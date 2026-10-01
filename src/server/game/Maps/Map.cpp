@@ -2984,7 +2984,7 @@ TransferAbortParams InstanceMap::CannotEnter(Player* player)
 
     // cannot enter while an encounter is in progress (unless this is a relog, in which case it is permitted); a companion bot is let in:
     // its owner calls it to the fight (otherwise the whole companion group stays outside "encounter in progress" while the owner is inside)
-    if (!player->IsLoading() && !player->GetSession()->IsBot() && IsRaid() && GetInstanceScript() && GetInstanceScript()->IsEncounterInProgress())
+    if (!player->IsLoading() && !player->GetSession()->IsBot() && GetInstanceScript() && GetInstanceScript()->IsEncounterInProgress())
         return TRANSFER_ABORT_ZONE_IN_COMBAT;
 
     if (i_instanceLock)
