@@ -161,7 +161,7 @@ void WorldSession::HandleWhoOpcode(WorldPackets::Who::WhoRequestPkt& whoRequest)
                 continue;
 
         // check if target's level is in level range
-        uint8 lvl = target.GetLevel();
+        int32 lvl = target.GetLevel();
         if (lvl < request.MinLevel || lvl > request.MaxLevel)
             continue;
 
@@ -174,10 +174,8 @@ void WorldSession::HandleWhoOpcode(WorldPackets::Who::WhoRequestPkt& whoRequest)
             continue;
 
         if (!whoRequest.Areas.empty())
-        {
-            if (std::find(whoRequest.Areas.begin(), whoRequest.Areas.end(), int32(target.GetZoneId())) == whoRequest.Areas.end())
+            if (std::ranges::find(whoRequest.Areas, int32(target.GetZoneId())) == whoRequest.Areas.end())
                 continue;
-        }
 
         std::wstring const& wTargetName = target.GetWidePlayerName();
         if (!(wPlayerName.empty() || wTargetName.find(wPlayerName) != std::wstring::npos))
