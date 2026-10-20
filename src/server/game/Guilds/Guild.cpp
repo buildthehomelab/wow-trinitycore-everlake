@@ -1967,7 +1967,7 @@ void Guild::HandleAddNewRank(WorldSession* session, std::string_view name)
         std::string rankName(name);
         if (rankName.empty())
             rankName = RankInfo::GetDefaultRankName(GuildRankOrder(size));
-        if (_CreateRank(trans, rankName, GR_RIGHT_GCHATLISTEN | GR_RIGHT_GCHATSPEAK))
+        if (_CreateRank(trans, rankName, GR_RIGHT_GCHATLISTEN | GR_RIGHT_GCHATSPEAK | GR_RIGHT_LEAVE))
         {
             WorldPackets::Guild::GuildEventRanksUpdated eventPacket;
             BroadcastPacket(eventPacket.Write());
@@ -2447,7 +2447,7 @@ void Guild::SendEventNewLeader(Member* newLeader, Member* oldLeader, bool isSelf
     });
 }
 
-void Guild::SendEventPlayerLeft(Member* leaver, Member* remover, bool isRemoved) const
+void Guild::SendEventPlayerLeft(Member const* leaver, Member const* remover, bool isRemoved) const
 {
     WorldPackets::Guild::GuildEventPlayerLeft eventPacket;
     eventPacket.Removed = isRemoved;
@@ -3235,9 +3235,9 @@ void Guild::_CreateDefaultGuildRanks(CharacterDatabaseTransaction trans, LocaleC
 
     _CreateRank(trans, sObjectMgr->GetTrinityString(LANG_GUILD_MASTER,   loc), GR_RIGHT_ALL);
     _CreateRank(trans, sObjectMgr->GetTrinityString(LANG_GUILD_OFFICER,  loc), GR_RIGHT_ALL);
-    _CreateRank(trans, sObjectMgr->GetTrinityString(LANG_GUILD_VETERAN,  loc), GR_RIGHT_GCHATLISTEN | GR_RIGHT_GCHATSPEAK);
-    _CreateRank(trans, sObjectMgr->GetTrinityString(LANG_GUILD_MEMBER,   loc), GR_RIGHT_GCHATLISTEN | GR_RIGHT_GCHATSPEAK);
-    _CreateRank(trans, sObjectMgr->GetTrinityString(LANG_GUILD_INITIATE, loc), GR_RIGHT_GCHATLISTEN | GR_RIGHT_GCHATSPEAK);
+    _CreateRank(trans, sObjectMgr->GetTrinityString(LANG_GUILD_VETERAN,  loc), GR_RIGHT_GCHATLISTEN | GR_RIGHT_GCHATSPEAK | GR_RIGHT_LEAVE);
+    _CreateRank(trans, sObjectMgr->GetTrinityString(LANG_GUILD_MEMBER,   loc), GR_RIGHT_GCHATLISTEN | GR_RIGHT_GCHATSPEAK | GR_RIGHT_LEAVE);
+    _CreateRank(trans, sObjectMgr->GetTrinityString(LANG_GUILD_INITIATE, loc), GR_RIGHT_GCHATLISTEN | GR_RIGHT_GCHATSPEAK | GR_RIGHT_LEAVE);
 }
 
 bool Guild::_CreateRank(CharacterDatabaseTransaction trans, std::string_view name, uint32 rights)
