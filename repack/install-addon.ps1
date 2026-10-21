@@ -18,6 +18,11 @@ foreach ($sub in '_classic_beta_\Interface\AddOns', '_classic_\Interface\AddOns'
 if (-not $dest) { $dest = Join-Path $Client '_classic_beta_\Interface\AddOns' }   # verify folder name against a real client
 New-Item -ItemType Directory -Force $dest | Out-Null
 robocopy $src (Join-Path $dest 'ForeverBots') /E /NFL /NDL /NJH /NJS | Out-Null
+# The Classic Forever dungeon-bot add-on (another server's) sends ".dungeonbots ..." chat commands at login, which this server does
+# not have ("Command 'dungeonbots presets' does not exist"). It is not ours and is left untouched; the player is only told.
+if (Test-Path (Join-Path $dest 'ClassicForever_Bots')) {
+    Write-Host "Note: the add-on ClassicForever_Bots is installed. It is made for another server and prints 'Command dungeonbots presets does not exist' here. Untick it in the AddOns list on the character screen."
+}
 New-Item -ItemType Directory -Force (Split-Path $saved -Parent) | Out-Null
 Set-Content $saved $Client -Encoding ascii
 "ForeverBots installed to $dest. In the character select screen click AddOns and make sure ForeverBots is ticked (and 'Load out of date AddOns' if shown)."

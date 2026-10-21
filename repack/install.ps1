@@ -4,7 +4,7 @@
 #   install.ps1 -Client "D:\WoW Forever"   -> use this client folder instead of looking for it
 #   install.ps1 -SkipMaps                  -> do not extract the maps now (the server will not run without them)
 [CmdletBinding()]
-param([string]$Client, [switch]$SkipMaps, [switch]$NoStart, [switch]$Elevated)
+param([string]$Client, [switch]$SkipMaps, [switch]$NoStart, [switch]$Elevated, [switch]$Gui)   # -Gui: started by the launcher window (already administrator): no questions, no pauses
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 
@@ -51,6 +51,7 @@ function Pick-Folder($start) {
 
 # --- admin rights (certificate + hosts entry) --------------------------------------------------------------------------
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin -and $Gui) { Write-Host 'Setup needs administrator rights. Open the launcher again and press Yes.'; exit 1 }
 if (-not $isAdmin) {
     Write-Host 'Windows will ask for permission once: it is needed to trust the local certificate and add the hosts line.'
     $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Elevated"
@@ -77,6 +78,7 @@ try {
     $saved = Join-Path $root 'config\client.txt'
     if (-not $Client -and (Test-Path $saved)) { $Client = (Get-Content $saved -TotalCount 1).Trim() }
     if ($Client -and -not (Test-Path (Join-Path $Client '.build.info'))) { Write-Warning "$Client has no .build.info; looking again."; $Client = $null }
+    if (-not $Client -and $Gui) { throw 'No valid game folder was given to the installer.' }
     if (-not $Client) {
         # look for it, then let the player confirm or change it in a folder window (it opens at the best guess)
         Write-Host 'Looking for it (at most 25 seconds)...'
@@ -130,28 +132,32 @@ try {
     Write-Host ''
     Write-Host 'HOW TO LOG IN' -ForegroundColor Green
     Write-Host 'You need an account. It is created through the running server (the server finishes starting in the other window).'
+    if ($Gui) { Write-Host 'The launcher window asks for the account name and password next.' }
+    else {
     $make = Read-Host 'Create your account now? [Y/n]'
     if ($make -notmatch '^(n|no|nein)$') {
         try { & "$PSScriptRoot\Create-Account.ps1" } catch { Write-Warning $_.Exception.Message; Write-Host 'You can do it later: menu option A (Create account).' }
     } else { Write-Host 'Later: menu option A (Create account).' }
+    }
     $help = @"
 Next steps
 1. Start the game with Play-WoWForever.cmd (or P in the control panel; it applies the server key, keep its window open) and log in with
-   your account name and password. Realm: Trinity. In game, type /fb for the bots window.
+   your account name plus @local (for example yourname@local) and your password. Realm: Trinity. In game, type /fb for the bots window.
 2. Next time: Start Menu > WoW Forever Bots (or the Desktop shortcut) opens the control panel: 1 Start, 2 Stop, 3 Restart,
    T Restarter mode, A Create account, S Settings, B Backup, U Update.
 Help and news: https://discord.gg/Jk596N3xun
 "@
     Set-Content (Join-Path $root 'secrets\first-login.txt') $help -Encoding ascii
-    Write-Host "`n$help" -ForegroundColor Green
+    if (-not $Gui) { Write-Host "`n$help" -ForegroundColor Green }
 }
 catch {
     Write-Host "`nInstall stopped: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host 'Fix that and run Install.cmd again: the steps already done are skipped. Details: repack\install.log'
     try { Stop-Transcript | Out-Null } catch { }
     # this window was opened for the installer (as administrator) and would close at once: keep the message on screen
-    try { [void](Read-Host 'Press Enter to close this window') } catch { Start-Sleep 60 }
+    if (-not $Gui) { try { [void](Read-Host 'Press Enter to close this window') } catch { Start-Sleep 60 } }
     exit 1
 }
 try { Stop-Transcript | Out-Null } catch { }
-try { [void](Read-Host 'Press Enter to close this window') } catch { Start-Sleep 30 }
+if (-not $Gui) { try { [void](Read-Host 'Press Enter to close this window') } catch { Start-Sleep 30 } }
+exit 0

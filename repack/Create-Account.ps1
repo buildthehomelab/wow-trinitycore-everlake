@@ -43,11 +43,19 @@ if ((Invoke-Query "SELECT COUNT(*) FROM auth.battlenet_accounts WHERE UPPER(emai
     Write-Host "An account called $Name already exists. Use another name." -ForegroundColor Yellow
     return
 }
+# the launcher window passes the password in an environment variable of this process only (never on the command line)
+$envPw = $env:WFB_ACCOUNT_PW
+$env:WFB_ACCOUNT_PW = $null
+if ($envPw) {
+    if (-not (Test-Password $envPw)) { Write-Host 'The password needs 6 to 16 characters, no spaces and none of  " '' ` ;' -ForegroundColor Yellow; return }
+    $pw = $envPw
+} else {
 while ($true) {
     $pw = Read-Plain 'Password (6 to 16 characters, no spaces)'
     if (-not (Test-Password $pw)) { Write-Host 'Use 6 to 16 characters, no spaces and none of  " '' ` ;' -ForegroundColor Yellow; continue }
     if ($pw -ne (Read-Plain 'Password again')) { Write-Host 'The two passwords differ. Try again.' -ForegroundColor Yellow; continue }
     break
+}
 }
 if (-not $GM -and -not $NoGmQuestion) {
     $a = Read-Host 'Make this a GM (admin) account? The bots work on every account; GM only adds the game master commands. [y/N]'

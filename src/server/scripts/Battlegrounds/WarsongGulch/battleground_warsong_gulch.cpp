@@ -616,6 +616,8 @@ namespace ClassicWarsongGulch
     static constexpr uint32 MaxTeamScore = 3;
     static constexpr Milliseconds FlagRespawnTime = 23s;    // after a capture
     static constexpr Milliseconds FlagDropTime = 10s;       // dropped flag returns to its base
+    static constexpr Milliseconds BuffCheckInterval = 200ms;
+    static constexpr float BuffPickupRadius = 3.0f;
     static constexpr float CaptureRadius = 6.0f;            // areatrigger radius 5 + tolerance
     static constexpr std::array<Position, PVP_TEAMS_COUNT> CapturePoints =
     { {
@@ -762,6 +764,23 @@ struct battleground_classic_warsong_gulch : BattlegroundScript
             return;
 
         Milliseconds const elapsed(diff);
+
+        // Speed / Restoration / Berserking buffs: the classic client's buff area triggers are not all in the client data (the flag
+        // zones had to be added the same way), so a player who walks over a buff object is found here, as the capture is, instead of
+        // through at_battleground_buffs.
+        _buffTimer -= elapsed;
+        if (_buffTimer <= 0ms)
+        {
+            _buffTimer = BuffCheckInterval;
+            for (auto const& [guid, bgPlayer] : battleground->GetPlayers())
+                if (Player* player = ObjectAccessor::GetPlayer(battlegroundMap, guid))
+                    if (player->IsAlive())
+                        if (GameObject* buff = player->FindNearestGameObjectWithOptions(BuffPickupRadius, { .StringId = "bg_buff_object" }))
+                        {
+                            buff->ActivateObject(GameObjectActions::Disturb, 0, player);
+                            buff->DespawnOrUnsummon();
+                        }
+        }
 
         if (_respawnTimer > 0ms)
         {
@@ -1102,6 +1121,7 @@ private:
     std::array<ObjectGuid, PVP_TEAMS_COUNT> _droppedFlags;
     std::array<Milliseconds, PVP_TEAMS_COUNT> _dropTimers = { { 0ms, 0ms } };
     Milliseconds _respawnTimer = 0ms;
+    Milliseconds _buffTimer = 0ms;
     GuidSet _doors;
     bool _isWeekend = false;
     uint32 _reputationCapture = 35;
