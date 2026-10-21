@@ -30,6 +30,7 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "World.h"
+#include <limits>
 
 static constexpr Rates QualityToRate[MAX_ITEM_QUALITY] =
 {
@@ -154,7 +155,11 @@ uint32 LootStore::LoadLootTable()
 
         uint32 entry               = fields[0].GetUInt32();
         LootStoreItem::Type type   = static_cast<LootStoreItem::Type>(fields[1].GetInt8());
-        uint32 item                = fields[2].GetUInt32();
+        // Use GetUInt64 to handle databases with BIGINT item columns, skip invalid values
+        uint64 rawItem             = fields[2].GetUInt64();
+        if (rawItem > std::numeric_limits<uint32>::max())
+            continue;
+        uint32 item                = static_cast<uint32>(rawItem);
         float  chance              = fields[3].GetFloat();
         bool   needsquest          = fields[4].GetBool();
         uint16 lootmode            = fields[5].GetUInt16();
@@ -247,6 +252,33 @@ void LootStore::ReportNonExistingId(uint32 lootId, char const* ownerType, uint32
 
 // Checks if the entry (quest, non-quest, reference) takes it's chance (at loot generation)
 // RATE_DROP_ITEMS is no longer used for all types of entries
+namespace
+{
+// Classic 1.60 Legacy perk Bountiful Harvest 1225435: Scarce materials from Mining, Herbalism and Skinning (the Forever uncommon
+// gathering finds) drop more often; set by Loot::FillLoot while it fills gathering / skinning loot for a player with the perk
+thread_local float ClassicScarceMaterialChanceMod = 1.0f;
+
+bool IsClassicScarceMaterial(uint32 itemId)
+{
+    switch (itemId)
+    {
+        case 249391:    // Pyrite (ore)
+        case 249399:    // Frilled Lichen (herbs)
+        case 249427:    // Pristine Leather (skinning)
+        case 268415:    // Commonplace Herb Seeds
+        case 268418:    // Scarce Herb Seeds
+            return true;
+        default:
+            return false;
+    }
+}
+}
+
+void SetClassicScarceMaterialChanceMod(float mod)
+{
+    ClassicScarceMaterialChanceMod = mod;
+}
+
 bool LootStoreItem::Roll(bool rate) const
 {
     if (chance >= 100.0f)
@@ -260,7 +292,9 @@ bool LootStoreItem::Roll(bool rate) const
 
             float qualityModifier = pProto && rate && QualityToRate[pProto->GetQuality()] != MAX_RATES ? sWorld->getRate(QualityToRate[pProto->GetQuality()]) : 1.0f;
 
-            return roll_chance(chance * qualityModifier);
+            float scarceModifier = ClassicScarceMaterialChanceMod != 1.0f && IsClassicScarceMaterial(itemid) ? ClassicScarceMaterialChanceMod : 1.0f;
+
+            return roll_chance(chance * qualityModifier * scarceModifier);
         }
         case Type::Reference:
             return roll_chance(chance * (rate ? sWorld->getRate(RATE_DROP_ITEM_REFERENCED) : 1.0f));

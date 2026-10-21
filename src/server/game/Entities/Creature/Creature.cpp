@@ -640,6 +640,17 @@ bool Creature::UpdateEntry(uint32 entry, CreatureData const* data /*= nullptr*/,
     SetBaseAttackTime(BASE_ATTACK,   cInfo->BaseAttackTime);
     SetBaseAttackTime(OFF_ATTACK,    cInfo->BaseAttackTime);
     SetBaseAttackTime(RANGED_ATTACK, cInfo->RangeAttackTime);
+    // Classic 1.60 (vanilla): the VMaNGOS swing times
+    if (ObjectMgr::CreatureClassicMelee const* classicMelee = IsPet() || IsGuardian() ? nullptr : sObjectMgr->GetCreatureClassicMelee(GetEntry()))
+    {
+        if (classicMelee->AttackMs)
+        {
+            SetBaseAttackTime(BASE_ATTACK, classicMelee->AttackMs);
+            SetBaseAttackTime(OFF_ATTACK, classicMelee->AttackMs);
+        }
+        if (classicMelee->RangedAttackMs)
+            SetBaseAttackTime(RANGED_ATTACK, classicMelee->RangedAttackMs);
+    }
 
     if (updateLevel)
         SelectLevel();
@@ -1629,6 +1640,48 @@ void Creature::UpdateLevelDependantStats()
     uint8 level = GetLevel();
     CreatureBaseStats const* stats = sObjectMgr->GetCreatureBaseStats(level, cInfo->unit_class);
 
+    // Classic 1.60: vanilla creatures (in VMaNGOS) use the vanilla formulas (VMaNGOS Creature::InitStatsForLevel): base stats of
+    // their class and level times their own multipliers. Forever-only creatures keep the client ExpectedStat path below.
+    if (!IsPet())
+    {
+        ClassicCreatureStats const* classicStats = sObjectMgr->GetCreatureClassicStats(GetEntry());
+        ClassicCreatureClassLevelStats const* classicBase = classicStats ? sObjectMgr->GetCreatureClassicClassLevelStats(level, cInfo->unit_class) : nullptr;
+        if (classicBase)
+        {
+            uint32 health = std::max(1u, uint32(std::round(GetHealthMod(classification) * classicBase->Health * classicStats->HealthMultiplier)));
+            SetCreateHealth(health);
+            SetMaxHealth(health);
+            SetHealth(health);
+            ResetPlayerDamageReq();
+            SetStatFlatModifier(UNIT_MOD_HEALTH, BASE_VALUE, float(health));
+
+            Powers powerType = CalculateDisplayPowerType();
+            SetCreateMana(uint32(std::round(classicBase->Mana * classicStats->ManaMultiplier)));
+            SetStatPctModifier(UnitMods(UNIT_MOD_POWER_START + AsUnderlyingType(powerType)), BASE_PCT, 1.0f);
+            SetPowerType(powerType, true, true);
+
+            // damage per hit, not scaled by attack time (Creature::CalculateMinMaxDamage); off hand half
+            float const damageMod = GetDamageMod(classification);
+            float const meleeAverage = classicBase->MeleeDamage * classicStats->DamageMultiplier * damageMod;
+            float const meleeVariance = meleeAverage * classicStats->DamageVariance;
+            float const rangedAverage = classicBase->RangedDamage * classicStats->DamageMultiplier * damageMod;
+            float const rangedVariance = rangedAverage * classicStats->DamageVariance;
+
+            SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, meleeAverage - meleeVariance);
+            SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, meleeAverage + meleeVariance);
+            SetBaseWeaponDamage(OFF_ATTACK, MINDAMAGE, (meleeAverage - meleeVariance) / 2.0f);
+            SetBaseWeaponDamage(OFF_ATTACK, MAXDAMAGE, (meleeAverage + meleeVariance) / 2.0f);
+            SetBaseWeaponDamage(RANGED_ATTACK, MINDAMAGE, rangedAverage - rangedVariance);
+            SetBaseWeaponDamage(RANGED_ATTACK, MAXDAMAGE, rangedAverage + rangedVariance);
+
+            m_baseAttackPower       = stats->AttackPower;
+            m_baseRangedAttackPower = stats->RangedAttackPower;
+
+            SetStatFlatModifier(UNIT_MOD_ARMOR, BASE_VALUE, classicBase->Armor * classicStats->ArmorMultiplier);
+            return;
+        }
+    }
+
     // health
     float healthmod = GetHealthMod(classification);
 
@@ -2248,6 +2301,10 @@ void Creature::setDeathState(DeathState s)
             else
                 m_respawnTime = GameTime::GetGameTime() + respawnDelay;
         }
+
+        // Instance.PersistRaidTrash: inside a locked raid, killed spawns stay dead until the lockout resets
+        if (m_spawnId && !IsSummon() && m_respawnDelay && GetMap()->IsRaid() && GetMap()->PersistsRespawnTimes())
+            m_respawnTime = std::numeric_limits<time_t>::max();
 
         SaveRespawnTime();
 

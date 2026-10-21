@@ -419,7 +419,7 @@ NonDefaultConstructible<SpellEffectHandlerFn> SpellEffectHandlers[TOTAL_SPELL_EF
     &Spell::EffectNULL,                                     //326 SPELL_EFFECT_326
     &Spell::EffectNULL,                                     //327 SPELL_EFFECT_327
     &Spell::EffectNULL,                                     //328 SPELL_EFFECT_328
-    &Spell::EffectNULL,                                     //329 SPELL_EFFECT_329
+    &Spell::EffectResurrectNew,                             //329 SPELL_EFFECT_RESURRECT_NEW
     &Spell::EffectNULL,                                     //330 SPELL_EFFECT_330
     &Spell::EffectNULL,                                     //331 SPELL_EFFECT_331
     &Spell::EffectNULL,                                     //332 SPELL_EFFECT_332
@@ -1389,6 +1389,15 @@ void Spell::DoCreateItem(uint32 itemId, ItemContext context /*= ItemContext::NON
 
     uint32 num_to_add = std::clamp<int32>(GetEffectValueAsInt(), 1, pProto->GetMaxStackSize());
 
+    // Classic 1.60 Legacy perk Master Chef 1225457: cooking recipes have a chance to create an extra result
+    if (int32 extraChance = player->GetClassicLegacyPerkAmount(1225457, EFFECT_0))
+    {
+        SkillLineAbilityMapBounds bounds = sSpellMgr->GetSkillLineAbilityMapBounds(m_spellInfo->Id);
+        bool cooking = std::any_of(bounds.first, bounds.second, [](auto const& pair) { return pair.second->SkillLine == SKILL_COOKING; });
+        if (cooking && roll_chance(extraChance))
+            num_to_add = std::min<uint32>(num_to_add * 2, pProto->GetMaxStackSize());
+    }
+
     /* == gem perfection handling == */
     // this is bad, should be done using spell_loot_template (and conditions)
 
@@ -1613,6 +1622,21 @@ void Spell::EffectEnergize()
         }
         default:
             break;
+    }
+
+    // Classic 1.60 (game rule 112): combo points belong to one target. The client shows them and allows finishers only while
+    // UnitData ClassicComboTarget is the current target (official sniff: set when Sinister Strike awards the first point), and
+    // building points on another target starts over from zero
+    if (power == POWER_COMBO_POINTS && unitTarget == unitCaster && unitCaster->IsPlayer())
+    {
+        if (Unit* comboTarget = m_targets.GetUnitTarget(); comboTarget && comboTarget != unitCaster)
+        {
+            if (unitCaster->GetClassicComboTarget() != comboTarget->GetGUID())
+            {
+                unitCaster->SetPower(POWER_COMBO_POINTS, 0);
+                unitCaster->SetClassicComboTarget(comboTarget->GetGUID());
+            }
+        }
     }
 
     unitCaster->EnergizeBySpell(unitTarget, m_spellInfo, energizeAmount, power);
@@ -2382,7 +2406,29 @@ void Spell::EffectLearnSkill()
     uint32 skillid = effectInfo->MiscValue;
     SkillRaceClassInfoEntry const* rcEntry = sDB2Manager.GetSkillRaceClassInfo(skillid, playerTarget->GetRace(), playerTarget->GetClass());
     if (!rcEntry)
+    {
+        // Modern 12.0+ client DB2 dropped SkillRaceClassInfo entries for the
+        // classic primary-profession skill lines (165 Leatherworking, 164
+        // Blacksmithing, 186 Mining, 182 Herbalism, 393 Skinning, ...) while
+        // the "Learn <Profession>" spells (e.g. 264578) still carry
+        // SPELL_EFFECT_SKILL and are taught castable. Without this fallback
+        // the cast silently no-ops here (the player clicks "Learn
+        // Leatherworking" at the trainer, confirms, and nothing happens —
+        // the skill is never granted). Mirror the Player::AddSpell fallback:
+        // for a primary profession with no rcInfo, derive the max from the
+        // classic apprentice→grand-master tier table and grant the skill.
+        if (IsPrimaryProfessionSkill(skillid))
+        {
+            static constexpr uint16 kPrimaryProfessionTierMax[] = { 75, 150, 225, 300, 375, 450 };
+            uint16 tierIdx = skillTier >= 1 ? uint16(skillTier - 1) : uint16(0);
+            if (tierIdx >= std::size(kPrimaryProfessionTierMax))
+                tierIdx = uint16(std::size(kPrimaryProfessionTierMax) - 1);
+            uint16 const maxSkillVal = kPrimaryProfessionTierMax[tierIdx];
+            uint16 const skillval = std::max<uint16>(1, playerTarget->GetPureSkillValue(skillid));
+            playerTarget->SetSkill(skillid, skillTier, skillval, maxSkillVal);
+        }
         return;
+    }
 
     SkillTiersEntry const* tier = sObjectMgr->GetSkillTier(rcEntry->SkillTierID);
     if (!tier)

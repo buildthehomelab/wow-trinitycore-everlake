@@ -19,6 +19,7 @@
 #include "DB2Stores.h"
 #include "Item.h"
 #include "Player.h"
+#include "ClassicManaRegen.h"
 #include "Pet.h"
 #include "GameTables.h"
 #include "GameTime.h"
@@ -171,6 +172,13 @@ void Player::ApplySpellPowerBonus(int32 amount, bool apply)
 
 void Player::UpdateSpellDamageAndHealingBonus()
 {
+    // SPELL_AURA_OVERRIDE_ATTACK_POWER_BY_SP_PCT together with SPELL_AURA_OVERRIDE_SPELL_POWER_BY_AP_PCT make this and
+    // UpdateAttackPowerAndDamage call each other without end
+    thread_local bool inSpellDamageUpdate = false;
+    if (inSpellDamageUpdate)
+        return;
+    inSpellDamageUpdate = true;
+
     // Magic damage modifiers implemented in Unit::SpellDamageBonusDone
     // This information for client side use only
     // Get healing bonus for all schools
@@ -195,6 +203,8 @@ void Player::UpdateSpellDamageAndHealingBonus()
         UpdateAttackPowerAndDamage();
         UpdateAttackPowerAndDamage(true);
     }
+
+    inSpellDamageUpdate = false;
 }
 
 bool Player::UpdateAllStats()
@@ -563,6 +573,21 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
     float weaponMinDamage = GetWeaponDamageRange(attType, MINDAMAGE);
     float weaponMaxDamage = GetWeaponDamageRange(attType, MAXDAMAGE);
 
+    // Classic 1.60 (vanilla, VMaNGOS): bows, guns and crossbows add the chosen ammo's damage per second times the weapon speed
+    if (attType == RANGED_ATTACK && NeedsAmmo())
+    {
+        if (ItemTemplate const* ammo = sObjectMgr->GetItemTemplate(GetAmmoId()))
+        {
+            if (ItemDamageAmmoEntry const* ammoDamage = sItemDamageAmmoStore.LookupEntry(ammo->GetBaseItemLevel()))
+            {
+                uint32 quality = std::min<uint32>(ammo->GetQuality(), ammoDamage->Quality.size() - 1);
+                float ammoBonus = ammoDamage->Quality[quality] * attackPowerMod;
+                weaponMinDamage += ammoBonus;
+                weaponMaxDamage += ammoBonus;
+            }
+        }
+    }
+
     float versaDmgMod = 1.0f;
 
     AddPct(versaDmgMod, GetRatingBonusValue(CR_VERSATILITY_DAMAGE_DONE) + float(GetTotalAuraModifier(SPELL_AURA_MOD_VERSATILITY)));
@@ -871,19 +896,21 @@ void Player::UpdateArmorPenetration(int32 amount)
     SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::CombatRatings, CR_ARMOR_PENETRATION), amount);
 }
 
+// Classic 1.60 (vanilla): players have no innate hit bonus (retail gives 7.5% melee / ranged and 15% spell hit), hit comes from
+// +hit auras and gear only
 void Player::UpdateMeleeHitChances()
 {
-    m_modMeleeHitChance = 7.5f + GetRatingBonusValue(CR_HIT_MELEE);
+    m_modMeleeHitChance = GetRatingBonusValue(CR_HIT_MELEE);
 }
 
 void Player::UpdateRangedHitChances()
 {
-    m_modRangedHitChance = 7.5f + GetRatingBonusValue(CR_HIT_RANGED);
+    m_modRangedHitChance = GetRatingBonusValue(CR_HIT_RANGED);
 }
 
 void Player::UpdateSpellHitChances()
 {
-    m_modSpellHitChance = 15.0f + GetTotalAuraModifier(SPELL_AURA_MOD_SPELL_HIT_CHANCE);
+    m_modSpellHitChance = GetTotalAuraModifier(SPELL_AURA_MOD_SPELL_HIT_CHANCE);
     m_modSpellHitChance += GetRatingBonusValue(CR_HIT_SPELL);
 }
 
@@ -1035,6 +1062,17 @@ float Player::GetPowerRegen(Powers power) const
     PowerTypeEntry const* powerType = sDB2Manager.GetPowerTypeEntry(power);
     if (!powerType)
         return 0.f;
+
+    if (power == POWER_MANA)
+    {
+        // Classic 1.60 (vanilla): five second rule (ClassicManaRegen.h). The window starts when mana is paid (Spell::TakePower), the
+        // interrupted rate is the share of SPELL_AURA_MOD_MANA_REGEN_INTERRUPT (not zero), and combat does not interrupt the regeneration.
+        // Leaving combat does not start the window, so it has a timestamp of its own.
+        int64 const msSinceManaSpent = std::chrono::duration_cast<Milliseconds>(GameTime::Now() - m_manaSpentTimestamp).count();
+        bool const manaInterrupted = ClassicManaRegen::IsInterrupted(msSinceManaSpent, HasAuraType(SPELL_AURA_INTERRUPT_REGEN));
+        return manaInterrupted ? powerType->RegenCombat + m_unitData->PowerRegenInterruptedFlatModifier[powerIndex]
+                               : powerType->RegenPeace + m_unitData->PowerRegenFlatModifier[powerIndex];
+    }
 
     if (powerType->GetFlags().HasFlag(PowerTypeFlags::UseRegenInterrupt) && m_regenInterruptTimestamp + Milliseconds(powerType->RegenInterruptTimeMS) >= GameTime::Now())
         return 0.f;
@@ -1265,6 +1303,30 @@ void Creature::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, 
     float totalPct         = addTotalPct ? GetPctModifierValue(unitMod, TOTAL_PCT) : 1.0f;
     float dmgMultiplier    = GetCreatureDifficulty()->DamageModifier; // = DamageModifier * GetDamageMod(rank);
 
+    // Classic 1.60 (vanilla): the VMaNGOS hit of the creature, per hit whatever its swing time (the client's damage per second table and the
+    // old damage modifiers are 0-60% off per creature, and scale the hit with the swing)
+    if (attType != RANGED_ATTACK && !IsPet() && !IsGuardian())
+        if (ObjectMgr::CreatureClassicMelee const* classic = sObjectMgr->GetCreatureClassicMelee(GetEntry()); classic && classic->DamageMax > 0.0f)
+        {
+            float const mainHand = CanUseAttackType(attType) ? 1.0f : 0.0f;
+            float const auraAttackPower = attackPower - baseAttackPower;
+            float const swingMs = float(GetBaseAttackTime(attType));
+            float const flat = GetFlatModifierValue(unitMod, BASE_VALUE);
+            float const pct = GetPctModifierValue(unitMod, BASE_PCT);
+            minDamage = ClassicSpellValue::CreatureClassicHit(classic->DamageMin * mainHand, auraAttackPower, variance, swingMs, flat, pct, totalValue, totalPct);
+            maxDamage = ClassicSpellValue::CreatureClassicHit(classic->DamageMax * mainHand, auraAttackPower, variance, swingMs, flat, pct, totalValue, totalPct);
+            return;
+        }
+
+    // Classic 1.60: vanilla creatures (creature_classic_stats) hit for their per-hit weapon damage, which already holds their
+    // damage multiplier (Creature::UpdateLevelDependantStats); only attack power changes from auras scale with attack time
+    if (!IsPet() && sObjectMgr->GetCreatureClassicStats(GetEntry()))
+    {
+        baseValue     = GetFlatModifierValue(unitMod, BASE_VALUE) + ((attackPower - baseAttackPower) / 14.0f) * attackSpeedMulti;
+        basePct       = GetPctModifierValue(unitMod, BASE_PCT);
+        dmgMultiplier = 1.0f;
+    }
+
     minDamage = ((weaponMinDamage + baseValue) * dmgMultiplier * basePct + totalValue) * totalPct;
     maxDamage = ((weaponMaxDamage + baseValue) * dmgMultiplier * basePct + totalValue) * totalPct;
 }
@@ -1306,20 +1368,7 @@ bool Guardian::UpdateStats(Stats stat)
         ownersBonus = float(owner->GetStat(stat)) * mod;
         value += ownersBonus;
     }
-    else if (stat == STAT_STAMINA)
-    {
-        ownersBonus = CalculatePct(owner->GetStat(STAT_STAMINA), 30);
-        value += ownersBonus;
-    }
-                                                            //warlock's and mage's pets gain 30% of owner's intellect
-    else if (stat == STAT_INTELLECT)
-    {
-        if (owner->GetClass() == CLASS_WARLOCK || owner->GetClass() == CLASS_MAGE)
-        {
-            ownersBonus = CalculatePct(owner->GetStat(stat), 30);
-            value += ownersBonus;
-        }
-    }
+    // Classic 1.60 (vanilla): pets get no share of their owner's stamina or intellect (that came with The Burning Crusade)
 /*
     else if (stat == STAT_STRENGTH)
     {
@@ -1367,12 +1416,7 @@ void Guardian::UpdateResistances(uint32 school)
         float baseValue = GetFlatModifierValue(UnitMods(UNIT_MOD_RESISTANCE_START + school), BASE_VALUE);
         float bonusValue = GetTotalAuraModValue(UnitMods(UNIT_MOD_RESISTANCE_START + school)) - baseValue;
 
-        // hunter and warlock pets gain 40% of owner's resistance
-        if (IsPet())
-        {
-            baseValue += float(CalculatePct(m_owner->GetResistance(SpellSchools(school)), 40));
-            bonusValue += float(CalculatePct(m_owner->GetBonusResistanceMod(SpellSchools(school)), 40));
-        }
+        // Classic 1.60 (vanilla): pets do not inherit their owner's resistances
 
         SetResistance(SpellSchools(school), int32(baseValue));
         SetBonusResistanceMod(SpellSchools(school), int32(bonusValue));
@@ -1388,11 +1432,7 @@ void Guardian::UpdateArmor()
     float bonus_armor = 0.0f;
     UnitMods unitMod = UNIT_MOD_ARMOR;
 
-    // hunter pets gain 35% of owner's armor value, warlock pets gain 100% of owner's armor
-    if (IsHunterPet())
-        bonus_armor = float(CalculatePct(m_owner->GetArmor(), 70));
-    else if (IsPet())
-        bonus_armor = m_owner->GetArmor();
+    // Classic 1.60 (vanilla): pets do not inherit their owner's armor
 
     value  = GetFlatModifierValue(unitMod, BASE_VALUE);
     baseValue = value;
@@ -1460,11 +1500,8 @@ void Guardian::UpdateAttackPowerAndDamage(bool ranged)
     Player* owner = GetOwner() ? GetOwner()->ToPlayer() : nullptr;
     if (owner)
     {
-        if (IsHunterPet())                      //hunter pets benefit from owner's attack power
+        if (IsHunterPet())                      // Classic 1.60 (vanilla): hunter pets get nothing from their owner's attack power
         {
-            float mod = 1.0f;                                                 //Hunter contribution modifier
-            bonusAP = owner->GetTotalAttackPowerValue(RANGED_ATTACK) * 0.22f * mod;
-            SetBonusDamage(int32(owner->GetTotalAttackPowerValue(RANGED_ATTACK) * 0.1287f * mod));
         }
         else if (IsPetGhoul()) //ghouls benefit from deathknight's attack power (may be summon pet or not)
         {
@@ -1477,16 +1514,9 @@ void Guardian::UpdateAttackPowerAndDamage(bool ranged)
             bonusAP = owner->GetTotalAttackPowerValue(BASE_ATTACK) * dmg_multiplier;
             SetBonusDamage(int32(owner->GetTotalAttackPowerValue(BASE_ATTACK) * dmg_multiplier));
         }
-        //demons benefit from warlocks shadow or fire damage
+        // Classic 1.60 (vanilla): demons get nothing from their warlock's fire or shadow damage
         else if (IsPet())
         {
-            int32 fire = owner->m_activePlayerData->ModDamageDonePos[SPELL_SCHOOL_FIRE] - owner->m_activePlayerData->ModDamageDoneNeg[SPELL_SCHOOL_FIRE];
-            int32 shadow = owner->m_activePlayerData->ModDamageDonePos[SPELL_SCHOOL_SHADOW] - owner->m_activePlayerData->ModDamageDoneNeg[SPELL_SCHOOL_SHADOW];
-            int32 maximum  = (fire > shadow) ? fire : shadow;
-            if (maximum < 0)
-                maximum = 0;
-            SetBonusDamage(int32(maximum * 0.15f));
-            bonusAP = maximum * 0.57f;
         }
         //water elementals benefit from mage's frost damage
         else if (GetEntry() == ENTRY_WATER_ELEMENTAL)

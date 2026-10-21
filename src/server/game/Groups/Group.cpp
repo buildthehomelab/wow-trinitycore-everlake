@@ -28,6 +28,7 @@
 #include "Item.h"
 #include "LFGMgr.h"
 #include "Log.h"
+#include <algorithm>
 #include "Loot.h"
 #include "MapManager.h"
 #include "MiscPackets.h"
@@ -38,6 +39,7 @@
 #include "Pet.h"
 #include "Player.h"
 #include "UpdateData.h"
+#include "World.h"
 #include "WorldSession.h"
 
 Seconds Group::CountdownInfo::GetTimeLeft() const
@@ -60,7 +62,8 @@ Group::Group() : m_leaderGuid(), m_leaderFactionGroup(0), m_leaderName(""), m_gr
 m_dungeonDifficulty(DIFFICULTY_NORMAL), m_raidDifficulty(DIFFICULTY_NORMAL_RAID), m_legacyRaidDifficulty(DIFFICULTY_10_N),
 m_bgGroup(nullptr), m_bfGroup(nullptr), m_lootMethod(PERSONAL_LOOT), m_lootThreshold(ITEM_QUALITY_UNCOMMON), m_looterGuid(),
 m_masterLooterGuid(), m_subGroupsCounts(nullptr), m_guid(), m_dbStoreId(0), m_isLeaderOffline(false),
-m_readyCheckStarted(false), m_readyCheckTimer(Milliseconds::zero()), m_activeMarkers(0), m_scriptRef(this, NoopGroupDeleter())
+m_readyCheckStarted(false), m_readyCheckTimer(Milliseconds::zero()), m_activeMarkers(0), m_pingRestriction(RestrictPingsTo::None),
+m_scriptRef(this, NoopGroupDeleter())
 {
     for (uint8 i = 0; i < TARGET_ICONS_COUNT; ++i)
         m_targetIcons[i].Clear();
@@ -157,6 +160,11 @@ bool Group::Create(Player* leader)
 
     if (m_groupFlags & GROUP_FLAG_RAID)
         _initRaidSubGroupsCounter();
+
+    // Classic 1.60 (vanilla): with shared boss loot a new group starts on group loot, as in vanilla; personal loot would make the
+    // shared boss corpse free for all
+    if (sWorld->getBoolConfig(CONFIG_LOOT_SHARED_ENCOUNTER_LOOT) && !isBGGroup() && !isBFGroup())
+        m_lootMethod = GROUP_LOOT;
 
     m_lootThreshold = ITEM_QUALITY_UNCOMMON;
     m_looterGuid = leaderGuid;
@@ -283,7 +291,8 @@ void Group::ConvertToLFG()
 {
     m_groupFlags = GroupFlags(m_groupFlags | GROUP_FLAG_LFG | GROUP_FLAG_LFG_RESTRICTED);
     m_groupCategory = GROUP_CATEGORY_INSTANCE;
-    m_lootMethod = PERSONAL_LOOT;
+    // dungeon finder groups cannot change the method: group loot with shared boss loot (see Group::Create)
+    m_lootMethod = sWorld->getBoolConfig(CONFIG_LOOT_SHARED_ENCOUNTER_LOOT) ? GROUP_LOOT : PERSONAL_LOOT;
     if (!isBGGroup() && !isBFGroup())
     {
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_GROUP_TYPE);
@@ -954,7 +963,10 @@ void Group::BroadcastAddonMessagePacket(WorldPacket const* packet, const std::st
         if ((!ignore.IsEmpty() && player->GetGUID() == ignore) || (ignorePlayersInBGRaid && player->GetGroup() != this))
             continue;
 
-        if (player->GetSession()->IsAddonRegistered(prefix) && (group == -1 || itr.getSubGroup() == group))
+        // Null-session guard for mid-logout group members in addon-msg
+        // broadcast path. Skipping a logging-out target is the right
+        // outcome — they can't process the addon msg anyway.
+        if (player->GetSession() && player->GetSession()->IsAddonRegistered(prefix) && (group == -1 || itr.getSubGroup() == group))
             player->SendDirectMessage(packet);
     }
 }
@@ -1057,6 +1069,21 @@ void Group::ChangeMembersGroup(ObjectGuid guid, uint8 group)
 
     // Broadcast the changes to the group
     SendUpdate();
+    sScriptMgr->OnGroupSubgroupChange(this, guid, group);
+}
+
+void Group::ReorderMembers(std::vector<ObjectGuid> const& order)
+{
+    MemberSlotList sorted;
+    for (ObjectGuid const& guid : order)
+    {
+        member_witerator it = _getMemberWSlot(guid);
+        if (it != m_memberSlots.end())
+            sorted.splice(sorted.end(), m_memberSlots, it);
+    }
+    sorted.splice(sorted.end(), m_memberSlots);
+    m_memberSlots.swap(sorted);
+    SendUpdate();
 }
 
 void Group::SwapMembersGroups(ObjectGuid firstGuid, ObjectGuid secondGuid)
@@ -1102,6 +1129,8 @@ void Group::SwapMembersGroups(ObjectGuid firstGuid, ObjectGuid secondGuid)
     CharacterDatabase.CommitTransaction(trans);
 
     SendUpdate();
+    sScriptMgr->OnGroupSubgroupChange(this, slots[0]->guid, slots[0]->group);
+    sScriptMgr->OnGroupSubgroupChange(this, slots[1]->guid, slots[1]->group);
 }
 
 // Retrieve the next Round-Roubin player for the group
@@ -1432,6 +1461,10 @@ void Group::SetLfgRoles(ObjectGuid guid, uint8 roles)
     if (slot == m_memberSlots.end())
         return;
 
+    // unchanged roles need no party update
+    if (slot->roles == roles)
+        return;
+
     slot->roles = roles;
     SendUpdate();
 }
@@ -1483,6 +1516,8 @@ void Group::EndReadyCheck(void)
 {
     if (!m_readyCheckStarted)
         return;
+
+    TC_LOG_INFO("network", "[ready_check] ended ({} members, {} had not answered)", GetMembersCount(), uint32(std::count_if(m_memberSlots.begin(), m_memberSlots.end(), [](MemberSlot const& m) { return !m.readyChecked; })));
 
     m_readyCheckStarted = false;
     m_readyCheckTimer = Milliseconds::zero();

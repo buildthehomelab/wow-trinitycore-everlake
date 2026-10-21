@@ -1,0 +1,284 @@
+# One-click updater for the repack. Checks the latest GitHub Release, downloads and verifies it, stops the server cleanly,
+# backs up the databases and the old program files, swaps in the new files and add-on, and starts the server again so the
+# database updates apply. Your characters, accounts, bots (databases), certificates, secrets and your own settings are kept.
+#   .\update.ps1                 -> check, update, restart
+#   .\update.ps1 -CheckOnly      -> only say whether a newer version exists
+#   .\update.ps1 -NoStart        -> update but do not start the server afterwards
+#   .\update.ps1 -Quiet          -> check only, no text; exit code 0 = up to date, 10 = update available, 1 = could not check
+# Windows PowerShell 5.1, no administrator rights needed.
+[CmdletBinding()]
+param(
+    [switch]$CheckOnly,
+    [switch]$Quiet,
+    [switch]$NoStart,
+    [switch]$AcceptDbReset,      # only when the release notes say [DB-RESET] and you accept losing characters
+    [string]$Repo,               # default: repack\release-source.txt
+    [string]$ApiUrl,             # tests only: replaces https://api.github.com/repos/<repo>/releases/latest
+    [string]$Root,               # tests only: default is the folder above repack\
+    [switch]$SkipDatabase        # tests only: skip the MySQL dump (never use on a real install)
+)
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'   # the progress bar makes downloads in Windows PowerShell 5.1 very slow
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
+if (-not $Root) { $Root = Split-Path $PSScriptRoot -Parent }
+$onWindows = ($env:OS -eq 'Windows_NT')
+$exe = if ($onWindows) { '.exe' } else { '' }
+
+function Say($m) { if (-not $Quiet) { Write-Host $m } }
+function Join($a, $b) { Join-Path $a $b }
+
+function Get-Latest {
+    $url = $ApiUrl
+    if (-not $url) {
+        $r = $Repo
+        if (-not $r) { $r = (Get-Content (Join $PSScriptRoot 'release-source.txt') -TotalCount 1).Trim() }
+        $url = "https://api.github.com/repos/$r/releases/latest"
+    }
+    for ($i = 1; $i -le 3; $i++) {
+        try { return Invoke-RestMethod $url -Headers @{ 'User-Agent' = 'wow-forever-updater'; 'Accept' = 'application/vnd.github+json' } -UseBasicParsing }
+        catch {
+            if ($i -eq 3) { throw "Could not reach the release page ($url): $($_.Exception.Message)" }
+            Start-Sleep (3 * $i)
+        }
+    }
+}
+
+function ConvertTo-Ver($s) {
+    if ($s -match '(\d+(?:\.\d+){1,3})') { try { return [version]$Matches[1] } catch { } }
+    return $null
+}
+
+# --- version check ------------------------------------------------------------------------------------------------
+$verFile = Join $Root 'version.json'
+if (-not (Test-Path $verFile)) { throw "version.json not found in $Root (is this the repack folder?)" }
+$localInfo = Get-Content $verFile -Raw | ConvertFrom-Json
+$local = [string]$localInfo.version
+try { $rel = Get-Latest } catch {
+    if ($Quiet) { exit 1 }
+    throw
+}
+$remote = ([string]$rel.tag_name).TrimStart('v', 'V')
+$lv = ConvertTo-Ver $local; $rv = ConvertTo-Ver $remote
+if ($lv -and $rv) { $newer = ($rv -gt $lv) } else { $newer = ($remote -ne $local) }
+Say "Installed: $local   Latest: $remote"
+if ($Quiet) { try { Set-Content (Join $PSScriptRoot 'latest-version.txt') $remote -Encoding ascii } catch { } }   # read by the launcher window for its update notice
+if (-not $newer) { Say 'You are up to date.'; if ($Quiet) { exit 0 } else { return } }
+if ($Quiet) { exit 10 }
+Say "`nWhat is new:`n$($rel.body)`n"
+if ($CheckOnly) { Say 'An update is available. Run repack\update.ps1 (or Update-WoWForever.cmd) to install it.'; return }
+if (([string]$rel.body) -match '\[DB-RESET\]' -and -not $AcceptDbReset) {
+    throw 'This update resets the database (characters and bots are lost). Your data is not touched. If you accept that, run again with -AcceptDbReset. A backup is made first.'
+}
+
+# the small update zip first; the full one-zip package and the old core zip work too
+$core = $null
+foreach ($pat in 'wow-forever-update-*.zip', 'WoW-Forever-Bots-*.zip', 'wow-forever-core-*.zip') {
+    $core = @($rel.assets | Where-Object { $_.name -like $pat })[0]
+    if ($core) { break }
+}
+$sums = @($rel.assets | Where-Object { $_.name -eq 'SHA256SUMS.txt' })[0]
+if (-not $core -or -not $sums) { throw 'The release has no update zip or no SHA256SUMS.txt, nothing was changed.' }
+
+# --- single instance + log ----------------------------------------------------------------------------------------
+$tmp = Join $Root 'update-tmp'
+$lock = Join $Root 'update.lock'
+if (Test-Path $lock) {
+    $age = (Get-Date) - (Get-Item $lock).LastWriteTime
+    if ($age.TotalHours -lt 6) { throw "Another update seems to be running ($lock). If not, delete that file and try again." }
+}
+Set-Content $lock (Get-Date -Format s)
+try { Start-Transcript -Path (Join $PSScriptRoot 'update.log') -Force | Out-Null } catch { }
+
+function Stop-Servers {
+    New-Item -ItemType File -Force (Join $PSScriptRoot 'stop.flag') | Out-Null   # ends a running auto-restart so it does not start the server again mid-update
+    foreach ($name in 'worldserver', 'bnetserver') {
+        $p = Get-Process $name -ErrorAction SilentlyContinue
+        if (-not $p) { continue }
+        Say "Stopping $name (saves characters; can take a minute)..."
+        $null = $p | ForEach-Object { $_.CloseMainWindow() }
+        # never kill it: a hard kill can lose the last minutes of characters. Give it 10 minutes, then give up and change nothing.
+        $deadline = (Get-Date).AddMinutes(10)
+        while ((Get-Process $name -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep 2 }
+        if (Get-Process $name -ErrorAction SilentlyContinue) { throw "$name did not stop. Close its window yourself, wait until it is gone, then run the update again. Nothing was changed." }
+    }
+}
+
+# Copies a folder tree; skips files matching $skipFiles (wildcards) and any folder whose name is in $skipDirs.
+function Copy-Tree($src, $dst, $skipFiles, $skipDirs) {
+    $src = (Resolve-Path $src).Path.TrimEnd('\', '/')
+    New-Item -ItemType Directory -Force $dst | Out-Null
+    $n = 0
+    foreach ($f in Get-ChildItem $src -Recurse -File -Force) {
+        $rel = $f.FullName.Substring($src.Length).TrimStart('\', '/')
+        $parts = $rel -split '[\\/]'
+        if ($parts.Count -gt 1 -and (@($parts[0..($parts.Count - 2)] | Where-Object { $skipDirs -contains $_ }).Count)) { continue }
+        $skip = $false
+        foreach ($w in $skipFiles) { if ($f.Name -like $w) { $skip = $true; break } }
+        if ($skip) { continue }
+        $target = Join $dst $rel
+        New-Item -ItemType Directory -Force (Split-Path $target -Parent) | Out-Null
+        Copy-Item $f.FullName $target -Force
+        $n++
+    }
+    return $n
+}
+
+function Set-ConfLine($file, $key, $value) {
+    if (-not (Test-Path $file)) { return }
+    $lines = @(Get-Content $file)
+    $hit = $false
+    $out = foreach ($l in $lines) { if ($l -match ('^\s*' + [regex]::Escape($key) + '\s*=')) { $hit = $true; "$key = $value" } else { $l } }
+    if (-not $hit) { $out = @($lines) + "$key = $value" }
+    Set-Content $file $out -Encoding ascii
+}
+
+$ok = $false
+$swapped = $false
+$wasRunning = [bool](Get-Process worldserver, bnetserver -ErrorAction SilentlyContinue)
+$bk = $null
+try {
+    # --- download + verify (nothing is stopped or changed until the file is checked) -------------------------------
+    $needGb = [math]::Round(($core.size * 4) / 1GB, 1)
+    $drive = (Get-Item $Root).PSDrive
+    if ($drive -and $drive.Free -and $drive.Free -lt ($core.size * 4)) { throw "Not enough free disk space: about $needGb GB needed on $($drive.Name):." }
+    if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+    New-Item -ItemType Directory -Force $tmp | Out-Null
+    Say ("Downloading {0} ({1} MB)..." -f $core.name, [math]::Round($core.size / 1MB))
+    $wc = New-Object System.Net.WebClient
+    $wc.Headers.Add('User-Agent', 'wow-forever-updater')
+    $wc.DownloadFile($core.browser_download_url, (Join $tmp 'core.zip'))
+    $wc.DownloadFile($sums.browser_download_url, (Join $tmp 'SHA256SUMS.txt'))
+    $want = $null
+    foreach ($l in Get-Content (Join $tmp 'SHA256SUMS.txt')) { $t = $l.Trim() -split '\s+', 2; if ($t.Count -eq 2 -and $t[1].TrimStart('*') -eq $core.name) { $want = $t[0] } }
+    if (-not $want) { throw "SHA256SUMS.txt has no entry for $($core.name)" }
+    $have = (Get-FileHash (Join $tmp 'core.zip') -Algorithm SHA256).Hash
+    if ($have -ne $want.ToUpper()) { throw 'The download is damaged (checksum does not match). Nothing was changed; try again.' }
+    Say 'Checksum OK. Unpacking...'
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::ExtractToDirectory((Join $tmp 'core.zip'), (Join $tmp 'core'))
+    $new = Join $tmp 'core'
+    if (-not (Test-Path (Join $new 'version.json'))) { throw 'The package has no version.json, nothing was changed.' }
+    if (-not (Test-Path (Join (Join $new 'server') ('worldserver' + $exe)))) { throw 'The package has no server\worldserver, nothing was changed.' }
+    $newInfo = Get-Content (Join $new 'version.json') -Raw | ConvertFrom-Json
+
+    # --- stop, back up ---------------------------------------------------------------------------------------------
+    Stop-Servers
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $bk = Join (Join $Root 'backups') "pre-$remote-$stamp"
+    New-Item -ItemType Directory -Force $bk | Out-Null
+    if (-not $SkipDatabase) {
+        $mysqlBin = Join (Join $Root 'mysql') 'bin'
+        $ini = Join (Join $Root 'config') 'my.ini'
+        # wait until MySQL answers (a slow disk or a first start can take a minute), instead of guessing a fixed time
+        $eapSaved = $ErrorActionPreference; $ErrorActionPreference = 'Continue'   # Windows PowerShell 5.1 turns a native program's error text into a stop under 'Stop'
+        $ready = $false
+        for ($i = 0; $i -lt 60 -and -not $ready; $i++) {
+            # (re)start it whenever no MySQL process exists, e.g. when it was still shutting down after the servers were stopped
+            # OUR MySQL listening on its own port is what counts; some other mysqld on the PC must not stop us from starting ours
+            $myPort = 3307; $pm = Select-String -Path $ini -Pattern '^\s*port\s*=\s*(\d+)' -ErrorAction SilentlyContinue | Select-Object -First 1; if ($pm) { $myPort = [int]$pm.Matches[0].Groups[1].Value }
+            $listening = $false; try { $tc = New-Object Net.Sockets.TcpClient; $listening = $tc.BeginConnect('127.0.0.1', $myPort, $null, $null).AsyncWaitHandle.WaitOne(700) -and $tc.Connected; $tc.Close() } catch { }
+            if (-not $listening) {
+                Say 'Starting MySQL for the backup...'
+                Start-Process (Join $mysqlBin 'mysqld.exe') -ArgumentList "`"--defaults-file=$ini`"" -WindowStyle Hidden
+                Start-Sleep 3
+            }
+            $ping = & (Join $mysqlBin 'mysqladmin.exe') "--defaults-file=$ini" -u root ping 2>&1
+            if ($LASTEXITCODE -eq 0) { $ready = $true } else { Start-Sleep 2 }
+        }
+        $ErrorActionPreference = $eapSaved
+        if (-not $ready) { throw 'MySQL did not start, so your data could not be backed up and nothing was changed. Start the server once with option 1 in the WoW Forever Bots menu, wait until it is up, close it with option 2, then run the update again. If it keeps failing, run bug-bundle.ps1 and send us the file.' }
+        foreach ($db in 'auth', 'characters', 'playerbot') {
+            Say "Backing up database $db..."
+            $sql = Join $bk "$db.sql"
+            $ErrorActionPreference = 'Continue'
+            $dumpOut = & (Join $mysqlBin 'mysqldump.exe') "--defaults-file=$ini" -u root --single-transaction --routines --result-file="$sql" $db 2>&1
+            $ErrorActionPreference = $eapSaved
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $sql) -or (Get-Item $sql).Length -lt 100) { throw "Backup of database $db failed, nothing was changed. MySQL said: $(($dumpOut | Out-String).Trim()). Start the server with option 1 in the WoW Forever Bots menu, wait until it is up, close it with option 2 and run the update again." }
+            $gz = [IO.File]::Create("$sql.gz")
+            $gzs = New-Object IO.Compression.GZipStream($gz, [IO.Compression.CompressionMode]::Compress)
+            $in = [IO.File]::OpenRead($sql); $in.CopyTo($gzs); $in.Dispose(); $gzs.Dispose(); $gz.Dispose()
+            Remove-Item $sql
+        }
+    }
+    # old program files and settings, so a restore (restore-backup.ps1) matches the database backup
+    $null = Copy-Tree (Join $Root 'server') (Join $bk 'server') @('*.pdb', '*.log') @('logs', 'data', 'Crashes')
+    Copy-Item $verFile (Join $bk 'version.json') -Force
+    Say "Backup saved in $bk"
+    Get-ChildItem (Join $Root 'backups') -Directory -Filter 'pre-*' | Where-Object { $_.FullName -ne (Resolve-Path $bk).Path } | Sort-Object CreationTime -Descending | Select-Object -Skip 2 | Remove-Item -Recurse -Force   # newest by date (a name sort puts pre-0.1.10 below pre-0.1.5 and deleted the backup just made); the new one always stays, so 3 are kept
+
+    # --- swap files -------------------------------------------------------------------------------------------------
+    # Kept: your settings (*.conf), certificates, secrets, MySQL and its data, maps (server\data), logs, backups.
+    # The release's own realm settings file is replaced; put your own changes in server\worldserver.conf.d\zz-9-local.conf.
+    Say 'Installing the new files...'
+    $swapped = $true
+    $skipFiles = @('*.conf', 'my.ini', 'version.json')
+    $skipDirs = @('data', 'logs', 'Crashes', 'mysql', 'mysql-data', 'config', 'secrets', 'certs', 'backups', 'update-tmp')
+    $count = Copy-Tree $new $Root $skipFiles $skipDirs
+    $managed = Join (Join (Join $new 'server') 'worldserver.conf.d') 'zz-1-wow-forever-realm.conf'
+    if (Test-Path $managed) {
+        $cd = Join (Join $Root 'server') 'worldserver.conf.d'
+        New-Item -ItemType Directory -Force $cd | Out-Null
+        Copy-Item $managed (Join $cd 'zz-1-wow-forever-realm.conf') -Force
+    }
+    $localConf = Join (Join (Join $Root 'server') 'worldserver.conf.d') 'zz-9-local.conf'
+    # The server only reads a settings file that starts a section: without a [worldserver] line every setting in it is ignored.
+    if (-not (Test-Path $localConf)) {
+        Set-Content $localConf "[worldserver]`r`n# Your own settings. This file is read last and is never changed by updates.`r`n# Example: Playerbot.World.MaxBots = 150`r`n" -Encoding ascii
+    } elseif (-not (Select-String -Path $localConf -Pattern '^\s*\[' -Quiet)) {
+        $old = Get-Content $localConf -Raw
+        Set-Content $localConf ("[worldserver]`r`n" + $old) -Encoding ascii
+    }
+    # the database updater reads the SQL files from the package and needs the MySQL client; keep both paths current
+    $fwd = { param($p) '"' + ($p -replace '\\', '/') + '"' }
+    foreach ($c in 'worldserver.conf', 'bnetserver.conf') {
+        $cf = Join (Join $Root 'server') $c
+        Set-ConfLine $cf 'SourceDirectory' (& $fwd $Root)
+        Set-ConfLine $cf 'MySQLExecutable' (& $fwd (Join (Join (Join $Root 'mysql') 'bin') ('mysql' + $exe)))
+    }
+    Copy-Item (Join $new 'version.json') $verFile -Force   # last: an interrupted update is simply repeated
+    Say "Installed version $remote ($count files)."
+
+    # --- add-on -----------------------------------------------------------------------------------------------------
+    $clientFile = Join (Join $Root 'config') 'client.txt'
+    if (Test-Path $clientFile) {
+        $client = (Get-Content $clientFile -TotalCount 1).Trim()
+        try { & (Join $PSScriptRoot 'install-addon.ps1') -Client $client } catch { Write-Warning "Could not update the add-on: $($_.Exception.Message)" }
+    } else {
+        Write-Warning 'The game folder is not known yet: run repack\install-addon.ps1 -Client "<your WoW folder>" once. After that updates install the add-on themselves.'
+    }
+    # bot pathing: if the game data is not finished, build it in its own window (it takes about 10 to 20 minutes; the update itself is done)
+    if (-not (Test-Path (Join (Join (Join $Root 'server') 'data') '.extract-complete'))) {
+        try { Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$(Join $PSScriptRoot 'ensure-data.ps1')`""; Say 'Installing bot pathing in a new window (the game data was not finished). Start the server after it says it is installed.' } catch { Write-Warning "Could not start the pathing install: $($_.Exception.Message)" }
+    }
+    # one shortcut only: removes the older separate ones this repack made and makes sure "WoW Forever Bots" exists
+    try { & (Join $PSScriptRoot 'make-shortcuts.ps1') | Out-Null } catch { Write-Warning "Could not tidy the shortcuts: $($_.Exception.Message)" }
+    if ($newInfo.dataVersion -and $localInfo.dataVersion -and ([string]$newInfo.dataVersion -ne [string]$localInfo.dataVersion)) {
+        Write-Warning "This release needs new map data (version $($newInfo.dataVersion)). Download wow-forever-data-*.zip from the release page and unpack it into server\data."
+    }
+    ($rel.body | Out-String) | Set-Content (Join $Root 'last-update-notes.txt') -Encoding utf8
+    $ok = $true
+}
+catch {
+    Write-Host "`nUpdate stopped: $($_.Exception.Message)" -ForegroundColor Red
+    if ($swapped) {
+        Write-Host "The update was only partly installed. Run it again (it starts over safely). Your database backup is in $bk." -ForegroundColor Yellow
+    } else {
+        Write-Host 'Nothing was changed. Details: repack\update.log'
+        if ($wasRunning -and -not (Get-Process worldserver -ErrorAction SilentlyContinue)) {
+            Write-Host 'Starting the server again as it was...'
+            try { & (Join $PSScriptRoot 'Start-WoWForever.ps1') } catch { Write-Host 'Start it with repack\Start-WoWForever.ps1.' }
+        }
+    }
+}
+finally {
+    if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+    Remove-Item $lock -Force -ErrorAction SilentlyContinue
+}
+
+if ($ok -and -not $NoStart) {
+    Say 'Starting the server. The first start after an update applies the database changes and can take several minutes...'
+    & (Join $PSScriptRoot 'Start-WoWForever.ps1')
+}
+elseif ($ok) { Say 'Updated. Start the server with repack\Start-WoWForever.ps1.' }
+try { Stop-Transcript | Out-Null } catch { }
+if (-not $ok) { exit 1 }

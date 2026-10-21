@@ -60,6 +60,7 @@
 #include "GridNotifiersImpl.h"
 #include "GroupMgr.h"
 #include "GuildMgr.h"
+#include "HandcraftedRoadStorage.h"
 #include "IPLocation.h"
 #include "InstanceLockMgr.h"
 #include "ItemBonusMgr.h"
@@ -109,6 +110,7 @@
 #include "WorldSession.h"
 #include "WorldStateMgr.h"
 #include <zlib.h>
+#include <filesystem>
 
 TC_GAME_API std::atomic<bool> World::m_stopEvent(false);
 TC_GAME_API uint8 World::m_ExitCode = SHUTDOWN_EXIT_CODE;
@@ -623,7 +625,14 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "AllFlightPaths"sv, .DefaultValue = false, .Index = CONFIG_ALL_TAXI_PATHS },
         { .Name = "InstantFlightPaths"sv, .DefaultValue = false, .Index = CONFIG_INSTANT_TAXI },
         { .Name = "Instance.IgnoreLevel"sv, .DefaultValue = false, .Index = CONFIG_INSTANCE_IGNORE_LEVEL },
+        { .Name = "Instance.IgnoreAttunement"sv, .DefaultValue = false, .Index = CONFIG_INSTANCE_IGNORE_ATTUNEMENT },
+        { .Name = "Instance.AhnQirajGatesOpen"sv, .DefaultValue = false, .Index = CONFIG_AQ_GATES_OPEN },
+        { .Name = "Instance.BindOnEntry"sv, .DefaultValue = false, .Index = CONFIG_INSTANCE_BIND_ON_ENTRY },
+        { .Name = "Instance.PersistRaidTrash"sv, .DefaultValue = false, .Index = CONFIG_INSTANCE_PERSIST_RAID_TRASH },
+        { .Name = "Instance.MoltenCoreHoundsLinked"sv, .DefaultValue = false, .Index = CONFIG_MC_CORE_HOUNDS_LINKED },
+        { .Name = "Instance.MoltenCoreSkipRunes"sv, .DefaultValue = false, .Index = CONFIG_MC_SKIP_RUNES },
         { .Name = "Instance.IgnoreRaid"sv, .DefaultValue = false, .Index = CONFIG_INSTANCE_IGNORE_RAID },
+        { .Name = "Instance.CombatResurrectionLimit"sv, .DefaultValue = false, .Index = CONFIG_INSTANCE_COMBAT_RES_LIMIT },
         { .Name = "CastUnstuck"sv, .DefaultValue = true, .Index = CONFIG_CAST_UNSTUCK },
         { .Name = "GM.AllowInvite"sv, .DefaultValue = false, .Index = CONFIG_ALLOW_GM_GROUP },
         { .Name = "GM.LowerSecurity"sv, .DefaultValue = false, .Index = CONFIG_GM_LOWER_SECURITY },
@@ -693,7 +702,10 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "CheckGameObjectLoS"sv, .DefaultValue = true, .Index = CONFIG_CHECK_GOBJECT_LOS },
         { .Name = "AllowLoggingIPAddressesInDatabase"sv, .DefaultValue = true, .Index = CONFIG_ALLOW_LOGGING_IP_ADDRESSES_IN_DATABASE },
         { .Name = "Loot.EnableAELoot"sv, .DefaultValue = true, .Index = CONFIG_ENABLE_AE_LOOT },
+        { .Name = "Loot.SharedEncounterLoot"sv, .DefaultValue = true, .Index = CONFIG_LOOT_SHARED_ENCOUNTER_LOOT },
         { .Name = "Load.Locales"sv, .DefaultValue = true, .Index = CONFIG_LOAD_LOCALES },
+        { .Name = "Classic.MountIndoorsRules"sv, .DefaultValue = true, .Index = CONFIG_CLASSIC_MOUNT_INDOORS_RULES },
+        { .Name = "Classic.SecuredBagSlotsForAll"sv, .DefaultValue = true, .Index = CONFIG_CLASSIC_SECURED_BAG_SLOTS_FOR_ALL },
     } };
 
     static constexpr ConfigOptionLoadDefinitionArray<uint32, INT_CONFIG_VALUE_COUNT> ints =
@@ -1184,6 +1196,26 @@ void World::LoadConfigSettings(bool reload)
 
     TC_LOG_INFO("server.loading", "WORLD: MMap data directory is: {}mmaps", m_dataPath);
 
+    ///- DBC.Locale has to match the data extracted from the client (a French client gives only dbc/frFR): when the configured
+    ///  locale was not extracted, use one that was, so nobody has to edit the config for their client language
+    {
+        std::filesystem::path dbcPath = std::filesystem::path(m_dataPath) / "dbc";
+        std::error_code error;
+        if (std::filesystem::is_directory(dbcPath, error) && !std::filesystem::is_directory(dbcPath / localeNames[m_defaultDbcLocale], error))
+        {
+            for (uint8 locale = 0; locale < TOTAL_LOCALES; ++locale)
+            {
+                if (locale == LOCALE_none || !std::filesystem::is_directory(dbcPath / localeNames[locale], error))
+                    continue;
+
+                TC_LOG_WARN("server.loading", "DBC.Locale {} was not extracted ({} has no {} folder): using the extracted {} data instead.",
+                    localeNames[m_defaultDbcLocale], dbcPath.generic_string(), localeNames[m_defaultDbcLocale], localeNames[locale]);
+                m_defaultDbcLocale = LocaleConstant(locale);
+                break;
+            }
+        }
+    }
+
     bool enableLOS = sConfigMgr->GetBoolDefault("vmap.enableLOS"sv, true);
     bool enableHeight = sConfigMgr->GetBoolDefault("vmap.enableHeight"sv, true);
 
@@ -1212,7 +1244,10 @@ void World::LoadConfigSettings(bool reload)
         { 157, 1 }, { 190, 0 }, { 162, 1 }, { 209, 1 }, { 89, 1 }, { 177, 1 }, { 197, 1 }, { 199, -5 }, { 63, 1 }, { 90, 1 },
         { 244, 1 }, { 33, 20 }, { 129, 0 }, { 228, 1 }, { 241, 1 }, { 243, 1 }, { 101, 1 }, { 237, 0 },
         // official 70205 and 70235 sniffs also send these (not in 70124); 242 / 247 are suspected to switch on the new Social window tabs
-        { 70, 1 }, { 242, 1 }, { 247, 1 } })
+        { 70, 1 }, { 242, 1 }, { 247, 1 },
+        // new in the official 70338 sniffs; without them the 70338 client fails ASSERTSAFE(isRuleActive) in
+        // PremadeGroupFinderStyleUtils.cpp (group finder) and crashed later in the same session
+        { 251, 1 }, { 252, 1 }, { 253, 0 } })
         _gameRules.push_back({ .Rule = ::GameRule(rule), .Value = value });
     _gameRules.push_back({ .Rule = ::GameRule(200), .Value = 0.5f });
 
@@ -1391,6 +1426,13 @@ bool World::SetInitialWorldSettings()
     TC_LOG_INFO("server.loading", "Loading SpellInfo corrections...");
     sSpellMgr->LoadSpellInfoCorrections();
 
+    TC_LOG_INFO("server.loading", "Loading classic spell values...");
+    sSpellMgr->LoadClassicSpellInfo();
+    sSpellMgr->LoadClassicTwinChannels();
+    sSpellMgr->LoadClassicSpellEffects();
+    sSpellMgr->LoadClassicSpellValues();
+    sSpellMgr->LoadClassicSpellCosts();
+
     TC_LOG_INFO("server.loading", "Loading SkillLineAbilityMultiMap Data...");
     sSpellMgr->LoadSkillLineAbilityMap();
 
@@ -1528,7 +1570,11 @@ bool World::SetInitialWorldSettings()
 
     TC_LOG_INFO("server.loading", "Loading Classic creature levels...");
     sObjectMgr->LoadCreatureClassicLevels();
+    sObjectMgr->LoadCreatureClassicMelee();
     sObjectMgr->LoadItemClassicBlock();
+
+    TC_LOG_INFO("server.loading", "Loading Shop products...");                 // must be after LoadItemTemplates
+    sObjectMgr->LoadShop();
 
     TC_LOG_INFO("server.loading", "Loading Equipment templates...");           // must be after LoadCreatureTemplates
     sObjectMgr->LoadEquipmentTemplates();
@@ -1688,6 +1734,17 @@ bool World::SetInitialWorldSettings()
 
     TC_LOG_INFO("server.loading", "Loading Graveyard-zone links...");
     sObjectMgr->LoadGraveyardZones();
+
+    TC_LOG_INFO("server.loading", "Loading Handcrafted Road Segments...");
+    HandcraftedRoadStorage::LoadFromDB();
+    // Belt-and-suspenders for ordering: if any continent navmesh was
+    // already loaded (e.g. by a prewarm helper) BEFORE LoadFromDB
+    // completed, the LoadMMapImpl hook would have seen only an empty
+    // segment list. Walk every currently-loaded Map and retag now. At
+    // first-boot this is typically a no-op (MapManager::Initialize
+    // happens later) — but the AlreadyLoaded branch of LoadMMapImpl
+    // catches the remaining cases.
+    TerrainMgrDetail::ApplyHandcraftedRoadsToAllLoadedMaps();
 
     TC_LOG_INFO("server.loading", "Loading spell pet auras...");
     sSpellMgr->LoadSpellPetAuras();
@@ -2324,6 +2381,11 @@ void World::Update(uint32 diff)
 
             LoginDatabase.Execute(stmt);
         }
+    }
+
+    {
+        TC_METRIC_TIMER("world_update_time", TC_METRIC_TAG("type", "Update world scripts before maps"));
+        sScriptMgr->OnWorldBeforeMapsUpdate(diff);
     }
 
     /// <li> Handle all other objects

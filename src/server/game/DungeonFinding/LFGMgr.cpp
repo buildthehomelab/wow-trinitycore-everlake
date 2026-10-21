@@ -32,6 +32,7 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "ScriptMgr.h"
 #include "RBAC.h"
 #include "SharedDefines.h"
 #include "SocialMgr.h"
@@ -368,6 +369,8 @@ void LFGMgr::Update(uint32 diff)
                 else
                     SendLfgUpdateStatus(guid, LfgUpdateData(LFG_UPDATETYPE_PROPOSAL_BEGIN, GetSelectedDungeons(guid)), false);
                 SendLfgUpdateProposal(guid, proposal);
+                if (Player* candidate = ObjectAccessor::FindConnectedPlayer(guid))
+                    sScriptMgr->OnPlayerLfgProposal(candidate, proposalId);
             }
 
             if (proposal.state == LFG_PROPOSAL_SUCCESS)
@@ -997,13 +1000,32 @@ void LFGMgr::MakeNewGroup(LfgProposal const& proposal)
         {
             grp = new Group();
             grp->ConvertToLFG();
-            grp->Create(player);
+            if (!grp->Create(player))
+            {
+                // A failed Create left a half-made group the others were added to while the leader stayed groupless
+                TC_LOG_ERROR("lfg.group", "LFGMgr::MakeNewGroup: Group::Create failed for leader {}", pguid.ToString());
+                delete grp;
+                grp = nullptr;
+                playersToTeleport.remove(pguid);
+                SetState(pguid, LFG_STATE_NONE);
+                continue;
+            }
             ObjectGuid gguid = grp->GetGUID();
             SetState(gguid, LFG_STATE_PROPOSAL);
             sGroupMgr->AddGroup(grp);
         }
         else if (group != grp)
-            grp->AddMember(player);
+        {
+            if (!grp->AddMember(player))
+            {
+                // Not in the group but ported into the group-bound instance: the player was thrown out again on entry
+                // with the LFG state stuck at "in dungeon". Skip the teleport and let the player queue again.
+                TC_LOG_ERROR("lfg.group", "LFGMgr::MakeNewGroup: Group::AddMember failed for {} (group {})", pguid.ToString(), grp->GetGUID().ToString());
+                playersToTeleport.remove(pguid);
+                SetState(pguid, LFG_STATE_NONE);
+                continue;
+            }
+        }
 
         grp->SetLfgRoles(pguid, proposal.players.find(pguid)->second.role);
 
@@ -1049,6 +1071,36 @@ uint32 LFGMgr::AddProposal(LfgProposal& proposal)
    @param[in]     guid Player guid to update answer
    @param[in]     accept Player answer
 */
+bool LFGMgr::IsRoleCheckPending(ObjectGuid group_guid, ObjectGuid player_guid) const
+{
+    auto it = RoleChecksStore.find(group_guid);
+    if (it == RoleChecksStore.end()) return false;
+    if (it->second.state != LFG_ROLECHECK_INITIALITING && it->second.state != LFG_ROLECHECK_DEFAULT)
+        return false;
+    auto rit = it->second.roles.find(player_guid);
+    // Pending = role hasn't been set yet (PLAYER_ROLE_NONE = 0). Once
+    // UpdateRoleCheck commits a role, it shows up here non-zero and we
+    // skip — the snapshot reverts to "no pending" next tick.
+    return rit == it->second.roles.end() || rit->second == PLAYER_ROLE_NONE;
+}
+
+uint32 LFGMgr::GetActiveProposalIdForPlayer(ObjectGuid guid) const
+{
+    // Walk current proposals; return the first id where this player is in the
+    // players map and hasn't answered yet. Multiple concurrent proposals for
+    // the same player aren't really possible in Trinity's design (one queue
+    // = one proposal at a time), but we still return the first match for
+    // safety.
+    for (auto const& [pid, prop] : ProposalsStore)
+    {
+        auto it = prop.players.find(guid);
+        if (it == prop.players.end()) continue;
+        if (it->second.accept != LFG_ANSWER_PENDING) continue;
+        return pid;
+    }
+    return 0;
+}
+
 void LFGMgr::UpdateProposal(uint32 proposalId, ObjectGuid guid, bool accept)
 {
     // Check if the proposal exists
@@ -1634,15 +1686,18 @@ LfgType LFGMgr::GetDungeonType(uint32 dungeonId)
 
 LfgState LFGMgr::GetState(ObjectGuid guid)
 {
-    LfgState state;
+    // read only: operator[] would insert an empty entry for every guid asked about
+    LfgState state = LFG_STATE_NONE;
     if (guid.IsParty())
     {
-        state = GroupsStore[guid].GetState();
+        if (auto it = GroupsStore.find(guid); it != GroupsStore.end())
+            state = it->second.GetState();
         TC_LOG_TRACE("lfg.data.group.state.get", "Group: {}, State: {}", guid.ToString(), GetStateString(state));
     }
     else
     {
-        state = PlayersStore[guid].GetState();
+        if (auto it = PlayersStore.find(guid); it != PlayersStore.end())
+            state = it->second.GetState();
         TC_LOG_TRACE("lfg.data.player.state.get", "Player: {}, State: {}", guid.ToString(), GetStateString(state));
     }
 
@@ -1651,15 +1706,17 @@ LfgState LFGMgr::GetState(ObjectGuid guid)
 
 LfgState LFGMgr::GetOldState(ObjectGuid guid)
 {
-    LfgState state;
+    LfgState state = LFG_STATE_NONE;    // read only, see GetState
     if (guid.IsParty())
     {
-        state = GroupsStore[guid].GetOldState();
+        if (auto it = GroupsStore.find(guid); it != GroupsStore.end())
+            state = it->second.GetOldState();
         TC_LOG_TRACE("lfg.data.group.oldstate.get", "Group: {}, Old state: {}", guid.ToString(), state);
     }
     else
     {
-        state = PlayersStore[guid].GetOldState();
+        if (auto it = PlayersStore.find(guid); it != PlayersStore.end())
+            state = it->second.GetOldState();
         TC_LOG_TRACE("lfg.data.player.oldstate.get", "Player: {}, Old state: {}", guid.ToString(), state);
     }
 
@@ -1670,7 +1727,9 @@ bool LFGMgr::IsVoteKickActive(ObjectGuid gguid)
 {
     ASSERT(gguid.IsParty());
 
-    bool active = GroupsStore[gguid].IsVoteKickActive();
+    bool active = false;                // read only, see GetState
+    if (auto it = GroupsStore.find(gguid); it != GroupsStore.end())
+        active = it->second.IsVoteKickActive();
     TC_LOG_TRACE("lfg.data.group.votekick.get", "Group: {}, Active: {}", gguid.ToString(), active);
 
     return active;

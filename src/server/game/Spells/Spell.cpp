@@ -24,6 +24,7 @@
 #include "BattlePetMgr.h"
 #include "CellImpl.h"
 #include "CharmInfo.h"
+#include "ClassicOpcodes.h"
 #include "CollectionMgr.h"
 #include "CombatLogPackets.h"
 #include "Common.h"
@@ -63,6 +64,8 @@
 #include "TradeData.h"
 #include "TraitPackets.h"
 #include "TransmogMgr.h"
+#include <mutex>
+#include <unordered_set>
 #include "UniqueTrackablePtr.h"
 #include "Util.h"
 #include "VMapFactory.h"
@@ -4257,6 +4260,8 @@ void Spell::_handle_immediate_phase()
 
 void Spell::_handle_finish_phase()
 {
+    SpendPendingComboPoints();
+
     if (Unit* unitCaster = m_caster->ToUnit())
         if (m_spellInfo->HasEffect(SPELL_EFFECT_ADD_EXTRA_ATTACKS))
             unitCaster->SetLastExtraAttackSpell(m_spellInfo->Id);
@@ -4407,6 +4412,8 @@ void Spell::finish(SpellCastResult result)
     if (m_spellState == SPELL_STATE_FINISHED)
         return;
     m_spellState = SPELL_STATE_FINISHED;
+
+    SpendPendingComboPoints();                              // a finisher that never reached its finish phase still pays
 
     if (m_scriptResult && (m_scriptWaitsForSpellHit || result != SPELL_CAST_OK))
         m_scriptResult.SetResult(result);
@@ -4908,6 +4915,23 @@ void Spell::SendSpellGo()
         castData.MissileTrajectory.Pitch = m_targets.GetPitch();
     }
 
+    // The missile is launched by this packet: without the ammo display the client draws it as a white box. Shots whose cast start is
+    // never sent (Auto Shot's repeats, other triggered ranged spells) were left with display 0 (PC 20 Oct, squares on some of a hunter's moves).
+    if (castFlags & CAST_FLAG_PROJECTILE)
+    {
+        castData.AmmoDisplayID = GetSpellCastDataAmmo();
+        static std::mutex missileLogMutex;
+        static std::unordered_set<uint32> missileLogged;
+        bool first;
+        {
+            std::lock_guard<std::mutex> lock(missileLogMutex);
+            first = m_caster->IsPlayer() && missileLogged.insert(m_spellInfo->Id).second;
+        }
+        if (first)
+            TC_LOG_INFO("playerbot.v2", "[missile] spell {} visual {} ammo display {} cast flags 0x{:X} triggered 0x{:X}", m_spellInfo->Id,
+                m_SpellVisual.SpellXSpellVisualID, castData.AmmoDisplayID, castFlags, uint32(_triggeredCastFlags));
+    }
+
     packet.LogData.Initialize(this);
 
     m_caster->SendCombatLogMessage(&packet);
@@ -4972,12 +4996,20 @@ int32 Spell::GetSpellCastDataAmmo()
         {
             ammoInventoryType = pItem->GetTemplate()->GetInventoryType();
             if (ammoInventoryType == INVTYPE_THROWN)
+            {
                 ammoDisplayID = pItem->GetDisplayId(playerCaster);
+                // A thrown weapon with the generic 1.60 display, or none, is drawn by the client as a white square (UBRS and Red Cloud Mesa, 20 Oct).
+                if (!ammoDisplayID || ammoDisplayID >= 500000)
+                    ammoDisplayID = 23211;
+            }
             else if (ItemTemplate const* ammo = sObjectMgr->GetItemTemplate(playerCaster->GetAmmoId()))   // Classic 1.60 ammo slot
             {
-                if (ItemModifiedAppearanceEntry const* modifiedAppearance = TransmogMgr::GetItemModifiedAppearance(ammo->GetId(), 0))
-                    if (ItemAppearanceEntry const* itemAppearance = sItemAppearanceStore.LookupEntry(modifiedAppearance->ItemAppearanceID))
-                        ammoDisplayID = itemAppearance->ItemDisplayInfoID;
+                // The ammo's own display, as a real player's cast sends it. The generic 1.60 ammo display (737992 / 737993) has no model and the
+                // client draws a white box for it (PC log 20 Oct); bots take ammo that has its own display (Player::AutoSelectAmmo), so
+                // this is the fallback only: an arrow model, for bullets too (every classic bullet has the generic display).
+                ammoDisplayID = Player::GetAmmoDisplayId(ammo);
+                if (!Player::HasDrawableAmmoDisplay(ammo))
+                    ammoDisplayID = 23211;   // an arrow display seen to draw (item 19082); no classic bullet has a display of its own
                 ammoInventoryType = INVTYPE_AMMO;
             }
             else if (playerCaster->HasAura(46699))      // Requires No Ammo
@@ -5431,6 +5463,11 @@ void Spell::SendResurrectRequest(Player* target)
     resurrectRequest.Name = sentName;
     resurrectRequest.Sickness = m_caster->IsUnit() && m_caster->ToUnit()->IsSpiritHealer(); // "you'll be afflicted with resurrection sickness"
     resurrectRequest.UseTimer = !m_spellInfo->HasAttribute(SPELL_ATTR3_NO_RES_TIMER);
+    // Classic 70291: a player's resurrection is accepted at once and carries no sickness. That client reads the two flag bits of this
+    // packet at a different alignment than retail, so a set UseTimer showed a 10 second wait with resurrection sickness and a greyed
+    // Accept; both bits clear reads as "no timer, no sickness" at any alignment.
+    if (ClassicOpcodes::IsBuild70291OrLater() && !resurrectRequest.Sickness)
+        resurrectRequest.UseTimer = false;
     if (Pet* pet = target->GetPet())
         if (CharmInfo* charmInfo = pet->GetCharmInfo())
             resurrectRequest.PetNumber = charmInfo->GetPetNumber();
@@ -5566,8 +5603,32 @@ void Spell::TakePower()
             continue;
         }
 
+        // a finisher's damage, durations and procs read the caster's combo points while its effects run (SpellEffectInfo::CalcValue),
+        // so the points are spent after the effects (SpendPendingComboPoints), not here
+        if (cost.Power == POWER_COMBO_POINTS && cost.Amount > 0 && unitCaster->IsPlayer())
+        {
+            m_comboPointsPending += cost.Amount;
+            continue;
+        }
+
         unitCaster->ModifyPower(cost.Power, -cost.Amount);
+
+        // Classic 1.60 (vanilla): paying mana starts the five second rule (Player::GetPowerRegen, ClassicManaRegen.h)
+        if (cost.Power == POWER_MANA && cost.Amount > 0)
+            if (Player* manaPlayer = unitCaster->ToPlayer())
+                manaPlayer->InterruptPowerRegen(POWER_MANA);
     }
+}
+
+void Spell::SpendPendingComboPoints()
+{
+    if (!m_comboPointsPending)
+        return;
+
+    int32 const points = m_comboPointsPending;
+    m_comboPointsPending = 0;
+    if (Unit* unitCaster = m_caster->ToUnit())
+        unitCaster->ModifyPower(POWER_COMBO_POINTS, -points);
 }
 
 void Spell::RefundPower()
@@ -5602,6 +5663,13 @@ void Spell::RefundPower()
         if (cost.Power == POWER_HEALTH)
         {
             unitCaster->ModifyHealth(cost.Amount);
+            continue;
+        }
+
+        // combo points not spent yet: nothing to give back
+        if (cost.Power == POWER_COMBO_POINTS && m_comboPointsPending)
+        {
+            m_comboPointsPending = 0;
             continue;
         }
 
@@ -6229,6 +6297,29 @@ SpellCastResult Spell::CheckCast(bool strict, int32* param1 /*= nullptr*/, int32
 
                 if (m_spellInfo->SpellLevel > pet->GetLevel())
                     return SPELL_FAILED_LOWLEVEL;
+
+                // Classic 1.60: the Grimoire spells (20270...) have no level of their own any more, so check the taught rank
+                // (vanilla spellLevel of the grimoire), and only teach a demon spells of its own family skill line
+                if (learn_spellproto->SpellLevel > pet->GetLevel())
+                    return SPELL_FAILED_LOWLEVEL;
+
+                if (CreatureFamilyEntry const* family = sCreatureFamilyStore.LookupEntry(pet->GetCreatureTemplate()->family))
+                {
+                    bool familySpell = false;
+                    for (int16 skillLine : family->SkillLine)
+                    {
+                        if (!skillLine)
+                            continue;
+
+                        if (std::vector<SkillLineAbilityEntry const*> const* abilities = sDB2Manager.GetSkillLineAbilitiesBySkill(skillLine))
+                            for (SkillLineAbilityEntry const* ability : *abilities)
+                                if (ability->Spell == int32(learn_spellproto->Id))
+                                    familySpell = true;
+                    }
+
+                    if (!familySpell)
+                        return SPELL_FAILED_BAD_TARGETS;
+                }
 
                 break;
             }
@@ -6912,6 +7003,11 @@ SpellCastResult Spell::CheckCast(bool strict, int32* param1 /*= nullptr*/, int32
                     SendMountResult(MountResult::Shapeshifted); // mount result gets sent before the cast result
                     return SPELL_FAILED_DONT_REPORT;
                 }
+
+                // Classic: no mounting indoors, nor in a closed battleground start room
+                if (!IsTriggered())
+                    if (Player const* player = unitCaster->ToPlayer(); player && player->IsMountRestrictedHere(true))
+                        return SPELL_FAILED_ONLY_OUTDOORS;
                 break;
             }
             case SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS:
@@ -7378,6 +7474,10 @@ void Spell::CheckDst()
 
 SpellCastResult Spell::CheckRange(bool strict) const
 {
+    // A trap picked its target by its own trigger radius; the effect spells of some traps have range 0
+    if (GameObject const* trap = m_caster->ToGameObject(); trap && trap->GetGoType() == GAMEOBJECT_TYPE_TRAP)
+        return SPELL_CAST_OK;
+
     // Don't check for instant cast spells
     if (!strict && m_casttime == 0)
         return SPELL_CAST_OK;
@@ -8478,6 +8578,10 @@ SpellEvent::~SpellEvent()
     if (m_Spell->getState() != SPELL_STATE_FINISHED)
         m_Spell->cancel();
 
+    // events killed on logout or map change skip the handler that clears the spell mod owner's taking spell
+    if (Player* modOwner = m_Spell->GetCaster()->ToPlayer())
+        modOwner->SetSpellModTakingSpell(m_Spell.get(), false);
+
     if (!m_Spell->IsDeletable())
     {
         TC_LOG_ERROR("spells", "~SpellEvent: {} {} tried to delete non-deletable spell {}. Was not deleted, causes memory leak.",
@@ -9316,22 +9420,18 @@ void Spell::TriggerGlobalCooldown()
             gcd = Milliseconds(intGcd);
         }
 
-        bool isMeleeOrRangedSpell = m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MELEE ||
-            m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_RANGED ||
-            m_spellInfo->HasAttribute(SPELL_ATTR0_USES_RANGED_SLOT) ||
-            m_spellInfo->HasAttribute(SPELL_ATTR0_IS_ABILITY);
+        // Classic 1.60 (vanilla): the global cooldown is not shortened by spell haste or haste regen (retail scaled it down to 0.75 s)
 
-        // Apply haste rating
-        if (gcd > MinGCD && ((m_spellInfo->StartRecoveryCategory == 133 && !isMeleeOrRangedSpell)))
+        // PlayerbotV2 pacing multiplier (bots only): scales the GCD, floor 750 ms.
+        if (m_caster->GetTypeId() == TYPEID_PLAYER)
         {
-            gcd = Milliseconds(int64(gcd.count() * m_caster->ToUnit()->m_unitData->ModSpellHaste));
-            RoundToInterval(gcd, MinGCD, MaxGCD);
-        }
-
-        if (gcd > MinGCD && m_caster->ToUnit()->HasAuraTypeWithAffectMask(SPELL_AURA_MOD_GLOBAL_COOLDOWN_BY_HASTE_REGEN, m_spellInfo))
-        {
-            gcd = Milliseconds(int64(gcd.count() * m_caster->ToUnit()->m_unitData->ModHasteRegen));
-            RoundToInterval(gcd, MinGCD, MaxGCD);
+            float const botMod = m_caster->ToPlayer()->GetBotCastSpeedMod();
+            if (botMod != 1.0f)
+            {
+                gcd = Milliseconds(int64(gcd.count() * botMod));
+                if (gcd < MinGCD)
+                    gcd = MinGCD;
+            }
         }
     }
 

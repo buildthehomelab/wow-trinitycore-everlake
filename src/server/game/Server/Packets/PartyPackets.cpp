@@ -18,6 +18,7 @@
 #include "PartyPackets.h"
 #include "CharacterCache.h"
 #include "Group.h"
+#include "Log.h"
 #include "PacketOperators.h"
 #include "Pet.h"
 #include "PhasingHandler.h"
@@ -25,6 +26,7 @@
 #include "RealmList.h"
 #include "SpellAuraEffects.h"
 #include "SpellAuras.h"
+#include "Util.h"
 #include "Vehicle.h"
 
 namespace WorldPackets::Party
@@ -47,21 +49,34 @@ WorldPacket const* PartyCommandResult::Write()
 
 void PartyInviteClient::Read()
 {
-    _worldPacket >> OptionalInit(PartyIndex);
+    // The 70450 client sends the target name length in 6 bits and the realm length in 9 (as the server's PartyInvite and
+    // PartyCommandResult carry the name and surname). Read as 9 + 9 bits the name length took the top three bits of the realm length too
+    // (a 8 letter name read as 64, a 9 letter one as 72): "Attempted to get value with size: 64 in ByteBuffer (pos: 7 size: 22)", the
+    // packet was dropped and no by-name or portrait invite reached the target.
+    try
+    {
+        _worldPacket >> OptionalInit(PartyIndex);
 
-    _worldPacket.ResetBitPos();
-    _worldPacket >> SizedString::BitsSize<9>(TargetName);
-    _worldPacket >> SizedString::BitsSize<9>(TargetRealm);
+        _worldPacket.ResetBitPos();
+        _worldPacket >> SizedString::BitsSize<6>(TargetName);
+        _worldPacket >> SizedString::BitsSize<9>(TargetRealm);
 
-    // Classic 1.60: a realm address, not the proposed roles (sniffs: 0 when inviting by name; 0x46010046 with the target guid from the
-    // Battle.net friends list). Read as roles it made the invitee see the Group Finder role choice with nothing selectable.
-    _worldPacket >> TargetRealmAddress;
-    _worldPacket >> TargetGUID;
+        // Classic 1.60: a realm address, not the proposed roles (sniffs: 0 when inviting by name; 0x46010046 with the target guid from the
+        // Battle.net friends list). Read as roles it made the invitee see the Group Finder role choice with nothing selectable.
+        _worldPacket >> TargetRealmAddress;
+        _worldPacket >> TargetGUID;
 
-    _worldPacket >> SizedString::Data(TargetName);
-    _worldPacket >> SizedString::Data(TargetRealm);
-    if (PartyIndex)
-        _worldPacket >> *PartyIndex;
+        _worldPacket >> SizedString::Data(TargetName);
+        _worldPacket >> SizedString::Data(TargetRealm);
+        if (PartyIndex)
+            _worldPacket >> *PartyIndex;
+    }
+    catch (ByteBufferException const& e)
+    {
+        TC_LOG_ERROR("network", "CMSG_PARTY_INVITE unreadable ({}): {} bytes {}", e.what(), _worldPacket.size(),
+            Trinity::Impl::ByteArrayToHexStr(_worldPacket.data(), _worldPacket.size()));
+        throw;
+    }
 }
 
 WorldPacket const* PartyInvite::Write()
@@ -489,10 +504,14 @@ ByteBuffer& operator<<(ByteBuffer& data, LeaverInfo const& leaverInfo)
     return data;
 }
 
-ByteBuffer& operator<<(ByteBuffer& data, PartyPlayerInfo const& playerInfo)
+static ByteBuffer& WritePlayerInfo(ByteBuffer& data, PartyPlayerInfo const& playerInfo, bool classic70291)
 {
     data << SizedString::BitsSize<6>(playerInfo.Name);
-    data << SizedCString::BitsSize<6>(playerInfo.VoiceStateID);
+    // client 70291 reads the voice state id size in 9 bits (6 in retail and 70245): header 6 + 9 + 3 flags = 3 bytes
+    if (classic70291)
+        data << SizedCString::BitsSize<9>(playerInfo.VoiceStateID);
+    else
+        data << SizedCString::BitsSize<6>(playerInfo.VoiceStateID);
     data << Bits<1>(playerInfo.Connected);
     data << Bits<1>(playerInfo.FromSocialQueue);
     data << Bits<1>(playerInfo.VoiceChatSilenced);
@@ -570,13 +589,17 @@ WorldPacket const* PartyUpdate::Write()
     _worldPacket << int32(MyIndex);
     _worldPacket << PartyGUID;
     _worldPacket << uint32(SequenceNum);
+    if (Classic70291)
+        _worldPacket << int8(Classic70291_BeforeLeader);
     _worldPacket << LeaderGUID;
     _worldPacket << uint8(LeaderFactionGroup);
     _worldPacket << int32(PingRestriction);
+    if (Classic70291)
+        _worldPacket << uint64(Classic70291_BeforeMemberCount);
     _worldPacket << Size<uint32>(PlayerList);
 
     for (PartyPlayerInfo const& playerInfos : PlayerList)
-        _worldPacket << playerInfos;
+        WritePlayerInfo(_worldPacket, playerInfos, Classic70291);
 
     _worldPacket << OptionalInit(ChallengeMode);
     _worldPacket << OptionalInit(LfgInfos);

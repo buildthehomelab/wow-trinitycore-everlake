@@ -457,6 +457,22 @@ void FillOwnedCurrenciesMap(WorldPackets::Traits::TraitConfig const& traitConfig
 
                             currencies[currencySource->TraitCurrencyID] += currencySource->Amount;
                         }
+
+                        // Classic 1.60 Legacy perk Talented: talent points every level from its start level instead of from level 10
+                        // (class talent currency 3820: one point per level 10-60, SourcedMax 51 stays the limit)
+                        static constexpr int32 ClassicTalentCurrencyID = 3820;
+                        static constexpr int32 ClassicFirstTalentLevel = 10;
+                        if (currency->ID == ClassicTalentCurrencyID)
+                        {
+                            if (int32 startLevel = player.GetClassicTalentedStartLevel(); startLevel > 0 && startLevel < ClassicFirstTalentLevel)
+                            {
+                                int32 extra = std::max(0, std::min(player.GetLevel(), ClassicFirstTalentLevel - 1) - startLevel + 1);
+                                int32& amount = currencies[currency->ID];
+                                amount += extra;
+                                if (currency->SourcedMax > 0)
+                                    amount = std::min(amount, currency->SourcedMax);
+                            }
+                        }
                     }
                     break;
                 case TraitCurrencyType::TraitSourcedPlayerDataElement:
@@ -1014,6 +1030,20 @@ LearnResult ValidateConfig(WorldPackets::Traits::TraitConfig& traitConfig, Playe
     return LearnResult::Ok;
 }
 
+LearnResult ValidateConfigForCommit(WorldPackets::Traits::TraitConfig& traitConfig, PlayerDataAccessor player)
+{
+    // Classic has one specialization containing all talent trees. Purchases
+    // are incremental; the earned-currency and entry checks still apply.
+    ChrSpecializationEntry const* specialization = sChrSpecializationStore.LookupEntry(traitConfig.ChrSpecializationID);
+    bool classicTalents = traitConfig.Type == TraitConfigType::Combat && specialization
+        && !specialization->IsPetSpecialization() && specialization->OrderIndex == 0
+        && std::ranges::none_of(sChrSpecializationStore, [specialization](ChrSpecializationEntry const* other)
+        {
+            return other->ClassID == specialization->ClassID && other->ID != specialization->ID;
+        });
+    return ValidateConfig(traitConfig, player, !classicTalents);
+}
+
 bool CanApplyTraitNode(UF::TraitConfig const& traitConfig, UF::TraitEntry const& traitEntry)
 {
     Node const* node = Trinity::Containers::MapGetValuePtr(_traitNodes, traitEntry.TraitNodeID);
@@ -1033,6 +1063,47 @@ bool CanApplyTraitNode(UF::TraitConfig const& traitConfig, UF::TraitEntry const&
 std::vector<TraitDefinitionEffectPointsEntry const*> const* GetTraitDefinitionEffectPointModifiers(int32 traitDefinitionId)
 {
     return Trinity::Containers::MapGetValuePtr(_traitDefinitionEffectPointModifiers, traitDefinitionId);
+}
+
+std::vector<NodeEntryInfo> GetNodeEntriesForConfig(WorldPackets::Traits::TraitConfig const& traitConfig)
+{
+    std::vector<NodeEntryInfo> result;
+    std::vector<Tree const*> const* trees = GetTreesForConfig(traitConfig);
+    if (!trees)
+        return result;
+
+    for (Tree const* tree : *trees)
+        for (Node const* node : tree->Nodes)
+            for (NodeEntry const& entry : node->Entries)
+                result.push_back({ .TraitNodeID = int32(node->Data->ID), .TraitNodeEntryID = int32(entry.Data->ID),
+                    .MaxRanks = entry.Data->MaxRanks, .TraitDefinitionID = entry.Data->TraitDefinitionID });
+
+    return result;
+}
+
+std::vector<int32> GetCostCurrenciesForNode(int32 traitNodeId)
+{
+    std::vector<int32> currencies;
+    Node const* node = Trinity::Containers::MapGetValuePtr(_traitNodes, traitNodeId);
+    if (!node)
+        return currencies;
+
+    auto add = [&](std::vector<TraitCostEntry const*> const& costs)
+    {
+        for (TraitCostEntry const* cost : costs)
+            currencies.push_back(cost->TraitCurrencyID);
+    };
+    for (NodeGroup const* group : node->Groups)
+        add(group->Costs);
+    for (NodeEntry const& entry : node->Entries)
+        add(entry.Costs);
+    add(node->Costs);
+    if (Tree const* tree = Trinity::Containers::MapGetValuePtr(_traitTrees, node->Data->TraitTreeID))
+        add(tree->Costs);
+
+    std::ranges::sort(currencies);
+    currencies.erase(std::ranges::unique(currencies).begin(), currencies.end());
+    return currencies;
 }
 
 void InitializeStarterBuildTraitConfig(WorldPackets::Traits::TraitConfig& traitConfig, PlayerDataAccessor player)

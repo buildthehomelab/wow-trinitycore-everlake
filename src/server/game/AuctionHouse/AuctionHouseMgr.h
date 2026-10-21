@@ -289,6 +289,11 @@ public:
     std::map<uint32, AuctionPosting>::iterator GetAuctionsEnd() { return _itemsByAuctionId.end(); }
 
     AuctionPosting* GetAuction(uint32 auctionId);
+    // Returns the auction ids the given player currently owns in this house.
+    // Read-only — does not mutate _playerOwnedAuctions / _itemsByAuctionId.
+    // Used by Playerbot V2 to drive bulk-cancel and snapshot enrichment
+    // without exposing the internal multimap.
+    std::vector<uint32> GetOwnedAuctionIds(ObjectGuid owner) const;
 
     void AddAuction(CharacterDatabaseTransaction trans, AuctionPosting auction);
 
@@ -372,8 +377,8 @@ class TC_GAME_API AuctionHouseMgr
         static std::string BuildAuctionSoldMailBody(ObjectGuid guid, uint64 bid, uint64 buyout, uint32 deposit, uint64 consignment);
         static std::string BuildAuctionInvoiceMailBody(ObjectGuid guid, uint64 bid, uint64 buyout, uint32 deposit, uint64 consignment, uint32 moneyDelay, uint32 eta);
 
-        static uint64 GetCommodityAuctionDeposit(ItemTemplate const* item, Minutes time, uint32 quantity);
-        static uint64 GetItemAuctionDeposit(Player const* player, Item const* item, Minutes time);
+        static uint64 GetCommodityAuctionDeposit(ItemTemplate const* item, Minutes time, uint32 quantity, uint32 depositRate = 5);
+        static uint64 GetItemAuctionDeposit(Player const* player, Item const* item, Minutes time, uint32 depositRate = 5);
         static AuctionHouseEntry const* GetAuctionHouseEntry(uint32 factionTemplateId, uint32* houseId);
 
     public:

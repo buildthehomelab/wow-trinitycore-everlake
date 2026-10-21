@@ -67,6 +67,7 @@ struct PlayerDataAccessor
     uint64 GetMoney() const;
     int32 GetCurrencyQuantity(int32 currencyId) const;
     int32 GetLevel() const;
+    int32 GetClassicTalentedStartLevel() const;
     bool IsQuestRewarded(int32 questId) const;
     bool HasAchieved(int32 achievementId) const;
     uint32 GetPrimarySpecialization() const;
@@ -90,9 +91,24 @@ void FillSpentCurrenciesMap(std::vector<WorldPackets::Traits::TraitEntry> const&
 std::vector<UF::TraitEntry> GetGrantedTraitEntriesForConfig(WorldPackets::Traits::TraitConfig const& traitConfig, PlayerDataAccessor player);
 bool IsValidEntry(WorldPackets::Traits::TraitEntry const& traitEntry);
 LearnResult ValidateConfig(WorldPackets::Traits::TraitConfig& traitConfig, PlayerDataAccessor player, bool requireSpendingAllCurrencies = false, bool removeInvalidEntries = false);
+LearnResult ValidateConfigForCommit(WorldPackets::Traits::TraitConfig& traitConfig, PlayerDataAccessor player);
 bool CanApplyTraitNode(UF::TraitConfig const& traitConfig, UF::TraitEntry const& traitEntry);
 std::vector<TraitDefinitionEffectPointsEntry const*> const* GetTraitDefinitionEffectPointModifiers(int32 traitDefinitionId);
 void InitializeStarterBuildTraitConfig(WorldPackets::Traits::TraitConfig& traitConfig, PlayerDataAccessor player);
+
+// Every node entry of the trees a config can spend in (the class talent trees for a Combat config). Used by
+// PlayerbotV2 to resolve talents by spell when it builds a config for a bot.
+struct NodeEntryInfo
+{
+    int32 TraitNodeID = 0;
+    int32 TraitNodeEntryID = 0;
+    int32 MaxRanks = 0;
+    int32 TraitDefinitionID = 0;
+};
+std::vector<NodeEntryInfo> GetNodeEntriesForConfig(WorldPackets::Traits::TraitConfig const& traitConfig);
+// The currencies buying a rank of this node spends, sorted. A tier gate counts the spend of one of them, so nodes that
+// share a gate's currency share a tree; Classic talent tabs differ here even when they share a TraitTree.
+std::vector<int32> GetCostCurrenciesForNode(int32 traitNodeId);
 }
 
 #endif // TRINITY_TRAIT_MGR_H

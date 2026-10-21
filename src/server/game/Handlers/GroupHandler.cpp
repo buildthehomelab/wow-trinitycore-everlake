@@ -29,6 +29,7 @@
 #include "ObjectAccessor.h"
 #include "PartyPackets.h"
 #include "Player.h"
+#include "ScriptMgr.h"
 #include "SocialMgr.h"
 #include "World.h"
 
@@ -63,7 +64,17 @@ void WorldSession::SendPartyResult(PartyOperation operation, const std::string& 
 void WorldSession::HandlePartyInviteOpcode(WorldPackets::Party::PartyInviteClient& packet)
 {
     Player* invitingPlayer = GetPlayer();
-    Player* invitedPlayer = ObjectAccessor::FindPlayerByName(packet.TargetName);
+    // The unit menu / portrait Invite can send the target by guid (empty name) or as "Name-Realm"; typed /invite sends the plain name.
+    Player* invitedPlayer = nullptr;
+    if (!packet.TargetGUID.IsEmpty() && packet.TargetGUID.IsPlayer())
+        invitedPlayer = ObjectAccessor::FindPlayer(packet.TargetGUID);
+    if (!invitedPlayer && !packet.TargetName.empty())
+    {
+        invitedPlayer = ObjectAccessor::FindPlayerByName(packet.TargetName);
+        if (!invitedPlayer)
+            if (size_t const dash = packet.TargetName.find('-'); dash != std::string::npos && dash > 0)
+                invitedPlayer = ObjectAccessor::FindPlayerByName(std::string_view(packet.TargetName).substr(0, dash));
+    }
 
     // no player
     if (!invitedPlayer)
@@ -121,6 +132,10 @@ void WorldSession::HandlePartyInviteOpcode(WorldPackets::Party::PartyInviteClien
         group = invitingPlayer->GetGroupInvite();
 
     Group* group2 = invitedPlayer->GetGroup(packet.PartyIndex);
+    // a bot group listed in the Group Finder takes a player who invites its member as a sign-up
+    if (group2 && !invitingPlayer->GetGroup(packet.PartyIndex) && sScriptMgr->OnPlayerGroupFinderJoinRequest(invitedPlayer, invitingPlayer))
+        return;
+
     // player already in another group or invited
     if (group2 || invitedPlayer->GetGroupInvite())
     {
@@ -362,10 +377,8 @@ void WorldSession::HandleLeaveGroupOpcode(WorldPackets::Party::LeaveGroup& packe
     }
 }
 
-void WorldSession::HandleSetLootMethodOpcode(WorldPackets::Party::SetLootMethod& /*packet*/)
+void WorldSession::HandleSetLootMethodOpcode(WorldPackets::Party::SetLootMethod& packet)
 {
-    // not allowed to change
-    /*
     Group* group = GetPlayer()->GetGroup(packet.PartyIndex);
     if (!group)
         return;
@@ -379,8 +392,10 @@ void WorldSession::HandleSetLootMethodOpcode(WorldPackets::Party::SetLootMethod&
     switch (packet.LootMethod)
     {
         case FREE_FOR_ALL:
+        case ROUND_ROBIN:
         case MASTER_LOOT:
         case GROUP_LOOT:
+        case NEED_BEFORE_GREED:
         case PERSONAL_LOOT:
             break;
         default:
@@ -395,10 +410,9 @@ void WorldSession::HandleSetLootMethodOpcode(WorldPackets::Party::SetLootMethod&
 
     // everything's fine, do it
     group->SetLootMethod(static_cast<LootMethod>(packet.LootMethod));
-    group->SetMasterLooterGuid(packet.LootMasterGUID);
+    group->SetMasterLooterGuid(packet.LootMethod == MASTER_LOOT ? packet.LootMasterGUID : ObjectGuid::Empty);
     group->SetLootThreshold(static_cast<ItemQualities>(packet.LootThreshold));
     group->SendUpdate();
-    */
 }
 
 void WorldSession::HandleMinimapPingOpcode(WorldPackets::Party::MinimapPingClient& packet)
@@ -557,12 +571,20 @@ void WorldSession::HandleDoReadyCheckOpcode(WorldPackets::Party::DoReadyCheck& p
 {
     Group* group = GetPlayer()->GetGroup(packet.PartyIndex);
     if (!group)
+    {
+        TC_LOG_INFO("network", "[ready_check] {} sent a ready check (party index {}) but has no such group", GetPlayer()->GetName(), packet.PartyIndex ? int32(*packet.PartyIndex) : -1);
         return;
+    }
 
     /** error handling **/
     if (!group->IsLeader(GetPlayer()->GetGUID()) && !group->IsAssistant(GetPlayer()->GetGUID()))
+    {
+        TC_LOG_INFO("network", "[ready_check] {} is not the leader or an assistant: ready check refused", GetPlayer()->GetName());
         return;
+    }
     /********************/
+
+    TC_LOG_INFO("network", "[ready_check] {} starts a ready check ({} members)", GetPlayer()->GetName(), group->GetMembersCount());
 
     // everything's fine, do it
     group->StartReadyCheck(GetPlayer()->GetGUID());
@@ -736,6 +758,8 @@ void WorldSession::HandleSendPingUnit(WorldPackets::Party::SendPingUnit const& p
 
         member->SendDirectMessage(broadcastPingUnit.GetRawPacket());
     }
+
+    sScriptMgr->OnPlayerPingUnit(_player, const_cast<Group*>(group), const_cast<Unit*>(target), static_cast<uint8>(pingUnit.Type));
 }
 
 void WorldSession::HandleSendPingWorldPoint(WorldPackets::Party::SendPingWorldPoint const& pingWorldPoint)
@@ -765,6 +789,8 @@ void WorldSession::HandleSendPingWorldPoint(WorldPackets::Party::SendPingWorldPo
 
         member->SendDirectMessage(broadcastPingWorldPoint.GetRawPacket());
     }
+
+    sScriptMgr->OnPlayerPingWorldPoint(_player, const_cast<Group*>(group), pingWorldPoint.Point.Pos, static_cast<uint8>(pingWorldPoint.Type));
 }
 
 void WorldSession::HandleSendPingCooldown(WorldPackets::Party::SendPingCooldown const& pingCooldown)

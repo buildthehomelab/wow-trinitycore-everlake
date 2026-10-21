@@ -27,6 +27,7 @@
 #include "GroupReference.h"
 #include "Hash.h"
 #include "ItemDefines.h"
+#include "IteratorPair.h"
 #include "ItemEnchantmentMgr.h"
 #include "MapReference.h"
 #include "PetDefines.h"
@@ -63,6 +64,7 @@ struct MapEntry;
 struct PvpTalentEntry;
 struct QuestPackageItemEntry;
 struct RewardPackEntry;
+struct SkillLineEntry;
 struct SkillRaceClassInfoEntry;
 struct SpellCastRequest;
 struct TalentEntry;
@@ -874,6 +876,10 @@ enum class BagSlotFlags : uint32
     PriorityReagents    = 0x0080,
     ExpansionCurrent    = 0x0100,
     ExpansionLegacy     = 0x0200,
+
+    // server only, kept in characters.inventoryBagFlags: the bag sort direction settings (ActivePlayerData)
+    SortBagsRightToLeft     = 0x10000000,
+    InsertItemsLeftToRight  = 0x20000000,
 };
 
 DEFINE_ENUM_FLAG(BagSlotFlags);
@@ -1339,6 +1345,12 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void SetCommandStatusOn(uint32 command) { _activeCheats |= command; }
         void SetCommandStatusOff(uint32 command) { _activeCheats &= ~command; }
 
+        // PlayerbotV2 pacing: aura-free multiplier on this bot's cast times and GCD
+        // (1.0 = none, <1 faster). Set on the world thread, read by map threads.
+        // See WorldObject::ModSpellCastTime and Spell::TriggerGlobalCooldown.
+        float GetBotCastSpeedMod() const { return _botCastSpeedMod.load(std::memory_order_relaxed); }
+        void SetBotCastSpeedMod(float mod) { _botCastSpeedMod.store(mod, std::memory_order_relaxed); }
+
         // Played Time Stuff
         time_t m_logintime;
         time_t m_Last_tick;
@@ -1355,6 +1367,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         PetStable& GetOrInitPetStable();
         PetStable const* GetPetStable() const { return m_petStable.get(); }
         void AddPetToUpdateFields(PetStable::PetInfo const& pet, PetSaveMode slot, PetStableFlags flags);
+        void UpdateStablePetLoyalty(uint32 petNumber, uint8 loyaltyLevel, int32 loyaltyPoints);   // Classic 1.60 hunter pet loyalty
         void SetPetSlot(uint32 petNumber, PetSaveMode dstPetSlot);
         uint8 GetNumStableSlots() const { return m_activePlayerData->NumStableSlots; }
         void SetNumStableSlots(uint8 slots);
@@ -1489,6 +1502,10 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void AutoSelectAmmo();                              // keeps a usable ammo set, or picks one from the bags
         void TakeAmmo();                                    // one shot
         bool IsAmmoUsableWithRangedWeapon(ItemTemplate const* proto) const;
+        // The display the client draws an arrow or bullet with: 0 when the item has none. The generic 1.60 ammo display (737992 / 737993, from 500000 up)
+        // has no model: the client draws a white box for it, nocked and in flight.
+        static uint32 GetAmmoDisplayId(ItemTemplate const* proto);
+        static bool HasDrawableAmmoDisplay(ItemTemplate const* proto) { uint32 const id = GetAmmoDisplayId(proto); return id && id < 500000; }
         bool NeedsAmmo() const;                             // bow, gun or crossbow equipped
         Item* GetShield(bool useable = false) const;
         Item* GetChildItemByGuid(ObjectGuid guid) const;
@@ -1539,6 +1556,10 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void SetBackpackSellJunkDisabled(bool disabled) { SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::BackpackSellJunkDisabled), disabled); }
         bool IsBankAutoSortDisabled() const { return m_activePlayerData->BankAutoSortDisabled; }
         void SetBankAutoSortDisabled(bool disabled) { SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::BankAutoSortDisabled), disabled); }
+        bool IsSortBagsRightToLeft() const { return m_activePlayerData->SortBagsRightToLeft; }
+        void SetSortBagsRightToLeft(bool enabled) { SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::SortBagsRightToLeft), enabled); }
+        bool IsInsertItemsLeftToRight() const { return m_activePlayerData->InsertItemsLeftToRight; }
+        void SetInsertItemsLeftToRight(bool enabled) { SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::InsertItemsLeftToRight), enabled); }
         EnumFlag<BagSlotFlags> GetBagSlotFlags(uint32 bagIndex) const { return static_cast<BagSlotFlags>(m_activePlayerData->BagSlotFlags[bagIndex]); }
         void SetBagSlotFlag(uint32 bagIndex, EnumFlag<BagSlotFlags> flags) { SetUpdateFieldFlagValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::BagSlotFlags, bagIndex), flags.AsUnderlyingType()); }
         void RemoveBagSlotFlag(uint32 bagIndex, EnumFlag<BagSlotFlags> flags) { RemoveUpdateFieldFlagValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::BagSlotFlags, bagIndex), flags.AsUnderlyingType()); }
@@ -1667,6 +1688,10 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         Player* GetTrader() const;
         TradeData* GetTradeData() const { return m_trade; }
         void TradeCancel(bool sendback, TradeStatus status = TRADE_STATUS_CANCELLED);
+        // Closes a trade that can no longer finish: the partner is gone, left the map or walked out of range, or the two sides
+        // disagree about being in it. Called every Update, free when no trade is open.
+        void UpdateTradeState();
+        void InitiateTrade(Player* trader); // PlayerBot integration: minimal core hook
 
         CinematicMgr* GetCinematicMgr() const { return _cinematicMgr.get(); }
 
@@ -1971,8 +1996,9 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void SendRemoveControlBar() const;
         bool HasSpell(uint32 spell) const override;
         bool HasActiveSpell(uint32 spell) const;            // show in spellbook
+        uint32 ResolveSupersededRank(uint32 spellId) const; // Classic 1.60: the active higher rank of a known but superseded rank, else spellId
         SpellInfo const* GetCastSpellInfo(SpellInfo const* spellInfo, TriggerCastFlags& triggerFlag, GetCastSpellInfoContext* context) const override;
-        bool IsSpellFitByClassAndRace(uint32 spell_id) const;
+        bool IsSpellFitByClassAndRace(uint32 spell_id, uint32 learnSpellDepth = 0) const;
         bool HandlePassiveSpellLearn(SpellInfo const* spellInfo);
 
         void SendProficiency(ItemClass itemClass, uint32 itemSubclassMask) const;
@@ -2300,6 +2326,10 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         LootRoll* GetLootRoll(ObjectGuid const& lootObjectGuid, uint8 lootListId);
         void AddLootRoll(LootRoll* roll);
         void RemoveLootRoll(LootRoll* roll);
+        // Read-only access to in-flight loot rolls. Lets external systems
+        // (Playerbot V2) enumerate pending rolls without going through
+        // the per-roll GetLootRoll lookup.
+        std::vector<LootRoll*> const& GetLootRolls() const { return m_lootRolls; }
 
         void RemovedInsignia(Player* looterPlr);
 
@@ -2384,6 +2414,12 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         Optional<WorldLocation> m_deathRecapReturn;
         void BuildPlayerRepop();
         void RepopAtGraveyard();
+        // Classic 1.60: a graveyard row whose Z lies under the terrain (retail world_safe_locs Z against Classic terrain) drops the ghost
+        // out of the world. Raises loc to the floor when it is buried (no static surface near it); returns true when it moved the point.
+        bool SnapBuriedLocToFloor(Map* map, WorldLocation& loc, uint32 safeLocId) const;
+        // Set by RepopAtGraveyard for a far teleport, consumed by the worldport ack (the destination map only exists there)
+        void SetGraveyardTeleportId(uint32 id) { m_graveyardTeleportId = id; }
+        uint32 ConsumeGraveyardTeleportId() { uint32 id = m_graveyardTeleportId; m_graveyardTeleportId = 0; return id; }
 
         void DurabilityLossAll(double percent, bool inventory);
         void DurabilityLoss(Item* item, double percent);
@@ -2424,6 +2460,13 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         static uint32 GetClassicProfessionSkill(uint32 skill);
         void SyncClassicProfessionChildSkills(uint32 skill);
         void UpdateClassicLegacyUnlock();
+        void UpdateClassicProfessionTitles();
+        static bool IsClassicCertificationSkill(uint32 skillId);
+        // Classic 1.60 Legacy perks (Legacy trait trees 1187 Professions, 1188 Adventure, 1189 Progression)
+        int32 GetClassicLegacyPerkAmount(uint32 spellId, SpellEffIndex effIndex) const;
+        uint64 ApplyClassicLegacyPriceMod(uint64 price, int32 priceType) const;
+        void SetClassicFreeHelpfulSpellsUntil(TimePoint until) { _classicFreeHelpfulSpellsUntil = until; }
+        bool HasClassicFreeHelpfulSpells() const;
         void GrantClassicFreeBankTab();
         bool HasSkill(uint32 skill) const;
         void LearnSkillRewardedSpells(uint32 skillId, uint32 skillValue, Races race);
@@ -2465,6 +2508,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         // These methods are used to periodically update certain area and aura based mechanics used in Heartbeat and Movement
         void UpdateZoneAndAreaId();
         void UpdateIndoorsOutdoorsAuras();
+        bool IsMountRestrictedHere(bool checkStartArea) const;
         void UpdateTavernRestingState();
 
         static Team TeamForRace(uint8 race);
@@ -2787,6 +2831,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         // Temporarily removed pet cache
         uint32 GetTemporaryUnsummonedPetNumber() const { return m_temporaryUnsummonedPetNumber; }
         void SetTemporaryUnsummonedPetNumber(uint32 petnumber) { m_temporaryUnsummonedPetNumber = petnumber; }
+        void DelayPetResummon(uint32 ms) { m_petResummonDelay = ms; }
         Optional<ReactStates> GetTemporaryPetReactState() const { return m_temporaryPetReactState; }
         void DisablePetControlsOnMount(ReactStates reactState, CommandStates commandState);
         void EnablePetControlsOnDismount();
@@ -3125,6 +3170,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         // Gamemaster whisper whitelist
         GuidList WhisperList;
         TimePoint m_regenInterruptTimestamp;
+        TimePoint m_manaSpentTimestamp;                     // Classic 1.60: the five second rule starts when mana is paid, nothing else
+        uint32 m_graveyardTeleportId = 0;                   // graveyard of a far repop teleport, checked by the worldport ack
         uint32 m_regenTimerCount;
         float m_healthFraction;
         std::array<float, MAX_POWERS_PER_CLASS> m_powerFraction;
@@ -3279,6 +3326,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         uint32 m_ExtraFlags;
 
+        std::atomic<float> _botCastSpeedMod{ 1.0f };
+
         QuestStatusMap m_QuestStatus;
         QuestObjectiveStatusMap m_questObjectiveStatus;
         QuestStatusSaveMap m_QuestStatusSave;
@@ -3312,6 +3361,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         int32 m_spellPenetrationItemMod;
         std::array<int32, 140 - 83> m_classicItemMods = { };   // ItemModType 83 .. 139 (ITEM_MOD_CLASSIC_*), from equipped items
         int32 m_classicBlockValueBonus = 0;                    // ITEM_MOD_BLOCK_VALUE of equipped items
+        mutable TimePoint _classicFreeHelpfulSpellsUntil;            // Legacy perk The Quick and the Dead: free helpful spells after resurrection
 
         SpellModContainer m_spellMods;
 
@@ -3440,6 +3490,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         // Temporary removed pet cache
         uint32 m_temporaryUnsummonedPetNumber;
+        uint32 m_botSheathIdleMs = 0;                       // bot only: ms with weapons drawn and no fight
+        uint32 m_petResummonDelay;                          // ms until the pet remembered at login is summoned (0 = none pending)
         Optional<ReactStates> m_temporaryPetReactState;
         uint32 m_oldpetspell;
         ObjectGuid m_temporaryUnsummonedBattlePet;

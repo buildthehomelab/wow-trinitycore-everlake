@@ -87,8 +87,32 @@ void WorldSession::HandleSendMail(WorldPackets::Mail::SendMail& sendMail)
     }
 
     ObjectGuid receiverGuid;
-    if (normalizePlayerName(sendMail.Info.Target))
-        receiverGuid = sCharacterCache->GetCharacterGuidByName(sendMail.Info.Target);
+    {
+        // The client sends recipients as "Name" or "Name Surname"
+        std::string recipientName = sendMail.Info.Target;
+        std::string recipientSurname;
+        if (size_t spacePos = recipientName.find(' '); spacePos != std::string::npos)
+        {
+            recipientSurname = recipientName.substr(spacePos + 1);
+            recipientName.erase(spacePos);
+            // tolerate repeated/trailing whitespace
+            recipientSurname.erase(0, recipientSurname.find_first_not_of(' '));
+            recipientSurname.erase(recipientSurname.find_last_not_of(' ') + 1);
+        }
+
+        if (!recipientName.empty() && normalizePlayerName(recipientName))
+        {
+            if (!recipientSurname.empty())
+            {
+                // character names are unique in this core, the surname has to match as well
+                CharacterCacheEntry const* entry = sCharacterCache->GetCharacterCacheByName(recipientName);
+                if (entry && StringEqualI(entry->Surname, recipientSurname))
+                    receiverGuid = entry->Guid;
+            }
+            else
+                receiverGuid = sCharacterCache->GetCharacterGuidByName(recipientName);
+        }
+    }
 
     if (!receiverGuid)
     {
@@ -287,13 +311,10 @@ void WorldSession::HandleSendMail(WorldPackets::Mail::SendMail& sendMail)
             }
         }
 
-        // If theres is an item, there is a one hour delivery delay if sent to another account's character.
-        uint32 deliver_delay = needItemDelay ? sWorld->getIntConfig(CONFIG_MAIL_DELIVERY_DELAY) : 0;
-
-        // Mail sent between guild members arrives instantly
-        if (Guild* guild = sGuildMgr->GetGuildById(player->GetGuildId()))
-            if (guild->IsMember(receiverGuid))
-                deliver_delay = 0;
+        // Classic 1.60 (vanilla, VMaNGOS): mail carrying items or money arrives after the delivery delay (one hour) whoever it is
+        // sent to, also between your own characters and guild members; text-only mail arrives instantly
+        (void)needItemDelay;
+        uint32 deliver_delay = (!mailInfo.Attachments.empty() || mailInfo.SendMoney > 0) ? sWorld->getIntConfig(CONFIG_MAIL_DELIVERY_DELAY) : 0;
 
         // don't ask for COD if there are no items
         if (mailInfo.Attachments.empty())

@@ -1,0 +1,7 @@
+# The advocaite/TrinityCore commit this tree is built on. Only the pin names the upstream version: the trunk and the repack
+# build from it, and nothing newer is merged until the process in doc/UPSTREAM.md has been followed.
+# `commit` is read by cmake/genrev.cmake (first 12 characters go into the version string and the startup self-check).
+upstream: https://github.com/advocaite/TrinityCore
+branch: forever
+commit: f63ffc12b35b2d34d55053b99f3a2de58a78b3ce
+# last move of the pin: 1a0a7de1 -> f63ffc12 (Classic 1.60 stable master, Skyborne portals, sniff import, login messages), merged 2026-10-09

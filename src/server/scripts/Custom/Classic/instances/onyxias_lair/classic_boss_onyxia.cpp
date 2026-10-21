@@ -48,7 +48,9 @@ enum ClassicOnyxia : uint32
     SPELL_ONY_CLEAVE                = 19983,
     SPELL_ONY_TAILSWEEP             = 15847,
     SPELL_ONY_KNOCK_AWAY            = 19633,
-    SPELL_ONY_BELLOWINGROAR         = 18431,
+    // Classic 1.60: vanilla 18431 is not in the 1.60 client; 22686 Bellowing Roar (same fear, 4 s, wider) is, and there it also
+    // triggers 1297001 Lava Eruption, the lair's eruptions: Forever's Onyxia roar
+    SPELL_ONY_BELLOWINGROAR         = 22686,
 
     SPELL_ONY_FIREBALL              = 18392,
     SPELL_ONY_DEEPBREATH            = 23461,
@@ -519,9 +521,16 @@ struct classic_boss_onyxia : public ScriptedAI
             ClassicScriptText(EMOTE_ONY_BREATH, me);
 
             m_bDeepBreathIsCasting = true;
-            m_uiDeepBreathTimer = 5000;
+            // The breath spell has a 5 s cast (SpellAudit: 17086 cast 5000 ms): the wait before she flies is that cast, and its damage lands
+            // when it completes. Cast as a plain triggered spell (instant) it hit the raid at once, before anyone could see the warning
+            // (onyxia_full n24: 19 and 11 raiders dead in the second she began the wait, every time). She holds still for the cast and the
+            // flight starts just after it.
+            m_uiDeepBreathTimer = 5500;
+            me->GetMotionMaster()->Clear();
+            me->GetMotionMaster()->MoveIdle();
+            me->StopMoving();
             if (m_pPointData)
-                me->CastSpell(me, m_pPointData->uiSpellId, true);
+                me->CastSpell(me, m_pPointData->uiSpellId, CastSpellExtraArgs(TriggerCastFlags(TRIGGERED_FULL_MASK & ~(TRIGGERED_IGNORE_CAST_TIME | TRIGGERED_CAST_DIRECTLY))));
             // face destination and clear target
             m_pPointData = GetMoveData();
             if (m_pPointData)

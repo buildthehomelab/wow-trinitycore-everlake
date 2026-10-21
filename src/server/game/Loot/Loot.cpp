@@ -16,6 +16,7 @@
  */
 
 #include "Loot.h"
+#include "Creature.h"
 #include "DB2Stores.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
@@ -32,6 +33,7 @@
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "Random.h"
+#include "StringFormat.h"
 #include "World.h"
 #include "WorldSession.h"
 
@@ -447,12 +449,13 @@ LootRoll::~LootRoll()
     if (m_isStarted)
         SendAllPassed();
 
+    // every player that was handed this roll must drop the pointer, voters included: a voter keeps it in Player::m_lootRolls
+    // until now, and the next lookup (Player::GetLootRoll from a roll vote packet) would read a destroyed roll
     for (auto const& [playerGuid, roll] : m_rollVoteMap)
     {
-        if (roll.Vote != RollVote::NotEmitedYet)
-            continue;
-
-        Player* player = ObjectAccessor::GetPlayer(m_map, playerGuid);
+        Player* player = m_map ? ObjectAccessor::GetPlayer(m_map, playerGuid) : nullptr;
+        if (!player)
+            player = ObjectAccessor::FindConnectedPlayer(playerGuid);   // left the map since the roll started
         if (!player)
             continue;
 
@@ -677,10 +680,16 @@ void LootRoll::Finish(RollVoteMap::const_iterator winnerItr)
     if (winnerItr == m_rollVoteMap.end())
     {
         SendAllPassed();
+        m_loot->LogGiven(m_map, "nobody", *m_lootItem, "roll: all passed");
     }
     else
     {
         m_lootItem->rollWinnerGUID = winnerItr->first;
+        {
+            Player const* winner = ObjectAccessor::FindConnectedPlayer(winnerItr->first);
+            m_loot->LogGiven(m_map, winner ? winner->GetName().c_str() : "offline", *m_lootItem,
+                winnerItr->second.Vote == RollVote::Need ? "roll: need" : winnerItr->second.Vote == RollVote::Disenchant ? "roll: disenchant" : "roll: greed");
+        }
 
         SendLootRollWon(winnerItr->first, winnerItr->second.RollNumber, winnerItr->second.Vote);
 
@@ -791,12 +800,60 @@ void Loot::NotifyMoneyRemoved(Map const* map)
     }
 }
 
+namespace
+{
+char const* LootMethodName(LootMethod method)
+{
+    switch (method)
+    {
+        case FREE_FOR_ALL:      return "free_for_all";
+        case ROUND_ROBIN:       return "round_robin";
+        case MASTER_LOOT:       return "master_loot";
+        case GROUP_LOOT:        return "group_loot";
+        case NEED_BEFORE_GREED: return "need_before_greed";
+        case PERSONAL_LOOT:     return "personal_loot";
+    }
+    return "unknown";
+}
+
+std::string LootItemLabel(LootItem const& item)
+{
+    if (item.type != LootItemType::Item)
+        return Trinity::StringFormat("{}:{} x{}", item.type == LootItemType::Currency ? "currency" : "quest", item.itemid, item.count);
+    ItemTemplate const* tmpl = sObjectMgr->GetItemTemplate(item.itemid);
+    return Trinity::StringFormat("{} {} x{}", item.itemid, tmpl ? tmpl->GetDefaultLocaleName() : "?", item.count);
+}
+
+std::string LootSourceLabel(Map* map, ObjectGuid const& owner)
+{
+    if (map)
+        if (Creature const* creature = map->GetCreature(owner))
+            return Trinity::StringFormat("{} entry={}", creature->GetName(), creature->GetEntry());
+    return owner.ToString();
+}
+}
+
+void Loot::LogTable(Map* map) const
+{
+    std::string list;
+    for (LootItem const& item : items)
+        list += (list.empty() ? "" : ", ") + LootItemLabel(item);
+    TC_LOG_INFO("playerbot.v2", "[loot_table] source={} map={} method={} gold={} items=[{}]", LootSourceLabel(map, _owner),
+        map ? map->GetId() : 0u, LootMethodName(_lootMethod), gold, list);
+}
+
+void Loot::LogGiven(Map* map, char const* receiver, LootItem const& item, char const* how) const
+{
+    TC_LOG_INFO("playerbot.v2", "[loot_given] source={} item=[{}] to={} how={}", LootSourceLabel(map, _owner), LootItemLabel(item), receiver, how);
+}
+
 void Loot::OnLootOpened(Map* map, Player* looter)
 {
     AddLooter(looter->GetGUID());
     if (!_wasOpened)
     {
         _wasOpened = true;
+        LogTable(map);
 
         if (_lootMethod == GROUP_LOOT || _lootMethod == NEED_BEFORE_GREED)
         {
@@ -875,7 +932,16 @@ bool Loot::FillLoot(uint32 lootId, LootStore const& store, Player* lootOwner, bo
 
     items.reserve(MAX_NR_LOOT_ITEMS);
 
+    // Classic 1.60 Legacy perk Bountiful Harvest: more Scarce materials from gathering nodes and skinning
+    float scarceMod = 1.0f;
+    if (&store == &LootTemplates_Gameobject || &store == &LootTemplates_Skinning)
+        if (int32 pct = lootOwner->GetClassicLegacyPerkAmount(1225435, EFFECT_0); pct > 0)
+            scarceMod = 1.0f + pct / 100.0f;
+    SetClassicScarceMaterialChanceMod(scarceMod);
+
     tab->Process(*this, store.IsRatesAllowed(), lootMode, 0);    // Processing is done there, callback via Loot::AddItem()
+
+    SetClassicScarceMaterialChanceMod(1.0f);
 
     // Setting access rights for group loot case
     Group const* group = lootOwner->GetGroup();
@@ -1011,6 +1077,7 @@ bool Loot::AutoStore(Player* player, uint8 bag, uint8 slot, bool broadcast, bool
                     continue;
                 }
 
+                LogGiven(player->GetMap(), player->GetName().c_str(), *lootItem, "auto store");
                 if (Item* pItem = player->StoreNewItem(dest, lootItem->itemid, true, lootItem->randomBonusListId, GuidSet(), lootItem->context, &lootItem->BonusListIDs))
                 {
                     player->SendNewItem(pItem, lootItem->count, pushed, createdByPlayer, broadcast, GetDungeonEncounterId());

@@ -21,17 +21,31 @@
 #include "AreaTrigger.h"
 #include "CellImpl.h"
 #include "Creature.h"
+#include "CreatureAI.h"
+#include "Containers.h"
+#include "DatabaseEnv.h"
+#include "DB2Stores.h"
+#include "Formulas.h"
 #include "GameObject.h"
+#include "GameTime.h"
 #include "GridNotifiersImpl.h"
 #include "Item.h"
 #include "ItemTemplate.h"
+#include "Map.h"
 #include "ObjectAccessor.h"
+#include "ObjectMgr.h"
+#include "PhasingHandler.h"
 #include "Player.h"
 #include "QuestDef.h"
 #include "SpellAuraEffects.h"
 #include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "SpellScript.h"
+#include "ThreatManager.h"
 #include "Unit.h"
+#include "WorldSession.h"
+#include <mutex>
+#include <unordered_map>
 
 /*######
 ## classic_spell_ground_area_damage
@@ -496,35 +510,43 @@ class classic_spell_warl_immolate : public SpellScript
     }
 };
 
-// 1259705 - Read Ley Line (Skyborne racial): the spell only triggers the 15 sec Energized (1270842). At a ley line (gameobjects
-// Ley Line 602735 / 613248, spell focus 2246) the official server also gives the 15 min Energized (1259691); sniff of the
-// Alliance Skyborne hunter: the cast away from a ley line got only 1270842, every cast at one got both. The 15 min buff also
-// completes "Reading the Ley Lines" (92597).
-class classic_spell_skyborne_read_ley_line : public SpellScript
+// 1259705 - Read Ley Line, 1259686 - Skysight (Skyborne racials): the spell only triggers a 30 sec buff (Energized 1270842 /
+// Elemental Blessing 1259688). Next to its spell focus object (Ley Line 602735 / 613248, focus 2246 / Elemental Convergence
+// 616992, focus 2271) the official server casts the 15 min version first (Energized 1259691 / Elemental Blessing 1270893); the
+// 30 sec trigger still shows a SPELL_GO there but adds no aura (sniffs: Alliance Skyborne hunter at ley lines, Windshaper at
+// convergences, every cast away from one got only the 30 sec aura). Energized 1259691 also completes "Reading the Ley Lines" (92597).
+class classic_spell_skyborne_racial_focus : public SpellScript
 {
-    static constexpr uint32 SPELL_FOCUS_LEY_LINE = 2246;
-    static constexpr uint32 SPELL_ENERGIZED_LEY_LINE = 1259691;
+public:
+    explicit classic_spell_skyborne_racial_focus(uint32 spellFocus, uint32 longBuffSpell) : _spellFocus(spellFocus), _longBuffSpell(longBuffSpell) { }
 
-    bool Validate(SpellInfo const* /*spellInfo*/) override
+private:
+    bool Validate(SpellInfo const* spellInfo) override
     {
-        return ValidateSpellInfo({ SPELL_ENERGIZED_LEY_LINE });
+        return ValidateSpellInfo({ _longBuffSpell }) && ValidateSpellEffect({ { spellInfo->Id, EFFECT_0 } });
     }
 
-    void HandleAfterCast()
+    void HandleTrigger(SpellEffIndex effIndex)
     {
         Unit* caster = GetCaster();
-        GameObject* leyLine = nullptr;
-        Trinity::GameObjectFocusCheck check(caster, SPELL_FOCUS_LEY_LINE);
-        Trinity::GameObjectSearcher searcher(caster, leyLine, check);
-        Cell::VisitGridObjects(caster, searcher, 50.0f); // focus radius of the ley lines is 25
-        if (leyLine)
-            caster->CastSpell(caster, SPELL_ENERGIZED_LEY_LINE, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
+        GameObject* focus = nullptr;
+        Trinity::GameObjectFocusCheck check(caster, _spellFocus);
+        Trinity::GameObjectSearcher searcher(caster, focus, check);
+        Cell::VisitGridObjects(caster, searcher, 50.0f); // focus radius of both objects is 25
+        if (!focus)
+            return;
+
+        PreventHitDefaultEffect(effIndex);
+        caster->CastSpell(caster, _longBuffSpell, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
     }
 
     void Register() override
     {
-        AfterCast += SpellCastFn(classic_spell_skyborne_read_ley_line::HandleAfterCast);
+        OnEffectLaunchTarget += SpellEffectFn(classic_spell_skyborne_racial_focus::HandleTrigger, EFFECT_0, SPELL_EFFECT_TRIGGER_SPELL);
     }
+
+    uint32 _spellFocus;
+    uint32 _longBuffSpell;
 };
 
 // 1319421 - Motivated (Executor's Motivator, undead quest Discipline 99134): a dummy aura on a Tirisfal Deathguard. The official
@@ -564,10 +586,664 @@ class classic_spell_executors_motivator : public AuraScript
     }
 };
 
+// 1289195-1289200 - Alchemy / Blacksmithing / Enchanting / Engineering / Leatherworking / Tailoring Certification (items 271621-271627,
+// 1000 Merchant Favor at the trade company vendors): "unlocks the <profession> title for all characters on your account; to display
+// it they must have 300 skill". The spell completes a hidden quest (95944-95949, not in our data); the account unlock is kept in
+// account_classic_certification and Player::UpdateClassicProfessionTitles gives the title to characters with 300 skill.
+class classic_spell_profession_certification : public SpellScript
+{
+    static uint32 SkillOf(uint32 spellId)
+    {
+        switch (spellId)
+        {
+            case 1289195: return SKILL_ALCHEMY;
+            case 1289196: return SKILL_BLACKSMITHING;
+            case 1289197: return SKILL_ENCHANTING;
+            case 1289198: return SKILL_ENGINEERING;
+            case 1289199: return SKILL_LEATHERWORKING;
+            case 1289200: return SKILL_TAILORING;
+            default: return 0;
+        }
+    }
+
+    void HandleAfterCast()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        uint32 skillId = SkillOf(GetSpellInfo()->Id);
+        if (!player || !skillId)
+            return;
+
+        // written directly: UpdateClassicProfessionTitles reads it right away
+        CharacterDatabase.DirectPExecute("REPLACE INTO account_classic_certification (account, skill) VALUES ({}, {})",
+            player->GetSession()->GetAccountId(), skillId);
+        player->UpdateClassicProfessionTitles();
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(classic_spell_profession_certification::HandleAfterCast);
+    }
+};
+
+// 1225472 - Thrill of Adventure (Legacy, Adventure tree 1188): after a kill that gives experience the official server casts 1261483
+// on the killer, 10 sec of health (aura 8) and mana (aura 24) every 2 sec. Sniff of a level 1-10 dwarf shaman (5/5, aura amount 5):
+// applied after 72 of 73 kills (the other one was before the talent), ticks of 1% of max health / mana (0.84 health, 0.96 mana per
+// tick at 84 / 96), so the talent amount is the total percent restored over the 5 ticks.
+class classic_player_thrill_of_adventure : public PlayerScript
+{
+public:
+    classic_player_thrill_of_adventure() : PlayerScript("classic_player_thrill_of_adventure") { }
+
+    static constexpr uint32 SPELL_THRILL_OF_ADVENTURE = 1225472;
+    static constexpr uint32 SPELL_THRILL_OF_ADVENTURE_REGEN = 1261483;
+
+    void OnCreatureKill(Player* killer, Creature* killed) override
+    {
+        AuraEffect const* talent = killer->GetAuraEffect(SPELL_THRILL_OF_ADVENTURE, EFFECT_0);
+        // tooltip: "each time you deliver the killing blow to a non-trivial enemy. Ineffective in dungeons, raids, and battlegrounds."
+        if (!talent || !talent->GetAmount() || !Trinity::XP::Gain(killer, killed) || killer->GetMap()->Instanceable())
+            return;
+
+        SpellInfo const* regen = sSpellMgr->GetSpellInfo(SPELL_THRILL_OF_ADVENTURE_REGEN, DIFFICULTY_NONE);
+        if (!regen || regen->GetEffects().size() < 2 || !regen->GetEffect(EFFECT_0).ApplyAuraPeriod)
+            return;
+
+        int32 ticks = std::max(1, regen->GetMaxDuration() / int32(regen->GetEffect(EFFECT_0).ApplyAuraPeriod));
+        float pctPerTick = float(talent->GetAmount()) / ticks;
+        int32 health = std::max(1, int32(CalculatePct(float(killer->GetMaxHealth()), pctPerTick) + 0.5f));
+        int32 mana = killer->GetMaxPower(POWER_MANA) ? std::max(1, int32(CalculatePct(float(killer->GetMaxPower(POWER_MANA)), pctPerTick) + 0.5f)) : 0;
+
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        args.AddSpellMod(SPELLVALUE_BASE_POINT0, health);
+        args.AddSpellMod(SPELLVALUE_BASE_POINT1, mana);
+        killer->CastSpell(killer, SPELL_THRILL_OF_ADVENTURE_REGEN, args);
+    }
+};
+
+// 1225503 - Reagent Economy (Legacy, Adventure tree 1188): its effect is aura 215, which this core handles as arena preparation
+// (unit flag PREPARATION + aura state). The perk must not put the player in that state; the reagent effect itself is not known yet.
+class classic_spell_legacy_reagent_economy : public AuraScript
+{
+    void PreventArenaPreparation(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        PreventDefaultAction();
+    }
+
+    void Register() override
+    {
+        OnEffectApply += AuraEffectApplyFn(classic_spell_legacy_reagent_economy::PreventArenaPreparation, EFFECT_0, SPELL_AURA_ARENA_PREPARATION, AURA_EFFECT_HANDLE_REAL);
+        OnEffectRemove += AuraEffectRemoveFn(classic_spell_legacy_reagent_economy::PreventArenaPreparation, EFFECT_0, SPELL_AURA_ARENA_PREPARATION, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 1225469 - Dedicated Study (Legacy, Professions tree 1187), a castable spell: "Increases your skill by 1 in your lowest tradeskill among
+// your Primary and Secondary tradeskills. If you have already reached 300 skill in your two current Primary Tradeskills and all three
+// Secondary Tradeskills, you will gain $s1 of a random Elemental Essence."
+class classic_spell_legacy_dedicated_study : public SpellScript
+{
+    static constexpr uint16 MaxTradeskill = 300;
+    static constexpr uint32 ElementalEssences[] = { 7076, 7078, 7080, 7082 };   // Earth, Fire, Water, Air
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Player* player = GetCaster()->ToPlayer();
+        if (!player)
+            return;
+
+        uint32 lowestSkill = 0;
+        uint16 lowestValue = std::numeric_limits<uint16>::max();
+        uint32 primaries = 0;
+        bool allMaxed = true;
+        for (SkillLineEntry const* skillLine : sSkillLineStore)
+        {
+            if (skillLine->ParentSkillLineID || (skillLine->CategoryID != SKILL_CATEGORY_PROFESSION && skillLine->CategoryID != SKILL_CATEGORY_SECONDARY))
+                continue;
+            if (!player->HasSkill(skillLine->ID))
+                continue;
+
+            uint16 value = player->GetPureSkillValue(skillLine->ID);
+            if (skillLine->CategoryID == SKILL_CATEGORY_PROFESSION)
+                ++primaries;
+            if (value < MaxTradeskill)
+                allMaxed = false;
+            if (value < player->GetPureMaxSkillValue(skillLine->ID) && value < lowestValue)
+            {
+                lowestValue = value;
+                lowestSkill = skillLine->ID;
+            }
+        }
+
+        bool secondariesMaxed = player->GetPureSkillValue(SKILL_COOKING) >= MaxTradeskill && player->GetPureSkillValue(129 /* First Aid */) >= MaxTradeskill
+            && player->GetPureSkillValue(SKILL_FISHING) >= MaxTradeskill;
+        if (allMaxed && primaries >= 2 && secondariesMaxed)
+        {
+            player->AddItem(Trinity::Containers::SelectRandomContainerElement(ElementalEssences), std::max(1, GetEffectValueAsInt()));
+            return;
+        }
+
+        if (lowestSkill)
+            player->SetSkill(lowestSkill, player->GetSkillStep(lowestSkill), lowestValue + 1, player->GetPureMaxSkillValue(lowestSkill));
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_legacy_dedicated_study::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
+// 11196 - Recently Bandaged: Legacy perk Field Medicine 1225475 (Adventure tree) shortens it by its amount in ms (negative) when the
+// bandage user has the perk. "Ineffective in dungeons, raids, and battlegrounds."
+class classic_spell_recently_bandaged_field_medicine : public AuraScript
+{
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Player const* bandager = Object::ToPlayer(GetCaster());
+        if (!bandager || bandager->GetMap()->Instanceable())
+            return;
+
+        int32 reduction = bandager->GetClassicLegacyPerkAmount(1225475, EFFECT_0);
+        if (reduction >= 0)
+            return;
+
+        Aura* aura = GetAura();
+        int32 duration = std::max(1000, aura->GetMaxDuration() + reduction);
+        aura->SetMaxDuration(duration);
+        aura->SetDuration(duration);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_spell_recently_bandaged_field_medicine::HandleApply, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 1225477 - High Alert (Legacy, Adventure tree 1188): stealth detection as if your level were higher. "Ineffective in Battlegrounds."
+class classic_spell_legacy_high_alert : public AuraScript
+{
+    void CalculateAmount(AuraEffect const* /*aurEff*/, SpellEffectValue& amount, bool& canBeRecalculated)
+    {
+        canBeRecalculated = true;
+        if (GetUnitOwner()->GetMap()->IsBattlegroundOrArena())
+            amount = 0;
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(classic_spell_legacy_high_alert::CalculateAmount, EFFECT_0, SPELL_AURA_MOD_STEALTH_DETECT);
+    }
+};
+
+// Seal of Fury (Forever, 1311649 1311656 20163 20419 20421 20422 20423): "Fills the Paladin with divine fury for 30 sec, causing melee
+// attacks to deal an additional N Holy damage. While a shield is equipped, each attack also grants an absorb shield equal to 50% of the
+// Holy damage dealt." Its judgement (Judgement of Fury) is in the seal table of SpellInfo.cpp.
+static uint32 ClassicSealOfFuryDamageSpell(uint32 sealId)
+{
+    switch (sealId)
+    {
+        case 1311649: return 1311647;
+        case 1311656: return 1311654;
+        case 20163:   return 20231;
+        case 20419:   return 20415;
+        case 20421:   return 20416;
+        case 20422:   return 20417;
+        case 20423:   return 20418;
+        default:      return 0;
+    }
+}
+
+class classic_spell_pal_seal_of_fury : public AuraScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellInfo({ ClassicSealOfFuryDamageSpell(spellInfo->Id) });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        return eventInfo.GetActionTarget() && eventInfo.GetDamageInfo() && eventInfo.GetDamageInfo()->GetAttackType() == BASE_ATTACK
+            && !eventInfo.GetSpellInfo();
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        GetTarget()->CastSpell(eventInfo.GetActionTarget(), ClassicSealOfFuryDamageSpell(GetId()), CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_pal_seal_of_fury::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_pal_seal_of_fury::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// Seal of Fury Holy damage (1311647 1311654 20231 20415-20418): with a shield equipped the paladin gains Light's Fury (1310927), an
+// absorb shield of the seal's effect 1 percent (50) of the damage dealt
+class classic_spell_pal_seal_of_fury_damage : public SpellScript
+{
+    static constexpr uint32 SPELL_LIGHTS_FURY = 1310927;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_LIGHTS_FURY });
+    }
+
+    void HandleAfterHit()
+    {
+        Player* paladin = Object::ToPlayer(GetCaster());
+        if (!paladin || GetHitDamage() <= 0)
+            return;
+
+        Item const* offhand = paladin->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+        if (!offhand || offhand->GetTemplate()->GetClass() != ITEM_CLASS_ARMOR || offhand->GetTemplate()->GetSubClass() != ITEM_SUBCLASS_ARMOR_SHIELD)
+            return;
+
+        for (uint32 sealId : { 1311649u, 1311656u, 20163u, 20419u, 20421u, 20422u, 20423u })
+        {
+            if (Aura const* seal = paladin->GetAura(sealId))
+            {
+                // effect 1 is a plain value (Effect 0), not an aura effect
+                int32 absorb = CalculatePct(GetHitDamage(), seal->GetSpellInfo()->GetEffect(EFFECT_1).CalcValue(paladin));
+                if (absorb > 0)
+                    paladin->CastSpell(paladin, SPELL_LIGHTS_FURY, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(absorb));
+                break;
+            }
+        }
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(classic_spell_pal_seal_of_fury_damage::HandleAfterHit);
+    }
+};
+
+// Judgement of Fury (20183 20411-20414 1311650 1311655): "Unleashing this Seal's energy causes Holy damage to an enemy and taunts the
+// target to attack you for 4 sec." Effect 1 (dummy) is the taunt, effect 2 (dummy) the extra threat.
+class classic_spell_pal_judgement_of_fury : public SpellScript
+{
+    void HandleTaunt(SpellEffIndex /*effIndex*/)
+    {
+        Creature* target = Object::ToCreature(GetHitUnit());
+        Unit* paladin = GetCaster()->ToUnit();
+        if (!target || !paladin || !target->CanHaveThreatList())
+            return;
+
+        target->GetThreatManager().MatchUnitThreatToHighestThreat(paladin);
+        if (target->IsAIEnabled())
+            target->AI()->AttackStart(paladin);
+    }
+
+    // effect 2 has no implicit target, so it runs once in hit mode against the judged unit
+    void HandleThreat(SpellEffIndex /*effIndex*/)
+    {
+        Creature* target = Object::ToCreature(GetExplTargetUnit());
+        Unit* paladin = GetCaster()->ToUnit();
+        if (target && paladin && target->CanHaveThreatList())
+            target->GetThreatManager().AddThreat(paladin, float(GetEffectValue()), GetSpellInfo(), true);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_pal_judgement_of_fury::HandleTaunt, EFFECT_1, SPELL_EFFECT_DUMMY);
+        OnEffectHit += SpellEffectFn(classic_spell_pal_judgement_of_fury::HandleThreat, EFFECT_2, SPELL_EFFECT_DUMMY);
+    }
+};
+
+// 26573, 20116, 20922, 20923, 20924 - Consecration (Classic 1.60, official dungeon sniff): the cast puts a 1 sec periodic dummy on the
+// paladin for 8 sec and creates area trigger 41311-41316 at his feet (no data on our server); each tick the official server casts the
+// rank's Consecration damage (1280345-1280349) at the consecrated spot, hitting the enemies standing in it.
+class classic_spell_pal_consecration : public AuraScript
+{
+    static uint32 TickSpell(uint32 spellId)
+    {
+        switch (spellId)
+        {
+            case 26573: return 1280345;
+            case 20116: return 1280346;
+            case 20922: return 1280347;
+            case 20923: return 1280348;
+            case 20924: return 1280349;
+            default:    return 0;
+        }
+    }
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return TickSpell(spellInfo->Id) && ValidateSpellInfo({ TickSpell(spellInfo->Id) });
+    }
+
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        _center = GetUnitOwner()->GetPosition();
+    }
+
+    void HandleTick(AuraEffect const* aurEff)
+    {
+        PreventDefaultAction();
+        Unit* paladin = GetUnitOwner();
+        paladin->CastSpell(_center, TickSpell(GetId()), CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_spell_pal_consecration::HandleApply, EFFECT_2, SPELL_AURA_PERIODIC_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        OnEffectPeriodic += AuraEffectPeriodicFn(classic_spell_pal_consecration::HandleTick, EFFECT_2, SPELL_AURA_PERIODIC_DUMMY);
+    }
+
+    Position _center;
+};
+
+// 15286 - Vampiric Embrace (vanilla, VMaNGOS UnitAuraProcHandler): a debuff on the enemy. Shadow damage the priest deals to it
+// heals the priest's party (15290, the priest included) for 20% of the damage. The retail script treated it as a self buff and
+// made the debuffed enemy cast the heal.
+class classic_spell_pri_vampiric_embrace : public AuraScript
+{
+    static constexpr uint32 SPELL_VAMPIRIC_EMBRACE_HEAL = 15290;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_VAMPIRIC_EMBRACE_HEAL });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        DamageInfo const* damageInfo = eventInfo.GetDamageInfo();
+        return damageInfo && damageInfo->GetDamage() && eventInfo.GetActor() && eventInfo.GetActor()->GetGUID() == GetCasterGUID();
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        Unit* priest = eventInfo.GetActor();
+        int32 heal = std::max<int32>(1, CalculatePct(int32(eventInfo.GetDamageInfo()->GetDamage()), aurEff->GetAmount()));
+
+        CastSpellExtraArgs args(aurEff);
+        args.AddSpellMod(SPELLVALUE_BASE_POINT0, heal);
+        priest->CastSpell(priest, SPELL_VAMPIRIC_EMBRACE_HEAL, args);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_pri_vampiric_embrace::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_pri_vampiric_embrace::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// High Alert follows the map: recalculated when entering or leaving a battleground
+class classic_player_high_alert_map : public PlayerScript
+{
+public:
+    classic_player_high_alert_map() : PlayerScript("classic_player_high_alert_map") { }
+
+    void OnMapChanged(Player* player) override
+    {
+        if (AuraEffect* highAlert = player->GetAuraEffect(1225477, EFFECT_0))
+            highAlert->RecalculateAmount();
+    }
+};
+
+// 5217 - Tiger's Fury (Classic 1.60): a dummy aura, effect 0 = 15, "increases physical damage done by 15% for 6 sec". Applied to melee
+// swings and physical abilities; the periodic hook carries no school, so bleeds are left alone.
+class classic_unit_tigers_fury : public UnitScript
+{
+public:
+    classic_unit_tigers_fury() : UnitScript("classic_unit_tigers_fury") { }
+
+    static constexpr uint32 SPELL_TIGERS_FURY = 5217;
+
+    static void Apply(Unit* attacker, uint32& damage)
+    {
+        if (!attacker || !damage || attacker->GetClass() != CLASS_DRUID)
+            return;
+
+        if (AuraEffect const* fury = attacker->GetAuraEffect(SPELL_TIGERS_FURY, EFFECT_0))
+            damage = AddPct(damage, fury->GetAmount());
+    }
+
+    void ModifyMeleeDamage(Unit* /*target*/, Unit* attacker, uint32& damage) override
+    {
+        Apply(attacker, damage);
+    }
+
+    void ModifySpellDamageTaken(Unit* /*target*/, Unit* attacker, int32& damage, SpellInfo const* spellInfo) override
+    {
+        if (!spellInfo || damage <= 0 || !(spellInfo->GetSchoolMask() & SPELL_SCHOOL_MASK_NORMAL))
+            return;
+
+        uint32 value = uint32(damage);
+        Apply(attacker, value);
+        damage = int32(value);
+    }
+};
+
+// Tauren racial Cultivation (1.60): "Cultivate a nearby herb, growing a duplicate you can harvest without requiring Herbalism skill.
+// Each herb may only be cultivated once." Official sniffs (2026-09-28, 2026-10-01): the spellbook spell 20552 (instant, dummy on game
+// objects within 5 yd) makes the server start 1312643 (3 sec cast) on the herb; when it completes a duplicate herb appears on the same
+// spot, created by the player: same model and loot, lock 4522 = key spell 1312650 (open lock without skill, the player does not know
+// it; Player allows lock key spells of the target). Peacebloom 1618 -> 657382, Wilted Peacebloom 656160 -> 657454; the other twins are
+// made by 2026_10_14_00_world_classic_tauren_cultivation.sql. A twin is found by model + loot.
+namespace ClassicCultivation
+{
+    static constexpr uint32 SPELL_CULTIVATE_HERB = 1312643;
+    static constexpr uint32 LOCK_CULTIVATED_HERB = 4522;
+    static constexpr float SEARCH_RANGE = 5.0f;
+    static constexpr Seconds TWIN_DURATION = 5min;
+    static constexpr Seconds HERB_COOLDOWN = 15min;    // "each herb may only be cultivated once" (until it has been picked and regrown)
+
+    static bool IsHerbalismLock(uint32 lockId)
+    {
+        LockEntry const* lock = sLockStore.LookupEntry(lockId);
+        if (!lock)
+            return false;
+        for (uint8 i = 0; i < MAX_LOCK_CASE; ++i)
+            if (lock->Type[i] == LOCK_KEY_SKILL && lock->Index[i] == LOCKTYPE_HERBALISM)
+                return true;
+        return false;
+    }
+
+    // herb (model, loot) -> twin entry
+    static uint32 GetTwinEntry(GameObjectTemplate const* herb)
+    {
+        static std::unordered_map<uint64, uint32> const twins = []
+        {
+            std::unordered_map<uint64, uint32> map;
+            for (auto const& [entry, goInfo] : sObjectMgr->GetGameObjectTemplates())
+                if (goInfo.type == GAMEOBJECT_TYPE_CHEST && goInfo.chest.open == LOCK_CULTIVATED_HERB)
+                    map.emplace(uint64(goInfo.displayId) << 32 | goInfo.chest.chestLoot, entry);
+            return map;
+        }();
+        if (!herb || herb->type != GAMEOBJECT_TYPE_CHEST || !IsHerbalismLock(herb->chest.open))
+            return 0;
+        auto itr = twins.find(uint64(herb->displayId) << 32 | herb->chest.chestLoot);
+        return itr != twins.end() ? itr->second : 0;
+    }
+
+    static std::unordered_map<ObjectGuid, TimePoint> CultivatedHerbs;
+    static std::mutex CultivatedHerbsLock;
+
+    static bool WasCultivated(ObjectGuid const& herb)
+    {
+        std::lock_guard<std::mutex> guard(CultivatedHerbsLock);
+        auto itr = CultivatedHerbs.find(herb);
+        if (itr == CultivatedHerbs.end())
+            return false;
+        if (GameTime::Now() - itr->second < HERB_COOLDOWN)
+            return true;
+        CultivatedHerbs.erase(itr);
+        return false;
+    }
+
+    static void MarkCultivated(ObjectGuid const& herb)
+    {
+        std::lock_guard<std::mutex> guard(CultivatedHerbsLock);
+        CultivatedHerbs[herb] = GameTime::Now();
+    }
+
+    static bool CanCultivate(GameObject const* go)
+    {
+        return go && go->isSpawned() && go->GetGoState() == GO_STATE_READY && !go->GetOwnerGUID()
+            && GetTwinEntry(go->GetGOInfo()) && !WasCultivated(go->GetGUID());
+    }
+
+    static GameObject* FindHerb(Unit* caster)
+    {
+        std::list<GameObject*> objects;
+        Trinity::AllWorldObjectsInRange check(caster, SEARCH_RANGE);
+        Trinity::GameObjectListSearcher<Trinity::AllWorldObjectsInRange> searcher(caster, objects, check);
+        Cell::VisitGridObjects(caster, searcher, SEARCH_RANGE);
+        GameObject* best = nullptr;
+        for (GameObject* go : objects)
+            if (CanCultivate(go) && (!best || caster->GetExactDist2dSq(go) < caster->GetExactDist2dSq(best)))
+                best = go;
+        return best;
+    }
+}
+
+// 20552 - Cultivation (Tauren racial, spellbook): starts Cultivate (1312643) on the nearest herb within 5 yd
+class classic_spell_tauren_cultivation : public SpellScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ ClassicCultivation::SPELL_CULTIVATE_HERB });
+    }
+
+    SpellCastResult CheckCast()
+    {
+        return ClassicCultivation::FindHerb(GetCaster()) ? SPELL_CAST_OK : SPELL_FAILED_NO_VALID_TARGETS;
+    }
+
+    void HandleAfterCast()
+    {
+        if (GameObject* herb = ClassicCultivation::FindHerb(GetCaster()))
+            GetCaster()->CastSpell(herb, ClassicCultivation::SPELL_CULTIVATE_HERB, CastSpellExtraArgs(TRIGGERED_IGNORE_GCD));
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(classic_spell_tauren_cultivation::CheckCast);
+        AfterCast += SpellCastFn(classic_spell_tauren_cultivation::HandleAfterCast);
+    }
+};
+
+// 1312643 - Cultivate: the herb's twin grows on the same spot, for the caster only
+class classic_spell_tauren_cultivate_herb : public SpellScript
+{
+    SpellCastResult CheckCast()
+    {
+        GameObject* herb = GetExplTargetGObj();
+        return ClassicCultivation::CanCultivate(herb) ? SPELL_CAST_OK : SPELL_FAILED_BAD_TARGETS;
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Player* caster = GetCaster()->ToPlayer();
+        GameObject* herb = GetHitGObj();
+        if (!caster || !ClassicCultivation::CanCultivate(herb))
+            return;
+
+        uint32 twinEntry = ClassicCultivation::GetTwinEntry(herb->GetGOInfo());
+        GameObject* twin = GameObject::CreateGameObject(twinEntry, herb->GetMap(), *herb, herb->GetLocalRotation(), 255, GO_STATE_READY);
+        if (!twin)
+            return;
+
+        ClassicCultivation::MarkCultivated(herb->GetGUID());
+        PhasingHandler::InheritPhaseShift(twin, caster);
+        twin->SetPrivateObjectOwner(caster->GetGUID());
+        twin->SetRespawnTime(ClassicCultivation::TWIN_DURATION.count());
+        caster->AddGameObject(twin);
+        herb->GetMap()->AddToMap(twin);
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(classic_spell_tauren_cultivate_herb::CheckCast);
+        OnEffectHitTarget += SpellEffectFn(classic_spell_tauren_cultivate_herb::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
+// Classic 1.60 (client 70374) warrior talent Gore Drinker 1323967: "Your Enrage, Berserker Rage, Bloodrage, Death Wish, and Bloodthirst
+// abilities cause your next $m1 melee attacks to restore ${$s2}.1% of your maximum Health." (both effects are server-side dummies: 4
+// attacks, 0.5 / 1% by rank). The buff 1323969 procs on melee attacks (SPELL_AURA_PROC_TRIGGER_SPELL_WITH_VALUE) and heals with 1323968
+// for its amount.
+namespace ClassicGoreDrinker
+{
+    static constexpr uint32 SPELL_GORE_DRINKER_TALENT = 1323967;
+    static constexpr uint32 SPELL_GORE_DRINKER_BUFF = 1323969;
+
+    static void Apply(Unit* warrior)
+    {
+        AuraEffect const* attacks = warrior->GetAuraEffect(SPELL_GORE_DRINKER_TALENT, EFFECT_0);
+        AuraEffect const* healthPct = warrior->GetAuraEffect(SPELL_GORE_DRINKER_TALENT, EFFECT_1);
+        if (!attacks || !healthPct || attacks->GetAmount() <= 0 || healthPct->GetAmount() <= 0)
+            return;
+
+        int32 heal = std::max(1, int32(warrior->CountPctFromMaxHealth(healthPct->GetAmount())));
+        warrior->CastSpell(warrior, SPELL_GORE_DRINKER_BUFF, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(heal));
+        if (Aura* buff = warrior->GetAura(SPELL_GORE_DRINKER_BUFF))
+            buff->SetCharges(uint8(attacks->GetAmount()));
+    }
+}
+
+// 2687 - Bloodrage, 18499 - Berserker Rage, 12328 - Death Wish, 23881, 23892, 23893, 23894 - Bloodthirst: Gore Drinker
+class classic_spell_warr_gore_drinker : public SpellScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ ClassicGoreDrinker::SPELL_GORE_DRINKER_BUFF });
+    }
+
+    void HandleAfterCast()
+    {
+        ClassicGoreDrinker::Apply(GetCaster());
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(classic_spell_warr_gore_drinker::HandleAfterCast);
+    }
+};
+
+// 12880 - Enrage (talent proc buff): Gore Drinker
+class classic_spell_warr_gore_drinker_enrage : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ ClassicGoreDrinker::SPELL_GORE_DRINKER_BUFF });
+    }
+
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        ClassicGoreDrinker::Apply(GetTarget());
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_spell_warr_gore_drinker_enrage::HandleApply, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 void AddSC_classic_spell_scripts()
 {
+    RegisterSpellScript(classic_spell_warr_gore_drinker);
+    RegisterSpellScript(classic_spell_warr_gore_drinker_enrage);
+    RegisterSpellScript(classic_spell_tauren_cultivation);
+    RegisterSpellScript(classic_spell_tauren_cultivate_herb);
+    new classic_unit_tigers_fury();
+    RegisterSpellScript(classic_spell_pri_vampiric_embrace);
+    RegisterSpellScript(classic_spell_pal_consecration);
+    RegisterSpellScript(classic_spell_pal_seal_of_fury);
+    RegisterSpellScript(classic_spell_pal_seal_of_fury_damage);
+    RegisterSpellScript(classic_spell_pal_judgement_of_fury);
+    RegisterSpellScript(classic_spell_legacy_high_alert);
+    new classic_player_high_alert_map();
+    RegisterSpellScript(classic_spell_legacy_dedicated_study);
+    RegisterSpellScript(classic_spell_recently_bandaged_field_medicine);
+    new classic_player_thrill_of_adventure();
+    RegisterSpellScript(classic_spell_legacy_reagent_economy);
+    RegisterSpellScript(classic_spell_profession_certification);
     RegisterSpellScript(classic_spell_executors_motivator);
-    RegisterSpellScript(classic_spell_skyborne_read_ley_line);
+    RegisterSpellScriptWithArgs(classic_spell_skyborne_racial_focus, "classic_spell_skyborne_read_ley_line", 2246, 1259691);
+    RegisterSpellScriptWithArgs(classic_spell_skyborne_racial_focus, "classic_spell_skyborne_skysight", 2271, 1270893);
     RegisterSpellScript(classic_spell_warl_immolate);
     RegisterSpellScript(classic_spell_hun_taming_rod);
     RegisterSpellScript(classic_spell_hun_tame_beast_channel);

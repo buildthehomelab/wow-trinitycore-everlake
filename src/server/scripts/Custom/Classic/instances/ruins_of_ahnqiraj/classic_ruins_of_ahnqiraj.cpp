@@ -997,6 +997,116 @@ struct classic_mob_swarmguard_needler : public ScriptedAI
     }
 };
 
+/*######
+## npc_andorov (Lieutenant General Andorov)
+## VMaNGOS creature_spells 154710, gossip_scripts 6629, creature_movement_template / creature_movement_special 15471 (the walks and the
+## wave event are driven by classic_instance_ruins_of_ahnqiraj, which owns the timeline)
+######*/
+
+struct classic_npc_andorov : public ScriptedAI
+{
+    classic_npc_andorov(Creature* creature) : ScriptedAI(creature), m_pInstance(creature->GetInstanceScript()) { }
+
+    InstanceScript* m_pInstance;
+    uint32 m_uiStrike_Timer = 0;
+    uint32 m_uiBash_Timer = 0;
+    uint32 m_uiAuraOfCommand_Timer = 0;
+
+    void Reset() override
+    {
+        m_uiStrike_Timer = urand(9000, 13000);
+        m_uiBash_Timer = urand(25000, 29000);
+        m_uiAuraOfCommand_Timer = urand(9000, 13000);
+    }
+
+    // gossip_scripts 6629: opening the NOT_STARTED menu starts generic_scripts 154710 (there is no gossip_menu_option for 6629)
+    bool OnGossipHello(Player* /*player*/) override
+    {
+        if (m_pInstance && me->GetGossipMenuId() == CLASSIC_AQ20_ANDOROV_GOSSIP_NOT_STARTED)
+            m_pInstance->SetData(CLASSIC_AQ20_TYPE_GENERAL_ANDOROV, IN_PROGRESS);
+        return false;   // the menu itself (and the vendor after the event) is still shown
+    }
+
+    // Every point of the camp / valley walks is ordered by the instance script; it continues the walk on arrival
+    void MovementInform(uint32 uiType, uint32 uiPointId) override
+    {
+        if (uiType != POINT_MOTION_TYPE || !m_pInstance)
+            return;
+        m_pInstance->SetData(CLASSIC_AQ20_DATA_ANDOROV_POINT, uiPointId);
+    }
+
+    void UpdateAI(uint32 uiDiff) override
+    {
+        if (!UpdateVictim())
+            return;
+
+        if (m_uiStrike_Timer < uiDiff)
+        {
+            if (DoCastVictim(CLASSIC_AQ20_SPELL_ANDOROV_STRIKE) == SPELL_CAST_OK)
+                m_uiStrike_Timer = urand(10000, 14000);
+        }
+        else
+            m_uiStrike_Timer -= uiDiff;
+
+        if (m_uiBash_Timer < uiDiff)
+        {
+            if (DoCastVictim(CLASSIC_AQ20_SPELL_ANDOROV_BASH) == SPELL_CAST_OK)
+                m_uiBash_Timer = urand(25000, 45000);
+        }
+        else
+            m_uiBash_Timer -= uiDiff;
+
+        if (m_uiAuraOfCommand_Timer < uiDiff)
+        {
+            if (DoCastSelf(CLASSIC_AQ20_SPELL_AURA_OF_COMMAND) == SPELL_CAST_OK)
+                m_uiAuraOfCommand_Timer = urand(30000, 32000);
+        }
+        else
+            m_uiAuraOfCommand_Timer -= uiDiff;
+    }
+};
+
+/*######
+## npc_kaldorei_elite
+## VMaNGOS creature_spells 154730
+######*/
+
+struct classic_npc_kaldorei_elite : public ScriptedAI
+{
+    classic_npc_kaldorei_elite(Creature* creature) : ScriptedAI(creature) { }
+
+    uint32 m_uiMortalStrike_Timer = 0;
+    uint32 m_uiCleave_Timer = 0;
+
+    void Reset() override
+    {
+        m_uiMortalStrike_Timer = urand(5000, 15000);
+        m_uiCleave_Timer = urand(10000, 30000);
+    }
+
+    void UpdateAI(uint32 uiDiff) override
+    {
+        if (!UpdateVictim())
+            return;
+
+        if (m_uiMortalStrike_Timer < uiDiff)
+        {
+            if (DoCastVictim(CLASSIC_AQ20_SPELL_ELITE_MORTAL_STRIKE) == SPELL_CAST_OK)
+                m_uiMortalStrike_Timer = urand(5000, 15000);
+        }
+        else
+            m_uiMortalStrike_Timer -= uiDiff;
+
+        if (m_uiCleave_Timer < uiDiff)
+        {
+            if (DoCastVictim(CLASSIC_AQ20_SPELL_ELITE_CLEAVE) == SPELL_CAST_OK)
+                m_uiCleave_Timer = urand(10000, 30000);
+        }
+        else
+            m_uiCleave_Timer -= uiDiff;
+    }
+};
+
 // 25676 - Drain Mana (Moam)
 // 25754 - Drain Mana (Obsidian Destroyer)
 // VMaNGOS: max 6 targets, skip targets without mana. The Classic 1.60 client data has EFFECT_0 = SCRIPT_EFFECT
@@ -1064,6 +1174,8 @@ void AddSC_classic_ruins_of_ahnqiraj()
     RegisterCreatureAI(classic_mob_qiraji_warrior);
     RegisterCreatureAI(classic_mob_swarmguard_needler);
     RegisterCreatureAI(classic_boss_tuubid);
+    RegisterCreatureAI(classic_npc_andorov);
+    RegisterCreatureAI(classic_npc_kaldorei_elite);
     RegisterSpellScript(classic_spell_aq20_drain_mana);
     RegisterSpellScript(classic_spell_rajaxx_thundercrash);
 }

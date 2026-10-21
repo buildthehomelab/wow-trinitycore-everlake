@@ -49,6 +49,13 @@ class Player;
 class Unit;
 class WorldPacket;
 class WorldSession;
+
+namespace Playerbot {
+    class BotSession;
+    namespace V2 {
+        class BotSession;
+    }
+}
 class WorldSocket;
 struct AuctionPosting;
 struct BlackMarketTemplate;
@@ -466,6 +473,8 @@ namespace WorldPackets
         class SetBackpackAutosortDisabled;
         class SetBackpackSellJunkDisabled;
         class SetBankAutosortDisabled;
+        class SetSortBagsRightToLeft;
+        class SetInsertItemsLeftToRight;
     }
 
     namespace LFG
@@ -792,6 +801,19 @@ namespace WorldPackets
         class CommerceTokenGetMarketPrice;
     }
 
+    namespace BattlePay
+    {
+        class StartPurchase;
+        class ConfirmPurchaseResponse;
+        class GetVasAccountCharacterList;
+        class GetVasTransferTargetRealmList;
+        class DistributionAssignVas;
+        class RequestCharacterGuildFollowInfo;
+        class StartVasPurchase;
+        class DistributionAssignToTarget;
+        struct DistributionObject;
+    }
+
     namespace Totem
     {
         class TotemDestroyed;
@@ -985,8 +1007,9 @@ class TC_GAME_API WorldSession
     public:
         WorldSession(uint32 id, std::string&& name, uint32 battlenetAccountId, std::string&& battlenetAccountEmail,
             std::shared_ptr<WorldSocket>&& sock, AccountTypes sec, uint8 expansion, time_t mute_time, std::string&& os, Minutes timezoneOffset,
-            uint32 build, ClientBuild::VariantId clientBuildVariant, LocaleConstant locale, uint32 recruiter, bool isARecruiter);
-        ~WorldSession();
+            uint32 build, ClientBuild::VariantId clientBuildVariant, LocaleConstant locale, uint32 recruiter, bool isARecruiter,
+            bool isBot = false);
+        virtual ~WorldSession();  // virtual: a module may run sessions without a client (bots)
 
         bool PlayerLoading() const { return !m_playerLoading.IsEmpty(); }
         bool PlayerLogout() const { return m_playerLogout; }
@@ -996,7 +1019,7 @@ class TC_GAME_API WorldSession
 
         bool IsAddonRegistered(std::string_view prefix) const;
 
-        void SendPacket(WorldPacket const* packet, bool forced = false);
+        virtual void SendPacket(WorldPacket const* packet, bool forced = false);
 
         void SendNotification(char const* format, ...) ATTR_PRINTF(2, 3);
         void SendNotification(uint32 stringId, ...);
@@ -1036,6 +1059,9 @@ class TC_GAME_API WorldSession
         std::string const& GetOS() const { return _os; }
         uint32 GetClientBuild() const { return _clientBuild; }
         ClientBuild::VariantId const& GetClientBuildVariant() const { return _clientBuildVariant; }
+
+        // A session without a client, run by a module (bots): no socket, shares its owner's account.
+        bool IsBot() const { return _isBot; }
 
         bool CanAccessAlliedRaces() const;
 
@@ -1244,6 +1270,21 @@ class TC_GAME_API WorldSession
         void HandleLfgListProbe(WorldPackets::Null& packet);    // Classic 1.60 Group Finder: layouts still being worked out
         void HandleRecentAllyProbe(WorldPackets::Null& packet); // Classic 1.60 Social window: Recent Allies tab (RecentAllies.cpp)
         void HandleGetLastCatalogFetch(WorldPackets::Null& null);   // Classic 1.60 catalog shop
+        void HandleBattlePayGetProductList(WorldPackets::Null& null);   // Classic 1.60 in-game Store
+        void HandleBattlePayGetPurchaseList(WorldPackets::Null& null);
+        void SendShopProductList();
+        void SendShopDistributionList();
+        static constexpr uint64 BoostDistributionIdBase = UI64LIT(0x100000000);    // boost token distribution id = base + auth.account_boost_token.ID
+        static WorldPackets::BattlePay::DistributionObject MakeBoostDistribution(uint32 tokenId, uint32 boostType, int32 status);
+        void HandleBattlePayDistributionAssignToTarget(WorldPackets::BattlePay::DistributionAssignToTarget& assign);
+        static void ProcessIncomingCharacterTransfers();    // realm transfers to this realm (auth.character_transfer)
+        void HandleGetVasAccountCharacterList(WorldPackets::BattlePay::GetVasAccountCharacterList& request);
+        void HandleGetVasTransferTargetRealmList(WorldPackets::BattlePay::GetVasTransferTargetRealmList& request);
+        void HandleBattlePayStartVasPurchase(WorldPackets::BattlePay::StartVasPurchase& startVasPurchase);
+        void HandleRequestCharacterGuildFollowInfo(WorldPackets::BattlePay::RequestCharacterGuildFollowInfo& request);
+        void HandleBattlePayDistributionAssignVas(WorldPackets::BattlePay::DistributionAssignVas& assign);
+        void HandleBattlePayStartPurchase(WorldPackets::BattlePay::StartPurchase& startPurchase);
+        void HandleBattlePayConfirmPurchaseResponse(WorldPackets::BattlePay::ConfirmPurchaseResponse& confirmPurchaseResponse);
         void Handle_EarlyProccess(WorldPackets::Null& null); // just mark packets processed in WorldSocket::ReadDataHandler
         void LogUnprocessedTail(WorldPacket const* packet);
 
@@ -1581,6 +1622,8 @@ class TC_GAME_API WorldSession
         void HandleSetBackpackAutosortDisabled(WorldPackets::Item::SetBackpackAutosortDisabled const& setBackpackAutosortDisabled);
         void HandleSetBackpackSellJunkDisabled(WorldPackets::Item::SetBackpackSellJunkDisabled const& setBackpackSellJunkDisabled);
         void HandleSetBankAutosortDisabled(WorldPackets::Item::SetBankAutosortDisabled const& setBankAutosortDisabled);
+        void HandleSetSortBagsRightToLeft(WorldPackets::Item::SetSortBagsRightToLeft const& setSortBagsRightToLeft);
+        void HandleSetInsertItemsLeftToRight(WorldPackets::Item::SetInsertItemsLeftToRight const& setInsertItemsLeftToRight);
 
         void HandleAttackSwingOpcode(WorldPackets::Combat::AttackSwing& packet);
         void HandleAttackStopOpcode(WorldPackets::Combat::AttackStop& packet);
@@ -1701,6 +1744,8 @@ class TC_GAME_API WorldSession
         //Battleground
         void HandleBattlemasterHelloOpcode(WorldPackets::NPC::Hello& hello);
         void HandleBattlemasterJoinOpcode(WorldPackets::Battleground::BattlemasterJoin& battlemasterJoin);
+        // Queues the player (or, as leader, the group) for the battleground a queue id names; shared by the packet handlers and .playerbot bgjoin.
+        void JoinBattlegroundQueue(BattlegroundQueueTypeId bgQueueTypeId);
         void HandlePVPLogDataOpcode(WorldPackets::Battleground::PVPLogDataRequest& pvpLogDataRequest);
         void HandleBattleFieldPortOpcode(WorldPackets::Battleground::BattlefieldPort& battlefieldPort);
         void HandleBattlefieldListOpcode(WorldPackets::Battleground::BattlefieldListRequest& battlefieldList);
@@ -1963,6 +2008,8 @@ class TC_GAME_API WorldSession
         AsyncCallbackProcessor<SQLQueryHolderCallback> _queryHolderProcessor;
 
     friend class World;
+    friend class Playerbot::BotSession;
+    friend class Playerbot::V2::BotSession;
     protected:
         class DosProtection
         {
@@ -2035,6 +2082,20 @@ class TC_GAME_API WorldSession
         std::unordered_map<uint32, std::function<void(MessageBuffer)>> _battlenetResponseCallbacks;
         uint32 _battlenetRequestToken;
 
+        // Classic 1.60 in-game Store: the purchase waiting for the player's confirmation
+        struct ShopPendingPurchase
+        {
+            uint64 PurchaseID = 0;
+            uint32 ProductID = 0;
+            uint32 ServerToken = 0;
+            ObjectGuid Target;
+            int64 TimeCreated = 0;
+            uint32 TransferRealmAddress = 0;    // realm transfer (character service window): destination realm
+        };
+        Optional<ShopPendingPurchase> _shopPendingPurchase;
+        Optional<std::pair<ObjectGuid, uint32>> _hardcoreTransferValidated;    // character, destination realm address of the token's check
+        void StartShopPurchase(uint32 clientToken, uint32 productId, ObjectGuid target, uint32 transferRealmAddress);
+
         time_t _logoutTime;
         bool m_inQueue;                                     // session wait in auth.queue
         ObjectGuid m_playerLoading;                         // code processed in LoginPlayer
@@ -2078,6 +2139,8 @@ class TC_GAME_API WorldSession
         std::unique_ptr<CollectionMgr> _collectionMgr;
 
         ConnectToKey _instanceConnectKey;
+
+        bool _isBot;
 
         WorldSession(WorldSession const& right) = delete;
         WorldSession& operator=(WorldSession const& right) = delete;

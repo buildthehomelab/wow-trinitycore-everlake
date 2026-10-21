@@ -273,11 +273,20 @@ class TC_GAME_API WorldScript : public ScriptObject
         // Called on every world tick (don't execute too heavy code here).
         virtual void OnUpdate(uint32 diff);
 
+        // Called on every world tick before the maps are updated (don't execute too heavy code here).
+        virtual void OnBeforeMapsUpdate(uint32 diff);
+
+        // Called once after the world is loaded, before the network starts and the realm is set online.
+        virtual void OnWorldInitialized();
+
         // Called when the world is started.
         virtual void OnStartup();
 
         // Called when the world is actually shut down.
         virtual void OnShutdown();
+
+        // Called before a battleground queue opens a new (non arena) instance; return false to hold it for now.
+        virtual bool CanCreateBattleground(uint32 battlemasterListId, uint8 bracketId);
 };
 
 class TC_GAME_API FormulaScript : public ScriptObject
@@ -427,6 +436,9 @@ class TC_GAME_API UnitScript : public ScriptObject
         // Called when a unit deals damage to another unit
         virtual void OnDamage(Unit* attacker, Unit* victim, uint32& damage);
 
+        // Called just before OnDamage with the spell that dealt the damage (null for a melee swing)
+        virtual void OnDamageSpell(Unit* attacker, Unit* victim, uint32 damage, SpellInfo const* spellInfo);
+
         // Called when DoT's Tick Damage is being Dealt
         virtual void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage);
 
@@ -435,6 +447,9 @@ class TC_GAME_API UnitScript : public ScriptObject
 
         // Called when Spell Damage is being Dealt
         virtual void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* spellInfo);
+
+        // Called when a unit is killed, before the kill (loot, rewards, death state) is processed (map thread)
+        virtual void OnUnitDeath(Unit* victim, Unit* killer);
 };
 
 class TC_GAME_API CreatureScript : public ScriptObject
@@ -748,6 +763,25 @@ class TC_GAME_API PlayerScript : public ScriptObject
 
         virtual void OnChat(Player* player, uint32 type, uint32 lang, std::string& msg, Channel* channel);
 
+        // The following methods are called after a player's say, yell, whisper, group or guild message was sent (map thread).
+        virtual void OnChatSent(Player* player, uint32 type, uint32 lang, std::string const& msg);
+
+        virtual void OnChatSent(Player* player, uint32 type, uint32 lang, std::string const& msg, Player* receiver);
+
+        virtual void OnChatSent(Player* player, uint32 type, uint32 lang, std::string const& msg, Group* group);
+
+        virtual void OnChatSent(Player* player, uint32 type, uint32 lang, std::string const& msg, Guild* guild);
+
+        // The following methods are called after a player's addon message was sent as a whisper or to the group (map thread).
+        virtual void OnAddonMessageSent(Player* player, uint32 type, std::string const& prefix, std::string const& text, Player* receiver);
+
+        virtual void OnAddonMessageSent(Player* player, uint32 type, std::string const& prefix, std::string const& text, Group* group);
+
+        // Called after a group ping was relayed to the group (map thread). type is a PingSubjectType value.
+        virtual void OnPingUnit(Player* player, Group* group, Unit* target, uint8 type);
+
+        virtual void OnPingWorldPoint(Player* player, Group* group, Position const& point, uint8 type);
+
         // Both of the below are called on emote opcodes.
         virtual void OnClearEmote(Player* player);
 
@@ -791,6 +825,35 @@ class TC_GAME_API PlayerScript : public ScriptObject
 
         // Called when a player completes a movie
         virtual void OnMovieComplete(Player* player, uint32 movieId);
+
+        // Called when a looted item was stored in the player's bags (map thread)
+        virtual void OnLootItem(Player* player, Item* item);
+
+        // Called after a player (alone or as group leader) joined a battleground queue
+        virtual void OnBattlegroundQueueJoin(Player* player, uint32 bgTypeId, uint8 bracketId);
+
+        // Called when a player is invited to a battleground instance, and again on the invite reminder
+        virtual void OnBattlegroundInvite(Player* player, uint32 instanceId, uint32 bgTypeId);
+
+        // Called when a player's request to enter a battleground is refused. reason: 1 not in queue, 2 invalid queue slot,
+        // 3 no group info, 4 not invited, 5 instance gone, 6 no bracket, 7 frozen (GM freeze), 8 invite no longer valid
+        virtual void OnBattlegroundPortFailed(Player* player, uint8 reason, uint32 instanceId);
+
+        // Called after a player joined the dungeon finder
+        virtual void OnLfgJoin(Player* player, uint32 dungeonId, uint8 roles);
+
+        // Called when a player posts (listed) or removes (!listed) a Classic Group Finder listing
+        virtual void OnGroupFinderListing(Player* player, uint32 categoryId, std::vector<uint32> const& activities, bool listed);
+
+        // Called when `applicant` invites a player who is already in a group (the sign-up of the Group Finder list until its Apply
+        // button is answered). Return true when the script took the request: the usual "already in a group" answer is then not sent.
+        virtual bool OnGroupFinderJoinRequest(Player* member, Player* applicant);
+
+        // Called when a player searches the Classic Group Finder list, before the listings are read
+        virtual void OnGroupFinderSearch(Player* searcher);
+
+        // Called when a dungeon finder proposal is sent to a player
+        virtual void OnLfgProposal(Player* player, uint32 proposalId);
 };
 
 class TC_GAME_API AccountScript : public ScriptObject
@@ -889,6 +952,9 @@ class TC_GAME_API GroupScript : public ScriptObject
 
         // Called when a group is disbanded.
         virtual void OnDisband(Group* group);
+
+        // Called when a raid member is moved to another subgroup (map thread).
+        virtual void OnSubgroupChange(Group* group, ObjectGuid guid, uint8 subgroup);
 };
 
 class TC_GAME_API AreaTriggerEntityScript : public ScriptObject
@@ -1103,8 +1169,11 @@ class TC_GAME_API ScriptMgr
         void OnShutdownInitiate(ShutdownExitCode code, ShutdownMask mask);
         void OnShutdownCancel();
         void OnWorldUpdate(uint32 diff);
+        void OnWorldBeforeMapsUpdate(uint32 diff);
+        void OnWorldInitialized();
         void OnStartup();
         void OnShutdown();
+        bool CanCreateBattleground(uint32 battlemasterListId, uint8 bracketId);
 
     public: /* FormulaScript */
 
@@ -1231,6 +1300,14 @@ class TC_GAME_API ScriptMgr
         void OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg, Group* group);
         void OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg, Guild* guild);
         void OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg, Channel* channel);
+        void OnPlayerChatSent(Player* player, uint32 type, uint32 lang, std::string const& msg);
+        void OnPlayerChatSent(Player* player, uint32 type, uint32 lang, std::string const& msg, Player* receiver);
+        void OnPlayerChatSent(Player* player, uint32 type, uint32 lang, std::string const& msg, Group* group);
+        void OnPlayerChatSent(Player* player, uint32 type, uint32 lang, std::string const& msg, Guild* guild);
+        void OnPlayerAddonMessageSent(Player* player, uint32 type, std::string const& prefix, std::string const& text, Player* receiver);
+        void OnPlayerAddonMessageSent(Player* player, uint32 type, std::string const& prefix, std::string const& text, Group* group);
+        void OnPlayerPingUnit(Player* player, Group* group, Unit* target, uint8 type);
+        void OnPlayerPingWorldPoint(Player* player, Group* group, Position const& point, uint8 type);
         void OnPlayerClearEmote(Player* player);
         void OnPlayerTextEmote(Player* player, uint32 textEmote, uint32 emoteNum, ObjectGuid guid);
         void OnPlayerSpellCast(Player* player, Spell* spell, bool skipCheck);
@@ -1245,6 +1322,15 @@ class TC_GAME_API ScriptMgr
         void OnQuestStatusChange(Player* player, uint32 questId);
         void OnPlayerRepop(Player* player);
         void OnMovieComplete(Player* player, uint32 movieId);
+        void OnPlayerLootItem(Player* player, Item* item);
+        void OnPlayerBattlegroundQueueJoin(Player* player, uint32 bgTypeId, uint8 bracketId);
+        void OnPlayerBattlegroundInvite(Player* player, uint32 instanceId, uint32 bgTypeId);
+        void OnPlayerBattlegroundPortFailed(Player* player, uint8 reason, uint32 instanceId);
+        void OnPlayerLfgJoin(Player* player, uint32 dungeonId, uint8 roles);
+        void OnPlayerGroupFinderListing(Player* player, uint32 categoryId, std::vector<uint32> const& activities, bool listed);
+        bool OnPlayerGroupFinderJoinRequest(Player* member, Player* applicant);
+        void OnPlayerGroupFinderSearch(Player* searcher);
+        void OnPlayerLfgProposal(Player* player, uint32 proposalId);
         void OnPlayerChoiceResponse(WorldObject* object, Player* player, PlayerChoice const* choice, PlayerChoiceResponse const* response, uint16 clientIdentifier);
 
     public: /* AccountScript */
@@ -1278,14 +1364,17 @@ class TC_GAME_API ScriptMgr
         void OnGroupRemoveMember(Group* group, ObjectGuid guid, RemoveMethod method, ObjectGuid kicker, char const* reason);
         void OnGroupChangeLeader(Group* group, ObjectGuid newLeaderGuid, ObjectGuid oldLeaderGuid);
         void OnGroupDisband(Group* group);
+        void OnGroupSubgroupChange(Group* group, ObjectGuid guid, uint8 subgroup);
 
     public: /* UnitScript */
 
         void OnHeal(Unit* healer, Unit* reciever, uint32& gain);
         void OnDamage(Unit* attacker, Unit* victim, uint32& damage);
+        void OnDamageSpell(Unit* attacker, Unit* victim, uint32 damage, SpellInfo const* spellInfo);
         void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage);
         void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage);
         void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* spellInfo);
+        void OnUnitDeath(Unit* victim, Unit* killer);
 
     public: /* AreaTriggerEntityScript */
 

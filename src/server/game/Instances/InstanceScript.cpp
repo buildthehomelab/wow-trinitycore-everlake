@@ -24,6 +24,7 @@
 #include "DB2Stores.h"
 #include "GameEventSender.h"
 #include "GameObject.h"
+#include "GameTime.h"
 #include "Group.h"
 #include "InstancePackets.h"
 #include "InstanceScenario.h"
@@ -39,6 +40,7 @@
 #include "ScriptReloadMgr.h"
 #include "SmartEnum.h"
 #include "SpellMgr.h"
+#include "Timer.h"
 #include "World.h"
 #include "WorldSession.h"
 #include "WorldStateMgr.h"
@@ -65,7 +67,7 @@ DungeonEncounterEntry const* BossInfo::GetDungeonEncounterForDifficulty(Difficul
 }
 
 InstanceScript::InstanceScript(InstanceMap* map) noexcept : instance(map), _instanceSpawnGroups(sObjectMgr->GetInstanceSpawnGroupsForMap(map->GetId())),
-_entranceId(0), _temporaryEntranceId(0), _combatResurrectionTimer(0), _combatResurrectionCharges(0), _combatResurrectionTimerStarted(false)
+_entranceId(0), _temporaryEntranceId(0), _combatResurrectionTimer(0), _combatResurrectionCharges(0), _combatResurrectionTimerStarted(false), _classicEncounterStartTime(0)
 {
 #ifdef TRINITY_API_USE_DYNAMIC_LINKING
     uint32 scriptId = sObjectMgr->GetInstanceTemplate(map->GetId())->ScriptId;
@@ -412,7 +414,10 @@ bool InstanceScript::SetBossState(uint32 id, EncounterState state)
                 {
                     uint32 resInterval = GetCombatResurrectionChargeInterval();
                     InitializeCombatResurrections(1, resInterval);
+                    SendClassicEncounterStart(bossInfo->GetDungeonEncounterForDifficulty(instance->GetDifficultyID()));
                     SendEncounterStart(1, 9, resInterval, resInterval);
+                    // Vanilla: a dead player can always release, boss fight or not.
+                    instance->SendToPlayers(WorldPackets::Instance::InstanceEncounterAllowReleaseInProgress().Write());
 
                     instance->DoOnPlayers([](Player* player)
                     {
@@ -420,10 +425,19 @@ bool InstanceScript::SetBossState(uint32 id, EncounterState state)
                     });
                     break;
                 }
+                case NOT_STARTED:
+                    // The classic boss scripts leave a fight by Reset() -> NOT_STARTED, never FAIL: without this the client was sent
+                    // the encounter start and never the end, stayed "in an encounter" and greyed out Release Spirit
+                    // ("A member of your group is in combat" after a wipe).
+                    if (bossInfo->state != IN_PROGRESS)
+                        break;
+                    [[fallthrough]];
                 case FAIL:
                 {
                     ResetCombatResurrections();
                     SendEncounterEnd();
+                    if (bossInfo->state == IN_PROGRESS)
+                        SendClassicEncounterEnd(bossInfo->GetDungeonEncounterForDifficulty(instance->GetDifficultyID()), false);
 
                     instance->DoOnPlayers([](Player* player)
                     {
@@ -436,6 +450,8 @@ bool InstanceScript::SetBossState(uint32 id, EncounterState state)
                     ResetCombatResurrections();
                     SendEncounterEnd();
                     dungeonEncounter = bossInfo->GetDungeonEncounterForDifficulty(instance->GetDifficultyID());
+                    if (bossInfo->state == IN_PROGRESS)
+                        SendClassicEncounterEnd(dungeonEncounter, true);
                     if (dungeonEncounter)
                     {
                         instance->DoOnPlayers([&](Player* player)
@@ -884,6 +900,8 @@ void InstanceScript::SendEncounterUnit(EncounterFrameType type, Unit const* unit
 
 void InstanceScript::SendEncounterStart(uint32 inCombatResCount /*= 0*/, uint32 maxInCombatResCount /*= 0*/, uint32 inCombatResChargeRecovery /*= 0*/, uint32 nextCombatResChargeTime /*= 0*/)
 {
+    TC_LOG_INFO("playerbot.v2.raid.encounter", "[encounter_packet] SMSG_INSTANCE_ENCOUNTER_START sent: map={} instance={} players={} in_progress=1 res={}/{}",
+        instance->GetId(), instance->GetInstanceId(), instance->GetPlayers().size(), inCombatResCount, maxInCombatResCount);
     WorldPackets::Instance::InstanceEncounterStart encounterStartMessage;
     encounterStartMessage.InCombatResCount = inCombatResCount;
     encounterStartMessage.MaxInCombatResCount = maxInCombatResCount;
@@ -895,8 +913,39 @@ void InstanceScript::SendEncounterStart(uint32 inCombatResCount /*= 0*/, uint32 
 
 void InstanceScript::SendEncounterEnd()
 {
+    TC_LOG_INFO("playerbot.v2.raid.encounter", "[encounter_packet] SMSG_INSTANCE_ENCOUNTER_END sent: map={} instance={} players={}",
+        instance->GetId(), instance->GetInstanceId(), instance->GetPlayers().size());
     WorldPackets::Instance::InstanceEncounterEnd encounterEndMessage;
     instance->SendToPlayers(encounterEndMessage.Write());
+}
+
+// Classic 1.60: the official server sends SMSG_ENCOUNTER_START next to SMSG_INSTANCE_ENCOUNTER_START when a boss is pulled and
+// SMSG_ENCOUNTER_END (duration, success) when it dies or resets; the client fires ENCOUNTER_START / ENCOUNTER_END for addons
+void InstanceScript::SendClassicEncounterStart(DungeonEncounterEntry const* dungeonEncounter)
+{
+    _classicEncounterStartTime = GameTime::GetGameTimeMS();
+    if (!dungeonEncounter)
+        return;
+
+    WorldPackets::Instance::EncounterStart encounterStart;
+    encounterStart.EncounterID = dungeonEncounter->ID;
+    encounterStart.DifficultyID = instance->GetDifficultyID();
+    encounterStart.GroupSize = instance->GetMapDifficulty() ? instance->GetMapDifficulty()->MaxPlayers : instance->GetPlayersCountExceptGMs();
+    instance->SendToPlayers(encounterStart.Write());
+}
+
+void InstanceScript::SendClassicEncounterEnd(DungeonEncounterEntry const* dungeonEncounter, bool success)
+{
+    if (!dungeonEncounter)
+        return;
+
+    WorldPackets::Instance::EncounterEnd encounterEnd;
+    encounterEnd.EncounterID = dungeonEncounter->ID;
+    encounterEnd.DifficultyID = instance->GetDifficultyID();
+    encounterEnd.GroupSize = instance->GetMapDifficulty() ? instance->GetMapDifficulty()->MaxPlayers : instance->GetPlayersCountExceptGMs();
+    encounterEnd.Duration = _classicEncounterStartTime ? int32(getMSTimeDiff(_classicEncounterStartTime, GameTime::GetGameTimeMS())) : 0;
+    encounterEnd.Success = success;
+    instance->SendToPlayers(encounterEnd.Write());
 }
 
 void InstanceScript::SendBossKillCredit(uint32 encounterId)

@@ -18,6 +18,7 @@
 #include "Pet.h"
 #include "PetScaling.h"
 #include "CharmInfo.h"
+#include "Chat.h"
 #include "Common.h"
 #include "DatabaseEnv.h"
 #include "DB2Stores.h"
@@ -310,6 +311,8 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
 
     InitStatsForLevel(petlevel);
     SetPetExperience(petInfo->Experience);
+    if (HasLoyalty())
+        InitLoyalty(petInfo->LoyaltyLevel, petInfo->LoyaltyPoints);
 
     SynchronizeLevelWithOwner();
 
@@ -435,6 +438,10 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
 
         SetGroupUpdateFlag(GROUP_UPDATE_PET_FULL);
 
+        TC_LOG_INFO("entities.pet", "Pet loaded for {}: number {} entry {} type {} level {} display {} scale {} spells {} specialization {}", owner->GetName(),
+            GetCharmInfo() ? GetCharmInfo()->GetPetNumber() : 0, GetEntry(), uint32(getPetType()), uint32(GetLevel()), GetDisplayId(), GetObjectScale(),
+            m_spells.size(), GetSpecialization());
+
         if (getPetType() == HUNTER_PET)
         {
             if (PreparedQueryResult result = holder.GetPreparedResult(PetLoadQueryHolder::DECLINED_NAMES))
@@ -540,6 +547,11 @@ void Pet::SavePetToDB(PetSaveMode mode)
         stmt->setUInt16(16, GetSpecialization());
         trans->Append(stmt);
 
+        // Classic 1.60: hunter pet loyalty (sql/custom/characters 2026_10_12_20)
+        if (HasLoyalty())
+            trans->PAppend("REPLACE INTO character_pet_loyalty (id, loyalty, loyalty_points) VALUES ({}, {}, {})",
+                m_charmInfo->GetPetNumber(), uint32(m_loyaltyLevel), m_loyaltyPoints);
+
         CharacterDatabase.CommitTransaction(trans);
     }
     // delete
@@ -567,6 +579,8 @@ void Pet::FillPetInfo(PetStable::PetInfo* petInfo, Optional<ReactStates> forcedR
     petInfo->CreatedBySpellId = m_unitData->CreatedBySpell;
     petInfo->Type = getPetType();
     petInfo->SpecializationId = GetSpecialization();
+    petInfo->LoyaltyLevel = m_loyaltyLevel;
+    petInfo->LoyaltyPoints = m_loyaltyPoints;
 }
 
 void Pet::DeleteFromDB(uint32 petNumber)
@@ -600,6 +614,8 @@ void Pet::DeleteFromDB(uint32 petNumber)
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_PET_SPELL_CHARGES);
     stmt->setUInt32(0, petNumber);
     trans->Append(stmt);
+
+    trans->PAppend("DELETE FROM character_pet_loyalty WHERE id = {}", petNumber);   // Classic 1.60 hunter pet loyalty
 
     CharacterDatabase.CommitTransaction(trans);
 }
@@ -677,7 +693,7 @@ void Pet::Update(uint32 diff)
                 }
             }
 
-            // Classic 1.60: hunter pets slowly lose happiness, twice as fast in combat
+            // Classic 1.60: hunter pets slowly lose happiness, 1.5 times as fast in combat (VMaNGOS Pet::LooseHappiness)
             if (HasHappiness())
             {
                 if (m_happinessTimer > diff)
@@ -685,7 +701,27 @@ void Pet::Update(uint32 diff)
                 else
                 {
                     m_happinessTimer = HAPPINESS_LOSS_INTERVAL;
-                    ModifyPower(POWER_HAPPINESS, -(IsInCombat() ? 2 * HAPPINESS_LOSS : HAPPINESS_LOSS));
+                    ModifyPower(POWER_HAPPINESS, -(IsInCombat() ? HAPPINESS_LOSS * 3 / 2 : HAPPINESS_LOSS));
+                }
+            }
+
+            // Classic 1.60: loyalty every 12 s by happiness: happy +20, content +10, unhappy -20 (VMaNGOS Pet::TickLoyaltyChange)
+            if (HasLoyalty())
+            {
+                if (m_loyaltyTimer > diff)
+                    m_loyaltyTimer -= diff;
+                else
+                {
+                    m_loyaltyTimer = LOYALTY_TICK_INTERVAL;
+                    int32 change = 0;
+                    switch (GetHappinessState())
+                    {
+                        case HAPPY:   change = 20; break;
+                        case CONTENT: change = 10; break;
+                        case UNHAPPY: change = -20; break;
+                    }
+                    if (!ModifyLoyalty(change))
+                        return;                             // ran away, removed
                 }
             }
 
@@ -769,6 +805,10 @@ void Pet::GivePetXP(uint32 xp)
     }
     // Not affected by special conditions - give it new XP
     SetPetExperience(petlevel < maxlevel ? newXP : 0);
+
+    // Classic 1.60: kills that give experience also give loyalty (VMaNGOS Pet::KillLoyaltyBonus)
+    if (HasLoyalty())
+        KillLoyaltyBonus(petlevel);
 }
 
 uint32 Pet::GetHunterPetNextLevelExperience(uint8 level)
@@ -817,7 +857,11 @@ bool Pet::CreateBaseAtCreature(Creature* creature)
     SetDisplayId(creature->GetDisplayId());
 
     if (CreatureFamilyEntry const* cFamily = sCreatureFamilyStore.LookupEntry(cinfo->family))
-        SetName(cFamily->Name[GetOwner()->GetSession()->GetSessionDbcLocale()]);
+    {
+        WorldSession const* osess = GetOwner() ? GetOwner()->GetSession() : nullptr;
+        LocaleConstant loc = osess ? osess->GetSessionDbcLocale() : DEFAULT_LOCALE;
+        SetName(cFamily->Name[loc]);
+    }
     else
         SetName(creature->GetNameForLocaleIdx(sObjectMgr->GetDBCLocaleIndex()));
 
@@ -871,6 +915,141 @@ int32 Pet::GetFoodBenefit(uint8 petLevel, uint32 foodLevel)
     return 0;
 }
 
+// Classic 1.60 hunter pet loyalty: points needed to reach the next level / points a level starts with (VMaNGOS Pet::LevelUpLoyalty /
+// LevelStartLoyalty; 100 points per minute while happy)
+int32 Pet::GetLoyaltyLevelUpPoints(uint8 loyaltyLevel)
+{
+    static constexpr std::array<int32, 6> LevelUp = { 5500, 11500, 17000, 23500, 31000, 39500 };
+    return LevelUp[std::clamp<uint8>(loyaltyLevel, REBELLIOUS, BEST_FRIEND) - 1];
+}
+
+int32 Pet::GetLoyaltyStartPoints(uint8 loyaltyLevel)
+{
+    static constexpr std::array<int32, 6> Start = { 2000, 4500, 7000, 10000, 13500, 17500 };
+    return Start[std::clamp<uint8>(loyaltyLevel, REBELLIOUS, BEST_FRIEND) - 1];
+}
+
+void Pet::InitLoyalty(uint8 loyaltyLevel, int32 loyaltyPoints)
+{
+    m_loyaltyLevel = std::clamp<uint8>(loyaltyLevel, REBELLIOUS, BEST_FRIEND);
+    m_loyaltyPoints = std::clamp<int32>(loyaltyPoints, 0, GetLoyaltyLevelUpPoints(m_loyaltyLevel));
+    m_loyaltyTimer = LOYALTY_TICK_INTERVAL;
+}
+
+bool Pet::ModifyLoyalty(int32 addvalue)
+{
+    if (!HasLoyalty() || !addvalue)
+        return true;
+
+    uint8 loyaltyLevel = m_loyaltyLevel;
+    if (loyaltyLevel >= BEST_FRIEND && addvalue + m_loyaltyPoints > GetLoyaltyLevelUpPoints(loyaltyLevel))
+        return true;
+
+    m_loyaltyPoints += addvalue;
+
+    if (m_loyaltyPoints < 0)
+    {
+        if (loyaltyLevel > REBELLIOUS)
+        {
+            // level down: the pet loses training points (level * 1)
+            --loyaltyLevel;
+            m_loyaltyPoints = GetLoyaltyStartPoints(loyaltyLevel);
+        }
+        else
+        {
+            // vanilla: a Rebellious pet that keeps losing loyalty runs away for good
+            m_loyaltyPoints = 0;
+            Player* owner = GetOwner();
+            ChatHandler(owner->GetSession()).SendSysMessage("Your pet has run away");
+            Remove(PET_SAVE_AS_DELETED);
+            return false;
+        }
+    }
+    else if (m_loyaltyPoints > GetLoyaltyLevelUpPoints(loyaltyLevel))
+    {
+        // level up: the pet gains training points (level * 1)
+        ++loyaltyLevel;
+        m_loyaltyPoints = GetLoyaltyStartPoints(loyaltyLevel);
+    }
+
+    if (loyaltyLevel != m_loyaltyLevel)
+    {
+        m_loyaltyLevel = loyaltyLevel;
+        UpdateTrainingPoints();
+        if (Player* owner = GetOwner())
+            owner->UpdateStablePetLoyalty(m_charmInfo->GetPetNumber(), m_loyaltyLevel, m_loyaltyPoints);
+    }
+    return true;
+}
+
+void Pet::KillLoyaltyBonus(uint8 level)
+{
+    if (level > 100)
+        return;
+
+    // at lower levels gain is faster, the lower the loyalty the more is gained
+    ModifyLoyalty(int32((100 - level) / 10) + (BEST_FRIEND - m_loyaltyLevel));
+}
+
+uint32 Pet::GetSpellTrainingPoints(uint32 spellId)
+{
+    static std::unordered_map<uint32, uint32> const costs = []
+    {
+        std::unordered_map<uint32, uint32> result;
+        if (QueryResult query = WorldDatabase.Query("SELECT SpellId, Points FROM classic_pet_spell_training_points"))
+        {
+            do
+            {
+                Field* fields = query->Fetch();
+                result[fields[0].GetUInt32()] = fields[1].GetUInt16();
+            } while (query->NextRow());
+        }
+        TC_LOG_INFO("server.loading", ">> Loaded {} Classic pet spell training point costs", result.size());
+        return result;
+    }();
+
+    auto itr = costs.find(spellId);
+    return itr != costs.end() ? itr->second : 0;
+}
+
+uint32 Pet::GetTrainingPointsTotal() const
+{
+    // vanilla: (loyalty level - 1) per pet level, i.e. every pet level gives loyalty - 1 and every loyalty level gives the pet level
+    return GetLevel() * (m_loyaltyLevel - 1);
+}
+
+uint32 Pet::GetTrainingPointsUsed() const
+{
+    // a rank costs its full price minus what the lower rank cost, so a chain costs the price of its highest known rank
+    std::unordered_map<uint32, uint32> chainCost;
+    for (auto const& [spellId, petSpell] : m_spells)
+    {
+        if (petSpell.state == PETSPELL_REMOVED)
+            continue;
+
+        if (uint32 points = GetSpellTrainingPoints(spellId))
+        {
+            uint32& cost = chainCost[sSpellMgr->GetFirstSpellInChain(spellId)];
+            cost = std::max(cost, points);
+        }
+    }
+
+    uint32 used = 0;
+    for (auto const& [chain, cost] : chainCost)
+        used += cost;
+    return used;
+}
+
+void Pet::UpdateTrainingPoints()
+{
+    if (!HasLoyalty())
+        return;
+
+    auto unitData = m_values.ModifyValue(&Unit::m_unitData);
+    SetUpdateFieldValue(unitData.ModifyValue(&UF::UnitData::ClassicTrainingPointsUsed), uint16(std::min<uint32>(GetTrainingPointsUsed(), 0xFFFF)));
+    SetUpdateFieldValue(unitData.ModifyValue(&UF::UnitData::ClassicTrainingPointsTotal), uint16(std::min<uint32>(GetTrainingPointsTotal(), 0xFFFF)));
+}
+
 bool Pet::CreateBaseAtTamed(CreatureTemplate const* cinfo, Map* map)
 {
     TC_LOG_DEBUG("entities.pet", "Pet::CreateBaseForTamed");
@@ -890,6 +1069,9 @@ bool Pet::CreateBaseAtTamed(CreatureTemplate const* cinfo, Map* map)
         SetPowerType(POWER_FOCUS);
         SetSheath(SHEATH_STATE_MELEE);
         ReplaceAllPetFlags(UNIT_PET_FLAG_CAN_BE_RENAMED | UNIT_PET_FLAG_CAN_BE_ABANDONED);
+        // Classic 1.60: a freshly tamed beast is Rebellious (vanilla)
+        m_loyaltyLevel = REBELLIOUS;
+        m_loyaltyPoints = LOYALTY_TAMED;
     }
 
     return true;
@@ -939,9 +1121,12 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
 
     SetStatFlatModifier(UNIT_MOD_ARMOR, BASE_VALUE, float(petlevel * 50));
 
-    SetBaseAttackTime(BASE_ATTACK, BASE_ATTACK_TIME);
-    SetBaseAttackTime(OFF_ATTACK, BASE_ATTACK_TIME);
-    SetBaseAttackTime(RANGED_ATTACK, BASE_ATTACK_TIME);
+    // Classic 1.60 (vanilla): pets keep their creature's attack speed (a tamed beast keeps the speed it had in the wild);
+    // retail forced 2.0 sec
+    uint32 const attackTime = cinfo->BaseAttackTime ? cinfo->BaseAttackTime : BASE_ATTACK_TIME;
+    SetBaseAttackTime(BASE_ATTACK, attackTime);
+    SetBaseAttackTime(OFF_ATTACK, attackTime);
+    SetBaseAttackTime(RANGED_ATTACK, cinfo->RangeAttackTime ? cinfo->RangeAttackTime : BASE_ATTACK_TIME);
 
     //scale
     SetObjectScale(GetNativeObjectScale());
@@ -994,15 +1179,7 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
     {
         case SUMMON_PET:
         {
-            // the damage bonus used for pets is either fire or shadow damage, whatever is higher
-            int32 fire = GetOwner()->ToPlayer()->m_activePlayerData->ModDamageDonePos[SPELL_SCHOOL_FIRE];
-            int32 shadow = GetOwner()->ToPlayer()->m_activePlayerData->ModDamageDonePos[SPELL_SCHOOL_SHADOW];
-            int32 val = (fire > shadow) ? fire : shadow;
-            if (val < 0)
-                val = 0;
-
-            SetBonusDamage(val * 0.15f);
-
+            // Classic 1.60 (vanilla): no bonus damage from the warlock's fire or shadow damage (The Burning Crusade)
             SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, float(petlevel - (petlevel / 4)));
             SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, float(petlevel + (petlevel / 4)));
 
@@ -1548,7 +1725,9 @@ void Pet::learnSpells(std::vector<uint32> const& spellIds)
     }
 
     if (!m_loading)
-        GetOwner()->GetSession()->SendPacket(packet.Write());
+        if (Player* o = GetOwner())
+            if (WorldSession* sess = o->GetSession())
+                sess->SendPacket(packet.Write());
 }
 
 void Pet::InitLevelupSpellsForLevel()
@@ -1586,6 +1765,9 @@ void Pet::InitLevelupSpellsForLevel()
                 learnSpell(spellInfo->Id);
         }
     }
+
+    // Classic 1.60: training points follow the pet level and its known abilities
+    UpdateTrainingPoints();
 }
 
 bool Pet::unlearnSpell(uint32 spell_id, bool learn_prev, bool clear_ab)
@@ -1616,7 +1798,9 @@ void Pet::unlearnSpells(std::vector<uint32> const& spellIds, bool learn_prev, bo
     }
 
     if (!m_loading)
-        GetOwner()->GetSession()->SendPacket(packet.Write());
+        if (Player* o = GetOwner())
+            if (WorldSession* sess = o->GetSession())
+                sess->SendPacket(packet.Write());
 }
 
 bool Pet::removeSpell(uint32 spell_id, bool learn_prev, bool clear_ab)
@@ -1879,10 +2063,19 @@ float Pet::GetFollowAngle() const
 float Pet::GetNativeObjectScale() const
 {
     CreatureFamilyEntry const* creatureFamily = sCreatureFamilyStore.LookupEntry(GetCreatureTemplate()->family);
-    if (creatureFamily && creatureFamily->MinScale > 0.0f && getPetType() == HUNTER_PET)
+    // both ends must be set: a family with MinScale but MaxScale 0 would give its pets ObjectScale 0 (invisible, client asserts)
+    if (creatureFamily && creatureFamily->MinScale > 0.0f && creatureFamily->MaxScale > 0.0f && getPetType() == HUNTER_PET)
         return PetScaling::FamilyScale(*creatureFamily, GetLevel());
 
-    return Guardian::GetNativeObjectScale();
+    // a template without a scale would give the pet ObjectScale 0, which the client asserts on ("scale > FLT_EPSILON") when it draws the pet
+    float const scale = Guardian::GetNativeObjectScale();
+    if (!(scale > 0.01f))
+    {
+        TC_LOG_ERROR("entities.pet", "Pet::GetNativeObjectScale: creature {} has scale {}, using 1", GetEntry(), scale);
+        return 1.0f;
+    }
+
+    return scale;
 }
 
 void Pet::SetDisplayId(uint32 modelId, bool setNative /*= false*/)
@@ -1988,7 +2181,9 @@ void Pet::SetSpecialization(uint16 spec)
 
     WorldPackets::Pet::SetPetSpecialization setPetSpecialization;
     setPetSpecialization.SpecID = m_petSpecialization;
-    GetOwner()->GetSession()->SendPacket(setPetSpecialization.Write());
+    if (Player* o = GetOwner())
+        if (WorldSession* sess = o->GetSession())
+            sess->SendPacket(setPetSpecialization.Write());
 }
 
 std::string Pet::GenerateActionBarData() const

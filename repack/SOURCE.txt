@@ -1,0 +1,11 @@
+SOURCE CODE (GPL v2)
+
+The server in this package is built from TrinityCore and the advocaite 'forever' fork (GPL v2), plus the PlayerbotV2 bot
+module and our changes. The complete corresponding source for the exact build you received is in
+
+    wow-forever-source-<version>.zip      (same download as this package)
+
+You may copy, modify and redistribute it under the GPL v2 (see COPYING inside the zip). If a source zip is missing from
+your download, ask the person who sent it and it will be provided. See NOTICE.txt for credits and licences.
+
+No Blizzard client files are included. This is an unofficial fan project and is not endorsed by Blizzard.

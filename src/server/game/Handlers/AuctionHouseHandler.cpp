@@ -371,11 +371,15 @@ void WorldSession::HandleAuctionPlaceBid(WorldPackets::AuctionHouse::AuctionPlac
     AuctionHouseObject* auctionHouse = sAuctionMgr->GetAuctionsMap(creature->GetFaction());
 
     AuctionPosting* auction = auctionHouse->GetAuction(placeBid.AuctionID);
-    if (!auction || auction->IsCommodity())
+    if (!auction)
     {
         SendAuctionCommandResult(placeBid.AuctionID, AuctionCommand::PlaceBid, AuctionResult::ItemNotFound, throttle.DelayUntilNext);
         return;
     }
+
+    // A stackable listing stores its price per item. Buying it by auction id buys the whole listing at its total price.
+    bool const stack = auction->IsCommodity();
+    uint64 const buyoutPrice = stack ? auction->BuyoutOrUnitPrice * auction->GetTotalItemCount() : auction->BuyoutOrUnitPrice;
 
     Player* player = GetPlayer();
 
@@ -389,8 +393,8 @@ void WorldSession::HandleAuctionPlaceBid(WorldPackets::AuctionHouse::AuctionPlac
     bool canBid = auction->MinBid != 0;
     bool canBuyout = auction->BuyoutOrUnitPrice != 0;
 
-    // buyout attempt with wrong amount
-    if (!canBid && placeBid.BidAmount != auction->BuyoutOrUnitPrice)
+    // buyout attempt with wrong amount (for a stack the price per item is accepted too)
+    if (!canBid && placeBid.BidAmount != buyoutPrice && !(stack && placeBid.BidAmount == auction->BuyoutOrUnitPrice))
     {
         SendAuctionCommandResult(placeBid.AuctionID, AuctionCommand::PlaceBid, AuctionResult::BidIncrement, throttle.DelayUntilNext);
         return;
@@ -405,14 +409,16 @@ void WorldSession::HandleAuctionPlaceBid(WorldPackets::AuctionHouse::AuctionPlac
 
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
 
-    uint64 priceToPay = placeBid.BidAmount;
+    // a stack bought by its price per item pays the total
+    uint64 const bidAmount = stack && placeBid.BidAmount == auction->BuyoutOrUnitPrice ? buyoutPrice : uint64(placeBid.BidAmount);
+    uint64 priceToPay = bidAmount;
     if (!auction->Bidder.IsEmpty())
     {
         // return money to previous bidder
         if (auction->Bidder != player->GetGUID())
-            auctionHouse->SendAuctionOutbid(auction, player->GetGUID(), placeBid.BidAmount, trans);
+            auctionHouse->SendAuctionOutbid(auction, player->GetGUID(), bidAmount, trans);
         else
-            priceToPay = placeBid.BidAmount - auction->BidAmount;
+            priceToPay = bidAmount - auction->BidAmount;
     }
 
     // check money
@@ -424,13 +430,13 @@ void WorldSession::HandleAuctionPlaceBid(WorldPackets::AuctionHouse::AuctionPlac
 
     player->ModifyMoney(-int64(priceToPay));
     auction->Bidder = player->GetGUID();
-    auction->BidAmount = placeBid.BidAmount;
+    auction->BidAmount = bidAmount;
     if (HasPermission(rbac::RBAC_PERM_LOG_GM_TRADE))
         auction->ServerFlags |= AuctionPostingServerFlag::GmLogBuyer;
     else
         auction->ServerFlags &= ~AuctionPostingServerFlag::GmLogBuyer;
 
-    if (canBuyout && placeBid.BidAmount == auction->BuyoutOrUnitPrice)
+    if (canBuyout && bidAmount == buyoutPrice)
     {
         // buyout
         std::map<uint32, AuctionPosting>::node_type removedAuctionNode = auctionHouse->RemoveAuction(trans, auction);
@@ -698,7 +704,7 @@ void WorldSession::HandleAuctionSellCommodity(WorldPackets::AuctionHouse::Auctio
     Seconds auctionTime = Seconds(int64(std::chrono::duration_cast<Seconds>(Minutes(sellCommodity.RunTime)).count() * double(sWorld->getRate(RATE_AUCTION_TIME))));
     AuctionHouseObject* auctionHouse = sAuctionMgr->GetAuctionsMap(creature->GetFaction());
 
-    uint64 deposit = AuctionHouseMgr::GetCommodityAuctionDeposit(items2.begin()->second.first->GetTemplate(), Minutes(sellCommodity.RunTime), totalCount);
+    uint64 deposit = AuctionHouseMgr::GetCommodityAuctionDeposit(items2.begin()->second.first->GetTemplate(), Minutes(sellCommodity.RunTime), totalCount, auctionHouseEntry->DepositRate);
     if (!_player->HasEnoughMoney(deposit))
     {
         SendAuctionCommandResult(0, AuctionCommand::SellItem, AuctionResult::NotEnoughMoney, throttle.DelayUntilNext);
@@ -884,7 +890,7 @@ void WorldSession::HandleAuctionSellItem(WorldPackets::AuctionHouse::AuctionSell
     Seconds auctionTime = Seconds(int64(std::chrono::duration_cast<Seconds>(Minutes(sellItem.RunTime)).count() * double(sWorld->getRate(RATE_AUCTION_TIME))));
     AuctionHouseObject* auctionHouse = sAuctionMgr->GetAuctionsMap(creature->GetFaction());
 
-    uint64 deposit = AuctionHouseMgr::GetItemAuctionDeposit(_player, item, Minutes(sellItem.RunTime));
+    uint64 deposit = AuctionHouseMgr::GetItemAuctionDeposit(_player, item, Minutes(sellItem.RunTime), auctionHouseEntry->DepositRate);
     if (!_player->HasEnoughMoney(deposit))
     {
         SendAuctionCommandResult(0, AuctionCommand::SellItem, AuctionResult::NotEnoughMoney, throttle.DelayUntilNext);

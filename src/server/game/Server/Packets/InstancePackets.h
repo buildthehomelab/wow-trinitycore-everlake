@@ -269,6 +269,45 @@ namespace WorldPackets
             WorldPacket const* Write() override { return &_worldPacket; }
         };
 
+        // The 70205 client keeps Release Spirit greyed out ("A member of your group is in combat") while an encounter is in progress
+        // unless the server allows release in progress. Layout not sniffed: the payload is 0x80 then three zero bytes, which reads as
+        // true whether the client takes one bit, one byte or one int32.
+        class InstanceEncounterAllowReleaseInProgress final : public ServerPacket
+        {
+        public:
+            explicit InstanceEncounterAllowReleaseInProgress() : ServerPacket(SMSG_INSTANCE_ENCOUNTER_UPDATE_ALLOW_RELEASE_IN_PROGRESS, 4) { }
+
+            WorldPacket const* Write() override;
+        };
+
+        // Classic 1.60 (official dungeon sniff): 3 x int32 then 2 bytes that are always 0
+        class EncounterStart final : public ServerPacket
+        {
+        public:
+            explicit EncounterStart() : ServerPacket(SMSG_ENCOUNTER_START, 4 + 4 + 4 + 2) { }
+
+            WorldPacket const* Write() override;
+
+            int32 EncounterID = 0;
+            int32 DifficultyID = 0;
+            int32 GroupSize = 0;
+        };
+
+        // Classic 1.60 (official dungeon sniff): 3 x int32, duration in ms, success bit
+        class EncounterEnd final : public ServerPacket
+        {
+        public:
+            explicit EncounterEnd() : ServerPacket(SMSG_ENCOUNTER_END, 4 + 4 + 4 + 4 + 1) { }
+
+            WorldPacket const* Write() override;
+
+            int32 EncounterID = 0;
+            int32 DifficultyID = 0;
+            int32 GroupSize = 0;
+            int32 Duration = 0;
+            bool Success = false;
+        };
+
         class InstanceEncounterInCombatResurrection final : public ServerPacket
         {
         public:

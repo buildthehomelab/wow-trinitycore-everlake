@@ -626,7 +626,7 @@ NonDefaultConstructible<pAuraEffectHandler> AuraEffectHandler[TOTAL_AURAS]=
     &AuraEffect::HandleNULL,                                      //554
     &AuraEffect::HandleNULL,                                      //555
     &AuraEffect::HandleNULL,                                      //556
-    &AuraEffect::HandleNULL,                                      //557
+    &AuraEffect::HandleAuraModRangedHaste,                        //557 Classic 1.60: ranged ammo haste (quivers and ammo pouches 14824 / 29418, VMaNGOS HandleRangedAmmoHaste)
     &AuraEffect::HandleNULL,                                      //558
     &AuraEffect::HandleNULL,                                      //559
     &AuraEffect::HandleNULL,                                      //560
@@ -1280,6 +1280,10 @@ void AuraEffect::Update(uint32 diff, Unit* caster)
 
 float AuraEffect::GetCritChanceFor(Unit const* caster, Unit const* target) const
 {
+    // a tick that cannot crit must not gain a chance from the target's side either (SpellCritChanceTaken adds those)
+    if (!GetBase()->CanPeriodicTickCrit())
+        return 0.0f;
+
     return target->SpellCritChanceTaken(caster, nullptr, this, GetSpellInfo()->GetSchoolMask(), CalcPeriodicCritChance(caster), GetSpellInfo()->GetAttackType());
 }
 

@@ -582,6 +582,27 @@ void WorldSession::HandleListInventoryOpcode(WorldPackets::NPC::Hello& packet)
     if (!GetPlayer()->IsAlive())
         return;
 
+    // The client's IsSellAllJunkEnabled requires PIM+48 == Merchant(5).
+    // NIOR(Merchant) case 5 QUEUES a UI event that sets PIM+48; it does NOT set
+    // it synchronously during packet processing. If we send VendorInventory in
+    // the same flush, the MerchantFrame opens before the event fires → PIM+48
+    // is not yet 5 → IsSellAllJunkEnabled returns false.
+    //
+    // Fix: on the initial click, send NIOR only and mark the interaction.
+    // The client event handler sets PIM+48, opens MerchantFrame, which then
+    // sends another CMSG_LIST_INVENTORY to fetch the actual vendor data.
+    if (!GetPlayer()->PlayerTalkClass->GetInteractionData().IsInteractingWith(packet.Unit, PlayerInteractionType::Vendor))
+    {
+        GetPlayer()->PlayerTalkClass->GetInteractionData().StartInteraction(packet.Unit, PlayerInteractionType::Vendor);
+
+        WorldPackets::NPC::NPCInteractionOpenResult npcInteraction;
+        npcInteraction.Npc = packet.Unit;
+        npcInteraction.InteractionType = PlayerInteractionType::Merchant;
+        npcInteraction.Success = true;
+        SendPacket(npcInteraction.Write());
+        return;
+    }
+
     SendListInventory(packet.Unit);
 }
 
@@ -664,6 +685,8 @@ void WorldSession::SendListInventory(ObjectGuid vendorGuid)
 
             if (float priceMod = _player->GetTotalAuraModifier(SPELL_AURA_MOD_VENDOR_ITEMS_PRICES))
                 price -= CalculatePct(price, priceMod);
+
+            price = _player->ApplyClassicLegacyPriceMod(price, 0);   // Legacy perk Bartering
 
             if (basePrice > 0)
                 price = std::max(uint64(1), price);
@@ -1298,4 +1321,14 @@ void WorldSession::HandleSetBackpackSellJunkDisabled(WorldPackets::Item::SetBack
 void WorldSession::HandleSetBankAutosortDisabled(WorldPackets::Item::SetBankAutosortDisabled const& setBankAutosortDisabled)
 {
     _player->SetBankAutoSortDisabled(setBankAutosortDisabled.Disable);
+}
+
+void WorldSession::HandleSetSortBagsRightToLeft(WorldPackets::Item::SetSortBagsRightToLeft const& setSortBagsRightToLeft)
+{
+    _player->SetSortBagsRightToLeft(setSortBagsRightToLeft.Enable);
+}
+
+void WorldSession::HandleSetInsertItemsLeftToRight(WorldPackets::Item::SetInsertItemsLeftToRight const& setInsertItemsLeftToRight)
+{
+    _player->SetInsertItemsLeftToRight(setInsertItemsLeftToRight.Enable);
 }

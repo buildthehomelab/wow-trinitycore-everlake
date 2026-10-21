@@ -37,6 +37,7 @@
 #include "SpellMgr.h"
 #include "TraitMgr.h"
 #include "Vehicle.h"
+#include "World.h"
 #include <boost/container/small_vector.hpp>
 #include <G3D/g3dmath.h>
 #include <bit>
@@ -417,7 +418,7 @@ SpellEffectInfo::SpellEffectInfo(SpellInfo const* spellInfo, SpellEffectEntry co
     _spellInfo = spellInfo;
     EffectIndex = SpellEffIndex(_effect.EffectIndex);
     Effect = SpellEffects(_effect.Effect);
-    ApplyAuraName = AuraType(_effect.EffectAura);
+    ApplyAuraName = AuraType(GetClassicAuraType(_effect.EffectAura));
     ApplyAuraPeriod = _effect.EffectAuraPeriod;
     BasePoints = _effect.EffectBasePoints;
     RealPointsPerLevel = _effect.EffectRealPointsPerLevel;
@@ -513,6 +514,18 @@ uint32 SpellEffectInfo::GetPeriodicTickCount() const
     return totalTicks;
 }
 
+// Classic 1.60: the vanilla (1.12) dice of an effect of a legacy spell, whoever casts it (ClassicSpellValue.h). The client's flat
+// values differ from vanilla for part of the legacy spells (Evoker Flamestrike 11829: 479, vanilla 76..88; player Shadow Bolt
+// rank 10 25307: 257, vanilla 482..538).
+static ClassicSpellValue::Value const* GetClassicValue(WorldObject const* caster, uint32 spellId, uint32 effectIndex)
+{
+    if (!caster)
+        return nullptr;
+    if (!ClassicSpellValue::AppliesToSpell(spellId))
+        return nullptr;
+    return sSpellMgr->GetClassicSpellValue(spellId, effectIndex);
+}
+
 int32 SpellEffectInfo::CalcValueAsInt(WorldObject const* caster /*= nullptr*/, SpellEffectValue const* basePoints /*= nullptr*/, Unit const* target /*= nullptr*/, float* variance /*= nullptr*/, uint32 castItemId /*= 0*/, int32 itemLevel /*= -1*/) const
 {
     return int32(CalcValue(caster, basePoints, target, variance, castItemId, itemLevel));
@@ -524,6 +537,14 @@ SpellEffectValue SpellEffectInfo::CalcValue(WorldObject const* caster /*= nullpt
     SpellEffectValue value = bp ? *bp : basePoints;
     SpellEffectValue basePointsPerLevel = RealPointsPerLevel;
     SpellEffectValue comboDamage = PointsPerResource;
+    float scalingVariance = Scaling.Variance;
+    ClassicSpellValue::Value const* vanilla = GetClassicValue(caster, _spellInfo->Id, EffectIndex);
+    if (vanilla)
+    {
+        basePointsPerLevel = vanilla->PointsPerLevel;
+        scalingVariance = ClassicSpellValue::Variance(*vanilla);
+        comboDamage = vanilla->PointsPerCombo;      // vanilla points per combo point (the client's PointsPerResource differs for part of the finishers)
+    }
 
     Unit const* casterUnit = nullptr;
     if (caster)
@@ -557,9 +578,9 @@ SpellEffectValue SpellEffectInfo::CalcValue(WorldObject const* caster /*= nullpt
         }
     }
 
-    if (Scaling.Variance)
+    if (scalingVariance)
     {
-        float delta = fabs(Scaling.Variance * 0.5f);
+        float delta = fabs(scalingVariance * 0.5f);
         float valueVariance = frand(-delta, delta);
         value += basePoints * valueVariance;
 
@@ -568,16 +589,22 @@ SpellEffectValue SpellEffectInfo::CalcValue(WorldObject const* caster /*= nullpt
     }
 
     // base amount modification based on spell lvl vs caster lvl
-    if (Scaling.Coefficient != 0.0f)
+    if (Scaling.Coefficient != 0.0f && !vanilla)
     {
         if (Scaling.ResourceCoefficient)
             comboDamage = value * Scaling.ResourceCoefficient;
     }
-    else if (GetScalingExpectedStat() == ExpectedStatType::None || UsesClassicFlatBasePoints(caster))
+    else if (vanilla || GetScalingExpectedStat() == ExpectedStatType::None || UsesClassicFlatBasePoints(caster))
     {
-        if (casterUnit && basePointsPerLevel != 0.0)
+        // Classic 1.60 (vanilla): spells cast by a player's object (hunter traps: Explosive Trap, Immolation Trap) scale with the
+        // owner's level
+        Unit const* levelUnit = casterUnit;
+        if (!levelUnit && caster && caster->IsGameObject())
+            levelUnit = caster->GetOwner();
+
+        if (levelUnit && basePointsPerLevel != 0.0)
         {
-            int32 level = int32(casterUnit->GetLevel());
+            int32 level = int32(levelUnit->GetLevel());
             if (level > int32(_spellInfo->MaxLevel) && _spellInfo->MaxLevel > 0)
                 level = int32(_spellInfo->MaxLevel);
 
@@ -659,14 +686,30 @@ SpellEffectValue SpellEffectInfo::CalcValue(WorldObject const* caster /*= nullpt
     return std::clamp(value, MinValue, MaxValue);
 }
 
-// Classic 1.60: spells of players and of what they control (pets, totems, traps) use their base points as flat values
-bool SpellEffectInfo::UsesClassicFlatBasePoints(WorldObject const* caster)
+// Classic 1.60: spells of players and of what they control (pets, totems, traps) use their base points as flat values.
+// So do the legacy creature spells: SpellEffect.db2 still carries their vanilla flat values (Molten Giant Smash 18944:
+// 900 +-20%), reading them as a percentage of the expected creature spell damage made them hit for many times that.
+// Only the spells new to Forever carry percentages (Living Storm Shock 1259652: 10 -> 16..18), all in the modern id range.
+static constexpr uint32 CLASSIC_FIRST_SCALED_SPELL_ID = 1000000;
+
+bool SpellEffectInfo::UsesClassicFlatBasePoints(WorldObject const* caster) const
 {
-    return caster && caster->GetAffectingPlayer();
+    if (caster && caster->GetAffectingPlayer())
+        return true;
+
+    // Some legacy creature spells were re-tuned to percentages in the Forever data: Vile Familiar Fireball 11921 carries
+    // 327.43 (~7 damage at level 4) and hit level 3 players for 300+ as a flat value. Vanilla flat values are whole numbers.
+    if (BasePoints != std::trunc(BasePoints))
+        return false;
+
+    return _spellInfo->Id < CLASSIC_FIRST_SCALED_SPELL_ID;
 }
 
 SpellEffectValue SpellEffectInfo::CalcBaseValue(WorldObject const* caster, Unit const* target, uint32 itemId, int32 itemLevel) const
 {
+    if (ClassicSpellValue::Value const* vanilla = GetClassicValue(caster, _spellInfo->Id, EffectIndex))
+        return ClassicSpellValue::Mean(*vanilla);
+
     if (Scaling.Coefficient != 0.0f)
     {
         uint32 level = _spellInfo->SpellLevel;
@@ -731,9 +774,9 @@ SpellEffectValue SpellEffectInfo::CalcBaseValue(WorldObject const* caster, Unit 
     {
         float value = BasePoints;
         ExpectedStatType stat = GetScalingExpectedStat();
-        // Classic 1.60: base points of player spells are flat vanilla values (Fireball rank 1: 18 +-22% = 14..22); only creature
-        // spells are a percentage of the expected stat (Living Storm Shock: 10 -> 16..18 on the official beta). Scaling Scorch made
-        // it hit for 7-8k.
+        // Classic 1.60: base points of player and legacy creature spells are flat vanilla values (Fireball rank 1: 18 +-22% =
+        // 14..22); only the new creature spells are a percentage of the expected stat (Living Storm Shock: 10 -> 16..18 on the
+        // official beta). Scaling Scorch made it hit for 7-8k.
         if (stat != ExpectedStatType::None && !UsesClassicFlatBasePoints(caster))
         {
             if (_spellInfo->HasAttribute(SPELL_ATTR0_SCALES_WITH_CREATURE_LEVEL))
@@ -1297,7 +1340,7 @@ std::array<SpellEffectInfo::StaticData, TOTAL_SPELL_EFFECTS> SpellEffectInfo::_d
     {EFFECT_IMPLICIT_TARGET_NONE,     TARGET_OBJECT_TYPE_NONE}, // 326 SPELL_EFFECT_326
     {EFFECT_IMPLICIT_TARGET_NONE,     TARGET_OBJECT_TYPE_NONE}, // 327 SPELL_EFFECT_327
     {EFFECT_IMPLICIT_TARGET_NONE,     TARGET_OBJECT_TYPE_NONE}, // 328 SPELL_EFFECT_328
-    {EFFECT_IMPLICIT_TARGET_NONE,     TARGET_OBJECT_TYPE_NONE}, // 329 SPELL_EFFECT_329
+    {EFFECT_IMPLICIT_TARGET_EXPLICIT, TARGET_OBJECT_TYPE_CORPSE_ALLY}, // 329 SPELL_EFFECT_RESURRECT_NEW
     {EFFECT_IMPLICIT_TARGET_NONE,     TARGET_OBJECT_TYPE_NONE}, // 330 SPELL_EFFECT_330
     {EFFECT_IMPLICIT_TARGET_NONE,     TARGET_OBJECT_TYPE_NONE}, // 331 SPELL_EFFECT_331
     {EFFECT_IMPLICIT_TARGET_NONE,     TARGET_OBJECT_TYPE_NONE}, // 332 SPELL_EFFECT_332
@@ -1343,6 +1386,8 @@ static std::unordered_map<uint32, uint32> const ClassicSealJudgements =
     { 20166, 20186 }, { 20356, 20354 }, { 20357, 20355 },                           // Seal of Wisdom
     { 20375, 20425 }, { 20915, 20962 }, { 20918, 20961 }, { 20919, 20967 }, { 20920, 20968 }, // Seal of Command
     { 407798, 407803 },                                                             // Seal of Martyrdom
+    { 1311649, 1311650 }, { 1311656, 1311655 }, { 20163, 20183 }, { 20419, 20411 }, // Seal of Fury (Forever, effect 2 names the judgement)
+    { 20421, 20412 }, { 20422, 20413 }, { 20423, 20414 },
 };
 
 bool IsClassicPaladinSeal(uint32 spellId)
@@ -2552,10 +2597,10 @@ SpellCastResult SpellInfo::CheckTarget(WorldObject const* caster, WorldObject co
         return SPELL_FAILED_TARGET_AURASTATE;
 
     if (unitTarget->HasAuraType(SPELL_AURA_PREVENT_RESURRECTION) && !HasAttribute(SPELL_ATTR7_BYPASS_NO_RESURRECT_AURA))
-        if (HasEffect(SPELL_EFFECT_SELF_RESURRECT) || HasEffect(SPELL_EFFECT_RESURRECT))
+        if (HasEffect(SPELL_EFFECT_SELF_RESURRECT) || HasEffect(SPELL_EFFECT_RESURRECT) || HasEffect(SPELL_EFFECT_RESURRECT_NEW))
             return SPELL_FAILED_TARGET_CANNOT_BE_RESURRECTED;
 
-    if (HasAttribute(SPELL_ATTR8_ENFORCE_IN_COMBAT_RESSURECTION_LIMIT))
+    if (HasAttribute(SPELL_ATTR8_ENFORCE_IN_COMBAT_RESSURECTION_LIMIT) && sWorld->getBoolConfig(CONFIG_INSTANCE_COMBAT_RES_LIMIT))
         if (Map* map = caster->GetMap())
             if (InstanceMap* iMap = map->ToInstanceMap())
                 if (InstanceScript* instance = iMap->GetInstanceScript())
@@ -3060,6 +3105,74 @@ void SpellInfo::_LoadSpellDiminishInfo()
         if (HasAura(SPELL_AURA_MOD_TAUNT))
             return DIMINISHING_TAUNT;
 
+        // Classic 1.60 (vanilla, VMaNGOS SpellEntry::GetDiminishingReturnsGroup): a few explicit spells, everything else by mechanic
+        switch (Id)
+        {
+            case 408: case 8643:                                        // Kidney Shot
+                return DIMINISHING_KIDNEY_SHOT;
+            case 2094:                                                  // Blind
+                return DIMINISHING_NONE;
+            case 3355: case 14308: case 14309:                          // Freezing Trap Effect
+                return DIMINISHING_FREEZE;
+            case 5782: case 6213: case 6215:                            // Fear
+            case 5484: case 17928:                                      // Howl of Terror
+            case 6358:                                                  // Seduction
+                return DIMINISHING_WARLOCK_FEAR;
+            case 1715: case 7372: case 7373:                            // Hamstring: duration limit only
+                return DIMINISHING_LIMITONLY;
+            case 8056: case 8058: case 10472: case 10473:               // Frost Shock: counts as a root
+                return DIMINISHING_ROOT;
+            case 7922:                                                  // Charge Stun
+            case 20253: case 20614: case 20615:                         // Intercept Stun
+                return DIMINISHING_STUN;
+            case 12355:                                                 // Impact
+            case 18093:                                                 // Pyroclasm
+            case 5530:                                                  // Mace Stun Effect
+            case 12798:                                                 // Revenge Stun
+            case 19410:                                                 // Improved Concussive Shot
+            case 15269:                                                 // Blackout
+            case 16922:                                                 // Starfire Stun
+            case 15283:                                                 // Stunning Blow (weapon proc)
+            case 56:                                                    // Stun (weapon proc)
+                return DIMINISHING_TRIGGER_STUN;
+            case 12494:                                                 // Frostbite
+            case 23694:                                                 // Improved Hamstring
+            case 19229:                                                 // Improved Wing Clip
+            case 19185:                                                 // Entrapment
+                return DIMINISHING_TRIGGER_ROOT;
+            default:
+                break;
+        }
+
+        uint64 const mechanics = GetAllEffectsMechanicMask() | (Mechanic ? (UI64LIT(1) << Mechanic) : UI64LIT(0));
+        auto has = [mechanics](Mechanics m) { return (mechanics & (UI64LIT(1) << m)) != 0; };
+        if (has(MECHANIC_STUN))
+            return DIMINISHING_STUN;
+        if (has(MECHANIC_SLEEP))
+            return DIMINISHING_SLEEP;
+        if (has(MECHANIC_POLYMORPH))
+            return DIMINISHING_POLYMORPH;
+        if (has(MECHANIC_ROOT))
+            return DIMINISHING_ROOT;
+        if (has(MECHANIC_FEAR))
+            return DIMINISHING_FEAR;
+        if (has(MECHANIC_CHARM))
+            return DIMINISHING_CHARM;
+        if (has(MECHANIC_SILENCE))
+            return DIMINISHING_SILENCE;
+        if (has(MECHANIC_DISARM))
+            return DIMINISHING_DISARM;
+        if (has(MECHANIC_FREEZE))
+            return DIMINISHING_FREEZE;
+        if (has(MECHANIC_KNOCKOUT) || has(MECHANIC_SAPPED))
+            return DIMINISHING_KNOCKOUT;
+        if (has(MECHANIC_BANISH))
+            return DIMINISHING_BANISH;
+        if (has(MECHANIC_HORROR))
+            return DIMINISHING_HORROR;
+        return DIMINISHING_NONE;
+
+        // retail TrinityCore groups (not used in Classic)
         switch (Id)
         {
             case 20549:     // War Stomp (Racial - Tauren)
@@ -3434,6 +3547,8 @@ void SpellInfo::_LoadSpellDiminishInfo()
         {
             case DIMINISHING_TAUNT:
             case DIMINISHING_STUN:
+            case DIMINISHING_TRIGGER_STUN:              // Classic 1.60 (vanilla): every stun group also diminishes on creatures
+            case DIMINISHING_KIDNEY_SHOT:
                 return DRTYPE_ALL;
             case DIMINISHING_LIMITONLY:
             case DIMINISHING_NONE:
@@ -3458,6 +3573,10 @@ void SpellInfo::_LoadSpellDiminishInfo()
 
     auto diminishingLimitDurationCompute = [this]() -> int32
     {
+        // Classic 1.60 (vanilla, VMaNGOS): no PvP duration cap, only the diminishing steps
+        if (Id)
+            return 0;
+
         // Explicit diminishing duration
         switch (SpellFamilyName)
         {
@@ -4113,6 +4232,10 @@ Optional<SpellPowerCost> SpellInfo::CalcPowerCost(SpellPowerEntry const* power, 
     if (power->RequiredAuraSpellID && !unitCaster->HasAura(power->RequiredAuraSpellID))
         return {};
 
+    // Classic 1.60 Legacy perk The Quick and the Dead 1225500: helpful spells and abilities cost no resources after being resurrected
+    if (Player const* player = unitCaster->ToPlayer(); player && IsPositive() && player->HasClassicFreeHelpfulSpells())
+        return {};
+
     // Spell drain all exist power on cast (Only paladin lay of Hands)
     if (HasAttribute(SPELL_ATTR1_USE_ALL_MANA))
     {
@@ -4136,8 +4259,17 @@ Optional<SpellPowerCost> SpellInfo::CalcPowerCost(SpellPowerEntry const* power, 
     if (!optionalCost)
     {
         powerCost = power->ManaCost;
+        // Classic 1.60: the vanilla mana cost of a legacy spell (classic_spell_cost: flat plus percent of the base mana) replaces the
+        // client's; the cost modifiers below (talents, auras) still apply to it
+        bool usesVanillaCost = false;
+        if (power->PowerType == POWER_MANA && ClassicSpellValue::AppliesToSpell(Id))
+            if (ClassicSpellValue::Cost const* vanillaCost = sSpellMgr->GetClassicSpellCost(Id))
+            {
+                powerCost = ClassicSpellValue::ManaCost(*vanillaCost, int32(unitCaster->GetCreateMana()));
+                usesVanillaCost = true;
+            }
         // PCT cost from total amount
-        if (power->PowerCostPct)
+        if (power->PowerCostPct && !usesVanillaCost)
         {
             switch (power->PowerType)
             {

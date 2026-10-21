@@ -29,6 +29,7 @@
 #include "GameObject.h"
 #include "GameObjectAI.h"
 #include "InstanceScript.h"
+#include "Log.h"
 #include "Map.h"
 #include "MapReference.h"
 #include "MotionMaster.h"
@@ -784,35 +785,62 @@ struct classic_go_orbe_domination : public GameObjectAI
         unit->SetChannelVisual(visual);
     }
 
+    // Every refusal says why in the log (classic.bwl.orb): the orb used to swallow the click silently, so a player who could not
+    // take control had nothing to go on.
     bool OnGossipHello(Player* pPlayer) override
     {
-        if (InstanceScript* pInstance = me->GetInstanceScript())
+        InstanceScript* pInstance = me->GetInstanceScript();
+        if (!pInstance)
         {
-            if (!pPlayer->HasAura(CLASSIC_BWL_SPELL_MIND_EXHAUSTION))
+            TC_LOG_INFO("classic.bwl.orb", "Orb of Domination used by {}: no instance script", pPlayer->GetName());
+            return true;
+        }
+
+        if (pPlayer->HasAura(CLASSIC_BWL_SPELL_MIND_EXHAUSTION))
+        {
+            TC_LOG_INFO("classic.bwl.orb", "Orb of Domination used by {}: refused, Mind Exhaustion", pPlayer->GetName());
+            return true;
+        }
+
+        Creature* pCreature = me->GetMap()->GetCreature(pInstance->GetGuidData(CLASSIC_BWL_DATA_RAZORGORE_GUID));
+        if (!pCreature)
+        {
+            TC_LOG_INFO("classic.bwl.orb", "Orb of Domination used by {}: refused, Razorgore not found", pPlayer->GetName());
+            return true;
+        }
+
+        if (pCreature->HasUnitState(UNIT_STATE_POSSESSED))
+        {
+            TC_LOG_INFO("classic.bwl.orb", "Orb of Domination used by {}: refused, Razorgore is already controlled", pPlayer->GetName());
+            return true;
+        }
+
+        if (pCreature->IsInEvadeMode() || !pCreature->IsAlive() || pInstance->GetData(CLASSIC_BWL_DATA_EGG) == DONE)
+        {
+            TC_LOG_INFO("classic.bwl.orb", "Orb of Domination used by {}: refused, evade={} alive={} eggsDone={}", pPlayer->GetName(),
+                pCreature->IsInEvadeMode(), pCreature->IsAlive(), pInstance->GetData(CLASSIC_BWL_DATA_EGG) == DONE);
+            return true;
+        }
+
+        // The orb works from the start of the encounter. A raid that clicks it before Razorgore has been pulled starts the fight
+        // (he engages the player, JustEngagedWith sets the boss state) instead of the click being swallowed.
+        if (!pCreature->IsInCombat() && pCreature->AI())
+        {
+            TC_LOG_INFO("classic.bwl.orb", "Orb of Domination used by {}: Razorgore not engaged yet, engaging the player", pPlayer->GetName());
+            pCreature->AI()->AttackStart(pPlayer);
+        }
+
+        SpellCastResult exhausted = pPlayer->CastSpell(pPlayer, CLASSIC_BWL_SPELL_MIND_EXHAUSTION, true);
+        SpellCastResult possessed = pPlayer->CastSpell(pCreature, CLASSIC_BWL_SPELL_POSSESS, true);
+        TC_LOG_INFO("classic.bwl.orb", "Orb of Domination used by {}: Mind Exhaustion cast result {}, Possess cast result {}", pPlayer->GetName(),
+            uint32(exhausted), uint32(possessed));
+
+        if (possessed == SPELL_CAST_OK)
+        {
+            if (Creature* pTrigger = me->GetMap()->GetCreature(pInstance->GetGuidData(CLASSIC_BWL_DATA_TRIGGER_GUID)))
             {
-                if (Creature* pCreature = me->GetMap()->GetCreature(pInstance->GetGuidData(CLASSIC_BWL_DATA_RAZORGORE_GUID)))
-                {
-                    // Already mind controlled
-                    if (pCreature->HasUnitState(UNIT_STATE_POSSESSED))
-                        return true;
-                    // Avoid bugging out
-                    if (pCreature->IsInEvadeMode())
-                        return true;
-                    if (pCreature->IsInCombat() && pInstance->GetData(CLASSIC_BWL_DATA_EGG) != DONE)
-                    {
-                        if (pPlayer->CastSpell(pPlayer, CLASSIC_BWL_SPELL_MIND_EXHAUSTION, true) == SPELL_CAST_OK)
-                        {
-                            if (pPlayer->CastSpell(pCreature, CLASSIC_BWL_SPELL_POSSESS, true) == SPELL_CAST_OK)
-                            {
-                                if (Creature* pTrigger = me->GetMap()->GetCreature(pInstance->GetGuidData(CLASSIC_BWL_DATA_TRIGGER_GUID)))
-                                {
-                                    pCreature->GetThreatManager().AddThreat(pTrigger, 100.0f);
-                                    SetChannel(pTrigger, pCreature->GetGUID(), CLASSIC_BWL_SPELL_POSSESS_VISUAL);
-                                }
-                            }
-                        }
-                    }
-                }
+                pCreature->GetThreatManager().AddThreat(pTrigger, 100.0f);
+                SetChannel(pTrigger, pCreature->GetGUID(), CLASSIC_BWL_SPELL_POSSESS_VISUAL);
             }
         }
 

@@ -47,6 +47,7 @@
 #include "Language.h"
 #include "Log.h"
 #include "Mail.h"
+#include "LoginQueryHolder.h"
 #include "Map.h"
 #include "MapUtils.h"
 #include "Metric.h"
@@ -71,18 +72,9 @@
 #include <boost/circular_buffer.hpp>
 #include <sstream>
 
-class LoginQueryHolder : public CharacterDatabaseQueryHolder
-{
-    private:
-        uint32 m_accountId;
-        ObjectGuid m_guid;
-    public:
-        LoginQueryHolder(uint32 accountId, ObjectGuid guid)
-            : m_accountId(accountId), m_guid(guid) { }
-        ObjectGuid GetGuid() const { return m_guid; }
-        uint32 GetAccountId() const { return m_accountId; }
-        bool Initialize();
-};
+// LoginQueryHolder declaration moved to Handlers/LoginQueryHolder.h so the
+// V2 playerbot module can build/submit the same holder for headless bot
+// logins. The Initialize() body still lives here (~250 prepared statements).
 
 bool LoginQueryHolder::Initialize()
 {
@@ -554,6 +546,10 @@ void WorldSession::HandleCharEnum(CharacterDatabaseQueryHolder const& holder)
     }
 
     SendPacket(charEnum.Write());
+
+    // Classic 1.60: the official server sends the distribution list (boost / character service tokens) unasked with the character
+    // list; the client only asks for it when the Shop opens
+    SendShopDistributionList();
 
     if (!realmCharacters.empty())
         charEnum.Characters = std::move(realmCharacters);
@@ -1530,6 +1526,9 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     // Classic 1.60: characters that were already level 25+ get the Legacy unlock on login
     pCurrChar->UpdateClassicLegacyUnlock();
 
+    // Classic 1.60: titles of the profession certifications bought on this account (300 skill shows them)
+    pCurrChar->UpdateClassicProfessionTitles();
+
     // Classic 1.60: characters start without bank tabs, the first one (BankTab.db2 character tab 0) is bought for 0 at the banker like
     // on the official beta (sniff 70170: "Tab 1" created by the purchase). Granting it at login is not needed.
     // pCurrChar->GrantClassicFreeBankTab();
@@ -1538,9 +1537,17 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     stmt->setUInt64(0, pCurrChar->GetGUID().GetCounter());
     CharacterDatabase.Execute(stmt);
 
-    LoginDatabasePreparedStatement* loginStmt = LoginDatabase.GetPreparedStatement(LOGIN_UPD_ACCOUNT_ONLINE);
-    loginStmt->setUInt32(0, GetAccountId());
-    LoginDatabase.Execute(loginStmt);
+    // Bot sessions share the owner's account id. Setting account.online=1
+    // here would (in auto-resume mode where the GM is offline) block them
+    // from later logging into their own account — the login server treats
+    // online=1 as "another session active". The character.online flag above
+    // is per-character and correctly reflects the bot's in-world state.
+    if (!IsBot())
+    {
+        LoginDatabasePreparedStatement* loginStmt = LoginDatabase.GetPreparedStatement(LOGIN_UPD_ACCOUNT_ONLINE);
+        loginStmt->setUInt32(0, GetAccountId());
+        LoginDatabase.Execute(loginStmt);
+    }
 
     pCurrChar->SetInGameTime(GameTime::GetGameTimeMS());
 
@@ -1593,7 +1600,7 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     }
 
     // Load pet if any (if player not alive and in taxi flight or another then pet will remember as temporary unsummoned)
-    pCurrChar->ResummonPetTemporaryUnSummonedIfAny();
+    pCurrChar->DelayPetResummon(4000);
 
     // Set FFA PvP for non GM in non-rest mode
     if (sWorld->IsFFAPvPRealm() && !pCurrChar->IsGameMaster() && !pCurrChar->HasPlayerFlag(PLAYER_FLAGS_RESTING))
@@ -1732,10 +1739,13 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     // Battle.net account with an authenticator (support site account page): "account secured", +4 backpack slots and no
     // "attach an Authenticator" prompts. Removing it takes the slots away again (items in them are mailed).
     {
-        bool secured = false;
-        if (QueryResult result = LoginDatabase.PQuery("SELECT COUNT(*) FROM battlenet_accounts WHERE id = {} AND authenticator_secret IS NOT NULL "
-            "AND authenticator_secret <> ''", GetBattlenetAccountId()))
-            secured = (*result)[0].GetUInt64() != 0;
+        bool secured = sWorld->getBoolConfig(CONFIG_CLASSIC_SECURED_BAG_SLOTS_FOR_ALL);
+        if (!secured)
+        {
+            if (QueryResult result = LoginDatabase.PQuery("SELECT COUNT(*) FROM battlenet_accounts WHERE id = {} AND authenticator_secret IS NOT NULL "
+                "AND authenticator_secret <> ''", GetBattlenetAccountId()))
+                secured = (*result)[0].GetUInt64() != 0;
+        }
 
         if (secured)
             pCurrChar->SetAccountSecured(true);
@@ -2015,6 +2025,7 @@ void WorldSession::HandleCharRenameOpcode(WorldPackets::Character::CharacterRena
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_FREE_NAME);
     stmt->setUInt64(0, request.RenameInfo->Guid.GetCounter());
     stmt->setString(1, request.RenameInfo->NewName);
+    stmt->setUInt64(2, request.RenameInfo->Guid.GetCounter());    // Classic 1.60: keeping the name and changing only the surname is allowed
 
     _queryProcessor.AddCallback(CharacterDatabase.AsyncQuery(stmt)
         .WithPreparedCallback([this, renameInfo = std::move(request.RenameInfo)](PreparedQueryResult result) mutable
@@ -2061,14 +2072,22 @@ void WorldSession::HandleCharRenameCallBack(std::shared_ptr<WorldPackets::Charac
 
     trans->Append(stmt);
 
+    // Classic 1.60: the rename dialog also sets the surname (up to 48 characters, like character creation)
+    if (utf8length(renameInfo->NewSurname) > 48)
+        renameInfo->NewSurname.clear();
+    std::string escapedSurname = renameInfo->NewSurname;
+    CharacterDatabase.EscapeString(escapedSurname);
+    trans->Append(Trinity::StringFormat("UPDATE characters SET surname = '{}' WHERE guid = {}", escapedSurname, lowGuid).c_str());
+
     CharacterDatabase.CommitTransaction(trans);
 
-    TC_LOG_INFO("entities.player.character", "Account: {} (IP: {}) Character:[{}] ({}) Changed name to: {}",
-        GetAccountId(), GetRemoteAddress(), oldName, renameInfo->Guid.ToString(), renameInfo->NewName);
+    TC_LOG_INFO("entities.player.character", "Account: {} (IP: {}) Character:[{}] ({}) Changed name to: {} {}",
+        GetAccountId(), GetRemoteAddress(), oldName, renameInfo->Guid.ToString(), renameInfo->NewName, renameInfo->NewSurname);
 
     SendCharRename(RESPONSE_SUCCESS, renameInfo.get());
 
     sCharacterCache->UpdateCharacterData(renameInfo->Guid, renameInfo->NewName);
+    sCharacterCache->UpdateCharacterSurname(renameInfo->Guid, renameInfo->NewSurname);
 }
 
 void WorldSession::HandleSetPlayerDeclinedNames(WorldPackets::Character::SetPlayerDeclinedNames& packet)
@@ -2307,11 +2326,19 @@ void WorldSession::HandleCharCustomizeCallback(std::shared_ptr<WorldPackets::Cha
         stmt->setUInt64(0, lowGuid);
 
         trans->Append(stmt);
+
+        // Classic 1.60: the surname is edited in the same screen (up to 48 characters, like character creation)
+        if (utf8length(customizeInfo->CharSurname) > 48)
+            customizeInfo->CharSurname.clear();
+        std::string escapedSurname = customizeInfo->CharSurname;
+        CharacterDatabase.EscapeString(escapedSurname);
+        trans->Append(Trinity::StringFormat("UPDATE characters SET surname = '{}' WHERE guid = {}", escapedSurname, lowGuid).c_str());
     }
 
     CharacterDatabase.CommitTransaction(trans);
 
     sCharacterCache->UpdateCharacterData(customizeInfo->CharGUID, customizeInfo->CharName, customizeInfo->SexID);
+    sCharacterCache->UpdateCharacterSurname(customizeInfo->CharGUID, customizeInfo->CharSurname);
 
     SendCharCustomize(RESPONSE_SUCCESS, customizeInfo.get());
 
@@ -2639,6 +2666,13 @@ void WorldSession::HandleCharRaceOrFactionChangeCallback(std::shared_ptr<WorldPa
         stmt->setUInt64(0, lowGuid);
 
         trans->Append(stmt);
+
+        // Classic 1.60: the surname is edited in the same screen (up to 48 characters, like character creation)
+        if (utf8length(factionChangeInfo->Surname) > 48)
+            factionChangeInfo->Surname.clear();
+        std::string escapedSurname = factionChangeInfo->Surname;
+        CharacterDatabase.EscapeString(escapedSurname);
+        trans->Append(Trinity::StringFormat("UPDATE characters SET surname = '{}' WHERE guid = {}", escapedSurname, lowGuid).c_str());
     }
 
     // Customize
@@ -2654,7 +2688,6 @@ void WorldSession::HandleCharRaceOrFactionChangeCallback(std::shared_ptr<WorldPa
         trans->Append(stmt);
     }
 
-    sCharacterCache->UpdateCharacterData(factionChangeInfo->Guid, factionChangeInfo->Name, factionChangeInfo->SexID, factionChangeInfo->RaceID);
 
     if (oldRace != factionChangeInfo->RaceID)
     {
@@ -2743,6 +2776,10 @@ void WorldSession::HandleCharRaceOrFactionChangeCallback(std::shared_ptr<WorldPa
                 case RACE_HARANIR_ALLIANCE:
                 case RACE_HARANIR_HORDE:
                     stmt->setUInt16(1, 2987);
+                    break;
+                case RACE_SKYBORNE_ALLIANCE:    // Classic 1.60: both Skyborne know Darnassian (skill 113) from creation
+                case RACE_SKYBORNE_HORDE:
+                    stmt->setUInt16(1, 113);
                     break;
                 default:
                     TC_LOG_ERROR("entities.player", "Could not find language data for race ({}).", factionChangeInfo->RaceID);
@@ -3041,6 +3078,11 @@ void WorldSession::HandleCharRaceOrFactionChangeCallback(std::shared_ptr<WorldPa
 
     CharacterDatabase.CommitTransaction(trans);
 
+    // update the cache only when the change is saved: a failed attempt left the new race cached, so every retry was
+    // checked against the wrong faction
+    sCharacterCache->UpdateCharacterData(factionChangeInfo->Guid, factionChangeInfo->Name, factionChangeInfo->SexID, factionChangeInfo->RaceID);
+    sCharacterCache->UpdateCharacterSurname(factionChangeInfo->Guid, factionChangeInfo->Surname);
+
     TC_LOG_DEBUG("entities.player", "{} (IP: {}) changed race from {} to {}", GetPlayerInfo(), GetRemoteAddress(), oldRace, factionChangeInfo->RaceID);
 
     SendCharFactionChange(RESPONSE_SUCCESS, factionChangeInfo.get());
@@ -3268,6 +3310,7 @@ void WorldSession::SendCharRename(ResponseCodes result, WorldPackets::Character:
     WorldPackets::Character::CharacterRenameResult packet;
     packet.Result = result;
     packet.Name = renameInfo->NewName;
+    packet.Surname = renameInfo->NewSurname;
     if (result == RESPONSE_SUCCESS)
         packet.Guid = renameInfo->Guid;
 
@@ -3300,6 +3343,7 @@ void WorldSession::SendCharFactionChange(ResponseCodes result, WorldPackets::Cha
     {
         packet.Display.emplace();
         packet.Display->Name = factionChangeInfo->Name;
+        packet.Display->Surname = factionChangeInfo->Surname;
         packet.Display->SexID = factionChangeInfo->SexID;
         packet.Display->Customizations = &factionChangeInfo->Customizations;
         packet.Display->RaceID = factionChangeInfo->RaceID;

@@ -1,0 +1,18 @@
+NOTICE AND CREDITS
+
+This package is distributed under the GNU General Public License version 2 (the same terms as TrinityCore).
+
+- TrinityCore (https://github.com/TrinityCore/TrinityCore), GPL-2.0.
+- advocaite's 'forever' fork of TrinityCore for the WoW Classic / Forever client (https://github.com/advocaite/TrinityCore), GPL-2.0.
+- PlayerbotV2 by agatho (https://github.com/agatho/TrinityCore, branch playerbot-v2), GPL-2.0. Core API, module layout and
+  most of the bot brain, travel and fleet code.
+- Classic (1.12) adaptation, raid, battleground, world-population and auction house bot work added for WoW Forever by
+  Karrz (Karrz1).
+- ike3 / cMaNGOS playerbots (Ike's mangosbot), VMaNGOS and cMaNGOS (all GPL-2.0): several behaviours and the vanilla
+  encounter data follow these projects.
+- SimulationCraft (GPL-3.0 data used as reference for rotations and talent loadouts).
+- Third-party binaries in the package (MySQL, OpenSSL, Boost, zlib and others) keep their own licences; their licence
+  files are in the folders they came from.
+
+World of Warcraft is a trademark of Blizzard Entertainment. This is an unofficial fan project. No game client files are
+included; you must supply your own client, build 70450.

@@ -111,7 +111,7 @@ constexpr uint32 GetMaxLevelForExpansion(uint32 expansion)
     switch (expansion)
     {
         case EXPANSION_CLASSIC:
-            return 30;
+            return 60; // local: the realm runs at level 60 (upstream Forever beta caps Classic at 30)
         case EXPANSION_THE_BURNING_CRUSADE:
             return 30;
         case EXPANSION_WRATH_OF_THE_LICH_KING:
@@ -1674,7 +1674,7 @@ enum SpellEffects
     SPELL_EFFECT_326                                = 326,
     SPELL_EFFECT_327                                = 327,
     SPELL_EFFECT_328                                = 328,
-    SPELL_EFFECT_329                                = 329,
+    SPELL_EFFECT_RESURRECT_NEW                      = 329, // value = health, MiscValue = mana
     SPELL_EFFECT_330                                = 330,
     SPELL_EFFECT_331                                = 331,
     SPELL_EFFECT_332                                = 332,
@@ -6659,6 +6659,21 @@ enum DiminishingGroup : uint16
     DIMINISHING_AOE_KNOCKBACK    = 6,
     DIMINISHING_TAUNT            = 7,
     DIMINISHING_LIMITONLY        = 8,
+    // Classic 1.60 (vanilla, VMaNGOS SpellEntry::GetDiminishingReturnsGroup): the vanilla groups next to STUN (controlled stun),
+    // ROOT (controlled root) and SILENCE
+    DIMINISHING_TRIGGER_STUN     = 9,
+    DIMINISHING_KIDNEY_SHOT      = 10,
+    DIMINISHING_SLEEP            = 11,
+    DIMINISHING_TRIGGER_ROOT     = 12,
+    DIMINISHING_FEAR             = 13,
+    DIMINISHING_CHARM            = 14,
+    DIMINISHING_POLYMORPH        = 15,
+    DIMINISHING_DISARM           = 16,
+    DIMINISHING_HORROR           = 17,
+    DIMINISHING_FREEZE           = 18,
+    DIMINISHING_BANISH           = 19,
+    DIMINISHING_WARLOCK_FEAR     = 20,
+    DIMINISHING_KNOCKOUT         = 21,
 
     DIMINISHING_MAX
 };

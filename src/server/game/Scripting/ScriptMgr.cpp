@@ -1541,6 +1541,16 @@ void ScriptMgr::OnWorldUpdate(uint32 diff)
     FOREACH_SCRIPT(WorldScript)->OnUpdate(diff);
 }
 
+void ScriptMgr::OnWorldBeforeMapsUpdate(uint32 diff)
+{
+    FOREACH_SCRIPT(WorldScript)->OnBeforeMapsUpdate(diff);
+}
+
+void ScriptMgr::OnWorldInitialized()
+{
+    FOREACH_SCRIPT(WorldScript)->OnWorldInitialized();
+}
+
 void ScriptMgr::OnHonorCalculation(float& honor, uint8 level, float multiplier)
 {
     FOREACH_SCRIPT(FormulaScript)->OnHonorCalculation(honor, level, multiplier);
@@ -1973,6 +1983,15 @@ void ScriptMgr::OnShutdown()
     FOREACH_SCRIPT(WorldScript)->OnShutdown();
 }
 
+bool ScriptMgr::CanCreateBattleground(uint32 battlemasterListId, uint8 bracketId)
+{
+    bool allowed = true;
+    FOR_SCRIPTS_RET(WorldScript, itr, end, true)
+        if (!itr->second->CanCreateBattleground(battlemasterListId, bracketId))
+            allowed = false;
+    return allowed;
+}
+
 // Achievement
 void ScriptMgr::OnAchievementCompleted(Player* player, AchievementEntry const* achievement)
 {
@@ -2083,6 +2102,46 @@ void ScriptMgr::OnPlayerChat(Player* player, uint32 type, uint32 lang, std::stri
     FOREACH_SCRIPT(PlayerScript)->OnChat(player, type, lang, msg, channel);
 }
 
+void ScriptMgr::OnPlayerChatSent(Player* player, uint32 type, uint32 lang, std::string const& msg)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnChatSent(player, type, lang, msg);
+}
+
+void ScriptMgr::OnPlayerChatSent(Player* player, uint32 type, uint32 lang, std::string const& msg, Player* receiver)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnChatSent(player, type, lang, msg, receiver);
+}
+
+void ScriptMgr::OnPlayerChatSent(Player* player, uint32 type, uint32 lang, std::string const& msg, Group* group)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnChatSent(player, type, lang, msg, group);
+}
+
+void ScriptMgr::OnPlayerChatSent(Player* player, uint32 type, uint32 lang, std::string const& msg, Guild* guild)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnChatSent(player, type, lang, msg, guild);
+}
+
+void ScriptMgr::OnPlayerAddonMessageSent(Player* player, uint32 type, std::string const& prefix, std::string const& text, Player* receiver)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnAddonMessageSent(player, type, prefix, text, receiver);
+}
+
+void ScriptMgr::OnPlayerAddonMessageSent(Player* player, uint32 type, std::string const& prefix, std::string const& text, Group* group)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnAddonMessageSent(player, type, prefix, text, group);
+}
+
+void ScriptMgr::OnPlayerPingUnit(Player* player, Group* group, Unit* target, uint8 type)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnPingUnit(player, group, target, type);
+}
+
+void ScriptMgr::OnPlayerPingWorldPoint(Player* player, Group* group, Position const& point, uint8 type)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnPingWorldPoint(player, group, point, type);
+}
+
 void ScriptMgr::OnPlayerClearEmote(Player* player)
 {
     FOREACH_SCRIPT(PlayerScript)->OnClearEmote(player);
@@ -2151,6 +2210,54 @@ void ScriptMgr::OnPlayerRepop(Player* player)
 void ScriptMgr::OnMovieComplete(Player* player, uint32 movieId)
 {
     FOREACH_SCRIPT(PlayerScript)->OnMovieComplete(player, movieId);
+}
+
+void ScriptMgr::OnPlayerLootItem(Player* player, Item* item)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnLootItem(player, item);
+}
+
+void ScriptMgr::OnPlayerBattlegroundQueueJoin(Player* player, uint32 bgTypeId, uint8 bracketId)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnBattlegroundQueueJoin(player, bgTypeId, bracketId);
+}
+
+void ScriptMgr::OnPlayerBattlegroundInvite(Player* player, uint32 instanceId, uint32 bgTypeId)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnBattlegroundInvite(player, instanceId, bgTypeId);
+}
+
+void ScriptMgr::OnPlayerBattlegroundPortFailed(Player* player, uint8 reason, uint32 instanceId)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnBattlegroundPortFailed(player, reason, instanceId);
+}
+
+void ScriptMgr::OnPlayerLfgJoin(Player* player, uint32 dungeonId, uint8 roles)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnLfgJoin(player, dungeonId, roles);
+}
+
+void ScriptMgr::OnPlayerGroupFinderListing(Player* player, uint32 categoryId, std::vector<uint32> const& activities, bool listed)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnGroupFinderListing(player, categoryId, activities, listed);
+}
+
+void ScriptMgr::OnPlayerGroupFinderSearch(Player* searcher)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnGroupFinderSearch(searcher);
+}
+
+bool ScriptMgr::OnPlayerGroupFinderJoinRequest(Player* member, Player* applicant)
+{
+    FOR_SCRIPTS_RET(PlayerScript, itr, end, false)
+        if (itr->second->OnGroupFinderJoinRequest(member, applicant))
+            return true;
+    return false;
+}
+
+void ScriptMgr::OnPlayerLfgProposal(Player* player, uint32 proposalId)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnLfgProposal(player, proposalId);
 }
 
 void ScriptMgr::OnPlayerChoiceResponse(WorldObject* object, Player* player, PlayerChoice const* choice, PlayerChoiceResponse const* response, uint16 clientIdentifier)
@@ -2281,10 +2388,21 @@ void ScriptMgr::OnGroupDisband(Group* group)
     FOREACH_SCRIPT(GroupScript)->OnDisband(group);
 }
 
+void ScriptMgr::OnGroupSubgroupChange(Group* group, ObjectGuid guid, uint8 subgroup)
+{
+    ASSERT(group);
+    FOREACH_SCRIPT(GroupScript)->OnSubgroupChange(group, guid, subgroup);
+}
+
 // Unit
 void ScriptMgr::OnHeal(Unit* healer, Unit* reciever, uint32& gain)
 {
     FOREACH_SCRIPT(UnitScript)->OnHeal(healer, reciever, gain);
+}
+
+void ScriptMgr::OnDamageSpell(Unit* attacker, Unit* victim, uint32 damage, SpellInfo const* spellInfo)
+{
+    FOREACH_SCRIPT(UnitScript)->OnDamageSpell(attacker, victim, damage, spellInfo);
 }
 
 void ScriptMgr::OnDamage(Unit* attacker, Unit* victim, uint32& damage)
@@ -2305,6 +2423,11 @@ void ScriptMgr::ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage)
 void ScriptMgr::ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* spellInfo)
 {
     FOREACH_SCRIPT(UnitScript)->ModifySpellDamageTaken(target, attacker, damage, spellInfo);
+}
+
+void ScriptMgr::OnUnitDeath(Unit* victim, Unit* killer)
+{
+    FOREACH_SCRIPT(UnitScript)->OnUnitDeath(victim, killer);
 }
 
 // Scene
@@ -2470,12 +2593,25 @@ void WorldScript::OnUpdate(uint32 /*diff*/)
 {
 }
 
+void WorldScript::OnBeforeMapsUpdate(uint32 /*diff*/)
+{
+}
+
+void WorldScript::OnWorldInitialized()
+{
+}
+
 void WorldScript::OnStartup()
 {
 }
 
 void WorldScript::OnShutdown()
 {
+}
+
+bool WorldScript::CanCreateBattleground(uint32 /*battlemasterListId*/, uint8 /*bracketId*/)
+{
+    return true;
 }
 
 FormulaScript::FormulaScript(char const* name) noexcept
@@ -2651,6 +2787,10 @@ void UnitScript::OnHeal(Unit* /*healer*/, Unit* /*reciever*/, uint32& /*gain*/)
 {
 }
 
+void UnitScript::OnDamageSpell(Unit* /*attacker*/, Unit* /*victim*/, uint32 /*damage*/, SpellInfo const* /*spellInfo*/)
+{
+}
+
 void UnitScript::OnDamage(Unit* /*attacker*/, Unit* /*victim*/, uint32& /*damage*/)
 {
 }
@@ -2664,6 +2804,10 @@ void UnitScript::ModifyMeleeDamage(Unit* /*target*/, Unit* /*attacker*/, uint32&
 }
 
 void UnitScript::ModifySpellDamageTaken(Unit* /*target*/, Unit* /*attacker*/, int32& /*damage*/, SpellInfo const* /*spellInfo*/)
+{
+}
+
+void UnitScript::OnUnitDeath(Unit* /*victim*/, Unit* /*killer*/)
 {
 }
 
@@ -2967,6 +3111,38 @@ void PlayerScript::OnChat(Player* /*player*/, uint32 /*type*/, uint32 /*lang*/, 
 {
 }
 
+void PlayerScript::OnChatSent(Player* /*player*/, uint32 /*type*/, uint32 /*lang*/, std::string const& /*msg*/)
+{
+}
+
+void PlayerScript::OnChatSent(Player* /*player*/, uint32 /*type*/, uint32 /*lang*/, std::string const& /*msg*/, Player* /*receiver*/)
+{
+}
+
+void PlayerScript::OnChatSent(Player* /*player*/, uint32 /*type*/, uint32 /*lang*/, std::string const& /*msg*/, Group* /*group*/)
+{
+}
+
+void PlayerScript::OnChatSent(Player* /*player*/, uint32 /*type*/, uint32 /*lang*/, std::string const& /*msg*/, Guild* /*guild*/)
+{
+}
+
+void PlayerScript::OnAddonMessageSent(Player* /*player*/, uint32 /*type*/, std::string const& /*prefix*/, std::string const& /*text*/, Player* /*receiver*/)
+{
+}
+
+void PlayerScript::OnAddonMessageSent(Player* /*player*/, uint32 /*type*/, std::string const& /*prefix*/, std::string const& /*text*/, Group* /*group*/)
+{
+}
+
+void PlayerScript::OnPingUnit(Player* /*player*/, Group* /*group*/, Unit* /*target*/, uint8 /*type*/)
+{
+}
+
+void PlayerScript::OnPingWorldPoint(Player* /*player*/, Group* /*group*/, Position const& /*point*/, uint8 /*type*/)
+{
+}
+
 void PlayerScript::OnClearEmote(Player* /*player*/)
 {
 }
@@ -3024,6 +3200,43 @@ void PlayerScript::OnPlayerRepop(Player* /*player*/)
 }
 
 void PlayerScript::OnMovieComplete(Player* /*player*/, uint32 /*movieId*/)
+{
+}
+
+void PlayerScript::OnLootItem(Player* /*player*/, Item* /*item*/)
+{
+}
+
+void PlayerScript::OnBattlegroundQueueJoin(Player* /*player*/, uint32 /*bgTypeId*/, uint8 /*bracketId*/)
+{
+}
+
+void PlayerScript::OnBattlegroundInvite(Player* /*player*/, uint32 /*instanceId*/, uint32 /*bgTypeId*/)
+{
+}
+
+void PlayerScript::OnBattlegroundPortFailed(Player* /*player*/, uint8 /*reason*/, uint32 /*instanceId*/)
+{
+}
+
+void PlayerScript::OnLfgJoin(Player* /*player*/, uint32 /*dungeonId*/, uint8 /*roles*/)
+{
+}
+
+void PlayerScript::OnGroupFinderListing(Player* /*player*/, uint32 /*categoryId*/, std::vector<uint32> const& /*activities*/, bool /*listed*/)
+{
+}
+
+bool PlayerScript::OnGroupFinderJoinRequest(Player* /*member*/, Player* /*applicant*/)
+{
+    return false;
+}
+
+void PlayerScript::OnGroupFinderSearch(Player* /*searcher*/)
+{
+}
+
+void PlayerScript::OnLfgProposal(Player* /*player*/, uint32 /*proposalId*/)
 {
 }
 
@@ -3138,6 +3351,10 @@ void GroupScript::OnChangeLeader(Group* /*group*/, ObjectGuid /*newLeaderGuid*/,
 }
 
 void GroupScript::OnDisband(Group* /*group*/)
+{
+}
+
+void GroupScript::OnSubgroupChange(Group* /*group*/, ObjectGuid /*guid*/, uint8 /*subgroup*/)
 {
 }
 
