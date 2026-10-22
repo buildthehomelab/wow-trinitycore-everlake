@@ -3090,11 +3090,9 @@ void Spell::EffectSummonObjectWild()
     Map* map = target->GetMap();
     Position pos = Position(x, y, z, o);
     QuaternionData rot = QuaternionData::fromOrientation(o);
-    GameObject* go = GameObject::CreateGameObject(effectInfo->MiscValue, map, pos, rot, 255, GO_STATE_READY);
+    GameObject* go = GameObject::CreateGameObject(effectInfo->MiscValue, map, pos, rot, InitialPhaseShift(m_caster), 255, GO_STATE_READY);
     if (!go)
         return;
-
-    PhasingHandler::InheritPhaseShift(go, m_caster);
 
     int32 duration = m_spellInfo->CalcDuration(m_caster);
 
@@ -3108,8 +3106,6 @@ void Spell::EffectSummonObjectWild()
 
     if (GameObject* linkedTrap = go->GetLinkedTrap())
     {
-        PhasingHandler::InheritPhaseShift(linkedTrap , m_caster);
-
         linkedTrap->SetRespawnTime(duration > 0 ? duration / IN_MILLISECONDS : 0);
         linkedTrap->SetSpellId(m_spellInfo->Id);
 
@@ -3335,11 +3331,9 @@ void Spell::EffectDuel()
     };
     QuaternionData rot = QuaternionData::fromOrientation(pos.GetOrientation());
 
-    GameObject* go = GameObject::CreateGameObject(effectInfo->MiscValue, map, pos, rot, 0, GO_STATE_READY);
+    GameObject* go = GameObject::CreateGameObject(effectInfo->MiscValue, map, pos, rot, InitialPhaseShift(m_caster), 0, GO_STATE_READY);
     if (!go)
         return;
-
-    PhasingHandler::InheritPhaseShift(go, caster);
 
     go->SetFaction(caster->GetFaction());
     go->SetLevel(caster->GetLevel() + 1);
@@ -3703,11 +3697,9 @@ void Spell::EffectSummonObject()
     Position pos = Position(x, y, z, o);
     QuaternionData rot = QuaternionData::fromOrientation(o);
 
-    GameObject* go = GameObject::CreateGameObject(effectInfo->MiscValue, map, pos, rot, 255, GO_STATE_READY);
+    GameObject* go = GameObject::CreateGameObject(effectInfo->MiscValue, map, pos, rot, InitialPhaseShift(m_caster), 255, GO_STATE_READY);
     if (!go)
         return;
-
-    PhasingHandler::InheritPhaseShift(go, m_caster);
 
     go->SetFaction(unitCaster->GetFaction());
     go->SetLevel(unitCaster->GetLevel());
@@ -4573,11 +4565,10 @@ void Spell::EffectTransmitted()
     Position pos = { fx, fy, fz, fo };
     QuaternionData rot = QuaternionData::fromOrientation(fo);
 
-    GameObject* go = GameObject::CreateGameObject(name_id, cMap, pos, rot, 255, GO_STATE_READY);
+    GameObject* go = GameObject::CreateGameObject(name_id, cMap, pos, rot, InitialPhaseShift(m_caster), 255, GO_STATE_READY);
     if (!go)
         return;
 
-    PhasingHandler::InheritPhaseShift(go, m_caster);
     int32 duration = m_spellInfo->CalcDuration(m_caster);
 
     switch (goinfo->type)
@@ -4635,8 +4626,6 @@ void Spell::EffectTransmitted()
 
     if (GameObject* linkedTrap = go->GetLinkedTrap())
     {
-        PhasingHandler::InheritPhaseShift(linkedTrap, m_caster);
-
         linkedTrap->SetRespawnTime(duration > 0 ? duration / IN_MILLISECONDS : 0);
         //linkedTrap->SetLevel(unitCaster->getLevel());
         linkedTrap->SetSpellId(m_spellInfo->Id);
@@ -5416,15 +5405,13 @@ void Spell::EffectSummonPersonalGameObject()
     Map* map = m_caster->GetMap();
     Position pos = Position(x, y, z, o);
     QuaternionData rot = QuaternionData::fromOrientation(o);
-    GameObject* go = GameObject::CreateGameObject(goId, map, pos, rot, 255, GO_STATE_READY);
+    GameObject* go = GameObject::CreateGameObject(goId, map, pos, rot, InitialPhaseShift(m_caster), 255, GO_STATE_READY);
 
     if (!go)
     {
         TC_LOG_WARN("spells", "SpellEffect Failed to summon personal gameobject. SpellId {}, effect {}", m_spellInfo->Id, effectInfo->EffectIndex);
         return;
     }
-
-    PhasingHandler::InheritPhaseShift(go, m_caster);
 
     int32 duration = m_spellInfo->CalcDuration(m_caster);
 
@@ -5438,8 +5425,6 @@ void Spell::EffectSummonPersonalGameObject()
 
     if (GameObject* linkedTrap = go->GetLinkedTrap())
     {
-        PhasingHandler::InheritPhaseShift(linkedTrap, m_caster);
-
         linkedTrap->SetRespawnTime(duration > 0 ? duration / IN_MILLISECONDS : 0);
         linkedTrap->SetSpellId(m_spellInfo->Id);
 
