@@ -5,14 +5,19 @@ param([string]$Client)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 # the game folder is remembered, so updates can refresh the add-on without asking
-$saved = Join-Path $root 'config\client.txt'
-if (-not $Client -and (Test-Path $saved)) { $Client = (Get-Content $saved -TotalCount 1).Trim() }
+. (Join-Path $PSScriptRoot 'ClientBuild.ps1')
+if (-not $Client -and (Get-SavedClient $root)) { $Client = (Get-SavedClient $root).Dir }
 if (-not $Client) { throw 'Usage: install-addon.ps1 -Client "<your WoW folder>"' }
+# the remembered folder (updates pass it in) may be a backup copy an earlier install found; the Battle.net install is used then
+$saved = Get-SavedClient $root
+if ($saved -and $saved.Dir -eq $Client) {
+    $better = Get-BetterThanSaved $root
+    if ($better) { Write-Host "Not using $Client (it looks like a backup copy); using the Battle.net install $better."; $Client = $better }
+}
 $src = Join-Path $root 'addons\ForeverBots'
 if (-not (Test-Path $src)) { throw "addon not found at $src" }
 $dest = $null
 # into the game folder of the build the server accepts (the beta and the Forever release can be installed side by side)
-. (Join-Path $PSScriptRoot 'ClientBuild.ps1')
 $use = Select-ClientProduct $root $Client
 if ($use) { $dest = Join-Path $use.Dir 'Interface\AddOns' }
 foreach ($sub in '_forever_\Interface\AddOns', '_classic_beta_\Interface\AddOns', '_classic_\Interface\AddOns', 'Interface\AddOns') {
@@ -28,6 +33,5 @@ robocopy $src (Join-Path $dest 'ForeverBots') /E /NFL /NDL /NJH /NJS | Out-Null
 if (Test-Path (Join-Path $dest 'ClassicForever_Bots')) {
     Write-Host "Note: the add-on ClassicForever_Bots is installed. It is made for another server and prints 'Command dungeonbots presets does not exist' here. Untick it in the AddOns list on the character screen."
 }
-New-Item -ItemType Directory -Force (Split-Path $saved -Parent) | Out-Null
-Set-Content $saved $Client -Encoding ascii
+Save-Client $root $Client
 "ForeverBots installed to $dest. In the character select screen click AddOns and make sure ForeverBots is ticked (and 'Load out of date AddOns' if shown)."

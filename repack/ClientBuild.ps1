@@ -64,6 +64,96 @@ function Select-ClientProduct([string]$Root, [string]$ClientDir) {
     }
     $null
 }
+# The place of $ClientDir's best client build in the accepted list (0 = preferred), or 99 when none is accepted.
+function Get-ClientRank([string]$Root, [string]$ClientDir) {
+    $use = Select-ClientProduct $Root $ClientDir
+    if (-not $use) { return 99 }
+    [array]::IndexOf([int[]]@(Get-AcceptedBuilds $Root), [int]$use.Build)
+}
+# A folder whose name says it is a copy (F:\wow-70532-backup, "World of Warcraft - Copy", ...). Such a folder is only used when
+# nothing else fits or the player chose it.
+function Test-BackupPath([string]$Dir) { [bool]($Dir -match '(?i)(^|[^a-z])(backups?|bak|old|copy|kopie|sicherung)([^a-z]|$)') }
+# The client folders (with .build.info) Battle.net has installed: its install list (%ProgramData%\Battle.net\Agent\product.db, a
+# protobuf file whose install paths are length-prefixed strings) and the World of Warcraft uninstall entries in the registry.
+function Get-BattleNetClients {
+    $paths = New-Object System.Collections.Generic.List[string]
+    try {
+        $b = [IO.File]::ReadAllBytes((Join-Path $env:ProgramData 'Battle.net\Agent\product.db'))
+        for ($i = 1; $i -lt $b.Length - 2; $i++) {
+            $c = $b[$i]
+            if (-not ((($c -ge 65 -and $c -le 90) -or ($c -ge 97 -and $c -le 122)) -and $b[$i + 1] -eq 58 -and ($b[$i + 2] -eq 47 -or $b[$i + 2] -eq 92))) { continue }
+            $len = [int]$b[$i - 1]
+            if ($len -ge 128) { continue }
+            if ($i -ge 2 -and $b[$i - 2] -ge 128) { $len = ($b[$i - 2] -band 127) + ($len -shl 7) }   # two-byte length
+            if ($len -lt 3 -or $i + $len -gt $b.Length) { continue }
+            $paths.Add([Text.Encoding]::UTF8.GetString($b, $i, $len))
+            $i += $len - 1
+        }
+    } catch { }
+    foreach ($k in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*') {
+        try {
+            foreach ($e in @(Get-ItemProperty $k -ErrorAction SilentlyContinue)) {
+                if ("$($e.DisplayName)" -match 'World of Warcraft' -and $e.InstallLocation) { $paths.Add([string]$e.InstallLocation) }
+            }
+        } catch { }
+    }
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($p in $paths) {
+        $d = ($p -replace '/', '\').TrimEnd('\')
+        if ($d -match '^[A-Za-z]:$') { continue }
+        try {   # .NET file checks: a path on a drive that is not there (an unplugged disk) is simply not used
+            if (-not [IO.File]::Exists([IO.Path]::Combine($d, '.build.info'))) {
+                $up = [IO.Path]::GetDirectoryName($d)   # a game folder (_forever_ / _classic_beta_): its client folder is the parent
+                if (-not ($up -and [IO.File]::Exists([IO.Path]::Combine($up, '.build.info')))) { continue }
+                $d = $up
+            }
+        } catch { continue }
+        if (-not @($out | Where-Object { $_ -eq $d }).Count) { $out.Add($d) }
+    }
+    @($out)
+}
+# $Dirs ordered for use: an accepted build first (the preferred build first), then a client Battle.net installed, then a folder not
+# named like a backup, then the order they were found in.
+function Sort-ClientFolders([string]$Root, [string[]]$Dirs, [string[]]$Registered) {
+    $i = 0
+    $rows = foreach ($d in $Dirs) {
+        [pscustomobject]@{ Dir = $d; Rank = (Get-ClientRank $Root $d); Bnet = [int](-not @($Registered | Where-Object { $_ -eq $d }).Count); Backup = [int](Test-BackupPath $d); Order = ($i++) }
+    }
+    @($rows | Sort-Object Rank, Bnet, Backup, Order)
+}
+# The folders of a sorted list (Sort-ClientFolders) that are as good as the first one: more than one means the player chooses.
+function Get-ClientTies($Sorted) {
+    $s = @($Sorted)
+    if (-not $s.Count -or $s[0].Rank -eq 99) { return @() }
+    @($s | Where-Object { $_.Rank -eq $s[0].Rank -and $_.Bnet -eq $s[0].Bnet -and $_.Backup -eq $s[0].Backup } | ForEach-Object { $_.Dir })
+}
+# config\client.txt: the client folder on the first line; a second line "picked" when the player chose it (then it is never replaced).
+function Get-SavedClient([string]$Root) {
+    $f = Join-Path $Root 'config\client.txt'
+    $l = @(Get-Content $f -TotalCount 2 -ErrorAction SilentlyContinue)
+    if (-not $l.Count -or -not $l[0].Trim()) { return $null }
+    [pscustomobject]@{ Dir = $l[0].Trim(); Picked = ($l.Count -gt 1 -and $l[1].Trim() -eq 'picked') }
+}
+function Save-Client([string]$Root, [string]$Dir, [switch]$Picked) {
+    $old = Get-SavedClient $Root
+    if ($old -and $old.Picked -and $old.Dir -eq $Dir) { $Picked = $true }   # the player's own choice stays marked
+    $f = Join-Path $Root 'config\client.txt'
+    New-Item -ItemType Directory -Force (Split-Path $f -Parent) | Out-Null
+    $text = @($Dir); if ($Picked) { $text += 'picked' }
+    Set-Content $f $text -Encoding ascii
+}
+# A remembered folder that was found automatically, is named like a backup and is not a Battle.net install gives way to a
+# Battle.net-installed client of an accepted build that is not a backup. Returns that client folder, or $null to keep the saved one.
+function Get-BetterThanSaved([string]$Root) {
+    $s = Get-SavedClient $Root
+    if (-not $s -or $s.Picked -or -not (Test-BackupPath $s.Dir)) { return $null }
+    $bnet = @(Get-BattleNetClients)
+    $base = if ([IO.File]::Exists([IO.Path]::Combine($s.Dir, '.build.info'))) { $s.Dir } else { [IO.Path]::GetDirectoryName($s.Dir) }
+    if ($bnet -contains $base) { return $null }
+    $best = @(Sort-ClientFolders $Root $bnet $bnet | Where-Object { $_.Rank -ne 99 -and -not $_.Backup })
+    if ($best.Count) { return $best[0].Dir }
+    $null
+}
 # $null when $ClientDir has a client this package can use, else a message saying what is there and what is needed.
 function Test-ClientFolder([string]$Root, [string]$ClientDir) {
     $want = @(Get-AcceptedBuilds $Root)

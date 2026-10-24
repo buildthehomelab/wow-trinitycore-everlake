@@ -9,11 +9,13 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 . "$PSScriptRoot\ClientBuild.ps1"   # the build the realm accepts is read from the shipped auth updates, never typed here
 
-# Looks for WoW Forever client folders (a folder with .build.info next to _forever_ (Wow.exe) or _classic_beta_ (WowB.exe)). Returns candidates,
-# the ones with a client build this package accepts first (repack\client-builds.txt). $roots is a list of folders to search (to depth 3).
+# Looks for WoW Forever client folders (a folder with .build.info next to _forever_ (Wow.exe) or _classic_beta_ (WowB.exe)). Returns candidates
+# in the order Sort-ClientFolders gives: an accepted build first (repack\client-builds.txt), then the clients Battle.net installed, then
+# folders not named like a backup. $roots is a list of folders to search (to depth 3); the Battle.net installs are always included.
 # Battle.net can have two WoW Forever installs of different builds (the beta and the Forever release); a build is what decides.
-function Find-ClientFolders([string[]]$roots, [int]$maxSeconds = 25) {
+function Find-ClientFolders([string[]]$roots, [int]$maxSeconds = 25, [string[]]$registered = @(Get-BattleNetClients)) {
     $found = New-Object System.Collections.Generic.List[string]
+    foreach ($d in $registered) { if (-not $found.Contains($d)) { $found.Add($d) } }
     $clock = [Diagnostics.Stopwatch]::StartNew()   # the search gives up after $maxSeconds; the player can pick the folder by hand
     foreach ($r in $roots) {
         if (-not (Test-Path $r)) { continue }
@@ -34,8 +36,7 @@ function Find-ClientFolders([string[]]$roots, [int]$maxSeconds = 25) {
             }
         }
     }
-    $withBuild = @($found | Where-Object { Select-ClientProduct $root $_ })
-    @($withBuild) + @($found | Where-Object { $withBuild -notcontains $_ })
+    @(Sort-ClientFolders $root @($found) $registered | ForEach-Object { $_.Dir })
 }
 
 if ($MyInvocation.InvocationName -eq '.') { return }   # dot-sourced by the tests: functions only
@@ -78,7 +79,13 @@ try {
 
     Step 2 $total "Finding your WoW Forever game folder (build $((Get-AcceptedBuilds $root) -join ' or '))"
     $saved = Join-Path $root 'config\client.txt'
-    if (-not $Client -and (Test-Path $saved)) { $Client = (Get-Content $saved -TotalCount 1).Trim() }
+    $picked = $false
+    if (-not $Client -and (Get-SavedClient $root)) {
+        $Client = (Get-SavedClient $root).Dir
+        # a backup copy found by an earlier install gives way to the client Battle.net installed
+        $better = Get-BetterThanSaved $root
+        if ($better) { Write-Host "Not using $Client (it looks like a backup copy); using the Battle.net install $better."; $Client = $better }
+    }
     # the launcher saves the game folder (_forever_ / _classic_beta_); the client folder with .build.info is its parent
     if ($Client -and -not (Test-Path (Join-Path $Client '.build.info')) -and (Test-Path (Join-Path (Split-Path $Client -Parent) '.build.info'))) { $Client = Split-Path $Client -Parent }
     if ($Client -and -not (Test-Path (Join-Path $Client '.build.info'))) { Write-Warning "$Client has no .build.info; looking again."; $Client = $null }
@@ -90,18 +97,28 @@ try {
         Write-Host 'Looking for it (at most 25 seconds)...'
         $roots = @("$env:USERPROFILE\Desktop", "$env:USERPROFILE\Downloads", "$env:USERPROFILE\Documents", "$env:PUBLIC\Games", "$env:ProgramFiles", "${env:ProgramFiles(x86)}")
         foreach ($d in Get-PSDrive -PSProvider FileSystem) { $roots += $d.Root }
-        $found = @(Find-ClientFolders $roots)
+        $registered = @(Get-BattleNetClients)
+        $found = @(Find-ClientFolders $roots 25 $registered)
+        $ties = @(Get-ClientTies (Sort-ClientFolders $root $found $registered))
         $guess = if ($found.Count) { $found[0] } else { $null }
-        if ($guess) { Write-Host "Found a likely game folder: $guess" } else { Write-Host 'Could not find it by itself.' }
-        Write-Host 'A window opens: select the folder of your WoW Forever game (the one that contains the file .build.info).'
-        $Client = Pick-Folder $guess
+        if ($ties.Count -gt 1) {
+            # several equally good clients (same build, none set apart by Battle.net or a backup name): the player says which
+            Write-Host 'Found more than one WoW Forever game folder that would work:'
+            for ($i = 0; $i -lt $ties.Count; $i++) { Write-Host "  $($i + 1)) $($ties[$i])" }
+            $n = Read-Host "Type the number of the one you play with (or press Enter to choose a folder yourself)"
+            if ($n -match '^\d+$' -and [int]$n -ge 1 -and [int]$n -le $ties.Count) { $Client = $ties[[int]$n - 1]; $picked = $true }
+        } elseif ($guess) { Write-Host "Found a likely game folder: $guess" } else { Write-Host 'Could not find it by itself.' }
+        if (-not $Client) {
+            Write-Host 'A window opens: select the folder of your WoW Forever game (the one that contains the file .build.info).'
+            $Client = Pick-Folder $guess
+            if ($Client -and $Client -ne $guess) { $picked = $true }
+        }
         if (-not $Client -or -not (Test-Path (Join-Path $Client '.build.info'))) { throw 'No valid game folder chosen (it must contain .build.info). Run Install.cmd again.' }
     }
     # the game data is extracted from this client, so it must be a build the server accepts
     $wrong = Test-ClientFolder $root $Client
     if ($wrong) { throw $wrong }
-    New-Item -ItemType Directory -Force (Split-Path $saved -Parent) | Out-Null
-    Set-Content $saved $Client -Encoding ascii
+    Save-Client $root $Client -Picked:$picked
     Test-ClientBuild $root
 
     Step 3 $total 'Setting up the database (a few minutes)'
