@@ -56,7 +56,10 @@ param(
 
     [switch]$Resume,
 
-    [string]$Locale = "enUS"
+    [string]$Locale = "enUS",
+
+    # client builds to extract from, preferred first: the product of $ClientPath with the first of these builds is used
+    [int[]]$Builds = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -143,20 +146,35 @@ $clock = [Diagnostics.Stopwatch]::StartNew()
 # The CASC product the extractors open. The tools default to wow_classic_beta (the beta, _classic_beta_\WowB.exe); the downloadable
 # WoW Forever client 70532 (_forever_\Wow.exe) is product wowf, and vmap4extractor opened with the wrong product failed at once on a fresh
 # install of kit 0.1.15. .build.info lists one row per installed product; take the one whose game folder is there.
+# The beta and the Forever release can both be installed, with different builds: with -Builds the product of the first listed
+# build is used, so the data always comes from the client the server accepts.
 $Product = $null
 try {
     $biLines = @(Get-Content (Join-Path $ClientPath '.build.info') -ErrorAction Stop)
     $biCols = @($biLines[0] -split '\|') | ForEach-Object { ($_ -split '!')[0] }
-    $prodCol = [array]::IndexOf($biCols, 'Product')
+    $prodCol = [array]::IndexOf($biCols, 'Product'); $verCol = [array]::IndexOf($biCols, 'Version')
     if ($prodCol -ge 0) {
-        $installed = @($biLines | Select-Object -Skip 1 | Where-Object { $_.Trim() } | ForEach-Object { (($_ -split '\|')[$prodCol]).Trim() } | Where-Object { $_ })
-        foreach ($cand in @(@('wowf', '_forever_'), @('wow_classic_beta', '_classic_beta_'))) {
-            if ($installed -contains $cand[0] -and (Test-Path (Join-Path $ClientPath $cand[1]))) { $Product = $cand[0]; break }
+        $layouts = @(@('wowf', '_forever_'), @('wow_classic_beta', '_classic_beta_'))
+        $rows = @($biLines | Select-Object -Skip 1 | Where-Object { $_.Trim() } | ForEach-Object {
+            $f = $_ -split '\|'
+            [pscustomobject]@{ Product = $f[$prodCol].Trim(); Version = $(if ($verCol -ge 0) { $f[$verCol].Trim() } else { '' }) }
+        } | Where-Object { $_.Product })
+        $present = @($rows | Where-Object { $p = $_.Product; @($layouts | Where-Object { $_[0] -eq $p -and (Test-Path (Join-Path $ClientPath $_[1])) }).Count })
+        if ($Builds.Count) {
+            foreach ($b in $Builds) {
+                $hit = @($present | Where-Object { $_.Version -match "(^|\.)$b$" })
+                if ($hit.Count) { $Product = $hit[0].Product; break }
+            }
+            if (-not $Product) {
+                Fail ("No client of build $($Builds -join ' or ') in $ClientPath (it has: " + (($rows | ForEach-Object { "$($_.Product) $($_.Version)" }) -join ', ') + ').')
+            }
+        } else {
+            foreach ($cand in $layouts) { if (@($present | Where-Object { $_.Product -eq $cand[0] }).Count) { $Product = $cand[0]; break } }
+            if (-not $Product -and $rows.Count -eq 1) { $Product = $rows[0].Product }
         }
-        if (-not $Product -and $installed.Count -eq 1) { $Product = $installed[0] }
     }
-} catch { }
-if (-not $Product) { $Product = 'wowf' }   # the downloadable client this repack supports
+} catch { if ($Builds.Count) { throw } }
+if (-not $Product) { $Product = 'wowf' }   # no .build.info product column: the extractors' own guess
 $productArgs = @('-p', $Product)
 Write-Host "Product: $Product"
 

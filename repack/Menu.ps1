@@ -115,7 +115,8 @@ function Do-Settings {
     $d = Join-Path $root 'server\worldserver.conf.d'
     New-Item -ItemType Directory -Force $d | Out-Null
     $f = Join-Path $d 'zz-9-local.conf'
-    # the server ignores a settings file that does not start with a section line, so the file always begins with [worldserver]
+    # the server ignores a settings file that does not start with a section line, so the file always begins with [worldserver].
+    # Left without a setting the start sets it aside (the 0.1.15 server does not start with a settings file that holds none).
     if (-not (Test-Path $f)) {
         "[worldserver]`r`n# Your own settings. Anything here overrides the realm settings and survives updates.`r`n# Example:  Playerbot.World.MaxBots = 300`r`n# Restart the server after saving (menu 3)." | Set-Content $f
     } elseif (-not (Select-String -Path $f -Pattern '^\s*\[' -Quiet)) {
@@ -161,7 +162,7 @@ function Do-Help {
   Add-on (I)              Copies the ForeverBots add-on into your game folder again (after reinstalling the game or moving the folder).
   Update                  Installs the newest release from GitHub and keeps your characters.
   Play (P)                Starts the game for this server and applies the server login key (keep that window open while you play); realm "Trinity".
-  Problems                Run repack\bug-bundle.ps1 and send the zip it makes in our Discord (button D).
+  Problems                Double-click Bug-Report.cmd in the main folder and post the zip it makes in our Discord (button D).
   Closing this window     The server keeps running. Use 2 to stop it.
 '@ -ForegroundColor Gray
 }

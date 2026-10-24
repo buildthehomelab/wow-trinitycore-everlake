@@ -15,11 +15,12 @@ Log 'Auto-restart started. Menu option 2 (Shut down server) stops it.'
 while (-not (Test-Path $flag)) {
     if (-not (Test-MySqlPort (Get-OurMySqlPort $root))) {
         Log 'Starting MySQL...'
-        try { Start-OurMySql $root | Out-Null } catch { Log "$_"; Start-Sleep 30; continue }
+        try { Start-OurMySql $root | Out-Null; Sync-TrinityUser $root } catch { Log "$_"; Start-Sleep 30; continue }
     }
     $w = Get-Process worldserver -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $w) {
         Log 'Starting worldserver...'
+        Repair-ConfDir $server | ForEach-Object { Log $_ }
         $w = Start-Process (Join-Path $server 'worldserver.exe') -WorkingDirectory $server -WindowStyle Minimized -PassThru
         $null = $w.Handle   # Windows PowerShell 5.1 leaves ExitCode empty unless the process handle is read right after the start
         $logDir = Join-Path $server 'logs'

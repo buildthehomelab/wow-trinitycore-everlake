@@ -222,9 +222,9 @@ try {
     }
     $localConf = Join (Join (Join $Root 'server') 'worldserver.conf.d') 'zz-9-local.conf'
     # The server only reads a settings file that starts a section: without a [worldserver] line every setting in it is ignored.
-    if (-not (Test-Path $localConf)) {
-        Set-Content $localConf "[worldserver]`r`n# Your own settings. This file is read last and is never changed by updates.`r`n# Example: Playerbot.World.MaxBots = 150`r`n" -Encoding ascii
-    } elseif (-not (Select-String -Path $localConf -Pattern '^\s*\[' -Quiet)) {
+    # The file is not created here: one with only the section line and comments counts as an "empty file" for the 0.1.15 server,
+    # which then does not start. Menu S creates it when you want your own settings; the start sets aside one without settings.
+    if ((Test-Path $localConf) -and -not (Select-String -Path $localConf -Pattern '^\s*\[' -Quiet)) {
         $old = Get-Content $localConf -Raw
         Set-Content $localConf ("[worldserver]`r`n" + $old) -Encoding ascii
     }

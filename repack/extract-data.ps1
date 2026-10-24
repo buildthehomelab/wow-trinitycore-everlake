@@ -29,7 +29,11 @@ $bi = Get-Content (Join-Path $Client '.build.info') -Raw -ErrorAction SilentlyCo
 if ($bi -match '\b(enUS|enGB|deDE|esES|esMX|frFR|itIT|koKR|ptBR|ruRU|zhCN|zhTW)\b') { $locale = $Matches[1]; if ($locale -eq 'enGB') { $locale = 'enUS' } }
 Write-Host "Client language: $locale"
 # extractors and generator live in server\; the tool writes dbc, maps, vmaps, mmaps ... next to them
-& $tool -ClientPath $Client -OutputPath $server -Resume -Locale $locale
+# only from a client build the server accepts (Battle.net can have the beta and the Forever release side by side)
+. (Join-Path $PSScriptRoot 'ClientBuild.ps1')
+$wrong = Test-ClientFolder $root $Client
+if ($wrong) { throw $wrong }
+& $tool -ClientPath $Client -OutputPath $server -Resume -Locale $locale -Builds (Get-AcceptedBuilds $root)
 if ($LASTEXITCODE -ne 0) { throw "The game data step failed (exit code $LASTEXITCODE). Run Install.cmd again to continue; finished stages are kept." }
 foreach ($f in '.extract-maps.done', '.extract-vmaps.done', '.extract-mmaps.done') {
     if (-not (Test-Path (Join-Path $server $f))) { throw "The game data step did not finish ($f missing). Run Install.cmd again to continue." }

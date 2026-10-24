@@ -11,7 +11,12 @@ if (-not $Client) { throw 'Usage: install-addon.ps1 -Client "<your WoW folder>"'
 $src = Join-Path $root 'addons\ForeverBots'
 if (-not (Test-Path $src)) { throw "addon not found at $src" }
 $dest = $null
+# into the game folder of the build the server accepts (the beta and the Forever release can be installed side by side)
+. (Join-Path $PSScriptRoot 'ClientBuild.ps1')
+$use = Select-ClientProduct $root $Client
+if ($use) { $dest = Join-Path $use.Dir 'Interface\AddOns' }
 foreach ($sub in '_forever_\Interface\AddOns', '_classic_beta_\Interface\AddOns', '_classic_\Interface\AddOns', 'Interface\AddOns') {
+    if ($dest) { break }
     $p = Join-Path $Client $sub
     if (Test-Path (Split-Path $p -Parent)) { $dest = $p; break }
 }

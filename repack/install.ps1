@@ -10,9 +10,9 @@ $root = Split-Path $PSScriptRoot -Parent
 . "$PSScriptRoot\ClientBuild.ps1"   # the build the realm accepts is read from the shipped auth updates, never typed here
 
 # Looks for WoW Forever client folders (a folder with .build.info next to _forever_ (Wow.exe) or _classic_beta_ (WowB.exe)). Returns candidates,
-# the ones that mention the realm's client build first. $roots is a list of folders to search (to depth 3).
-function Find-ClientFolders([string[]]$roots, [string]$build = '', [int]$maxSeconds = 25) {
-    if (-not $build) { $build = [string](Get-RealmBuild $root) }
+# the ones with a client build this package accepts first (repack\client-builds.txt). $roots is a list of folders to search (to depth 3).
+# Battle.net can have two WoW Forever installs of different builds (the beta and the Forever release); a build is what decides.
+function Find-ClientFolders([string[]]$roots, [int]$maxSeconds = 25) {
     $found = New-Object System.Collections.Generic.List[string]
     $clock = [Diagnostics.Stopwatch]::StartNew()   # the search gives up after $maxSeconds; the player can pick the folder by hand
     foreach ($r in $roots) {
@@ -34,7 +34,7 @@ function Find-ClientFolders([string[]]$roots, [string]$build = '', [int]$maxSeco
             }
         }
     }
-    $withBuild = @($found | Where-Object { $build -and (Get-Content (Join-Path $_ '.build.info') -Raw -ErrorAction SilentlyContinue) -match $build })
+    $withBuild = @($found | Where-Object { Select-ClientProduct $root $_ })
     @($withBuild) + @($found | Where-Object { $withBuild -notcontains $_ })
 }
 
@@ -76,12 +76,14 @@ try {
     # data counts as complete ONLY with the marker; a partial run (even with many navmesh tiles) is finished by extract-data.ps1 -Resume
     $dataDone = Test-Path "$root\server\data\.extract-complete"
 
-    Step 2 $total "Finding your WoW Forever game folder (build $(Get-RealmBuild $root))"
+    Step 2 $total "Finding your WoW Forever game folder (build $((Get-AcceptedBuilds $root) -join ' or '))"
     $saved = Join-Path $root 'config\client.txt'
     if (-not $Client -and (Test-Path $saved)) { $Client = (Get-Content $saved -TotalCount 1).Trim() }
     # the launcher saves the game folder (_forever_ / _classic_beta_); the client folder with .build.info is its parent
     if ($Client -and -not (Test-Path (Join-Path $Client '.build.info')) -and (Test-Path (Join-Path (Split-Path $Client -Parent) '.build.info'))) { $Client = Split-Path $Client -Parent }
     if ($Client -and -not (Test-Path (Join-Path $Client '.build.info'))) { Write-Warning "$Client has no .build.info; looking again."; $Client = $null }
+    # a remembered folder of another build (the other Forever install) is not used; look again
+    if ($Client -and -not $Gui -and (Test-ClientFolder $root $Client)) { Write-Warning (Test-ClientFolder $root $Client); Write-Host 'Looking for another game folder.'; $Client = $null }
     if (-not $Client -and $Gui) { throw 'No valid game folder was given to the installer.' }
     if (-not $Client) {
         # look for it, then let the player confirm or change it in a folder window (it opens at the best guess)
@@ -95,6 +97,9 @@ try {
         $Client = Pick-Folder $guess
         if (-not $Client -or -not (Test-Path (Join-Path $Client '.build.info'))) { throw 'No valid game folder chosen (it must contain .build.info). Run Install.cmd again.' }
     }
+    # the game data is extracted from this client, so it must be a build the server accepts
+    $wrong = Test-ClientFolder $root $Client
+    if ($wrong) { throw $wrong }
     New-Item -ItemType Directory -Force (Split-Path $saved -Parent) | Out-Null
     Set-Content $saved $Client -Encoding ascii
     Test-ClientBuild $root

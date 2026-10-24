@@ -35,7 +35,7 @@ if (-not (Test-Path "$stage\server\legacy.dll")) {
     Copy-Item $pick.FullName "$stage\server\legacy.dll" -Force
     "Added legacy.dll from $($pick.FullName)"
 }
-robocopy "$src\repack" "$stage\repack" /E /XF Install.cmd WoW-Forever-Bots.cmd Play-WoWForever.cmd build-package.ps1 package-data.ps1 package-source.ps1 README-TESTER.md SOURCE.txt NOTICE.txt UPDATER.md update.log clean-release.ps1 *.log *.bak* *.orig *~ /XD feedback-repo /NFL /NDL /NJH /NJS | Out-Null
+robocopy "$src\repack" "$stage\repack" /E /XF Install.cmd WoW-Forever-Bots.cmd Play-WoWForever.cmd Bug-Report.cmd build-package.ps1 package-data.ps1 package-source.ps1 README-TESTER.md SOURCE.txt NOTICE.txt UPDATER.md update.log clean-release.ps1 *.log *.bak* *.orig *~ /XD feedback-repo /NFL /NDL /NJH /NJS | Out-Null
 # the ForeverBots addon is REQUIRED (whispering bots only works through it); always ship the copy from this commit
 robocopy "$src\src\modules\PlayerbotV2\Addon\ForeverBots" "$stage\addons\ForeverBots" /E /NFL /NDL /NJH /NJS | Out-Null
 if (-not (Test-Path "$stage\addons\ForeverBots\ForeverBots.toc")) { throw 'ForeverBots addon missing from the package' }
@@ -59,6 +59,7 @@ Copy-Item "$src\tools\extract_client_data.ps1" "$stage\repack\extract_client_dat
 Copy-Item "$src\repack\Install.cmd" "$stage\Install.cmd" -Force
 Copy-Item "$src\repack\WoW-Forever-Bots.cmd" "$stage\WoW-Forever-Bots.cmd" -Force
 Copy-Item "$src\repack\Play-WoWForever.cmd" "$stage\Play-WoWForever.cmd" -Force
+Copy-Item "$src\repack\Bug-Report.cmd" "$stage\Bug-Report.cmd" -Force
 & "$src\repack\build-launcher.ps1" -Out "$stage\WoWForeverLauncher.exe"   # the launcher window, compiled with the .NET Framework compiler that ships with Windows
 foreach ($f in 'README-TESTER.md:README.md', 'SOURCE.txt:SOURCE.txt', 'NOTICE.txt:NOTICE.txt') {
     $a, $b = $f -split ':'; Copy-Item "$src\repack\$a" "$stage\$b" -Force

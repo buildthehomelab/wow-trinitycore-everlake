@@ -46,8 +46,11 @@ if (-not $Client) {
     $saved = Join-Path $root 'config\client.txt'
     if (Test-Path $saved) { $Client = (Get-Content $saved -TotalCount 1).Trim() }
 }
+. (Join-Path $PSScriptRoot 'ClientBuild.ps1')
 function Find-Exe([string]$dir) {
     if (-not $dir) { return $null }
+    $use = Select-ClientProduct $root $dir   # the game folder of a build the server accepts first
+    if ($use) { return $use.Dir }
     foreach ($d in @($dir, (Join-Path $dir '_forever_'), (Join-Path $dir '_classic_beta_'))) { foreach ($e in 'Wow.exe', 'WowB.exe') { if (Test-Path (Join-Path $d $e)) { return $d } } }
     $null
 }
