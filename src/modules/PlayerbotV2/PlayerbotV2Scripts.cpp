@@ -101,6 +101,12 @@ public:
 
     void OnLogin(Player* player, bool /*firstLogin*/) override
     {
+        if (player->GetSession() && player->GetSession()->IsBot())
+        {
+            // A bot has no client to choose its ammo: it takes a stack that is drawn with a model, not the generic white box.
+            player->SetPreferDrawableAmmo(true);
+            player->AutoSelectAmmo();
+        }
         Module::instance().OnPlayerLogin(player);
     }
 
@@ -301,6 +307,11 @@ public:
         Module::instance().NoteDamageSpell(spellInfo ? spellInfo->Id : 0);
     }
 
+    void OnHitOutcome(Unit* attacker, Unit* victim, uint32 spellId, uint8 outcome, uint32 damage) override
+    {
+        Module::instance().OnHitOutcome(attacker, victim, spellId, outcome, damage);
+    }
+
     void OnDamage(Unit* attacker, Unit* victim, uint32& damage) override
     {
         Module::instance().OnDamageTaken(attacker, victim, int32(damage), 0);
@@ -311,6 +322,11 @@ public:
         if (attacker && victim && victim->GetTypeId() == TYPEID_UNIT)
             if (Player* dealer = attacker->GetCharmerOrOwnerPlayerOrPlayerItself())
                 Playerbot::Raid::DealtHit(victim->GetEntry(), victim->GetName().c_str(), dealer->GetGUID().GetCounter(), damage);
+    }
+
+    void OnHealOutcome(Unit* healer, Unit* target, uint32 spellId, uint32 raw, uint32 effective) override
+    {
+        Module::instance().OnHealOutcome(healer, target, spellId, raw, effective);
     }
 
     // Raid mana ledger: healing that landed (the core passes the effective gain, overheal already removed).

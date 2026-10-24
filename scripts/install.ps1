@@ -16,7 +16,7 @@
 param(
     [Parameter(Mandatory)][string]$Commit,
     [string]$Server = '',                  # default: $installFolder from common.ps1
-    [string]$Client = 'C:\wow wowowo',
+    [string]$Client = 'C:\wow 70352',
     [string[]]$Addons = @('ForeverBots'),
     [string]$VmapsFrom,
     [string]$MmapsFrom,
@@ -85,13 +85,18 @@ foreach ($pair in @(@('VmapsFrom', $VmapsFrom), @('MmapsFrom', $MmapsFrom))) {
         if (Test-Path $pair[1] -PathType Container) { Add-Result "-$($pair[0])" 'PASS' $pair[1] } else { Add-Result "-$($pair[0])" 'FAIL' "$($pair[1]) is not a folder" }
     }
 }
+# The game folder inside the client: _forever_ (WoW Forever, Wow.exe, 70532) or the beta's _classic_beta_ (WowB.exe)
+$ClientGame = $null
+foreach ($layout in @(@('_forever_', 'Wow.exe'), @('_classic_beta_', 'WowB.exe'))) {
+    if (-not $ClientGame -and (Test-Path (Join-Path $Client "$($layout[0])\$($layout[1])"))) { $ClientGame = Join-Path $Client $layout[0] }
+}
 if (-not $Addons) { } else {
     foreach ($a in $Addons) {
         $s = Join-Path $repo "src\modules\PlayerbotV2\Addon\$a"
         if (Test-Path $s) { Add-Result "addon source $a" 'PASS' $s } else { Add-Result "addon source $a" 'FAIL' "$s missing" }
     }
-    if (-not (Test-Path (Join-Path $Client '_classic_beta_'))) { Add-Result 'client folder' 'FAIL' "$Client\_classic_beta_ not found" }
-    else { Add-Result 'client folder' 'PASS' $Client }
+    if (-not $ClientGame) { Add-Result 'client folder' 'FAIL' "neither $Client\_forever_\Wow.exe nor $Client\_classic_beta_\WowB.exe found" }
+    else { Add-Result 'client folder' 'PASS' $ClientGame }
 }
 
 # ---------------------------------------------------------------- 2. DB backup (dump only)
@@ -284,7 +289,7 @@ Invoke-Swap 'mmaps' $MmapsFrom
 # ---------------------------------------------------------------- 6. addon sync
 foreach ($a in $Addons) {
     $src = Join-Path $repo "src\modules\PlayerbotV2\Addon\$a"
-    $dst = Join-Path $Client "_classic_beta_\Interface\AddOns\$a"
+    $dst = Join-Path $ClientGame "Interface\AddOns\$a"
     Invoke-Step "addon $a" "robocopy /MIR $src -> $dst" {
         & robocopy $src $dst /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
         if ($LASTEXITCODE -ge 8) { throw "robocopy failed (exit $LASTEXITCODE)" }

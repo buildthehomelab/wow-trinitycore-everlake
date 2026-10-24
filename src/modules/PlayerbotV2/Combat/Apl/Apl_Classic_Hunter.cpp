@@ -55,6 +55,8 @@ constexpr uint32 CONCUSSIVE_SHOT    = 5116;
 constexpr uint32 RAPID_FIRE         = 3045;
 constexpr uint32 BESTIAL_WRATH      = 19574;   // Beast Mastery talent
 constexpr uint32 TRUESHOT_AURA      = 19506;   // Marksmanship talent
+constexpr uint32 READINESS          = 23989;   // Marksmanship talent
+constexpr uint32 COUNTERATTACK      = 19306;   // reactive (after a parry)
 constexpr uint32 DETERRENCE         = 19263;   // Survival talent
 constexpr uint32 MEND_PET           = 136;
 constexpr uint32 REVIVE_PET         = 982;
@@ -174,12 +176,22 @@ bool ShouldBackOffDeadZone(ApPredicateContext const& ctx)
         if (it != g_backOffLastMs.end() && s.published_at_ms() - it->second < 2000u)
             return false;
     }
-    if (!s.in_combat() || !HasLiveTarget(ctx) || s.is_rooted() || s.is_casting() || !s.in_group())
+    if (!s.in_combat() || !HasLiveTarget(ctx) || s.is_rooted() || s.is_casting())
         return false;
     if (s.ammo_kind() == 0 || s.ammo_count() == 0)
         return false;
     NearbyUnit const* v = s.victim_info();
-    if (!v || v->victim == s.guid() || v->victim.IsEmpty() || v->is_player)
+    if (!v || v->is_player)
+        return false;
+    // In a group the tank holds the mob. A solo hunter steps back only when the mob is not on it: the pet holds it, or a root / snare (Concussive
+    // Shot, Wing Clip) keeps it from following - like a player's kiting; a mob that is on the hunter and free to run is fought in melee.
+    bool const held_off = (s.has_pet() && v->victim == s.pet_guid()) || v->snared;
+    if (s.in_group())
+    {
+        if (v->victim == s.guid() || v->victim.IsEmpty())
+            return false;
+    }
+    else if (!held_off)
         return false;
     return DistToVictim(ctx) < s.spell_min_range(ARCANE_SHOT, *v) + 0.5f;
 }
@@ -233,6 +245,19 @@ void DoRapidFire(ApPredicateContext const& ctx, BotIntentEmitter& e)
     Classic::NoteCooldownUse(ctx.bot, RAPID_FIRE, "Rapid Fire");
 }
 
+// Readiness (Marksmanship) finishes the cooldown of Rapid Fire, Multi-Shot, Aimed Shot, Arcane Shot and the traps. Cast once the Rapid Fire
+// haste has run out and Rapid Fire is on cooldown, the next rule recasts Rapid Fire at once: two hastes in one boss fight.
+bool ShouldReadiness(ApPredicateContext const& ctx)
+{
+    return HasLiveTarget(ctx) && Classic::BossFight(ctx.bot) && Ready(ctx, READINESS) && ctx.bot.knows_spell(RAPID_FIRE)
+        && !ctx.bot.is_ready(RAPID_FIRE) && !ctx.bot.has_aura(RAPID_FIRE);
+}
+void DoReadiness(ApPredicateContext const& ctx, BotIntentEmitter& e)
+{
+    e.cast(READINESS);
+    Classic::NoteCooldownUse(ctx.bot, READINESS, "Readiness");
+}
+
 // ======================= Ranged =======================
 
 bool ShouldHuntersMark(ApPredicateContext const& ctx)
@@ -272,13 +297,16 @@ int EnemiesAroundVictim(ApPredicateContext const& ctx, float radius)
     return n;
 }
 
+// Multi-Shot is a weapon-damage shot with a 10 s cooldown, the hardest hitting shot per global cooldown a vanilla hunter has, so it goes
+// out on every cooldown at a lone target as well (it used to wait for a second mob and then never fired in a single-target fight).
 bool ShouldMultiShot(ApPredicateContext const& ctx)
 {
-    return HasLiveTarget(ctx) && VictimInShotRange(ctx) && ctx.bot.power_pct(POWER_MANA) >= 30
-        && EnemiesAroundVictim(ctx, 10.0f) >= 2 && (Ready(ctx, MULTI_SHOT) && ctx.bot.victim_in_spell_range(MULTI_SHOT))
-        // The extra arrows hit the victim's neighbours: not a sheep, an
-        // unpulled mob or one the tank has not secured.
-        && AoeSafeAroundVictim(ctx.bot, 10.0f, "Multi-Shot", MULTI_SHOT);
+    if (!HasLiveTarget(ctx) || !VictimInShotRange(ctx) || ctx.bot.power_pct(POWER_MANA) < 30
+        || !(Ready(ctx, MULTI_SHOT) && ctx.bot.victim_in_spell_range(MULTI_SHOT)))
+        return false;
+    // With neighbours the extra arrows hit them: not a sheep, an unpulled mob or one the tank has not secured. A lone victim is hit like
+    // any other shot (Arcane Shot has no such gate), so the pull / threat checks of the target choice already cover it.
+    return EnemiesAroundVictim(ctx, 10.0f) < 2 || AoeSafeAroundVictim(ctx.bot, 10.0f, "Multi-Shot", MULTI_SHOT);
 }
 void DoMultiShot(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(MULTI_SHOT, ctx.bot.victim()); }
 
@@ -317,6 +345,13 @@ bool ShouldWingClip(ApPredicateContext const& ctx)
         && !ctx.bot.has_aura(WING_CLIP, ctx.bot.victim());
 }
 void DoWingClip(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(WING_CLIP, ctx.bot.victim()); }
+
+// Counterattack: usable for 4 s after the hunter parried (caster aura state; the snapshot treats it as not ready otherwise).
+bool ShouldCounterattack(ApPredicateContext const& ctx)
+{
+    return HasLiveTarget(ctx) && VictimInMelee(ctx) && (Ready(ctx, COUNTERATTACK) && ctx.bot.victim_in_spell_range(COUNTERATTACK));
+}
+void DoCounterattack(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(COUNTERATTACK, ctx.bot.victim()); }
 
 bool ShouldMongooseBite(ApPredicateContext const& ctx)
 {
@@ -433,14 +468,17 @@ ApRule const kRules[] = {
     { ShouldPrePullTrap,   DoPrePullTrap,   "classic_hunter:freezing_trap" },
     { ShouldBestialWrath,  DoBestialWrath,  "classic_hunter:bestial_wrath" },
     { ShouldRapidFire,     DoRapidFire,     "classic_hunter:rapid_fire" },
+    { ShouldReadiness,     DoReadiness,     "classic_hunter:readiness" },
     { ShouldHuntersMark,   DoHuntersMark,   "classic_hunter:hunters_mark" },
     { ShouldSchoolShot,    DoSchoolShot,    "classic_hunter:school_shot" },
-    { ShouldSerpentSting,  DoSerpentSting,  "classic_hunter:serpent_sting" },
+    // Instant shots on their cooldowns first, the 3 s Aimed Shot cast (it holds Auto Shot back while it is cast) only in the gaps.
     { ShouldMultiShot,     DoMultiShot,     "classic_hunter:multi_shot" },
-    { ShouldAimedShot,     DoAimedShot,     "classic_hunter:aimed_shot" },
+    { ShouldSerpentSting,  DoSerpentSting,  "classic_hunter:serpent_sting" },
     { ShouldArcaneShot,    DoArcaneShot,    "classic_hunter:arcane_shot" },
-    { ShouldWingClip,      DoWingClip,      "classic_hunter:wing_clip" },
+    { ShouldAimedShot,     DoAimedShot,     "classic_hunter:aimed_shot" },
+    { ShouldCounterattack, DoCounterattack, "classic_hunter:counterattack" },
     { ShouldMongooseBite,  DoMongooseBite,  "classic_hunter:mongoose_bite" },
+    { ShouldWingClip,      DoWingClip,      "classic_hunter:wing_clip" },
     { ShouldRaptorStrike,  DoRaptorStrike,  "classic_hunter:raptor_strike" },
     { HasLiveTarget,       DoAutoAttack,    "classic_hunter:auto_attack" },
 };

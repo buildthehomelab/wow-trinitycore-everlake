@@ -34,6 +34,26 @@ inline LfgRoleGap LfgRoleMix(uint32 size)
     return LfgRoleGap{ uint8(tank), uint8(healer), uint8(size - tank - healer) };
 }
 
+// The party size a listing of an activity is filled to: an explicit size of the activity (Playerbot.Lfg.ActivityMaps) wins; a raid
+// is as big as its map says (20, 40); any other dungeon is a 5-man. The Map table's MaxPlayers is NOT used for a dungeon: it says
+// 10 for most classic dungeons (Deadmines, Uldaman, Scarlet Monastery) that are 5-mans.
+inline uint32 LfgActivityPartySize(uint32 explicitSize, bool raidMap, uint32 mapMaxPlayers)
+{
+    uint32 size = kLfgMinPartySize;
+    if (explicitSize)
+        size = explicitSize;
+    else if (raidMap)
+        size = mapMaxPlayers;
+    return size < kLfgMinPartySize ? kLfgMinPartySize : (size > kLfgMaxPartySize ? kLfgMaxPartySize : size);
+}
+
+// How long the fill of a group a player joined (a listed bot group) is spread over: the configured wait, but never more than a
+// minute: the bots are already there, only the open roles are missing.
+inline uint32 LfgJoinedFillSeconds(uint32 configuredSeconds)
+{
+    return configuredSeconds < 60 ? configuredSeconds : 60;
+}
+
 // The places a group of `size` (default a 5-man party) still lacks after the real members have taken theirs. `memberRoles`
 // holds one role mask per real member (0 = unknown: counts as damage). A member takes the first of tank, healer, damage
 // from their mask whose place is still free, else any free place; members past the group size take none.

@@ -1,4 +1,5 @@
-﻿#include "../WanderRule.h"
+﻿#include "Fleet/BotPool.h"
+#include "../WanderRule.h"
 #include "StateBase.h"
 #include "Bot/BotAI.h"
 #include "Bot/TownLife.h"
@@ -2126,16 +2127,20 @@ constexpr float kRaidRangedTooClose  = 12.0f;  // an elite's melee splash reache
 constexpr float kRaidRangedStandOff  = 22.0f;  // inside every 30y spell / 40y heal, outside the splash
 constexpr float kRaidRangedJoinRange = 25.0f;  // a raid ranged bot this near the tank has joined
 
-// Ranged DPS or healer in a raid (5b's predicate, shared so the three rules
-// always agree on who stands back).
-static bool RaidRangedOrHealer(BotSnapshotView const& s, BotAI const& ai)
+// Ranged DPS or healer by role or spec; RaidRangedOrHealer is the same in a raid
+// (5b's predicate, shared so the three rules always agree on who stands back).
+static bool RangedOrHealerRole(BotSnapshotView const& s, BotAI const& ai)
 {
-    if (!s.is_in_raid()) return false;
     Role const r = ai.effective_role(s);
     if (r == Role::Tank) return false;
     uint8 const cls = s.raw().identity.cls;
     uint16 const spec = uint16(s.spec());
     return r == Role::Healer || IsHealerSpec(cls, spec) || IsRangedSpec(cls, spec);
+}
+
+static bool RaidRangedOrHealer(BotSnapshotView const& s, BotAI const& ai)
+{
+    return s.is_in_raid() && RangedOrHealerRole(s, ai);
 }
 
 // The same predicate for any dungeon / raid group (not battlegrounds): the
@@ -3019,7 +3024,9 @@ struct FormationWalk { float x = 0.f, y = 0.f; uint32 since_ms = 0, giveup_until
 bool RaidFormationHold(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, BotIntentEmitter& emit)
 {
     constexpr float kFormationSlack = 7.0f;
-    if (!s.is_in_raid() || s.in_battleground() || !g.exists() || !g.members() || !RaidRangedOrHealer(s, ai))
+    // A raid group keeps its formation wherever it fights (support scorecard 233: in the open world the healers kept following their
+    // leader to 5 y from the boss, in melee reach for 35-114 of 120 s).
+    if (!(s.is_in_raid() || s.in_raid_group()) || s.in_battleground() || !g.exists() || !g.members() || !RangedOrHealerRole(s, ai))
         return false;
     if (ai.effective_role(s) == Role::Tank || s.is_casting() || s.is_rooted())
         return false;
@@ -6367,6 +6374,7 @@ bool BgTryUseObjectiveGo(BotSnapshotView const& s, BotAI& ai,
         emit.use_game_object(go->guid);
         ai.note_action_retry(BotAI::ActionKind::BgUseGo,
                              go_low, bg_now_ms);
+        ai.note_action_retry(BotAI::ActionKind::BgFormHold, 0, bg_now_ms);
         ai.set_last_rule_fired("idle:bg_use_objective_go");
         return true;
     }
@@ -20659,7 +20667,8 @@ void DispatchIdle(BotAI& ai,
         uint32 const now = s.published_at_ms();
         float px, py, pz;
         s.position(px, py, pz);
-        bool const exempt = s.has_owner_character() || s.in_group() || s.in_battleground() || s.is_in_instance() || s.on_transport()
+        // A scenario squad member stands where the test put it; the watch walk sent a priest to the hub at a parity leg's start (147: 29 s lost).
+        bool const exempt = ::Playerbot::Pool::IsScenarioBot(s.guid().GetCounter()) || s.has_owner_character() || s.in_group() || s.in_battleground() || s.is_in_instance() || s.on_transport()
             || s.is_mounted() || s.is_swimming() || s.in_combat() || s.is_casting() || s.hp_pct() < 70
             || Classic::IsEating(s) || Classic::IsDrinking(s)   // a meal or a mana drink is a reason to stand
             || (ai.last_rule_fired() && (std::strcmp(ai.last_rule_fired(), "idle:inn_rest") == 0            // resting at the inn is a reason to stand

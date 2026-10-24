@@ -519,6 +519,11 @@ Playerbot.Behavior.AcceptOwnerTrade = 1
 #   Playerbot.Gear.RaidIlvlCap   explicit item level ceiling; when set above 0 it overrides MaxTier. Default 0 (use MaxTier).
 Playerbot.Gear.MaxTier = 2
 Playerbot.Gear.RaidIlvlCap = 0
+#   Playerbot.Gear.RaidEnchants  every bot, world bots too, gets the permanent enchants a vanilla raider wore for its
+#                                role (chest, bracers, gloves, boots, cloak, weapon; Bot/Gear/RaidLoadout.cpp), on any worn piece
+#                                without one, when its gear is set up. Names the spell data lacks are skipped and logged
+#                                as "[enchant] unresolved". Default 1.
+Playerbot.Gear.RaidEnchants = 1
 #   Playerbot.World.Gear.MaxTier world / ambient / BG-fill bots (the ones nobody owns): the same tier scale as Gear.MaxTier,
 #                                default 1 (item level 76). Owned and raid bots keep Playerbot.Gear.MaxTier. A world bot wearing
 #                                a piece above this cap is re-geared down to it the next time the gear pass runs for it.
@@ -556,6 +561,10 @@ Playerbot.OwnedGear.AllowedModes = ""
 #                         talent_audit_<class>): a creature_template entry that can be attacked and does nothing; the runner makes it level 63,
 #                         3731 armor, 2 billion health. 0 (default): the first "Training Dummy" / "Target Dummy" template without a script.
 Playerbot.Scenario.DummyEntry = 0
+#   DamageParity.AllLegs  1 = every damage_parity run also does the four sensitivity legs (spell power, attack power, bare and sundered
+#                         armor), eight legs in all. 0 (default): the four reference legs (none, t1, t3, t3_buffed); a class that failed a check
+#                         in them runs the other four as well.
+Playerbot.DamageParity.AllLegs = 0
 #   AmmoSupply        a bot with a bow, crossbow or gun equipped (hunters; warriors / rogues if the generator gives
 #                     them one) is handed the best arrows / bullets its level allows, up to 1000, and the ammo slot
 #                     is pointed at them, whenever the stock drops under 30% (1000 = 300). Out of combat, bots only,
@@ -1094,8 +1103,9 @@ PlayerbotV2.Combat.SkipUnfightable       = 1
 # a mob already hitting a non-tank member (self-defence). Holding = the bot
 # stops attacking that mob (pet called back) but keeps healing / buffing.
 #   HoldEnabled        master switch
-#   HoldInOpenWorld    0 = dungeons/raids only (the owner: open-world groups just
-#                      fight); 1 = also hold in the open world
+#   HoldInOpenWorld    0 = dungeons, raids and raid groups only (the owner: open-world
+#                      parties just fight; a raid group holds wherever it fights);
+#                      1 = every group also holds in the open world
 #   MaxRatio           stay below this fraction of the tank's threat on the
 #                      target; over it, damage stops (and Fade / Feign Death /
 #                      Feint / Cower are used when ready)
@@ -1115,6 +1125,9 @@ Playerbot.Raid.DpsWaitForAttack       = 1
 #   Nightfin Soup). Bots always use ones they carry; with this on, the bags are stocked for them first (free, like
 #   the potion and reagent stock). Default 0; the server's make-configs set 1.
 Playerbot.Raid.ProvideConsumables     = 1
+# Playerbot.Raid.ConsumablesInDungeons  the same kits in dungeon instances (level 58+ bots in a group), not only raids.
+#   Default 1.
+Playerbot.Raid.ConsumablesInDungeons  = 1
 # Playerbot.Raid.ResistGear  grouped raid bots wear the vanilla pieces with the most resistance of the school a boss deals
 #   (the boss's Greater Protection Potion row: Vaelastrasz and Firemaw fire, Ebonroc / Flamegor / Nefarian shadow, Huhuran
 #   nature, Sapphiron frost) while they stand before it, and put their own gear back afterwards. Free pieces for the raid
@@ -1128,6 +1141,33 @@ Playerbot.Raid.ResistGear             = 0
 #   PvE 1, PvP 0.
 Playerbot.Consumables.PvE             = 1
 Playerbot.Consumables.PvP             = 0
+# Playerbot.AlwaysBuffs.<Switch>.<Place>  keeps bots supplied so nobody has to find or buy anything. Bots only; real players
+#   are never touched. Each switch is 1 (on) or 0 (off) for each place:
+#     Raid          raids and dungeons (any instance that is not a battleground)
+#     World         everywhere else (open world, cities)
+#     Battleground  battlegrounds and arenas
+#   Switches:
+#     Supplies     ammo, reagents, soul shards, poisons, runes, food, water and potions kept at the full stack, topped up as
+#                  soon as one is used, in a fight too. Defaults: 1 everywhere.
+#     Repair       gear kept at full durability with no repair bill, and at least 200 gold in the pocket. Defaults: 1 everywhere.
+#     WorldBuffs   Rallying Cry, Spirit of Zandalar, Songflower, Warchief's Blessing (Horde), and the Dire Maul buffs of the role,
+#                  put on as auras (no item, no cast). Defaults: 1 in Raid, 0 in World and Battleground.
+#     Consumables  the role's flask or elixirs, scrolls, stat food and weapon stone (Bot/AlwaysBuffs.h), put on as auras (no
+#                  item, no cast, no GCD), level 58+. Defaults: 1 in Raid, 0 in World and Battleground.
+#   A WorldBuffs or Consumables switch that is 0 where the bot stands also takes those auras off it, so they do not follow it
+#   from a raid into a battleground.
+Playerbot.AlwaysBuffs.Supplies.Raid          = 1
+Playerbot.AlwaysBuffs.Supplies.World         = 1
+Playerbot.AlwaysBuffs.Supplies.Battleground  = 1
+Playerbot.AlwaysBuffs.Repair.Raid            = 1
+Playerbot.AlwaysBuffs.Repair.World           = 1
+Playerbot.AlwaysBuffs.Repair.Battleground    = 1
+Playerbot.AlwaysBuffs.WorldBuffs.Raid        = 1
+Playerbot.AlwaysBuffs.WorldBuffs.World       = 0
+Playerbot.AlwaysBuffs.WorldBuffs.Battleground = 0
+Playerbot.AlwaysBuffs.Consumables.Raid       = 1
+Playerbot.AlwaysBuffs.Consumables.World      = 0
+Playerbot.AlwaysBuffs.Consumables.Battleground = 0
 # Playerbot.Raid.DpsWaitTimeoutMs  with DpsWaitForAttack: after the tanks have fought this long without the owner's
 #   Attack, the DPS go anyway (a forgotten Attack no longer wipes the raid). Eight seconds for a raid, because the tank
 #   takes a while to run in (a party's Pull keeps six); the value is limited to 1000-8000 (there is no "never").
@@ -1213,3 +1253,21 @@ Playerbot.LoadTest.MaxP99Ms = 100
 Playerbot.LoadTest.MaxAvgMs = 40
 Playerbot.LoadTest.MaxRssMb = 9000
 Playerbot.LoadTest.MaxSlowCallMs = 250
+
+#
+#    Playerbot.ClassicTalents.ApplyOnLogin
+#        Description: 0 = a bot that already holds all the talent points of its level on the build its talents show is not walked again at
+#                     login or in upkeep (the walk validates the whole trait config rank by rank and froze the world thread when
+#                     dozens of bots logged in together). Walks that remain run at most one per world update. 1 = walk every bot as before.
+#        Default:     0
+
+Playerbot.ClassicTalents.ApplyOnLogin = 0
+
+#
+#    Playerbot.ClassicTalents.WalkBudgetMs
+#        Description: The longest one bot's talent walk may hold the world thread, in milliseconds. A walk that reaches it keeps the ranks
+#                     it validated, logs an error once per class and spec, and the bot is not walked again until its level, spec or
+#                     ranks change.
+#        Default:     250
+
+Playerbot.ClassicTalents.WalkBudgetMs = 250

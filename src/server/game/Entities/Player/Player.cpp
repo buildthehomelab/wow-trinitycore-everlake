@@ -2984,6 +2984,15 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
             if (!IsInWorld() && !learning)                   // explicitly load from DB and then exist in it already and set correctly
                 itr->second.state = PLAYERSPELL_UNCHANGED;
 
+            // a spell loaded from character_spell carries no trait; the trait config applied at login names it, so link it here instead of dropping it with the early return
+            if (trait && itr->second.Trait != trait)
+            {
+                itr->second.Trait = trait;
+                if (TraitDefinitionEntry const* traitDefinition = sTraitDefinitionStore.LookupEntry(trait->DefinitionId))
+                    if (traitDefinition->OverridesSpellID)
+                        AddOverrideSpell(traitDefinition->OverridesSpellID, spellId);
+            }
+
             return false;
         }
 
@@ -2996,7 +3005,8 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
             dependent_set = true;
         }
 
-        if (itr->second.Trait != trait)
+        // a learn that names no trait (a trainer teaching a former talent such as Mortal Strike) must not drop the link a talent purchase gave it
+        if (trait && itr->second.Trait != trait)
         {
             if (itr->second.Trait)
                 if (TraitDefinitionEntry const* traitDefinition = sTraitDefinitionStore.LookupEntry(itr->second.Trait->DefinitionId))
@@ -5616,7 +5626,8 @@ float Player::ApplyRatingDiminishing(CombatRating cr, float bonusValue) const
 
 float Player::GetExpertiseDodgeOrParryReduction(WeaponAttackType attType) const
 {
-    float baseExpertise = 7.5f;
+    // Classic 1.60 (vanilla): no innate expertise, creatures keep their full 5% dodge and parry (retail players start at 7.5%)
+    float baseExpertise = 0.0f;
     switch (attType)
     {
         case BASE_ATTACK:
@@ -6589,7 +6600,7 @@ void Player::SendActionButtons(uint32 state) const
     SendDirectMessage(packet.Write());
 }
 
-bool Player::IsActionButtonDataValid(uint8 button, uint64 action, uint8 type) const
+bool Player::IsActionButtonDataValid(uint16 button, uint64 action, uint8 type) const
 {
     if (button >= MAX_ACTION_BUTTONS)
     {
@@ -6666,7 +6677,7 @@ bool Player::IsActionButtonDataValid(uint8 button, uint64 action, uint8 type) co
     return true;
 }
 
-ActionButton* Player::AddActionButton(uint8 button, uint64 action, uint8 type)
+ActionButton* Player::AddActionButton(uint16 button, uint64 action, uint8 type)
 {
     if (!IsActionButtonDataValid(button, action, type))
         return nullptr;
@@ -6682,7 +6693,7 @@ ActionButton* Player::AddActionButton(uint8 button, uint64 action, uint8 type)
     return &ab;
 }
 
-void Player::RemoveActionButton(uint8 button)
+void Player::RemoveActionButton(uint16 button)
 {
     ActionButtonList::iterator buttonItr = m_actionButtons.find(button);
     if (buttonItr == m_actionButtons.end() || buttonItr->second.uState == ACTIONBUTTON_DELETED)
@@ -6697,7 +6708,7 @@ void Player::RemoveActionButton(uint8 button)
         GetName(), GetGUID().ToString(), button);
 }
 
-ActionButton const* Player::GetActionButton(uint8 button)
+ActionButton const* Player::GetActionButton(uint16 button)
 {
     ActionButtonList::iterator buttonItr = m_actionButtons.find(button);
     if (buttonItr == m_actionButtons.end() || buttonItr->second.uState == ACTIONBUTTON_DELETED)
@@ -9392,6 +9403,31 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
         if (!pEnchant)
             continue;
 
+        // Windfury Weapon (vMaNGOS, Player::CastItemCombatSpell): 20% on a melee hit to gain the rank's Windfury Attack, which adds the extra
+        // attack and the attack power for it; never on the extra attack itself. Done here on the imbue's enchantment, not through the
+        // enchantment's own spell, which Forever points at a dummy aura (Windfury Weapon 439431) with no script.
+        if (e_slot == TEMP_ENCHANTMENT_SLOT)
+        {
+            uint32 windfuryAttack = 0;
+            switch (enchant_id)
+            {
+                case 283:  windfuryAttack = 8233;  break;   // Windfury Weapon rank 1 (spell 8232)
+                case 284:  windfuryAttack = 8236;  break;   // rank 2 (8235)
+                case 525:  windfuryAttack = 10484; break;   // rank 3 (10486)
+                case 1669: windfuryAttack = 16361; break;   // rank 4 (16362)
+                default: break;
+            }
+            if (windfuryAttack)
+            {
+                if (canTrigger && !GetLastExtraAttackSpell())
+                    CombatEnchantProc::Dispatch(20.0f, [](float procChance) { return roll_chance(procChance); }, [&]
+                    {
+                        CastSpell(this, windfuryAttack, CastSpellExtraArgs(item));
+                    });
+                continue;
+            }
+        }
+
         for (uint8 s = 0; s < MAX_ITEM_ENCHANTMENT_EFFECTS; ++s)
         {
             if (pEnchant->Effect[s] != ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL)
@@ -10328,8 +10364,8 @@ bool Player::SetAmmo(uint32 itemId)
 
 void Player::AutoSelectAmmo()
 {
-    // A bot has no client to choose its ammo: it takes a stack that is drawn with a model, not the generic white-box display.
-    bool const preferDrawable = GetSession() && GetSession()->IsBot();
+    // Without a client to choose its ammo, a player takes a stack that is drawn with a model, not the generic white-box display.
+    bool const preferDrawable = m_preferDrawableAmmo;
     if (uint32 current = GetAmmoId())
         if (HasItemCount(current) && IsAmmoUsableWithRangedWeapon(sObjectMgr->GetItemTemplate(current)) &&
             (!preferDrawable || HasDrawableAmmoDisplay(sObjectMgr->GetItemTemplate(current))))
@@ -17285,7 +17321,18 @@ void Player::AdjustQuestObjectiveProgress(Quest const* quest)
                 {
                     uint32 reqItemCount = obj.Amount;
                     uint32 curItemCount = GetItemCount(obj.ObjectID, true);
-                    SetQuestObjectiveData(obj, std::min(curItemCount, reqItemCount));
+                    uint32 itemProgress = std::min(curItemCount, reqItemCount);
+
+                    // QUEST_OBJECTIVE_FLAG_PRESERVE_QUEST_ITEMS: same as Player::ItemRemovedQuestCheck, never lower
+                    // the recorded progress of such an objective (the item is meant to be consumed).
+                    if (obj.Flags & QUEST_OBJECTIVE_FLAG_PRESERVE_QUEST_ITEMS)
+                    {
+                        uint16 slot = FindQuestSlot(quest->GetQuestId());
+                        if (slot < MAX_QUEST_LOG_SIZE && GetQuestSlotObjectiveData(slot, obj) >= int32(itemProgress))
+                            break;
+                    }
+
+                    SetQuestObjectiveData(obj, itemProgress);
                 }
                 break;
             case QUEST_OBJECTIVE_HAVE_CURRENCY:
@@ -17572,6 +17619,12 @@ void Player::ItemRemovedQuestCheck(uint32 entry, uint32 /*count*/)
         QuestObjective const* objective = sObjectMgr->GetQuestObjective(objectiveItr.second.ObjectiveId);
 
         if (!quest || !objective || !IsQuestObjectiveCompletable(logSlot, quest, *objective))
+            continue;
+
+        // QUEST_OBJECTIVE_FLAG_PRESERVE_QUEST_ITEMS: these objectives are completed by using/consuming the item
+        // itself (e.g. an on-use item whose spell takes it as a reagent to fire a follow-up kill credit), so losing
+        // the item from the inventory must not roll the objective back.
+        if (objective->Flags & QUEST_OBJECTIVE_FLAG_PRESERVE_QUEST_ITEMS)
             continue;
 
         int32 newItemCount = GetItemCount(entry, false);  // we may have more than what the status shows, so we have to iterate inventory
@@ -19925,7 +19978,7 @@ void Player::_LoadActions(PreparedQueryResult result)
         do
         {
             Field* fields = result->Fetch();
-            uint8 button = fields[0].GetUInt8();
+            uint16 button = fields[0].GetUInt16();
             uint64 action = fields[1].GetUInt64();
             uint8 type = fields[2].GetUInt8();
 
@@ -21863,7 +21916,7 @@ void Player::_SaveActions(CharacterDatabaseTransaction trans)
                 stmt->setUInt64(0, GetGUID().GetCounter());
                 stmt->setUInt8(1, GetActiveTalentGroup());
                 stmt->setInt32(2, traitConfigId);
-                stmt->setUInt8(3, itr->first);
+                stmt->setUInt16(3, itr->first);
                 stmt->setUInt64(4, itr->second.GetAction());
                 stmt->setUInt8(5, uint8(itr->second.GetType()));
                 trans->Append(stmt);
@@ -21876,7 +21929,7 @@ void Player::_SaveActions(CharacterDatabaseTransaction trans)
                 stmt->setUInt64(0, itr->second.GetAction());
                 stmt->setUInt8(1, uint8(itr->second.GetType()));
                 stmt->setUInt64(2, GetGUID().GetCounter());
-                stmt->setUInt8(3, itr->first);
+                stmt->setUInt16(3, itr->first);
                 stmt->setUInt8(4, GetActiveTalentGroup());
                 stmt->setInt32(5, traitConfigId);
                 trans->Append(stmt);
@@ -21887,7 +21940,7 @@ void Player::_SaveActions(CharacterDatabaseTransaction trans)
             case ACTIONBUTTON_DELETED:
                 stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_ACTION_BY_BUTTON_SPEC);
                 stmt->setUInt64(0, GetGUID().GetCounter());
-                stmt->setUInt8(1, itr->first);
+                stmt->setUInt16(1, itr->first);
                 stmt->setUInt8(2, GetActiveTalentGroup());
                 stmt->setInt32(3, traitConfigId);
                 trans->Append(stmt);
@@ -27350,7 +27403,11 @@ void Player::InitializeSelfResurrectionSpells()
     for (AuraEffectList::const_iterator itr = dummyAuras.begin(); itr != dummyAuras.end(); ++itr)
     {
         // Soulstone Resurrection                           // prio: 3 (max, non death persistent)
-        if ((*itr)->GetSpellInfo()->SpellFamilyName == SPELLFAMILY_WARLOCK && (*itr)->GetSpellInfo()->SpellFamilyFlags[1] & 0x1000000)
+        // Classic 1.60 (VMaNGOS Player.cpp): the passive ranks 20707, 20762..20765. The retail family flag (0x1000000) is not on them; the client
+        // data has 0x4000000 in the second mask, so the flag check never matched and a Soulstone never resurrected.
+        uint32 const dummyId = (*itr)->GetId();
+        if (dummyId == 20707 || (dummyId >= 20762 && dummyId <= 20765)
+            || ((*itr)->GetSpellInfo()->SpellFamilyName == SPELLFAMILY_WARLOCK && (*itr)->GetSpellInfo()->SpellFamilyFlags[1] & 0x1000000))
             spells[0] = 3026;
         // Twisting Nether                                  // prio: 2 (max)
         else if ((*itr)->GetId() == 23701 && roll_chance(10))

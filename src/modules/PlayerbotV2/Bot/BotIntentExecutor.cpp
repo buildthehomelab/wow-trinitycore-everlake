@@ -466,6 +466,7 @@ struct IntentVisitor
             else if constexpr (std::is_same_v<T, LfgProposalRespondIntent>)   return api.lfg_proposal_respond(op.proposal_id, op.accept);
             else if constexpr (std::is_same_v<T, LfgRoleCheckIntent>)         return api.lfg_role_check(op.roles);
             else if constexpr (std::is_same_v<T, EnterAreaTriggerIntent>)     return api.enter_area_trigger(op.area_trigger_id);
+            else if constexpr (std::is_same_v<T, AlwaysBuffIntent>)           return api.always_buffs(op.set, op.mask);
             else                                                              return Result::Other;
         }, qi.op);
     }
@@ -533,7 +534,11 @@ struct IntentVisitor
                 return claimed.id != 0 ? Result::Ok : Result::ServerRefused;
             }
             else if constexpr (std::is_same_v<T, EconomyOp::RestockClassSupplies>)
+            {
+                // The supplies rule reaches every bot now and then: a petless world hunter gets its beast here (BotPopulationManager::EnsureBotHunterPet).
+                V2::Fleet::BotPopulationManager::EnsureBotHunterPet(api.player());
                 return api.restock_class_supplies();
+            }
             else if constexpr (std::is_same_v<T, EconomyOp::StockRaidConsumable>)
                 return api.stock_raid_consumable(op.item);
             else if constexpr (std::is_same_v<T, EconomyOp::ResistGear>)

@@ -151,9 +151,21 @@ void ConfigReader::apply_from_loaded_config()
     threat_hold_enabled_    = c.GetBoolDefault("PlayerbotV2.Threat.HoldEnabled", true, true);
     raid_dps_wait_attack_   = c.GetBoolDefault("Playerbot.Raid.DpsWaitForAttack", true, true);
     raid_provide_consumables_ = c.GetBoolDefault("Playerbot.Raid.ProvideConsumables", true, true);
+    raid_consumables_in_dungeons_ = c.GetBoolDefault("Playerbot.Raid.ConsumablesInDungeons", true, true);
     raid_resist_gear_         = c.GetBoolDefault("Playerbot.Raid.ResistGear", false, true);
     consumables_pve_          = c.GetBoolDefault("Playerbot.Consumables.PvE", true, true);
     consumables_pvp_          = c.GetBoolDefault("Playerbot.Consumables.PvP", false, true);
+    {
+        static constexpr char const* kSwitch[kAlwaysSwitchCount] = { "Supplies", "Repair", "WorldBuffs", "Consumables" };
+        static constexpr char const* kPlace[kAlwaysPlaceCount]   = { "Raid", "World", "Battleground" };
+        for (uint8 w = 0; w < kAlwaysSwitchCount; ++w)
+            for (uint8 p = 0; p < kAlwaysPlaceCount; ++p)
+            {
+                // Supplies and Repair on everywhere; world buffs and consumables on in raids and dungeons only.
+                bool const def = w == uint8(AlwaysSwitch::Supplies) || w == uint8(AlwaysSwitch::Repair) || p == uint8(AlwaysPlace::Raid);
+                always_[w][p] = c.GetBoolDefault(std::string("Playerbot.AlwaysBuffs.") + kSwitch[w] + "." + kPlace[p], def, true);
+            }
+    }
     raid_dps_wait_timeout_ms_ = uint32(std::clamp<int64>(int64(c.GetIntDefault("Playerbot.Raid.DpsWaitTimeoutMs", int(kRaidDpsWaitTimeoutMaxMs), true)), 1000, int64(kRaidDpsWaitTimeoutMaxMs)));
     threat_hold_open_world_ = c.GetBoolDefault("PlayerbotV2.Threat.HoldInOpenWorld", false, true);
     threat_max_ratio_ = std::clamp(float(c.GetFloatDefault("PlayerbotV2.Threat.MaxRatio", 0.9f, true)), 0.3f, 1.2f);
@@ -170,6 +182,7 @@ void ConfigReader::apply_from_loaded_config()
     bhv_tank_ranged_weapon_   = c.GetBoolDefault("Playerbot.Behavior.TankRangedWeapon", true, true);
     bhv_ammo_supply_          = c.GetBoolDefault("Playerbot.Behavior.AmmoSupply", true, true);
     bhv_raid_gear_            = c.GetBoolDefault("Playerbot.Behavior.RaidGear", true, true);
+    gear_raid_enchants_       = c.GetBoolDefault("Playerbot.Gear.RaidEnchants", true, true);
     bhv_accept_owner_trade_   = c.GetBoolDefault("Playerbot.Behavior.AcceptOwnerTrade", true, true);
     bhv_formation_            = c.GetBoolDefault("Playerbot.Behavior.Formation", true, true);
     bhv_distance_order_       = c.GetBoolDefault("Playerbot.Behavior.DistanceOrder", true, true);
@@ -203,19 +216,21 @@ void ConfigReader::apply_from_loaded_config()
             lfg_categories_.push_back(*id);
     lfg_activity_maps_.clear();
     std::string const lfgActivityMaps = c.GetStringDefault("Playerbot.Lfg.ActivityMaps",
-        "203776:43,204032:289,204288:389,204544:36,204800:33,205056:48,205312:34,205568:90,205824:47,206080:189,206336:129,206592:70,206848:209,207104:349,207360:109,207616:230,207872:229,208128:429,208384:429,208640:429,208896:329,211712:189,211968:189,212224:189,214272:229,214016:309,214528:249,214784:409,215040:469,215296:533,215552:509,215808:531", true);
+        "203776:43,204032:289,204288:389,204544:36,204800:33,205056:48,205312:34,205568:90,205824:47,206080:189,206336:129,206592:70,206848:209,207104:349,207360:109,207616:230,207872:229,208128:429,208384:429,208640:429,208896:329,211712:189,211968:189,212224:189,214272:229:10,214016:309,214528:249,214784:409,215040:469,215296:533,215552:509,215808:531", true);
     for (std::string_view token : Trinity::Tokenize(lfgActivityMaps, ',', false))
     {
-        size_t const colon = token.find(':');
-        if (colon == std::string_view::npos)
+        // "activity:map" or "activity:map:size"
+        std::vector<std::string_view> const parts = Trinity::Tokenize(token, ':', true);
+        if (parts.size() != 2 && parts.size() != 3)
             continue;
-        Optional<uint32> activity = Trinity::StringTo<uint32>(token.substr(0, colon));
-        Optional<uint32> map = Trinity::StringTo<uint32>(token.substr(colon + 1));
-        if (activity && map)
-            lfg_activity_maps_.emplace_back(*activity, *map);
+        Optional<uint32> activity = Trinity::StringTo<uint32>(parts[0]);
+        Optional<uint32> map = Trinity::StringTo<uint32>(parts[1]);
+        Optional<uint32> size = parts.size() == 3 ? Trinity::StringTo<uint32>(parts[2]) : Optional<uint32>(0u);
+        if (activity && map && size)
+            lfg_activity_maps_.push_back(LfgActivityMap{ *activity, *map, *size });
     }
-    lfg_bot_groups_max_       = uint32(std::clamp<int32>(c.GetIntDefault("Playerbot.Lfg.BotGroups.Max", 6, true), 0, 20));
-    lfg_bot_groups_max_bots_  = uint32(std::clamp<int32>(c.GetIntDefault("Playerbot.Lfg.BotGroups.MaxBots", 100, true), 0, 400));
+    lfg_bot_groups_max_       = uint32(std::clamp<int32>(c.GetIntDefault("Playerbot.Lfg.BotGroups.Max", 25, true), 0, 40));
+    lfg_bot_groups_max_bots_  = uint32(std::clamp<int32>(c.GetIntDefault("Playerbot.Lfg.BotGroups.MaxBots", 150, true), 0, 400));
     lfg_bot_groups_category_  = uint32(std::max<int32>(c.GetIntDefault("Playerbot.Lfg.BotGroups.Category", 2, true), 0));
     lfg_bot_groups_min_seconds_ = uint32(std::clamp<int32>(c.GetIntDefault("Playerbot.Lfg.BotGroups.MinMinutes", 5, true), 1, 120)) * 60;
     lfg_bot_groups_max_seconds_ = std::max(lfg_bot_groups_min_seconds_,

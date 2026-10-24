@@ -3,7 +3,7 @@
 #
 #   .\Play-WoWForever.ps1                       -> start the game and apply the server key
 #   .\Play-WoWForever.ps1 -Attach               -> game is already running: only apply the key
-#   .\Play-WoWForever.ps1 -Client "D:\WoW"      -> use this game folder (the one with WowB.exe)
+#   .\Play-WoWForever.ps1 -Client "D:\WoW"      -> use this game folder (_forever_ with Wow.exe, or _classic_beta_ with WowB.exe)
 #   .\Play-WoWForever.ps1 -CheckOnly            -> print what would happen, start nothing
 #
 # What it does, and nothing else:
@@ -48,11 +48,11 @@ if (-not $Client) {
 }
 function Find-Exe([string]$dir) {
     if (-not $dir) { return $null }
-    foreach ($d in @($dir, (Join-Path $dir '_classic_beta_'))) { if (Test-Path (Join-Path $d 'WowB.exe')) { return $d } }
+    foreach ($d in @($dir, (Join-Path $dir '_forever_'), (Join-Path $dir '_classic_beta_'))) { foreach ($e in 'Wow.exe', 'WowB.exe') { if (Test-Path (Join-Path $d $e)) { return $d } } }
     $null
 }
 $gameDir = Find-Exe $Client
-if (-not $gameDir) { throw "WowB.exe not found in '$Client'. Run: Play-WoWForever.ps1 -Client `"<folder that contains WowB.exe>`"" }
+if (-not $gameDir) { throw "Wow.exe (_forever_) or WowB.exe (_classic_beta_) not found in '$Client'. Run: Play-WoWForever.ps1 -Client `"<folder that contains _forever_ or _classic_beta_>`"" }
 
 # --- client config -------------------------------------------------------------------------------------------------------------
 $wtfDir = Join-Path $gameDir 'WTF'
@@ -183,12 +183,12 @@ function Say($m, $c = 'Gray') { Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH
 
 # --- start / attach ----------------------------------------------------------------------------------------------------------------
 if ($Attach) {
-    $proc = Get-Process WowB -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $proc) { throw 'The game (WowB.exe) is not running.' }
+    $proc = Get-Process Wow, WowB -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $proc) { throw 'The game (Wow.exe or WowB.exe) is not running.' }
 } else {
-    if (Get-Process WowB -ErrorAction SilentlyContinue) { throw 'The game is already running. Close it first, or use -Attach to only apply the key.' }
+    if (Get-Process Wow, WowB -ErrorAction SilentlyContinue) { throw 'The game is already running. Close it first, or use -Attach to only apply the key.' }
     Say 'Starting the game...' 'Cyan'
-    $proc = Start-Process (Join-Path $gameDir 'WowB.exe') -ArgumentList '-config', 'ForeverLauncher.wtf' -WorkingDirectory $gameDir -PassThru
+    $proc = Start-Process (Join-Path $gameDir $(if (Test-Path (Join-Path $gameDir 'Wow.exe')) { 'Wow.exe' } else { 'WowB.exe' })) -ArgumentList '-config', 'ForeverLauncher.wtf' -WorkingDirectory $gameDir -PassThru
     $null = $proc.Handle   # Windows PowerShell 5.1 leaves ExitCode empty unless the process handle is read right after the start
 }
 $h = [KeyStore]::Open($proc.Id)

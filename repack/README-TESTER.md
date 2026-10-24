@@ -5,7 +5,7 @@ Your feedback is the point: please report what goes wrong (see the end).
 
 ## You need
 - Windows 10/11 64-bit, 16 GB RAM (8 GB works with the small bot preset), 4+ cores, about 25 GB free disk.
-- Your own WoW Forever client, build **70450**. Copy the client folder first and do not let Battle.net patch the copy.
+- Your own WoW Forever client at the build this release names (shown in the release notes and by the installer, which also warns if your client has another build). Copy the client folder first and do not let Battle.net patch the copy; a client of another build logs in to Battle.net but sees no realms.
 - Administrator rights once (hosts entry and a local certificate).
 - The **ForeverBots addon** (included; Install.cmd installs it). It is required: this client cannot whisper bots without it.
 
@@ -34,7 +34,7 @@ If something goes wrong: `repack\restore-backup.ps1` lists the backups and puts 
 `repack\Stop-WoWForever.ps1`. To remove the certificate and hosts line: Administrator PowerShell, `repack\uninstall.ps1`.
 
 ## Community
-Discord: https://discord.gg/Jk596N3xun
+Discord: https://discord.gg/QJBM6tR3E4
 
 ## Report a bug
 Run `repack\bug-bundle.ps1` (makes a zip on your Desktop with logs, names and IPs masked) and send it with what happened: class, level, place, what you expected.

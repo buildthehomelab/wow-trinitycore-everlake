@@ -420,6 +420,21 @@ class TC_GAME_API ItemScript : public ScriptObject
         virtual bool OnCastItemCombatSpell(Player* player, Unit* victim, SpellInfo const* spellInfo, Item* item);
 };
 
+// The roll behind a swing or a spell hit, for UnitScript::OnHitOutcome
+enum HitOutcomeKind : uint8
+{
+    HIT_OUTCOME_HIT = 0,
+    HIT_OUTCOME_CRIT,
+    HIT_OUTCOME_MISS,
+    HIT_OUTCOME_DODGE,
+    HIT_OUTCOME_PARRY,
+    HIT_OUTCOME_BLOCK,
+    HIT_OUTCOME_GLANCING,
+    HIT_OUTCOME_CRUSHING,
+    HIT_OUTCOME_RESIST,
+    HIT_OUTCOME_OTHER
+};
+
 class TC_GAME_API UnitScript : public ScriptObject
 {
     protected:
@@ -433,11 +448,19 @@ class TC_GAME_API UnitScript : public ScriptObject
         // Called when a unit deals healing to another unit
         virtual void OnHeal(Unit* healer, Unit* reciever, uint32& gain);
 
+        // Called after a heal landed: what the heal was worth before the target's missing health capped it (`raw`) and what it restored (`effective`);
+        // the difference is overheal. `spellId` is 0 for a heal without a spell.
+        virtual void OnHealOutcome(Unit* healer, Unit* target, uint32 spellId, uint32 raw, uint32 effective);
+
         // Called when a unit deals damage to another unit
         virtual void OnDamage(Unit* attacker, Unit* victim, uint32& damage);
 
         // Called just before OnDamage with the spell that dealt the damage (null for a melee swing)
         virtual void OnDamageSpell(Unit* attacker, Unit* victim, uint32 damage, SpellInfo const* spellInfo);
+
+        // Called before the damage of a swing or a direct spell hit is dealt, and for a spell that missed, with what the roll gave. spellId is 0
+        // for a melee swing; outcome is a HitOutcomeKind
+        virtual void OnHitOutcome(Unit* attacker, Unit* victim, uint32 spellId, uint8 outcome, uint32 damage);
 
         // Called when DoT's Tick Damage is being Dealt
         virtual void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage);
@@ -1369,8 +1392,10 @@ class TC_GAME_API ScriptMgr
     public: /* UnitScript */
 
         void OnHeal(Unit* healer, Unit* reciever, uint32& gain);
+        void OnHealOutcome(Unit* healer, Unit* target, uint32 spellId, uint32 raw, uint32 effective);
         void OnDamage(Unit* attacker, Unit* victim, uint32& damage);
         void OnDamageSpell(Unit* attacker, Unit* victim, uint32 damage, SpellInfo const* spellInfo);
+        void OnHitOutcome(Unit* attacker, Unit* victim, uint32 spellId, uint8 outcome, uint32 damage);
         void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage);
         void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage);
         void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* spellInfo);

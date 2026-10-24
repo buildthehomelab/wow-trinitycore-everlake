@@ -16,6 +16,7 @@
 #include <functional>
 #include <string_view>
 #include "InstanceSchools.h"
+#include "AlwaysBuffs.h"
 #include "ClassicSupplies.h"   // RaidConsumableRole
 #include "BotTypes.h"
 #include "ObjectGuid.h"
@@ -267,6 +268,11 @@ void ShortClassSupplies(BotSnapshotView const& s, std::vector<uint32>& out);
 // PickRaidConsumableStock: the kit item the bags are short of whose buff is missing, to stock (0 = none).
 // Playerbot.Consumables.PvE / .PvP for the bot's current map (battlegrounds and arenas are PvP, everything else PvE).
 bool ConsumablesAllowed(BotSnapshotView const& s);
+// Playerbot.AlwaysBuffs.<Switch>.<Place>: where the bot stands (a battleground or arena map, else a raid or dungeon instance, else the world)
+// and whether a switch is on there. A bot in a raid-type group counts as in a raid wherever it stands (the dps scorecard fights in the
+// open world with a 22-bot raid and its flasks and world buffs were stripped there).
+AlwaysPlace AlwaysPlaceOf(BotSnapshotView const& s, GroupSnapshotView const* g = nullptr);
+bool AlwaysOn(BotSnapshotView const& s, AlwaysSwitch what, GroupSnapshotView const* g = nullptr);
 uint32 PickRaidConsumable(BotSnapshotView const& s, GroupSnapshotView const& g);
 uint32 PickRaidConsumableStock(BotSnapshotView const& s, GroupSnapshotView const& g);
 // The role whose kit (ClassicSupplies RaidConsumablesFor) the bot drinks: the group's role first, then the tank test, then the spec.

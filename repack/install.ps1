@@ -7,10 +7,12 @@
 param([string]$Client, [switch]$SkipMaps, [switch]$NoStart, [switch]$Elevated, [switch]$Gui)   # -Gui: started by the launcher window (already administrator): no questions, no pauses
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
+. "$PSScriptRoot\ClientBuild.ps1"   # the build the realm accepts is read from the shipped auth updates, never typed here
 
-# Looks for WoW Forever client folders (a folder with .build.info next to _classic_beta_ or a WowB*.exe). Returns candidates,
-# the ones that mention build 70450 first. $roots is a list of folders to search (to depth 3).
-function Find-ClientFolders([string[]]$roots, [string]$build = '70450', [int]$maxSeconds = 25) {
+# Looks for WoW Forever client folders (a folder with .build.info next to _forever_ (Wow.exe) or _classic_beta_ (WowB.exe)). Returns candidates,
+# the ones that mention the realm's client build first. $roots is a list of folders to search (to depth 3).
+function Find-ClientFolders([string[]]$roots, [string]$build = '', [int]$maxSeconds = 25) {
+    if (-not $build) { $build = [string](Get-RealmBuild $root) }
     $found = New-Object System.Collections.Generic.List[string]
     $clock = [Diagnostics.Stopwatch]::StartNew()   # the search gives up after $maxSeconds; the player can pick the folder by hand
     foreach ($r in $roots) {
@@ -20,7 +22,7 @@ function Find-ClientFolders([string[]]$roots, [string]$build = '70450', [int]$ma
         while ($stack.Count -and $clock.Elapsed.TotalSeconds -lt $maxSeconds) {
             $item = $stack.Pop(); $dir = $item[0]; $depth = $item[1]
             if (Test-Path (Join-Path $dir '.build.info')) {
-                if ((Test-Path (Join-Path $dir '_classic_beta_')) -or @(Get-ChildItem $dir -Filter 'WowB*.exe' -ErrorAction SilentlyContinue).Count) {
+                if ((Test-Path (Join-Path $dir '_forever_')) -or (Test-Path (Join-Path $dir '_classic_beta_')) -or @(Get-ChildItem $dir -Filter 'Wow*.exe' -ErrorAction SilentlyContinue).Count) {
                     if (-not $found.Contains($dir)) { $found.Add($dir) }
                     continue
                 }
@@ -32,7 +34,7 @@ function Find-ClientFolders([string[]]$roots, [string]$build = '70450', [int]$ma
             }
         }
     }
-    $withBuild = @($found | Where-Object { (Get-Content (Join-Path $_ '.build.info') -Raw -ErrorAction SilentlyContinue) -match $build })
+    $withBuild = @($found | Where-Object { $build -and (Get-Content (Join-Path $_ '.build.info') -Raw -ErrorAction SilentlyContinue) -match $build })
     @($withBuild) + @($found | Where-Object { $withBuild -notcontains $_ })
 }
 
@@ -74,9 +76,11 @@ try {
     # data counts as complete ONLY with the marker; a partial run (even with many navmesh tiles) is finished by extract-data.ps1 -Resume
     $dataDone = Test-Path "$root\server\data\.extract-complete"
 
-    Step 2 $total 'Finding your WoW Forever game folder (build 70450)'
+    Step 2 $total "Finding your WoW Forever game folder (build $(Get-RealmBuild $root))"
     $saved = Join-Path $root 'config\client.txt'
     if (-not $Client -and (Test-Path $saved)) { $Client = (Get-Content $saved -TotalCount 1).Trim() }
+    # the launcher saves the game folder (_forever_ / _classic_beta_); the client folder with .build.info is its parent
+    if ($Client -and -not (Test-Path (Join-Path $Client '.build.info')) -and (Test-Path (Join-Path (Split-Path $Client -Parent) '.build.info'))) { $Client = Split-Path $Client -Parent }
     if ($Client -and -not (Test-Path (Join-Path $Client '.build.info'))) { Write-Warning "$Client has no .build.info; looking again."; $Client = $null }
     if (-not $Client -and $Gui) { throw 'No valid game folder was given to the installer.' }
     if (-not $Client) {
@@ -93,6 +97,7 @@ try {
     }
     New-Item -ItemType Directory -Force (Split-Path $saved -Parent) | Out-Null
     Set-Content $saved $Client -Encoding ascii
+    Test-ClientBuild $root
 
     Step 3 $total 'Setting up the database (a few minutes)'
     & "$PSScriptRoot\first-run.ps1"
@@ -145,7 +150,7 @@ Next steps
    your account name plus @local (for example yourname@local) and your password. Realm: Trinity. In game, type /fb for the bots window.
 2. Next time: Start Menu > WoW Forever Bots (or the Desktop shortcut) opens the control panel: 1 Start, 2 Stop, 3 Restart,
    T Restarter mode, A Create account, S Settings, B Backup, U Update.
-Help and news: https://discord.gg/Jk596N3xun
+Help and news: https://discord.gg/QJBM6tR3E4
 "@
     Set-Content (Join-Path $root 'secrets\first-login.txt') $help -Encoding ascii
     if (-not $Gui) { Write-Host "`n$help" -ForegroundColor Green }

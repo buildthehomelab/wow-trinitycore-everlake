@@ -3103,6 +3103,10 @@ void Module::OnDamageTaken(Unit* attacker, Unit* victim, int32 amount, uint32 sp
     tl_damage_spell = 0;
     if (!initialized_) return;
     PveGroupCoordinator::NoteDamageDone(attacker, victim, amount);   // the [raid_dps] per-bot tally
+    // The bot's own hit (not its pet's) for the idle watchdog: "did anything land in the last 4 s".
+    if (attacker && attacker->IsPlayer() && victim && amount > 0 && !victim->IsPlayer())
+        if (BotAI* ai = Services::Registry().ai(attacker->GetGUID().GetCounter()))
+            ai->note_damage_done(GameTime::GetGameTimeMS());
     Diagnostics::Scenario::NoteDamage(attacker, victim, amount);   // a scenario's boss-pull statistics; one atomic load when none runs
     // The core hands this hook spell 0; the spell is the one NoteDamageSpell stashed just before (0 = a melee swing). With 0 every spell and
     // DoT tick was tallied as "white swing" and no per-spell row matched its outcome.
@@ -3134,6 +3138,12 @@ void Module::OnEnergize(Unit* target, uint32 spell_id, int32 gained, uint8 power
 {
     if (!initialized_) return;
     Diagnostics::Parity::NoteEnergize(target, spell_id, gained, power);   // one atomic load when no economy leg measures
+}
+
+void Module::OnHealOutcome(Unit* healer, Unit* target, uint32 spell_id, uint32 raw, uint32 effective)
+{
+    if (!initialized_) return;
+    Diagnostics::Parity::NoteHeal(healer, target, spell_id, raw, effective);   // one atomic load when no support scorecard runs
 }
 
 void Module::OnHealReceived(Unit* /*healer*/, Unit* /*target*/, int32 /*amount*/, uint32 /*spell_id*/)

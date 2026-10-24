@@ -35,6 +35,7 @@
 #include "../Diagnostics/PerfCounters.h"
 #include "../Bot/Gear/BotGearGenerator.h"   // weaponless re-gear hygiene (audit B15)
 #include "../Bot/Gear/OwnedGearPolicy.h"    // companion gear rules
+#include "../Bot/Gear/RaidEnchants.h"       // permanent enchants of a raid-ready bot
 #include "Bot/ResistGear.h"   // SwapResistGear: which slots and maps
 #include "BotItemScorer.h"   // EffectiveItemLevelForLevel — under-gear detection
 #include "Battleground.h"
@@ -65,6 +66,7 @@
 #include "RaceMask.h"
 #include "Random.h"
 #include <algorithm>
+#include <mutex>
 #include <unordered_set>
 #include <tuple>
 #include <array>
@@ -1092,6 +1094,30 @@ void BotPopulationManager::RequestGearRefresh(BotId bot)
         gear_rush_.push_back(bot);
 }
 
+namespace {
+
+// A bot made before the book-rank and class-skill-line passes existed (Shadow Bolt 25307, the rogue poisons, Fire Nova rank 1) never ran them:
+// the free trainer pass runs once per boot for each online bot, and is idempotent. The caller's sweep stops a frame after 6 ms, so a fleet of
+// hundreds spreads over frames on its own. (A time gate on the sweep's own clock let one bot through per sweep: the sweep passes one `now_ms`.)
+void TopUpSpellsOnce(Player* p)
+{
+    static std::mutex lock;
+    static std::unordered_set<uint64> toppedUp;
+    // Only registered bots reach this (the sweep walks the registry). A summoned alt (IsPlayersOwnCharacter) is such a bot too and gets its spells.
+    if (!p->IsInWorld() || !p->IsAlive() || p->GetLevel() < 5)
+        return;
+    {
+        std::lock_guard<std::mutex> guard(lock);
+        if (!toppedUp.insert(p->GetGUID().GetCounter()).second)
+            return;
+    }
+    ::Playerbot::API api(p);
+    uint32 const learned = api.learn_trainer_spells_free();
+    TC_LOG_INFO("playerbot.v2", "[SpellTopUp] {} (class {} level {}): {} spells from the free trainer pass", p->GetName(), uint32(p->GetClass()), uint32(p->GetLevel()), learned);
+}
+
+}
+
 void BotPopulationManager::RunGearBackfill(uint32 now_ms)
 {
     // Owner-requested gear passes (a changed gear mode) go first, ignoring the cadence, the cooldown and the per-sweep cap.
@@ -1140,6 +1166,7 @@ void BotPopulationManager::RunGearBackfill(uint32 now_ms)
         BotId const id = gear_scan_[gear_scan_pos_++];
         Player* p = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(id));
         if (!p || !p->IsInWorld()) continue;
+        TopUpSpellsOnce(p);
         // Before the re-gear cap and gate: a well-geared companion still needs its new spells.
         CompanionUpkeep(id, p);
         if (gear_regear_count_ >= 25) continue;     // bound per sweep
@@ -1191,6 +1218,45 @@ void BotPopulationManager::GrantCompanionStarterPet(BotId id, Player* p)
     // tameable beast in this data) is not retried every pass either. NotNow (mounted, in combat...) waits for the next.
     if (r != PetResult::NotNow)
         Services::Owners().MarkStarterPetGranted(id);
+}
+
+void BotPopulationManager::EnsureBotHunterPet(Player* p)
+{
+    if (!p || p->GetClass() != CLASS_HUNTER || p->GetLevel() < 10 || !p->IsInWorld())
+        return;
+    WorldSession const* session = p->GetSession();
+    if (!session || !session->IsBot())
+        return;
+    if (Services::Owners().GetOwner(p->GetGUID().GetCounter()).account_id != 0)
+        return;
+    // One try per bot while the answer is "not now" (mounted, in combat, on a transport); anything else is settled.
+    static std::mutex s_mutex;
+    static std::unordered_set<uint64> s_settled;
+    uint64 const guid = p->GetGUID().GetCounter();
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (s_settled.contains(guid))
+            return;
+    }
+    using PetResult = ::Playerbot::API::StarterPetResult;
+    uint32 const race_entry = World::StarterHunterPetEntry(p->GetRace(), p->GetTeam() == ALLIANCE);
+    uint32 entry = World::VariedHunterPetEntry(p->GetTeam() == ALLIANCE, guid, race_entry);
+    PetResult r = ::Playerbot::API(p).grant_starter_hunter_pet(entry);
+    if (r == PetResult::Unavailable && entry != race_entry)   // the varied beast is not tameable in this data: the race's own
+    {
+        entry = race_entry;
+        r = ::Playerbot::API(p).grant_starter_hunter_pet(entry);
+    }
+    if (r == PetResult::NotNow)
+        return;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_settled.insert(guid);
+    }
+    if (r == PetResult::Tamed)
+        TC_LOG_INFO("playerbot.v2", "[hunter_pet] {} L{} had no pet: tamed entry {}", p->GetName(), uint32(p->GetLevel()), entry);
+    else if (r == PetResult::Unavailable)
+        TC_LOG_WARN("playerbot.v2", "[hunter_pet] {} L{} has no pet and entry {} is not a tameable beast in this data", p->GetName(), uint32(p->GetLevel()), entry);
 }
 
 void BotPopulationManager::QueueCompanionSetup(BotId bot, uint64 owner_guid_low, uint8 role)
@@ -1374,10 +1440,8 @@ Role BotPopulationManager::ApplyCompanionRole(Player* bot, Role requested, char 
         }
         if (role == Role::Dps)
         {
-            // A DPS spec it already has (Elemental, Fury) is kept; a tank or healer one gives way to the class default.
-            uint32 const current = ::Playerbot::Classic::EffectiveSpecId(bot);
-            spec = (current && !IsTankSpec(cls, uint16(current)) && !IsHealerSpec(cls, uint16(current)))
-                ? current : DpsSpecForClass(cls);
+            // A companion DPS plays its class's highest-damage spec; a spec the owner saved is applied below.
+            spec = DpsSpecForClass(cls);
         }
     }
 
@@ -2065,7 +2129,7 @@ static uint32 RaidRegearPass(Player* p, bool& refused_any, bool only_over_cap = 
                     continue;
                 // A world bot's one-time re-roll: whatever it wears that differs from its own per-slot pick goes.
                 // A piece of the tier set the owner asked for goes on over whatever is worn, even a better scoring piece.
-                bool const tier_pick = Gear::IsTierSetPick(cls, ctx.gear_mode, g.item_entry);
+                bool const tier_pick = Gear::IsTierSetPick(cls, ctx.gear_mode, g.item_entry, ctx.spec);
                 // A resistance piece the generator chose for the fight the bot gears for (GearGenerationContext::resist_school) goes on the
                 // same way: by the role's stats it scores below the tier piece it replaces.
                 bool const resist_pick = ctx.resist_school && !ctx.world_bot() && ::Playerbot::Gear::ResistPoints(gtpl, ctx.resist_school, lvl) > 0;
@@ -2091,8 +2155,39 @@ static uint32 RaidRegearPass(Player* p, bool& refused_any, bool only_over_cap = 
             if (off_for_2h && (p->CanUseItem(gtpl) != EQUIP_ERR_OK || !stow(EQUIPMENT_SLOT_OFFHAND)))
                 continue;
             uint16 eq_dest = 0;
-            if (p->CanEquipNewItem(g.slot, eq_dest, g.item_entry, /*swap*/ cur != nullptr) != EQUIP_ERR_OK)
+            InventoryResult eq_result = p->CanEquipNewItem(g.slot, eq_dest, g.item_entry, /*swap*/ cur != nullptr);
+            // A player cannot change gear while a cast or channel runs (Player::CanEquipItem returns CLIENT_LOCKED_OUT, error 40). A caster that
+            // re-cast between the leg's CombatStop and this regear refused every pick (damage_parity 175 warlock: T3 leg with 0 tier pieces, 282 dps
+            // against 498 with them): a player stops the cast to dress, so does the bot.
+            if (eq_result == EQUIP_ERR_CLIENT_LOCKED_OUT && (p->GetCurrentSpell(CURRENT_GENERIC_SPELL) || p->GetCurrentSpell(CURRENT_CHANNELED_SPELL)))
             {
+                p->InterruptNonMeleeSpells(false);
+                eq_result = p->CanEquipNewItem(g.slot, eq_dest, g.item_entry, /*swap*/ cur != nullptr);
+            }
+            if (eq_result != EQUIP_ERR_OK)
+            {
+                // damage_parity 147: the shaman's t1 leg picked 16 pieces, wore 13, and fought without a main hand.
+                TC_LOG_INFO("playerbot.v2", "[gear] {} pick {} for slot {} refused by CanEquipNewItem: error {}", p->GetName(), g.item_entry, uint32(g.slot), uint32(eq_result));
+                // ITEM_MAX_COUNT: a unique pick the bot already owns (damage_parity 150 shaman, error 17 on the main hand every regear: the copy sat in
+                // the bags from an earlier leg, so a new one is refused for ever). Wear the copy it owns.
+                if (eq_result == EQUIP_ERR_ITEM_MAX_COUNT)
+                {
+                    Item* owned = p->GetItemByEntry(g.item_entry);
+                    if (owned && !owned->IsEquipped())
+                    {
+                        uint16 const src = (uint16(owned->GetBagSlot()) << 8) | owned->GetSlot();
+                        uint16 const dst = (uint16(INVENTORY_SLOT_BAG_0) << 8) | g.slot;
+                        p->SwapItem(src, dst);
+                        if (p->GetItemByPos(INVENTORY_SLOT_BAG_0, g.slot) == owned)
+                        {
+                            ++changed;
+                            TC_LOG_INFO("playerbot.v2", "[gear] {} wears the pick {} it already owned in slot {}", p->GetName(), g.item_entry, uint32(g.slot));
+                            continue;
+                        }
+                        TC_LOG_INFO("playerbot.v2", "[gear] {} owns the pick {} but the swap into slot {} was refused (can equip: {})", p->GetName(), g.item_entry, uint32(g.slot),
+                                    uint32(p->CanEquipItem(g.slot, eq_dest, owned, true)));
+                    }
+                }
                 refused_any = true;
                 continue;
             }
@@ -2127,6 +2222,11 @@ static uint32 RaidRegearPass(Player* p, bool& refused_any, bool only_over_cap = 
     }
     if (changed)
         p->AutoUnequipOffhandIfNeed();
+
+    // The role's permanent enchants on whatever is worn without one (a piece that just went on, or one the bot never had enchanted).
+    // World bots too: a bot has no enchanter to find (Playerbot.Gear.RaidEnchants).
+    if (Services::Config().gear_raid_enchants())
+        ::Playerbot::Gear::ApplyRaidEnchants(p, ctx.spec);
 
     uint32 sum = 0, cnt = 0;
     for (uint8 s = EQUIPMENT_SLOT_START; s < EQUIPMENT_SLOT_END; ++s)
@@ -4384,6 +4484,17 @@ void BotPopulationManager::DriveSetupPipelines()
                             p->ActivateTalentGroup(spec_entry);
                     }
                 }
+                else if (p->GetClass() == CLASS_SHAMAN && ::Playerbot::Classic::IsSingleSpecClass(CLASS_SHAMAN))
+                {
+                    // A shaman taken for a damage place (a raid's totem shaman, BotQueueFiller) plays Enhancement, not the
+                    // Restoration its role roll may have given it.
+                    uint32 const dps_spec = DpsSpecForClass(CLASS_SHAMAN);
+                    if (dps_spec && uint32(::Playerbot::Classic::EffectiveSpecId(p)) != dps_spec)
+                    {
+                        ::Playerbot::Classic::SetSpecOverride(p, dps_spec);
+                        ::Playerbot::API(p).apply_classic_talents();
+                    }
+                }
 
                 // A reused JIT character logs in where it was last saved: dead (ghost), mid-fight in a hostile zone, hurt. WSG test
                 // 2026-10-08: such bots carried on with world life and were only invited ~80 s later, once alive and idle. A bot taken
@@ -5165,7 +5276,7 @@ void BotPopulationManager::TopUpActiveBGs(uint32 now_ms)
                 req.instance_id = uint32(bg->GetTypeID());
                 req.requesting_player = nullptr;
                 req.online_only = !allow_jit;
-                req.max_total_bots = uint8(Battleground::TopUpRequest(alli, max_per_team));
+                req.max_total_bots = uint8(Battleground::TopUpAfterInFlight(alli, max_per_team, BotQueueFiller::JitInFlight(uint32(bg->GetTypeID()), true, now_ms)));
                 req.single_faction = true;
                 if (target_level_for_bracket > 0)
                     req.target_level_override = target_level_for_bracket;
@@ -5174,7 +5285,8 @@ void BotPopulationManager::TopUpActiveBGs(uint32 now_ms)
                     req.bracket_min_level = bracket_min;
                     req.bracket_max_level = bracket_max;
                 }
-                filler.Fill(req);
+                if (req.max_total_bots)
+                    filler.Fill(req);
             }
             if (horde < max_per_team && (horde_free_tc > 0 || alli < max_per_team))
             {
@@ -5185,7 +5297,7 @@ void BotPopulationManager::TopUpActiveBGs(uint32 now_ms)
                 req.instance_id = uint32(bg->GetTypeID());
                 req.requesting_player = nullptr;
                 req.online_only = !allow_jit;
-                req.max_total_bots = uint8(Battleground::TopUpRequest(horde, max_per_team));
+                req.max_total_bots = uint8(Battleground::TopUpAfterInFlight(horde, max_per_team, BotQueueFiller::JitInFlight(uint32(bg->GetTypeID()), false, now_ms)));
                 req.single_faction = true;
                 if (target_level_for_bracket > 0)
                     req.target_level_override = target_level_for_bracket;
@@ -5194,7 +5306,8 @@ void BotPopulationManager::TopUpActiveBGs(uint32 now_ms)
                     req.bracket_min_level = bracket_min;
                     req.bracket_max_level = bracket_max;
                 }
-                filler.Fill(req);
+                if (req.max_total_bots)
+                    filler.Fill(req);
             }
             // Diagnostic: surface the team-balance state alongside the
             // top-up activity so an imbalanced BG is visible in the log.

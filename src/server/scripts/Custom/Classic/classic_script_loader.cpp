@@ -201,6 +201,7 @@ void AddSC_classic_spell_scripts();
 void AddSC_classic_dbscript_spells();
 void AddSC_classic_talents_mage_shaman();
 void AddSC_classic_talents_warrior_rogue_hunter();
+void AddSC_classic_rogue_abilities();
 void AddSC_classic_talents_priest_paladin();
 void AddSC_classic_talents_warlock_druid();
 void AddSC_classic_armory_commands();
@@ -404,6 +405,7 @@ void AddClassicScripts()
     AddSC_classic_dbscript_spells();
     AddSC_classic_talents_mage_shaman();
     AddSC_classic_talents_warrior_rogue_hunter();
+    AddSC_classic_rogue_abilities();
     AddSC_classic_talents_priest_paladin();
     AddSC_classic_talents_warlock_druid();
     AddSC_classic_armory_commands();

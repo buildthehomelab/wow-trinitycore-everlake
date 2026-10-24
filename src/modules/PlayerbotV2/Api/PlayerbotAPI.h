@@ -330,6 +330,9 @@ public:
     // when the server let it in nowhere. A dead bot is refused (Locked): the
     // ghost path is ghost_enter_area_trigger.
     Result enter_area_trigger(uint32 area_trigger_id);
+    // always_buffs: Playerbot.AlwaysBuffs. mask = kAlwaysMask* kinds on where the bot stands: add the aura rows of the BuffSet `set` (Bot/AlwaysBuffs.h) of an on kind the bot lacks, direct, no cast, and take off the rows of an off kind;
+    // mask 0 takes every always-on aura off. Logs [always_buff] for what it changes.
+    Result always_buffs(uint8 set, uint8 mask);
     // spirit_resurrect: spirit-healer instant rez. Mirrors
     // WorldSession::SendSpiritResurrect: ResurrectPlayer(0.5f, applySickness=true)
     // + DurabilityLossAll(0.25f) + SpawnCorpseBones, then teleport to the

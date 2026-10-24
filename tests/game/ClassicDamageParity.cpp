@@ -20,6 +20,8 @@
 #include "../../src/modules/PlayerbotV2/Diagnostics/DamageParityMath.h"
 #include "../../src/modules/PlayerbotV2/Diagnostics/ScenarioDefs.h"
 
+#include <cctype>
+#include <iterator>
 #include <set>
 #include <string>
 
@@ -173,6 +175,12 @@ TEST_CASE("the reference ranges: a class inside its range passes, outside is bel
     // A class with two damage specs takes the widest range of the two.
     CHECK(DpsVerdict(11, 3, true, 790.0, &text) == RangeVerdict::In);
     CHECK(text == "450-800");
+    // Frost and arcane mages have their own range; fire (and an unknown spec) keeps the mage one.
+    CHECK(DpsVerdict(8, 3, true, 564.0, &text, 64) == RangeVerdict::In);
+    CHECK(text == "520-710");
+    CHECK(DpsVerdict(8, 3, true, 634.0, &text, 62) == RangeVerdict::In);
+    CHECK(DpsVerdict(8, 3, true, 564.0, &text, 63) == RangeVerdict::Below);
+    CHECK(text == "700-950");
     // No gear, no reference.
     CHECK(DpsVerdict(9, 0, true, 100.0) == RangeVerdict::NoReference);
     // Every class the scenarios cover but the healers has a range (priest: shadow).
@@ -207,16 +215,31 @@ TEST_CASE("a spell line carries the counts a reader greps for", "[DamageParity]"
 TEST_CASE("the parity scenarios are in the catalogue under unique names and stay out of a plain runall", "[DamageParity]")
 {
     std::set<std::string> names;
-    int damage = 0, finisher = 0, audit = 0, economy = 0, incoming = 0, trap = 0;
+    int damage = 0, finisher = 0, audit = 0, economy = 0, incoming = 0, trap = 0, threat = 0, scorecard = 0, support = 0;
     for (ScenarioDef const& d : ScenarioCatalogue())
     {
         if (!d.parity)
             continue;
         CHECK(names.insert(d.name).second);
         CHECK(d.goal == ScenarioGoalKind::Parity);
-        CHECK(d.squad.size() == 1);
         CHECK(d.level == 60);
         CHECK(d.full_clear);   // `runall` without a filter skips full clears
+        if (d.parity == 8)
+        {
+            CHECK(d.name == "dps_scorecard_raid");
+            CHECK(d.squad.size() == std::size(kScorecardRaid));
+            ++scorecard;
+            continue;
+        }
+        if (d.parity == 9)
+        {
+            CHECK(std::string(d.name).rfind("support_scorecard_", 0) == 0);
+            CHECK(d.squad.size() == 1 + std::size(kSupportRaid));   // the tank, then five healers and four dps
+            CHECK(d.squad[0].role == ScenarioRoleKind::Tank);
+            ++support;
+            continue;
+        }
+        CHECK(d.squad.size() == 1);
         std::string const n = d.name;
         if (d.parity == 1) { ++damage; CHECK(n.rfind("damage_parity_", 0) == 0); }
         if (d.parity == 2) { ++finisher; CHECK(n.rfind("finisher_sweep_", 0) == 0); }
@@ -224,16 +247,68 @@ TEST_CASE("the parity scenarios are in the catalogue under unique names and stay
         if (d.parity == 4) { ++economy; CHECK(n.rfind("economy_audit_", 0) == 0); }
         if (d.parity == 5) { ++incoming; CHECK(n.rfind("incoming_damage_", 0) == 0); }
         if (d.parity == 6) { ++trap; CHECK(n == "trap_audit_hunter"); CHECK(d.squad[0].cls == ScnClass::Hunter); }
+        if (d.parity == 7) { ++threat; CHECK(n.rfind("threat_audit_", 0) == 0); }
     }
     CHECK(economy == 6);    // priest, paladin, shaman, druid, mage, warlock
     CHECK(incoming == 2);   // warrior, paladin
     CHECK(trap == 1);       // hunter
-    CHECK(damage == 9);
+    CHECK(threat == 4);     // rogue, priest, hunter, druid
+    CHECK(damage == 18);    // nine classes plus the spec variants: warrior Fury and Protection, mage Fire and Arcane, warlock x3, druid cat, shaman Elemental
+    CHECK(scorecard == 1);
+    CHECK(support == int(std::size(kSupportTanks)));   // warrior, paladin, druid
     CHECK(finisher == 3);   // rogue, druid, warrior
     CHECK(audit == 9);
     CHECK(FindScenario("damage_parity_warlock") != nullptr);
     CHECK(FindScenario("finisher_sweep_rogue") != nullptr);
     CHECK(FindScenario("finisher_sweep_mage") == nullptr);
+    REQUIRE(FindScenario("damage_parity_warrior_fury") != nullptr);
+    CHECK(FindScenario("damage_parity_warrior_fury")->parity_spec == 72);
+    REQUIRE(FindScenario("damage_parity_warrior_prot") != nullptr);
+    CHECK(FindScenario("damage_parity_warrior_prot")->parity_spec == 73);
+    CHECK(FindScenario("damage_parity_warrior")->parity_spec == 0);
+    REQUIRE(FindScenario("damage_parity_mage_fire") != nullptr);
+    CHECK(FindScenario("damage_parity_mage_fire")->parity_spec == 63);
+    REQUIRE(FindScenario("damage_parity_mage_arcane") != nullptr);
+    CHECK(FindScenario("damage_parity_mage_arcane")->parity_spec == 62);
+    REQUIRE(FindScenario("damage_parity_warlock_affliction") != nullptr);
+    CHECK(FindScenario("damage_parity_warlock_affliction")->parity_spec == 265);
+    REQUIRE(FindScenario("damage_parity_warlock_demonology") != nullptr);
+    CHECK(FindScenario("damage_parity_warlock_demonology")->parity_spec == 266);
+    REQUIRE(FindScenario("damage_parity_warlock_destruction") != nullptr);
+    CHECK(FindScenario("damage_parity_warlock_destruction")->parity_spec == 267);
+    REQUIRE(FindScenario("damage_parity_shaman_elemental") != nullptr);
+    CHECK(FindScenario("damage_parity_shaman_elemental")->parity_spec == 262);
+    CHECK(FindScenario("damage_parity_shaman")->parity_spec == 263);
+    CHECK(FindScenario("damage_parity_paladin")->parity_spec == 70);
+    CHECK(FindScenario("damage_parity_rogue")->parity_spec == 260);
+    CHECK(FindScenario("damage_parity_priest")->parity_spec == 258);
+    CHECK(FindScenario("damage_parity_druid")->parity_spec == 102);
+    CHECK(FindScenario("damage_parity_hunter")->parity_spec == 254);
+}
+
+TEST_CASE("the dps scorecard raid fields a tank, three healers and one bot per dps spec under unique names", "[DamageParity]")
+{
+    ScenarioDef const* d = FindScenario("dps_scorecard_raid");
+    REQUIRE(d != nullptr);
+    CHECK(d->parity == 8);
+    CHECK(d->squad.size() == 23);
+    std::set<std::string> names;
+    std::set<std::pair<std::uint8_t, std::uint32_t>> specs;
+    int tanks = 0, healers = 0, dps = 0;
+    for (ScenarioMember const& m : d->squad)
+    {
+        CHECK(names.insert(m.name).second);
+        CHECK(m.spec != 0);
+        CHECK(specs.insert({ m.cls, m.spec }).second);
+        for (char c : m.name)
+            CHECK(std::isalpha(static_cast<unsigned char>(c)));
+        if (m.role == ScenarioRoleKind::Tank) ++tanks;
+        else if (m.role == ScenarioRoleKind::Healer) ++healers;
+        else ++dps;
+    }
+    CHECK(tanks == 1);
+    CHECK(healers == 3);
+    CHECK(dps == 19);
 }
 
 TEST_CASE("the summary table row and header line up", "[DamageParity]")

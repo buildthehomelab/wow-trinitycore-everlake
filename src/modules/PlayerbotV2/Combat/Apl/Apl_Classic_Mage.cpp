@@ -92,11 +92,21 @@ uint32 IceBlockSpell(ApPredicateContext const&)
     return ICE_BLOCK;
 }
 
+// A Fire mage: the specialization says so (62 Arcane and 64 Frost never are). Knowing Pyroblast or Combustion alone cannot decide it: the 166 Arcane
+// mage held them and ran the fire rules, 111 Scorch casts in a leg and no Frostbolt. With no specialization set the spells decide.
+bool FireBuild(ApPredicateContext const& ctx)
+{
+    uint32 const spec = ctx.bot.spec();
+    if (spec == 63) return true;
+    if (spec == 62 || spec == 64) return false;
+    return ctx.bot.knows_spell(PYROBLAST) || ctx.bot.knows_spell(COMBUSTION);
+}
+
 // Fire talents -> Fireball; else Frostbolt; Fireball before Frostbolt is
 // trained; Arcane Missiles only if nothing else is known.
 uint32 NukeSpell(ApPredicateContext const& ctx)
 {
-    bool const fire_build = ctx.bot.knows_spell(PYROBLAST) || ctx.bot.knows_spell(COMBUSTION);
+    bool const fire_build = FireBuild(ctx);
     if (fire_build && ctx.bot.knows_spell(FIREBALL)) return FIREBALL;
     if (ctx.bot.knows_spell(FROSTBOLT))              return FROSTBOLT;
     if (ctx.bot.knows_spell(FIREBALL))               return FIREBALL;
@@ -242,7 +252,7 @@ bool ShouldFireBlast(ApPredicateContext const& ctx)
 {
     // Instant but on the global cooldown and mana-hungry: worth it while moving (a hard cast cannot run) or as a filler for a fire
     // build with mana to spare; a frost / arcane mage standing still casts its main spell instead.
-    bool const fire_build = ctx.bot.knows_spell(PYROBLAST) || ctx.bot.knows_spell(COMBUSTION);
+    bool const fire_build = FireBuild(ctx);
     return HasLiveTarget(ctx) && ManaPct(ctx) >= 25 && (ctx.bot.is_moving() || (fire_build && ManaPct(ctx) >= 50))
         && (Ready(ctx, FIRE_BLAST) && ctx.bot.victim_in_spell_range(FIRE_BLAST));
 }
@@ -276,7 +286,7 @@ SchoolHint::SchoolChoice const kSchoolChoices[] = {
 // shared, so the mage only casts it when no mage has them at 5 with time left.
 bool ShouldScorch(ApPredicateContext const& ctx)
 {
-    if (!(ctx.bot.knows_spell(PYROBLAST) || ctx.bot.knows_spell(COMBUSTION)) || !Classic::BossFight(ctx.bot))
+    if (!FireBuild(ctx) || !Classic::BossFight(ctx.bot))
         return false;
     if (!NukeUsable(ctx, SCORCH)) return false;
     AuraEntry const* fv = ctx.bot.find_aura_any_caster(FIRE_VULNERABILITY, ctx.bot.victim());

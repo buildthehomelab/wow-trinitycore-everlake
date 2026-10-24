@@ -1,4 +1,4 @@
-# Copies the ForeverBots addon into the client's AddOns folder and leaves it enabled. Required: the client (70450) has no
+# Copies the ForeverBots addon into the client's AddOns folder and leaves it enabled. Required: the client (70532) has no
 # working native /w, so whispering a bot (/w, /whisper, /t, /tell, /cw) only works through this addon.
 #   .\install-addon.ps1 -Client "C:\WoW Forever Client"
 param([string]$Client)
@@ -11,11 +11,11 @@ if (-not $Client) { throw 'Usage: install-addon.ps1 -Client "<your WoW folder>"'
 $src = Join-Path $root 'addons\ForeverBots'
 if (-not (Test-Path $src)) { throw "addon not found at $src" }
 $dest = $null
-foreach ($sub in '_classic_beta_\Interface\AddOns', '_classic_\Interface\AddOns', 'Interface\AddOns') {
+foreach ($sub in '_forever_\Interface\AddOns', '_classic_beta_\Interface\AddOns', '_classic_\Interface\AddOns', 'Interface\AddOns') {
     $p = Join-Path $Client $sub
     if (Test-Path (Split-Path $p -Parent)) { $dest = $p; break }
 }
-if (-not $dest) { $dest = Join-Path $Client '_classic_beta_\Interface\AddOns' }   # verify folder name against a real client
+if (-not $dest) { $dest = Join-Path $Client '_forever_\Interface\AddOns' }   # verify folder name against a real client
 New-Item -ItemType Directory -Force $dest | Out-Null
 robocopy $src (Join-Path $dest 'ForeverBots') /E /NFL /NDL /NJH /NJS | Out-Null
 # The Classic Forever dungeon-bot add-on (another server's) sends ".dungeonbots ..." chat commands at login, which this server does

@@ -2400,9 +2400,19 @@ void ScriptMgr::OnHeal(Unit* healer, Unit* reciever, uint32& gain)
     FOREACH_SCRIPT(UnitScript)->OnHeal(healer, reciever, gain);
 }
 
+void ScriptMgr::OnHealOutcome(Unit* healer, Unit* target, uint32 spellId, uint32 raw, uint32 effective)
+{
+    FOREACH_SCRIPT(UnitScript)->OnHealOutcome(healer, target, spellId, raw, effective);
+}
+
 void ScriptMgr::OnDamageSpell(Unit* attacker, Unit* victim, uint32 damage, SpellInfo const* spellInfo)
 {
     FOREACH_SCRIPT(UnitScript)->OnDamageSpell(attacker, victim, damage, spellInfo);
+}
+
+void ScriptMgr::OnHitOutcome(Unit* attacker, Unit* victim, uint32 spellId, uint8 outcome, uint32 damage)
+{
+    FOREACH_SCRIPT(UnitScript)->OnHitOutcome(attacker, victim, spellId, outcome, damage);
 }
 
 void ScriptMgr::OnDamage(Unit* attacker, Unit* victim, uint32& damage)
@@ -2787,7 +2797,15 @@ void UnitScript::OnHeal(Unit* /*healer*/, Unit* /*reciever*/, uint32& /*gain*/)
 {
 }
 
+void UnitScript::OnHealOutcome(Unit* /*healer*/, Unit* /*target*/, uint32 /*spellId*/, uint32 /*raw*/, uint32 /*effective*/)
+{
+}
+
 void UnitScript::OnDamageSpell(Unit* /*attacker*/, Unit* /*victim*/, uint32 /*damage*/, SpellInfo const* /*spellInfo*/)
+{
+}
+
+void UnitScript::OnHitOutcome(Unit* /*attacker*/, Unit* /*victim*/, uint32 /*spellId*/, uint8 /*outcome*/, uint32 /*damage*/)
 {
 }
 

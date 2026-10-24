@@ -1672,7 +1672,7 @@ int main(int argc, char * arg[])
     if (firstInstalledLocale < 0)
     {
         printf("No locales detected\n");
-        return 0;
+        return 1;   // nothing could be read (wrong -p product, wrong path): a failure, not an empty success
     }
 
     if (CONF_extract & EXTRACT_CAMERA)

@@ -1182,12 +1182,28 @@ bool PullBackTick(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
                         }
                     }
                 }
+                // Neither the spot nor the whole line is pathable (MC lava, 2026-10-22: the tank ran out and back without a shot):
+                // try shorter steps along the line toward the target, each its own path, before giving the approach up.
+                if (!queued && d > want + 1.0f)
+                    for (float frac : { 0.75f, 0.5f, 0.25f })
+                    {
+                        const float k = frac * (d - want) / d;
+                        const float ax = bx + (tx - bx) * k, ay = by + (ty - by) * k, az = bz + (tz - bz) * k;
+                        if (in_circle(ax, ay)) continue;
+                        if (head_to(ax, ay, az, true))
+                        {
+                            queued = true;
+                            TC_LOG_INFO("playerbot.v2", "[pull_back] {} short step {:.0f}% toward the target ({:.1f},{:.1f},{:.1f}) queued",
+                                s.name(), frac * 100.0f, ax, ay, az);
+                            break;
+                        }
+                    }
             }
             std::string why;
             if (hopeless(std::sqrt(d2xy(bx, by, sx, sy)), !queued, why))
             {
                 // Pull from where we stand if anything reaches from here; else abort.
-                bool const can_range = pick && d >= pick->min_d && d <= pick->max_d;
+                bool const can_range = pick && d >= pick->min_d && d <= pick->max_d && (!tu || tu->in_los);
                 bool const can_melee = d <= 6.0f;
                 if (!can_range && !can_melee)
                     return go_home_and_finish(why.c_str());
@@ -1200,7 +1216,7 @@ bool PullBackTick(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
         }
         if (p.stand_pull)
         {
-            bool const can_range = pick && d >= pick->min_d && d <= pick->max_d;
+            bool const can_range = pick && d >= pick->min_d && d <= pick->max_d && (!tu || tu->in_los);
             if (!can_range && d > 6.0f)
                 return go_home_and_finish("nothing reaches the target from here");
             pick = can_range ? pick : nullptr;

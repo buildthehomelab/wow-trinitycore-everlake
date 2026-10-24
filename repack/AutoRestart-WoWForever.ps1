@@ -7,6 +7,7 @@ $flag = Join-Path $PSScriptRoot 'stop.flag'
 $log = Join-Path $PSScriptRoot 'autorestart.log'
 $server = Join-Path $root 'server'
 . "$PSScriptRoot\mysql-helpers.ps1"
+. "$PSScriptRoot\WorldUp.ps1"
 function Log($m) { $l = "$(Get-Date -Format 's')  $m"; Write-Host $l; Add-Content $log $l }
 Remove-Item $flag -ErrorAction SilentlyContinue
 $crashes = New-Object System.Collections.Generic.List[datetime]
@@ -21,12 +22,15 @@ while (-not (Test-Path $flag)) {
         Log 'Starting worldserver...'
         $w = Start-Process (Join-Path $server 'worldserver.exe') -WorkingDirectory $server -WindowStyle Minimized -PassThru
         $null = $w.Handle   # Windows PowerShell 5.1 leaves ExitCode empty unless the process handle is read right after the start
-        $serverLog = Join-Path $server 'logs\Server.log'
+        $logDir = Join-Path $server 'logs'
+        $since = (Get-Date).AddMinutes(-1)
         $deadline = (Get-Date).AddMinutes(30)
-        do { Start-Sleep 5 } until (((Test-Path $serverLog) -and (Select-String -Path $serverLog -Pattern 'World initialized' -Quiet)) -or $w.HasExited -or (Get-Date) -gt $deadline -or (Test-Path $flag))
+        Log 'The worldserver window stays quiet while it loads; progress is in server\logs\Server.log. The first start can take several minutes.'
+        do { Start-Sleep 5 } until ((Test-WorldInitialized $logDir $since) -or $w.HasExited -or (Get-Date) -gt $deadline -or (Test-Path $flag))
+        if (-not $w.HasExited -and -not (Test-Path $flag) -and -not (Test-WorldInitialized $logDir $since)) { Log 'WARNING: no "World initialized" line after 30 minutes. Starting bnetserver anyway; check server\logs\Server.log.' }
     }
     if (-not $w.HasExited -and -not (Get-Process bnetserver -ErrorAction SilentlyContinue) -and -not (Test-Path $flag)) {
-        Log 'Starting bnetserver...'
+        Log 'World is up (or the wait timed out). Starting bnetserver (the login server)...'
         Start-Process (Join-Path $server 'bnetserver.exe') -WorkingDirectory $server -WindowStyle Minimized
     }
     while (-not $w.HasExited -and -not (Test-Path $flag)) { Start-Sleep 5 }

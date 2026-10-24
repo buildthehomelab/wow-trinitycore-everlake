@@ -71,7 +71,10 @@ bool UpkeepWindow(BotSnapshotView const& s, GroupSnapshotView const& g)
 // InitFood / InitPotions), so a companion never runs dry.
 bool SuppliesGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, uint32 now_ms)
 {
-    if (!(Services::Config().classic_class_supplies() || Services::Config().behavior_ammo_supply()) || !UpkeepWindow(s, g))
+    if (!(Services::Config().classic_class_supplies() || Services::Config().behavior_ammo_supply()))
+        return false;
+    // Playerbot.AlwaysBuffs: adding items takes no time, so a living bot is restocked in a fight as well; otherwise between fights only.
+    if (Classic::AlwaysOn(s, AlwaysSwitch::Supplies, &g) ? !s.is_alive() : !UpkeepWindow(s, g))
         return false;
     thread_local std::vector<uint32> shortItems;
     Classic::ShortClassSupplies(s, shortItems);

@@ -140,6 +140,26 @@ function Test-Done($name) { $Resume -and (Test-Path (Join-Path $OutputPath ".ext
 function Set-Done($name) { if ($Resume) { Set-Content (Join-Path $OutputPath ".extract-$name.done") (Get-Date -Format s) } }
 $clock = [Diagnostics.Stopwatch]::StartNew()
 
+# The CASC product the extractors open. The tools default to wow_classic_beta (the beta, _classic_beta_\WowB.exe); the downloadable
+# WoW Forever client 70532 (_forever_\Wow.exe) is product wowf, and vmap4extractor opened with the wrong product failed at once on a fresh
+# install of kit 0.1.15. .build.info lists one row per installed product; take the one whose game folder is there.
+$Product = $null
+try {
+    $biLines = @(Get-Content (Join-Path $ClientPath '.build.info') -ErrorAction Stop)
+    $biCols = @($biLines[0] -split '\|') | ForEach-Object { ($_ -split '!')[0] }
+    $prodCol = [array]::IndexOf($biCols, 'Product')
+    if ($prodCol -ge 0) {
+        $installed = @($biLines | Select-Object -Skip 1 | Where-Object { $_.Trim() } | ForEach-Object { (($_ -split '\|')[$prodCol]).Trim() } | Where-Object { $_ })
+        foreach ($cand in @(@('wowf', '_forever_'), @('wow_classic_beta', '_classic_beta_'))) {
+            if ($installed -contains $cand[0] -and (Test-Path (Join-Path $ClientPath $cand[1]))) { $Product = $cand[0]; break }
+        }
+        if (-not $Product -and $installed.Count -eq 1) { $Product = $installed[0] }
+    }
+} catch { }
+if (-not $Product) { $Product = 'wowf' }   # the downloadable client this repack supports
+$productArgs = @('-p', $Product)
+Write-Host "Product: $Product"
+
 Push-Location $OutputPath
 try {
     # --- Step 1: mapextractor ----------------------------------------------
@@ -147,10 +167,14 @@ try {
     if (Test-Done 'maps') { Write-Host "Already done (resuming)." }
     else {
         $eFlag = if ($MapsOnly) { "3" } else { "15" }
-        & ".\mapextractor.exe" -i "$ClientPath" -o "$OutputPath" -e $eFlag -f 1 -l $Locale
+        & ".\mapextractor.exe" -i "$ClientPath" -o "$OutputPath" -e $eFlag -f 1 -l $Locale @productArgs
         if ($LASTEXITCODE -ne 0) {
             Fail "mapextractor failed with exit code $LASTEXITCODE.
 Check stdout above; usual culprits: CASC init failure, wrong client path, antivirus."
+        }
+        # mapextractor ends with exit code 0 when it could open no locale of the client ("No locales detected"): check what it wrote
+        if (-not (Test-Path (Join-Path $OutputPath 'dbc')) -or -not (Get-ChildItem (Join-Path $OutputPath 'maps') -Filter '*.map' -File -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+            Fail "mapextractor could not read the game client in $ClientPath as product '$Product' (no dbc or maps were written). Check stdout above."
         }
         Set-Done 'maps'
     }
@@ -168,12 +192,12 @@ Check stdout above; usual culprits: CASC init failure, wrong client path, antivi
     if (Test-Done 'vmaps') { Write-Host "Already done (resuming)." }
     else {
     if ($Resume) { foreach ($junk in 'Buildings', 'dir_bin') { Remove-Item (Join-Path $OutputPath $junk) -Recurse -Force -ErrorAction SilentlyContinue } }   # a half-finished earlier run
-    $vmapArgs = @("-d", "$ClientPath")
+    $vmapArgs = @("-d", "$ClientPath") + $productArgs
     if ($Threads -gt 0) { $vmapArgs += @("--threads", "$Threads") }
     & ".\vmap4extractor.exe" @vmapArgs
     if ($LASTEXITCODE -ne 0) {
         Fail "vmap4extractor failed with exit code $LASTEXITCODE.
-Common cause: leftover Buildings/dir_bin/ from a previous run. Delete it and retry."
+Its output above says why (the client could not be opened as product '$Product', or a leftover Buildings/dir_bin/ in $OutputPath)."
     }
 
     # --- Step 3: vmap4assembler --------------------------------------------

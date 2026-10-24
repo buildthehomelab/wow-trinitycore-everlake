@@ -4,6 +4,8 @@
 // Backed by TrinityCore's existing ConfigMgr. No new file format.
 
 #pragma once
+
+#include "Bot/AlwaysBuffs.h"
 #include <vector>
 
 #include "Bot/BotTypes.h"
@@ -298,12 +300,15 @@ public:
     bool   threat_hold_enabled() const         { return threat_hold_enabled_; }
     bool   raid_dps_wait_attack() const        { return raid_dps_wait_attack_; }
     bool   raid_provide_consumables() const    { return raid_provide_consumables_; }
+    bool   raid_consumables_in_dungeons() const { return raid_consumables_in_dungeons_; }
     // Playerbot.Raid.ResistGear: a raid bot wears resistance gear for the boss it stands before (Bot/ResistGear.h). Default off.
     bool   raid_resist_gear() const            { return raid_resist_gear_; }
     // Playerbot.Consumables.PvE / .PvP: whether bots use (and are stocked with) flasks, elixirs, buff food, combat
     // potions, healthstones and resistance potions in PvE (open world, dungeons, raids) or in PvP (battlegrounds, arenas).
     bool   consumables_pve() const             { return consumables_pve_; }
     bool   consumables_pvp() const             { return consumables_pvp_; }
+    // Playerbot.AlwaysBuffs.<Switch>.<Place>: what bots are kept supplied with, and where (Bot/AlwaysBuffs.h).
+    bool   always_on(AlwaysSwitch what, AlwaysPlace where) const { return always_[uint8(what)][uint8(where)]; }
     uint32 raid_dps_wait_timeout_ms() const    { return raid_dps_wait_timeout_ms_; }
     bool   threat_hold_open_world() const      { return threat_hold_open_world_; }
     float  threat_max_ratio() const            { return threat_max_ratio_; }
@@ -321,6 +326,7 @@ public:
     bool behavior_tank_ranged_weapon()  const { return bhv_tank_ranged_weapon_; }
     bool behavior_ammo_supply()         const { return bhv_ammo_supply_; }
     bool behavior_raid_gear()           const { return bhv_raid_gear_; }
+    bool gear_raid_enchants()           const { return gear_raid_enchants_; }
     bool behavior_accept_owner_trade()  const { return bhv_accept_owner_trade_; }
     bool behavior_formation()          const { return bhv_formation_; }
     bool behavior_distance_order()      const { return bhv_distance_order_; }
@@ -348,7 +354,9 @@ public:
     uint32 lfg_level_range()            const { return lfg_level_range_; }
     uint32 lfg_bot_fill_seconds()       const { return lfg_bot_fill_seconds_; }
     std::vector<uint32> const& lfg_categories() const { return lfg_categories_; }
-    std::vector<std::pair<uint32, uint32>> const& lfg_activity_maps() const { return lfg_activity_maps_; }
+    // activity id, its map id and the party size when the entry names one (0 = from the map: a raid is as big as the map, a dungeon is a 5-man)
+    struct LfgActivityMap { uint32 activity = 0, map = 0, size = 0; };
+    std::vector<LfgActivityMap> const& lfg_activity_maps() const { return lfg_activity_maps_; }
     uint32 lfg_bot_groups_max()         const { return lfg_bot_groups_max_; }
     uint32 lfg_bot_groups_max_bots()    const { return lfg_bot_groups_max_bots_; }
     uint32 lfg_bot_groups_category()    const { return lfg_bot_groups_category_; }
@@ -526,8 +534,10 @@ private:
     bool   threat_hold_enabled_          = true;
     bool   raid_dps_wait_attack_         = true;
     bool   raid_provide_consumables_     = false;
+    bool   raid_consumables_in_dungeons_ = true;
     bool   raid_resist_gear_             = false;
     bool   consumables_pve_              = true;
+    bool   always_[kAlwaysSwitchCount][kAlwaysPlaceCount] = {};   // loaded from Playerbot.AlwaysBuffs.<Switch>.<Place>
     bool   consumables_pvp_              = false;
     uint32 raid_dps_wait_timeout_ms_     = 8000;
     bool   threat_hold_open_world_       = false;
@@ -543,6 +553,7 @@ private:
     bool   bhv_tank_ranged_weapon_   = true;
     bool   bhv_ammo_supply_          = true;
     bool   bhv_raid_gear_            = true;
+    bool   gear_raid_enchants_       = true;
     bool   bhv_accept_owner_trade_   = true;
     bool   bhv_formation_            = true;
     bool   bhv_distance_order_       = true;
@@ -570,7 +581,7 @@ private:
     uint32 lfg_level_range_          = 5;
     uint32 lfg_bot_fill_seconds_     = 180;
     std::vector<uint32> lfg_categories_;
-    std::vector<std::pair<uint32, uint32>> lfg_activity_maps_;
+    std::vector<LfgActivityMap> lfg_activity_maps_;
     uint32 lfg_bot_groups_max_              = 6;
     uint32 lfg_bot_groups_max_bots_         = 60;
     uint32 lfg_bot_groups_category_         = 2;

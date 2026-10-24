@@ -31,6 +31,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include "Bot/ResistGear.h"
+#include "Bot/AlwaysBuffs.h"
 
 namespace Playerbot::Classic {
 
@@ -665,8 +666,30 @@ CastPick PickImbue(BotSnapshotView const& s, bool in_combat)
     return {};
 }
 
+// A damage caster's weapon oil: Brilliant Wizard Oil (+36 spell damage, +1% crit) on the main hand while it carries no temporary enchant, as
+// every raiding caster ran it. Not the shaman (its Flametongue imbue holds the same slot) and not the healers (Brilliant Mana Oil is a separate pick).
+constexpr uint32 BRILLIANT_WIZARD_OIL = 20749;
+static bool IsDamageCaster(BotSnapshotView const& s)
+{
+    switch (s.cls())
+    {
+        case CLASS_MAGE:
+        case CLASS_WARLOCK: return true;
+        case CLASS_PRIEST:  return s.spec() == 258;                        // Shadow
+        case CLASS_DRUID:   return s.spec() == 102;                        // Balance
+        default:            return false;
+    }
+}
+
 ItemPick PickPoison(BotSnapshotView const& s)
 {
+    if (IsDamageCaster(s) && !s.is_mounted())
+    {
+        WeaponUpkeep const& mh = s.classic_upkeep().main_hand;
+        if (!mh.guid.IsEmpty() && s.item_count(BRILLIANT_WIZARD_OIL) > 0 && (!mh.temp_enchant || mh.temp_remaining.count() < 60'000))
+            return { BRILLIANT_WIZARD_OIL, mh.guid };
+        return {};
+    }
     if (s.cls() != CLASS_ROGUE || s.is_mounted())
         return {};
     auto best_in_bags = [&s](char const* family) -> uint32
@@ -773,9 +796,9 @@ uint32 HealRank(BotSnapshotView const& s, GroupSnapshotView const& g, uint32 spe
 void ShortClassSupplies(BotSnapshotView const& s, std::vector<uint32>& out)
 {
     out.clear();
-    // Ammo for the equipped bow / crossbow / gun: short under 30% of the target (the entry is the
+    // Ammo for the equipped bow / crossbow / gun: short under 60% of the target (the entry is the
     // ammo item the restock will hand out, so it doubles as the retry-lockout key).
-    if (Services::Config().behavior_ammo_supply() && s.ammo_kind() != 0 && s.ammo_count() < AmmoLowBelow())
+    if (Services::Config().behavior_ammo_supply() && s.ammo_kind() != 0 && s.ammo_count() < (AlwaysOn(s, AlwaysSwitch::Supplies) ? AMMO_TARGET : AmmoLowBelow()))
         if (uint32 const ammo = BestAmmo(s.ammo_kind(), s.level()))
             out.push_back(ammo);
     if (!Services::Config().classic_class_supplies())
@@ -799,7 +822,9 @@ void ShortClassSupplies(BotSnapshotView const& s, std::vector<uint32>& out)
         }
         else
             have = s.item_count(best);
-        if (have < std::max<uint32>(1u, SupplyTarget(f, s.level()) / 2u))
+        // Playerbot.AlwaysBuffs: topped up to the full stack as soon as one is used, not only under half of it.
+        uint32 const want = AlwaysOn(s, AlwaysSwitch::Supplies) ? SupplyTarget(f, s.level()) : std::max<uint32>(1u, SupplyTarget(f, s.level()) / 2u);
+        if (have < want)
             out.push_back(best);
     }
 }
@@ -1162,9 +1187,13 @@ RaidConsumableRole RaidConsumableRoleOf(BotSnapshotView const& s, GroupSnapshotV
 
 namespace {
 
+constexpr uint8 kDungeonKitMinLevel = 58;   // the flasks and elixirs of the kits need level 51-55; dungeon runs of the raiding bots are 58+
+
 bool RaidConsumablesApply(BotSnapshotView const& s)
 {
-    return IsVanillaRealm() && s.in_group() && s.is_in_raid() && s.is_alive() && !s.is_mounted() && ConsumablesAllowed(s);
+    // A raid, and, with Playerbot.Raid.ConsumablesInDungeons, any dungeon instance a bot of the raiding levels is in with a group.
+    bool const where = s.is_in_raid() || (s.is_in_instance() && s.level() >= kDungeonKitMinLevel && Services::Config().raid_consumables_in_dungeons());
+    return IsVanillaRealm() && s.in_group() && where && s.is_alive() && !s.is_mounted() && ConsumablesAllowed(s);
 }
 
 } // namespace
@@ -1174,6 +1203,18 @@ bool ConsumablesAllowed(BotSnapshotView const& s)
     // A battleground or arena map is PvP; everything else (open world, dungeons, raids) is PvE.
     bool const pvp = s.in_battleground() || s.is_bg_orphan();
     return pvp ? Services::Config().consumables_pvp() : Services::Config().consumables_pve();
+}
+
+AlwaysPlace AlwaysPlaceOf(BotSnapshotView const& s, GroupSnapshotView const* g)
+{
+    if (s.in_battleground() || s.is_bg_orphan())
+        return AlwaysPlace::Battleground;
+    return s.is_in_raid() || s.is_in_instance() || (g && g->is_raid()) ? AlwaysPlace::Raid : AlwaysPlace::World;
+}
+
+bool AlwaysOn(BotSnapshotView const& s, AlwaysSwitch what, GroupSnapshotView const* g)
+{
+    return Services::Config().always_on(what, AlwaysPlaceOf(s, g));
 }
 
 uint32 PickRaidConsumable(BotSnapshotView const& s, GroupSnapshotView const& g)
@@ -1318,7 +1359,9 @@ bool BossFight(BotSnapshotView const& s)
         return false;
     }
     NearbyUnit const* v = s.victim_info();
-    return v && v->hp > 0 && (IsBossUnit(*v) || v->max_hp >= 100'000);
+    // Open world: a boss or a big pool as before, and now also an elite or a pack of three or more, so a bot grinding or questing
+    // kills them faster; the long cooldowns still come back for the bosses.
+    return v && v->hp > 0 && (IsBossUnit(*v) || v->max_hp >= 100'000 || v->is_elite_or_rare || s.attackers_count() >= 3);
 }
 
 namespace {
@@ -2917,3 +2960,78 @@ bool IsCurseDispelSpell(uint32 spell)
 }
 
 } // namespace Playerbot::Classic
+
+namespace Playerbot {
+
+namespace {
+
+std::string_view SpellEnglishName(SpellInfo const* si)
+{
+    return si && si->SpellName ? std::string_view((*si->SpellName)[LOCALE_enUS]) : std::string_view();
+}
+
+void ResolveAlwaysAura(AlwaysAura const& row, std::vector<uint32>& out)
+{
+    if (row.kind == AlwaysKind::Spell)
+    {
+        SpellInfo const* si = sSpellMgr->GetSpellInfo(row.id, DIFFICULTY_NONE);
+        if (SpellEnglishName(si).find(row.name) != std::string_view::npos)
+            out.push_back(row.id);
+        else
+            TC_LOG_ERROR("playerbot.v2", "[always_buff] spell {} is not '{}', skipped", row.id, row.name);
+        return;
+    }
+    ItemTemplate const* tmpl = sObjectMgr->GetItemTemplate(row.id);
+    if (!tmpl || std::string_view(tmpl->GetName(LOCALE_enUS)).find(row.name) == std::string_view::npos)
+    {
+        TC_LOG_ERROR("playerbot.v2", "[always_buff] item {} is not '{}', skipped", row.id, row.name);
+        return;
+    }
+    for (ItemEffectEntry const* eff : tmpl->Effects)
+    {
+        if (!eff || eff->TriggerType != ITEM_SPELLTRIGGER_ON_USE || eff->SpellID <= 0)
+            continue;
+        SpellInfo const* si = sSpellMgr->GetSpellInfo(uint32(eff->SpellID), DIFFICULTY_NONE);
+        if (!si)
+            continue;
+        bool triggers = false;
+        for (SpellEffectInfo const& e : si->GetEffects())
+        {
+            if (row.kind == AlwaysKind::Stone)
+            {
+                if (e.IsEffect(SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY))
+                    out.push_back(uint32(e.MiscValue));
+            }
+            else if (e.TriggerSpell)
+            {
+                out.push_back(e.TriggerSpell);
+                triggers = true;
+            }
+        }
+        // A scroll or elixir leaves its own aura; food only eats and triggers the stat buff (Well Fed). The eating aura (Food 1129 / 1131, an on-use
+        // spell of its own beside the Well Fed one) ends when the bot stands, so it is never up on a bot that fights: as a row aura it read as
+        // missing on every check and idle:always_buff fired every 10 s for each bot through the whole support scorecard (233, "+1129").
+        if (row.kind == AlwaysKind::Item && !triggers && !si->HasAuraInterruptFlag(SpellAuraInterruptFlags::Standing))
+            out.push_back(uint32(eff->SpellID));
+    }
+}
+
+} // namespace
+
+std::span<uint32 const> AlwaysAuraEffects(AlwaysAura const& row)
+{
+    static std::mutex mu;
+    static std::map<std::pair<uint8, uint32>, std::vector<uint32>> cache;
+    std::lock_guard<std::mutex> lk(mu);
+    auto const key = std::make_pair(uint8(row.kind), row.id);
+    auto it = cache.find(key);
+    if (it == cache.end())
+    {
+        std::vector<uint32> v;
+        ResolveAlwaysAura(row, v);
+        it = cache.emplace(key, std::move(v)).first;
+    }
+    return it->second;
+}
+
+} // namespace Playerbot

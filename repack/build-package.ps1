@@ -2,7 +2,7 @@
 # Produces in <root>\release\<ver>\ (+ SHA256SUMS.txt):
 #   WoW-Forever-Bots-<ver>.zip   the ONE zip players download: everything, including the game database dumps; they run Install.cmd
 #   wow-forever-update-<ver>.zip the same without MySQL and the database dumps (small); the Update button downloads this one
-# Also run package-source.ps1 (GPL source, separate asset). Nothing is uploaded; publishing is manual. Target client build: 70450.
+# Also run package-source.ps1 (GPL source, separate asset). Nothing is uploaded; publishing is manual. Target client build: 70532.
 #   .\build-package.ps1 -Version 0.1.1 [-DbZip <path to wow-forever-db-*.zip>]
 # The database dumps (sql\world.sql, sql\hotfixes.sql, from a FRESH install) come from the db zip: the one given, else the newest
 # wow-forever-db-*.zip under <root>\release\. Without one the full zip is built without dumps (worldserver then imports on first start).
@@ -51,6 +51,9 @@ if ($LASTEXITCODE -ge 8) { throw 'copying the sql folder failed' }
 New-Item -ItemType Directory -Force "$stage\server\worldserver.conf.d" | Out-Null
 Copy-Item "$src\repack\templates\realm.conf" "$stage\server\worldserver.conf.d\zz-1-wow-forever-realm.conf" -Force
 Copy-Item "$src\src\modules\PlayerbotV2\conf\zz-0-playerbot-defaults.conf" "$stage\server\worldserver.conf.d\zz-0-playerbot-defaults.conf" -Force   # managed bot defaults (auction bot on); the robocopy of server-bot leaves out every *.conf
+# only the two managed overrides ship: a local one (a packet log, a debug log level) never reaches players
+$extra = Get-ChildItem "$stage\server\worldserver.conf.d" -File | Where-Object { $_.Name -notin 'zz-0-playerbot-defaults.conf', 'zz-1-wow-forever-realm.conf' }
+if ($extra) { throw ('Unexpected files in worldserver.conf.d: ' + (($extra | ForEach-Object Name) -join ', ')) }
 Copy-Item "$src\repack\Update-WoWForever.cmd" "$stage\Update-WoWForever.cmd" -Force
 Copy-Item "$src\tools\extract_client_data.ps1" "$stage\repack\extract_client_data.ps1" -Force   # maps + vmaps + mmaps for every map, resumable (used by extract-data.ps1)
 Copy-Item "$src\repack\Install.cmd" "$stage\Install.cmd" -Force
@@ -62,7 +65,7 @@ foreach ($f in 'README-TESTER.md:README.md', 'SOURCE.txt:SOURCE.txt', 'NOTICE.tx
 }
 if (Test-Path "$src\COPYING") { Copy-Item "$src\COPYING" "$stage\COPYING" -Force }
 if (Test-Path "$root\BOT_COMMANDS.pdf") { Copy-Item "$root\BOT_COMMANDS.pdf" "$stage\BOT_COMMANDS.pdf" }
-@{ version = $Version; client = '70450'; dataVersion = '1'; built = (Get-Date -Format s); commit = (git -C $src rev-parse HEAD) } | ConvertTo-Json | Set-Content "$stage\version.json"
+@{ version = $Version; client = [string](. { . "$PSScriptRoot\ClientBuild.ps1"; Get-RealmBuild $src }); dataVersion = '1'; built = (Get-Date -Format s); commit = (git -C $src rev-parse HEAD) } | ConvertTo-Json | Set-Content "$stage\version.json"
 # debug symbols stay with the dev (crash dumps), never in the tester zip
 New-Item -ItemType Directory -Force "$out\symbols" | Out-Null
 Get-ChildItem "$root\server-bot" -Filter *.pdb | Copy-Item -Destination "$out\symbols" -Force

@@ -54,6 +54,7 @@ public:
     void NoteDamageSpell(uint32 spell_id);
     void OnHitOutcome(Unit* attacker, Unit* victim, uint32 spell_id, uint8 outcome, uint32 damage);
     void OnEnergize(Unit* target, uint32 spell_id, int32 gained, uint8 power);
+    void OnHealOutcome(Unit* healer, Unit* target, uint32 spell_id, uint32 raw, uint32 effective);
     void OnHealReceived(Unit* healer, Unit* target, int32 amount, uint32 spell_id);
     void OnAuraApplied(Unit* target, Aura* aura);
     void OnAuraRemoved(Unit* target, Aura* aura);

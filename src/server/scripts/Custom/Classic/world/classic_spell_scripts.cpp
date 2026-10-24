@@ -73,6 +73,8 @@ static std::unordered_map<uint32, ClassicGroundAreaDamage> const ClassicGroundAr
     { 5740,  {  42, 0.0833f } }, { 6219,  {  96, 0.0833f } }, { 11677, { 155, 0.0833f } }, { 11678, { 226, 0.0833f } },
     // Volley (arcane, 1 s, 6 s channel): no spell power
     { 1510,  {  50, 0.0f } }, { 14294, {  65, 0.0f } }, { 14295, {  80, 0.0f } },
+    // Hurricane (nature, 1 s, 10 s channel): base points + die of the three ranks (classic_spell_value), 10.7% spell power per tick
+    { 16914, {  70, 0.107f } }, { 17401, { 100, 0.107f } }, { 17402, { 134, 0.107f } },
 };
 
 class classic_spell_ground_area_damage : public AuraScript
@@ -104,6 +106,15 @@ class classic_spell_ground_area_damage : public AuraScript
             int32 damage = values.TickDamage;
             if (values.Coefficient > 0.0f)
                 damage += int32(caster->SpellBaseDamageBonusDone(spellInfo->GetSchoolMask()) * values.Coefficient);
+
+            // The same done modifiers a periodic tick gets in Unit::SpellDamageBonusDone: percent auras of the school and the talent
+            // spell mods of the periodic damage (Fire Power, Piercing Ice, Emberstorm, Arcane Power, Shadow Mastery... carry one for
+            // the periodic damage next to the direct one). Without them the ground damage ignored every one of these.
+            float modifiedDamage = float(damage) * caster->SpellDamagePctDone(target, spellInfo, DOT, spellInfo->GetEffect(EFFECT_2));
+            if (Player* modOwner = caster->GetSpellModOwner())
+                modOwner->ApplySpellMod(spellInfo, SpellModOp::PeriodicHealingAndDamage, modifiedDamage);
+            damage = int32(std::max(modifiedDamage, 0.0f));
+
             damage = target->SpellDamageBonusTaken(caster, spellInfo, damage, DOT);
 
             SpellNonMeleeDamage damageInfo(caster, target, spellInfo, GetAura()->GetSpellVisual(), spellInfo->GetSchoolMask(), GetAura()->GetCastId());
@@ -332,6 +343,104 @@ class classic_spell_pal_judgement : public SpellScript
     void Register() override
     {
         OnEffectHitTarget += SpellEffectFn(classic_spell_pal_judgement::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
+// 20425, 20961, 20962, 20967, 20968 - Judgement of Command: the client spell is a dummy effect whose base points name the Holy damage spell
+// (20467 / 20964 / 20963 / 20965 / 20966 for the Seal of Command ranks 1 to 5); nothing cast it, so the judgement did no damage.
+class classic_spell_pal_judgement_of_command : public SpellScript
+{
+    static uint32 GetDamageSpell(uint32 judgementId)
+    {
+        switch (judgementId)
+        {
+            case 20425: return 20467;
+            case 20962: return 20963;
+            case 20961: return 20964;
+            case 20967: return 20965;
+            case 20968: return 20966;
+            default:    return 0;
+        }
+    }
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellInfo({ GetDamageSpell(spellInfo->Id) });
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Unit* target = GetHitUnit();
+        if (!target)
+            return;
+
+        GetCaster()->CastSpell(target, GetDamageSpell(GetSpellInfo()->Id), CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_pal_judgement_of_command::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
+// 5373, 1826 - Judgement of Light / Judgement of Wisdom "Intermediate": the judgement debuff (20185, 20186 and their ranks) procs this dummy
+// from the judged enemy at whoever hits it, and nothing turned it into the heal or the mana (the client spell does neither itself). The rank's
+// own spell (20267 / 20341-20343 heal, 20268 / 20352-20353 mana) is cast by the paladin that judged, so its talents (Improved Judgement of
+// Light) and healing modifiers apply; the vanilla amounts are in those spells.
+class classic_spell_pal_judgement_intermediate : public SpellScript
+{
+    static uint32 GetRankSpell(bool light, uint32 debuffId)
+    {
+        if (light)
+        {
+            switch (debuffId)
+            {
+                case 20185: return 20267;
+                case 20344: return 20341;
+                case 20345: return 20342;
+                case 20346: return 20343;
+                default:    return 0;
+            }
+        }
+        switch (debuffId)
+        {
+            case 20186: return 20268;
+            case 20354: return 20352;
+            case 20355: return 20353;
+            default:    return 0;
+        }
+    }
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ 20267, 20341, 20342, 20343, 20268, 20352, 20353 });
+    }
+
+    void HandleCast()
+    {
+        Unit* judged = GetCaster();
+        Unit* attacker = GetExplTargetUnit();
+        if (!judged || !attacker)
+            return;
+
+        bool const light = GetSpellInfo()->Id == 5373;
+        for (auto const& [auraId, aurApp] : judged->GetAppliedAuras())
+        {
+            uint32 const rankSpell = GetRankSpell(light, auraId);
+            if (!rankSpell)
+                continue;
+
+            Unit* paladin = GetOriginalCaster();
+            if (!paladin)
+                paladin = aurApp->GetBase()->GetCaster();
+            (paladin ? paladin : judged)->CastSpell(attacker, rankSpell, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
+            break;
+        }
+    }
+
+    void Register() override
+    {
+        OnCast += SpellCastFn(classic_spell_pal_judgement_intermediate::HandleCast);
     }
 };
 
@@ -1251,6 +1360,8 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_pal_judgement_of_the_crusader_refresh);
     RegisterSpellScript(classic_spell_pal_seal_of_righteousness);
     RegisterSpellScript(classic_spell_pal_judgement);
+    RegisterSpellScript(classic_spell_pal_judgement_of_command);
+    RegisterSpellScript(classic_spell_pal_judgement_intermediate);
     RegisterSpellScript(classic_spell_profession_book);
     RegisterSpellScript(classic_spell_ground_area_damage);
     RegisterSpellScript(classic_spell_heal_injured_druid);

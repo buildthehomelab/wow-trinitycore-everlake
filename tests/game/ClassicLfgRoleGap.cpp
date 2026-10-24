@@ -122,3 +122,48 @@ TEST_CASE("LfgFill: with InstantFillIfNobody off an empty server still waits", "
     CHECK(DecideLfgFill(0, 0, false) == LfgFillAction::FillAfterWait);
     CHECK(DecideLfgFill(60000, 4, false) == LfgFillAction::Wait);
 }
+
+TEST_CASE("LfgRoleGap: the party size of an activity", "[lfggap]")
+{
+    // the Map table says 10 for most classic dungeons: a dungeon is a 5-man unless the activity names a size
+    CHECK(LfgActivityPartySize(0, false, 10) == 5);
+    CHECK(LfgActivityPartySize(0, false, 5) == 5);
+    CHECK(LfgActivityPartySize(10, false, 10) == 10);      // Upper Blackrock Spire
+    // a raid is as big as its map
+    CHECK(LfgActivityPartySize(0, true, 40) == 40);
+    CHECK(LfgActivityPartySize(0, true, 20) == 20);
+    CHECK(LfgActivityPartySize(0, true, 0) == 5);          // a raid map without a limit
+    // held to 5-40
+    CHECK(LfgActivityPartySize(2, false, 10) == 5);
+    CHECK(LfgActivityPartySize(99, false, 10) == 40);
+}
+
+TEST_CASE("LfgRoleGap: a ten-man group lacks 1 tank, 3 healers and 6 damage", "[lfggap]")
+{
+    LfgRoleGap const mix = LfgRoleMix(LfgActivityPartySize(10, false, 10));
+    CHECK(mix == LfgRoleGap{ 1, 3, 6 });
+    std::vector<uint8> const own{ kLfgRoleDamage };
+    LfgRoleGap const gap = ComputeLfgRoleGap(own, 10);
+    CHECK(gap == LfgRoleGap{ 1, 3, 5 });
+    CHECK(gap.Total() == 9);                                // 9 bots make a 10-man with the player
+}
+
+TEST_CASE("LfgRoleGap: a player joining a part-filled UBRS group leaves the rest to fill", "[lfggap]")
+{
+    // 4 bots (tank, healer, 2 damage) and the player (damage): 5 of 10 places taken, 2 healers and 3 damage dealers still due
+    std::vector<uint8> const members{ kLfgRoleTank, kLfgRoleHealer, kLfgRoleDamage, kLfgRoleDamage, kLfgRoleDamage };
+    LfgRoleGap const gap = ComputeLfgRoleGap(members, 10);
+    CHECK(gap == LfgRoleGap{ 0, 2, 3 });
+    CHECK(gap.Total() == 5);                                // 5 more bots: 10 in all
+    // a 5-man with 3 bots and the player lacks one place
+    std::vector<uint8> const small{ kLfgRoleTank, kLfgRoleDamage, kLfgRoleDamage, kLfgRoleDamage };
+    CHECK(ComputeLfgRoleGap(small, 5) == LfgRoleGap{ 0, 1, 0 });
+}
+
+TEST_CASE("LfgRoleGap: the fill of a joined group is spread over at most a minute", "[lfggap]")
+{
+    CHECK(LfgJoinedFillSeconds(180) == 60);
+    CHECK(LfgJoinedFillSeconds(60) == 60);
+    CHECK(LfgJoinedFillSeconds(20) == 20);
+    CHECK(LfgJoinedFillSeconds(0) == 0);                    // fill off stays off
+}

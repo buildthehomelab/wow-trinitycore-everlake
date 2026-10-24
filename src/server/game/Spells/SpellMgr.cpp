@@ -3724,6 +3724,14 @@ void SpellMgr::LoadSpellInfoCorrections()
         });
     }
 
+    // Classic 1.60 warrior Deep Wounds: the bleed tick (412613) never misses, never crits and ignores armor
+    ApplySpellFix({ 412613 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->AttributesEx2 |= SPELL_ATTR2_CANT_CRIT;
+        spellInfo->AttributesEx3 |= SPELL_ATTR3_ALWAYS_HIT;
+        spellInfo->AttributesCu |= SPELL_ATTR0_CU_IGNORE_ARMOR;
+    });
+
     // specific code for cases with no trigger spell provided in field
     {
         // Brood Affliction: Bronze
@@ -4014,6 +4022,18 @@ void SpellMgr::LoadSpellInfoCorrections()
         ApplySpellEffectFix(spellInfo, EFFECT_2, [](SpellEffectInfo* spellEffectInfo)
         {
             spellEffectInfo->BasePoints += 30000;
+        });
+    });
+
+    // Classic 1.60: Spirit of Redemption talent (20711). The client spell is a dummy aura; vMaNGOS (Unit::DealDamage) checks the aura on a
+    // lethal hit and casts 27827. The retail overkill absorb is the same hook here: the aura becomes an absorb of all schools without a
+    // limit, which spell_pri_spirit_of_redemption (bound to 20711) answers with 27827
+    ApplySpellFix({ 20711 }, [](SpellInfo* spellInfo)
+    {
+        ApplySpellEffectFix(spellInfo, EFFECT_0, [](SpellEffectInfo* spellEffectInfo)
+        {
+            spellEffectInfo->ApplyAuraName = SPELL_AURA_SCHOOL_ABSORB_OVERKILL;
+            spellEffectInfo->MiscValue = SPELL_SCHOOL_MASK_ALL;
         });
     });
 
@@ -5817,6 +5837,17 @@ void SpellMgr::LoadSpellInfoTargetCaps()
     ApplySpellFix({ 435222 }, [](SpellInfo* spellInfo)
     {
         spellInfo->_LoadSqrtTargetLimit(5, 0, {}, EFFECT_4, {}, {});
+    });
+
+    // Revealed Flaw (Bonescythe Armor, 8 pieces): the client effect is an add-target-trigger without a class mask or a chance, which put the +100 crit
+    // aura 28815 on the rogue after every spell it cast. A proc trigger on Eviscerate (spell_proc 28814, classic_spell_rog_revealed_flaw rolls the chance).
+    ApplySpellFix({ 28814 }, [](SpellInfo* spellInfo)
+    {
+        ApplySpellEffectFix(spellInfo, EFFECT_0, [](SpellEffectInfo* spellEffectInfo)
+        {
+            spellEffectInfo->ApplyAuraName = SPELL_AURA_PROC_TRIGGER_SPELL;
+        });
+        spellInfo->ProcChance = 100;
     });
 
     // Rampaging Ruin

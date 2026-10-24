@@ -16,7 +16,7 @@ git -C $src archive --format=zip --prefix=$prefix -o $zip HEAD
 if ($LASTEXITCODE) { throw 'git archive failed' }
 
 # files and folders that are not part of the source offer (development setup, CI, hand-over notes, personal paths, python caches)
-$dropRegex = '^(\.[c]laude/|\.github/|[C]LAUDE\.md$|HANDOVER\.md$|build-playerbot\.sh$|patches/|scripts/install_dependencies\.sh$|scripts/setup_environment\.sh$|scripts/verify_playerbot_dependencies\.|src/modules/PlayerbotV2/[C]LAUDE\.md$|repack/UPDATER\.md$|repack/update\.log$|repack/feedback-repo/|sql/custom/auth/2026_10_07_99_auth_pin_client_70205\.sql$|sql/custom/auth/2026_10_09_01_auth_forever_move_to_70291\.sql$)|(^|/)__pycache__/|\.pyc$'
+$dropRegex = '^(\.[c]laude/|\.github/|[C]LAUDE\.md$|HANDOVER\.md$|build-playerbot\.sh$|patches/|scripts/install_dependencies\.sh$|scripts/setup_environment\.sh$|scripts/verify_playerbot_dependencies\.|src/modules/PlayerbotV2/[C]LAUDE\.md$|repack/UPDATER\.md$|repack/update\.log$|repack/feedback-repo/|sql/old/|sql/custom/auth/2026_10_07_99_auth_pin_client_70205\.sql$|sql/custom/auth/2026_10_09_01_auth_forever_move_to_70291\.sql$)|(^|/)__pycache__/|\.pyc$'
 # credit and path lines that are rewritten in place: pattern -> replacement
 $scrubs = @(
     @{ re = '(?m)[ ,]*with [C]laude Code\.?'; to = '.' },

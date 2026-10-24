@@ -393,6 +393,7 @@ public:
     // ungrouped or no tank is on this map.
     ObjectGuid group_tank() const { return s_->combat.group_tank; }
     bool       big_raid()   const { return s_->combat.big_raid; }
+    bool       in_raid_group() const { return s_->combat.raid_group; }
     // Damage-restraint verdict for a NON-TANK group member about to damage
     // `target` (MCRaidHoldDamage): TankOpening while the tank has not yet
     // built `opening_lead` threat (or nobody has engaged the mob yet);
@@ -509,19 +510,19 @@ public:
         return seen ? lo : 100;
     }
 
-    // First trinket on-use spell that's actually ready to fire. Returns 0
-    // when the bot has no equipped on-use trinket or both are on cooldown.
-    // Trinkets live in EQUIPMENT_SLOT_TRINKET1 (13) and TRINKET2 (14); the
-    // builder pre-resolved each slot's ON_USE spell so we just probe the
-    // ready bit. InCombat fires this on cooldown to extract trinket value
-    // without per-tick ItemTemplate lookups.
-    uint32 ready_on_use_trinket() const
+    // Item entry of the first equipped trinket whose on-use spell is off cooldown; 0 when there is none. A trinket's spell is not in the
+    // spellbook, so is_ready() (which refuses an unknown spell) never passed one: no trinket of any class fired until this check
+    // (215 scorecard: no trinket in any hunter's cast list). The builder pre-resolved each slot's ON_USE spell; the cooldown is the spell's,
+    // as the core keeps an item's use cooldown under its spell. The caller uses the item (UseItemByEntry), not a spell cast.
+    uint32 ready_on_use_trinket_item() const
     {
-        constexpr uint8 TRINKET1 = 13, TRINKET2 = 14;
+        constexpr uint8 TRINKET1 = 12, TRINKET2 = 13;   // EQUIPMENT_SLOT_TRINKET1 / TRINKET2
+        if (s_->vitals.is_stunned) return 0;
         for (uint8 slot : {TRINKET1, TRINKET2})
         {
-            const uint32 sid = s_->inventory.equipped[slot].on_use_spell_id;
-            if (sid != 0 && is_ready(sid)) return sid;
+            auto const& eq = s_->inventory.equipped[slot];
+            if (eq.entry != 0 && eq.on_use_spell_id != 0 && eq.on_use_cd_ms == 0)
+                return eq.entry;
         }
         return 0;
     }

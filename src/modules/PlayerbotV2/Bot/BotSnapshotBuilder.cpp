@@ -3061,6 +3061,9 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                     if (eff->TriggerType == ITEM_SPELLTRIGGER_ON_USE)
                     {
                         dst.on_use_spell_id = static_cast<uint32>(eff->SpellID);
+                        if (SpellInfo const* use_info = sSpellMgr->GetSpellInfo(eff->SpellID, DIFFICULTY_NONE))
+                            if (SpellHistory const* use_hist = p->GetSpellHistory(); use_hist && use_hist->HasCooldown(use_info, item->GetEntry()))
+                                dst.on_use_cd_ms = static_cast<uint32>(std::max<int64>(1, use_hist->GetRemainingCooldown(use_info).count()));
                         break;
                     }
                 }
@@ -3827,6 +3830,11 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     {
         if (Spell* casting = p->GetCurrentSpell(static_cast<CurrentSpellTypes>(slot)))
         {
+            // A cast whose cast time is over and whose projectile is still in flight (LAUNCHED) is no longer a cast in progress: the core
+            // accepts the next cast (Unit::IsNonMeleeSpellCast skips it) and the bot is free to act. Counting it held every caster idle for the
+            // flight time of its Fireball / Frostbolt / Shadow Bolt (0.4-0.9 s after each, ~15 s of every 120).
+            if (slot == CURRENT_GENERIC_SPELL && casting->getState() == SPELL_STATE_LAUNCHED)
+                continue;
             snap->cast.is_casting           = true;
             snap->cast.current_cast_spell_id = casting->m_spellInfo->Id;
             const int32 rem            = casting->GetRemainingCastTime();
@@ -3857,9 +3865,11 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     threat_tanks.clear();
     snap->combat.group_tank = ObjectGuid::Empty;
     snap->combat.big_raid = false;
+    snap->combat.raid_group = false;
     if (Group const* tg = p->GetGroup())
     {
         snap->combat.big_raid = tg->GetMembersCount() > 15;
+        snap->combat.raid_group = tg->isRaidGroup();
         for (auto const& slot : tg->GetMemberSlots())
         {
             Player* mp = slot.guid == p->GetGUID() ? p : ObjectAccessor::GetPlayer(*p, slot.guid);
@@ -4054,6 +4064,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                 if (IsDemoApDebuff(asi->Id))
                     NoteApDebuff(u, abase);
                 if (asi->Mechanic == MECHANIC_ROOT) u.root_caster = abase->GetCasterGUID();   // MarkCc: Entangling Roots up (not CC-locked)
+                if (asi->Mechanic == MECHANIC_ROOT || asi->Mechanic == MECHANIC_SNARE) u.snared = true;   // Concussive Shot, Wing Clip, Frostbolt: a hunter can step back
                 int pri = -1;
                 switch (asi->Mechanic)
                 {
@@ -4787,6 +4798,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                 if (IsDemoApDebuff(asi->Id))
                     NoteApDebuff(u, abase);
                 if (asi->Mechanic == MECHANIC_ROOT) u.root_caster = abase->GetCasterGUID();   // MarkCc: Entangling Roots up (not CC-locked)
+                if (asi->Mechanic == MECHANIC_ROOT || asi->Mechanic == MECHANIC_SNARE) u.snared = true;   // Concussive Shot, Wing Clip, Frostbolt: a hunter can step back
                 int pri = -1;
                 switch (asi->Mechanic)
                 {

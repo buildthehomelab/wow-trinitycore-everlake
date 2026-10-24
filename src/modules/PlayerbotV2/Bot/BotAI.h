@@ -10,6 +10,7 @@
 #include "WalkOrder.h"
 #include "Travel/ReachMemory.h"
 #include "BotTypes.h"
+#include "Util/AtomicSharedPtr.h"
 #include "BotSnapshot.h"  // CurrencyEntry — cached_currencies_ member needs full type
 #include "Battleground/BgTactics.h"          // BgTactics::StallWatch (bg_stall_ member)
 #include "Battleground/BattlegroundScript.h"  // BattlegroundAdvice — bg_advice_cache_ member needs full type
@@ -2679,6 +2680,9 @@ public:
                                // object's guid_low (bit 41 set). Companion quest help
                                // (idle:companion_quest_*): 15s between attempts on the same quest / object.
         CompanionQuestShare = 56, // target = 0 (per bot). One auto-share pass per 90s.
+        BgFormHold      = 57,  // target = 0. A bot clicking a battleground flag / banner: no druid shapeshift cast
+                               // for 6s (the click leaves the form; the rotation shifted straight back in).
+        AlwaysBuff      = 58,  // target = kAlwaysBuffLockKey. idle:always_buff (Playerbot.AlwaysBuffs): 10s between passes.
     };
     static constexpr uint32 kActionRetryLockoutMs = 5u * 60u * 1000u;
     // Per-kind cooldown override — most actions use the 5 min default, but
@@ -2807,6 +2811,14 @@ public:
             case ActionKind::DruidFormEntered:
                 // A buff that can't land must not flip the form every tick.
                 return 10u * 1000u;
+            case ActionKind::BgFormHold:
+                // Past the 3 s BgUseGo retry, so the second click lands out of form.
+                return 6u * 1000u;
+            case ActionKind::AlwaysBuff:
+                // The gate fires only when an aura is out of step with where the bot stands, so a short pace is enough. It shared the
+                // potion's 5 min lockout once: a bot that got its gold floor in the world and joined a raid group a few seconds later
+                // could not take its flask for 5 minutes (support scorecard on 230: no flask on any of ten bots for the whole run).
+                return 10u * 1000u;
             case ActionKind::CompanionQuest:
                 // A refused accept / turn-in / click (bags full, out of range) retries at human pace.
                 return 15u * 1000u;
@@ -2903,6 +2915,7 @@ public:
             // without this the 6s / 10s leave / re-enter windows were no-ops.
             case ActionKind::DruidFormLeft:
             case ActionKind::DruidFormEntered:
+            case ActionKind::BgFormHold:
             case ActionKind::CompanionQuestShare:
                 return true;
             default:
@@ -3232,10 +3245,19 @@ public:
     {
         uint32 idle_since_ms = 0;
         uint32 logged_ms     = 0;
+        // Idle watchdog ([idle_reposition]): where the bot stood when the streak began or the watchdog last fired, and when. A bot that has
+        // moved on from there is walking somewhere; one still within a few yards of it after 3 s is stuck and is sent to a spot.
+        float  anchor_x      = 0.f;
+        float  anchor_y      = 0.f;
+        uint32 anchor_ms     = 0;
     };
     CombatIdleState& combat_idle() { return combat_idle_; }
+    // Game time of the last damage this bot itself dealt (world thread writes from the damage hook, the bot worker reads); 0 = none yet.
+    void   note_damage_done(uint32 now_ms) { last_damage_done_ms_.store(now_ms ? now_ms : 1u, std::memory_order_relaxed); }
+    uint32 last_damage_done_ms() const { return last_damage_done_ms_.load(std::memory_order_relaxed); }
 private:
     CombatIdleState combat_idle_;
+    std::atomic<uint32> last_damage_done_ms_{0};
 
     // [cast_fail] window (world thread only; see note_cast_outcome).
     struct CastFailWindow
@@ -3522,7 +3544,7 @@ public:
     std::shared_ptr<PublishedBgAdvice const> published_bg_advice() const
     { return published_bg_advice_.load(std::memory_order_acquire); }
 private:
-    std::atomic<std::shared_ptr<PublishedBgAdvice const>> published_bg_advice_;
+    AtomicSharedPtr<PublishedBgAdvice const> published_bg_advice_;
 public:
     bool prev_in_battleground() const { return prev_in_battleground_; }
     void set_prev_in_battleground(bool v) { prev_in_battleground_ = v; }

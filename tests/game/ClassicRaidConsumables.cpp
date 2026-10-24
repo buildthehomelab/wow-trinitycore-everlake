@@ -146,13 +146,17 @@ TEST_CASE("a combat potion is stocked but never used before the pull", "[classic
     stock = NextRaidConsumableToStock(RaidConsumableRole::Tank, holds_all_but_potion, flask_buffed);
     REQUIRE(stock != nullptr);
     CHECK(stock->item == 13457);
-    // Every role carries the four Greater Protection Potions (fire 13457, shadow 13459, nature 13458, frost 13456), and only those are combat potions.
+    // Every role carries the four Greater Protection Potions (fire 13457, shadow 13459, nature 13458, frost 13456), and only those are combat potions; the casters' stock-only extras are listed below.
     for (RaidConsumableRole role : { RaidConsumableRole::Melee, RaidConsumableRole::Caster, RaidConsumableRole::Healer, RaidConsumableRole::Hunter })
     {
         std::set<uint32> combat;
         for (RaidConsumable const& c : RaidConsumablesFor(role))
             if (c.combat)
                 combat.insert(c.item);
-        CHECK(combat == std::set<uint32>{ 13457, 13459, 13458, 13456 });
+        std::set<uint32> expected{ 13457, 13459, 13458, 13456 };
+        // The caster kit also stocks what is used outside the pre-pull picker: the weapon oil (idle:classic_weapon), the mana potion and the runes (fight rule).
+        if (role == RaidConsumableRole::Caster)
+            expected.insert({ 20749, 13444, 12662, 20520 });
+        CHECK(combat == expected);
     }
 }

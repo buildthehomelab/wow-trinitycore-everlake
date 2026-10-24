@@ -3390,7 +3390,7 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
             Push(bot, WhisperIntent{sender->GetName(), "no snapshot."});
             return true;
         }
-        constexpr uint8 TRINKET1 = 13, TRINKET2 = 14;
+        constexpr uint8 TRINKET1 = 12, TRINKET2 = 13;   // EQUIPMENT_SLOT_TRINKET1 / TRINKET2
         const BotSnapshotView v{*snap};
         for (uint8 slot : {TRINKET1, TRINKET2})
         {

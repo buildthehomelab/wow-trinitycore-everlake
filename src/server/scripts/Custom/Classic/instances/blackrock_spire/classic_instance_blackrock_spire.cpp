@@ -1652,8 +1652,13 @@ private:
     void ShowChannel(Player* player, AltarUser& user)
     {
         SpellCastVisual visual;
-        if (SpellInfo const* info = sSpellMgr->GetSpellInfo(SPELL_ALTAR_CHANNEL, me->GetMap()->GetDifficultyID()))
+        SpellInfo const* info = sSpellMgr->GetSpellInfo(SPELL_ALTAR_CHANNEL, me->GetMap()->GetDifficultyID());
+        if (info)
             visual.SpellXSpellVisualID = player->GetCastSpellXSpellVisualId(info);
+        // the beam needs a spell visual: when this logs "visual 0" (or no spell info) the client has nothing to draw
+        if (!user.waitedMs)
+            TC_LOG_INFO("scripts.classic", "UBRS altar: {} channels spell {}: spell info {}, visual {}, difficulty {}", player->GetName(), uint32(SPELL_ALTAR_CHANNEL),
+                info ? "found" : "MISSING", visual.SpellXSpellVisualID, uint32(me->GetMap()->GetDifficultyID()));
         player->ClearChannelObjects();
         player->AddChannelObject(me->GetGUID());
         player->SetChannelSpellId(SPELL_ALTAR_CHANNEL);

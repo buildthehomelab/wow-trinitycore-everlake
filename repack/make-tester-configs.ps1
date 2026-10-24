@@ -61,6 +61,7 @@ $worldOptions = [ordered]@{
     'Logger.sql.sql' = '6,Console DBErrors'
     # bot module logs
     'Appender.Console' = '1,6,0'
+    'Appender.Loading' = '1,3,0'; 'Logger.server.loading' = '3,Loading Server CrashRing'; 'Logger.server.worldserver' = '3,Loading Server CrashRing'
     'Appender.Playerbot' = '2,3,0,Playerbot.log,w'
     'Logger.playerbot.v2' = '3,Playerbot'; 'Logger.playerbot.api' = '3,Playerbot'
     'Logger.instance.locks' = '3,Console Server'; 'Logger.bg.battleground' = '3,Console Server'

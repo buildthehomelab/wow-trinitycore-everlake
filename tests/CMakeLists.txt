@@ -39,6 +39,8 @@ if(NOT BUILD_PLAYERBOT_V2)
     ClassicLfgRoleGap.cpp
     ClassicRaidConsumables.cpp
     ClassicRaidDispel.cpp
+    ClassicRaidLoadout.cpp
+    ClassicBisPools.cpp
     ClassicRaidFightScript.cpp
     ClassicRaidGeometry.cpp
     ClassicRaidRagnaros.cpp

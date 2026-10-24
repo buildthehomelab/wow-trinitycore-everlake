@@ -121,6 +121,26 @@ TEST_CASE("Battleground fill: a top-up asks for the whole shortfall of each side
     CHECK(Battleground::TopUpRequest(16, 15) == 0);                   // never an overshoot
 }
 
+// WSG 2026-10-21: ten instances from one queue, because each prep tick asked again for the places that bots still in setup would take.
+TEST_CASE("Battleground fill: a top-up leaves out the bots whose setup is still running", "[battleground][balance]")
+{
+    CHECK(Battleground::TopUpAfterInFlight(0, 10, 0) == 10);
+    CHECK(Battleground::TopUpAfterInFlight(0, 10, 10) == 0);    // the first batch already covers the side: no second batch
+    CHECK(Battleground::TopUpAfterInFlight(3, 10, 4) == 3);     // 7 short, 4 on the way
+    CHECK(Battleground::TopUpAfterInFlight(3, 10, 40) == 0);    // never negative
+    CHECK(Battleground::TopUpAfterInFlight(10, 10, 0) == 0);
+}
+
+// A real player queues into a full match whose bots are all in combat at that moment: wait a few seconds for one to be free, do not open a new match.
+TEST_CASE("Battleground fill: a player waits for a busy bot instead of opening a second match", "[battleground][balance]")
+{
+    CHECK(Battleground::WaitForBotToFree(1, 0, 10));     // 10 bots on the side, none free right now
+    CHECK(Battleground::WaitForBotToFree(2, 1, 8));
+    CHECK_FALSE(Battleground::WaitForBotToFree(1, 1, 10));  // a bot can leave now
+    CHECK_FALSE(Battleground::WaitForBotToFree(1, 0, 0));   // the side is all real players: a new match is right
+    CHECK_FALSE(Battleground::WaitForBotToFree(3, 0, 2));   // fewer bots than places needed
+}
+
 // AB 2026-10-11: Alliance 14 of 15 inside, Horde 6: the gate gives Alliance nothing, but a real Alliance player may take the free place.
 TEST_CASE("Battleground fill: a waiting real player ignores the balance gate for a free place", "[battleground][balance]")
 {

@@ -98,19 +98,19 @@ namespace
     std::unordered_map<uint64, uint32> g_lastSize;
     uint32 g_lastTickMs = 0;
 
-    // The player limit of the dungeon a listing is for: the activity's map (Playerbot.Lfg.ActivityMaps) and that map's MaxPlayers
-    // (Upper Blackrock Spire, map 229 = 10); the largest of the listed activities. An unknown activity or map is a 5-man party.
+    // The party size a listing is filled to: the activity's entry in Playerbot.Lfg.ActivityMaps (Upper Blackrock Spire is 10, a raid is
+    // as big as its map, any other dungeon is a 5-man); the largest of the listed activities. An unknown activity is a 5-man party.
     uint32 PartySizeOf(std::vector<uint32> const& activities)
     {
         uint32 size = kLfgMinPartySize;
-        auto const& maps = Playerbot::Services::Config().lfg_activity_maps();
         for (uint32 activity : activities)
         {
-            auto const itr = std::ranges::find(maps, activity, &std::pair<uint32, uint32>::first);
+            auto const& maps = Playerbot::Services::Config().lfg_activity_maps();
+            auto const itr = std::ranges::find(maps, activity, &ConfigReader::LfgActivityMap::activity);
             if (itr == maps.end())
                 continue;
-            if (MapEntry const* map = sMapStore.LookupEntry(itr->second))
-                size = std::max<uint32>(size, std::min<uint32>(uint32(map->MaxPlayers), kLfgMaxPartySize));
+            MapEntry const* map = sMapStore.LookupEntry(itr->map);
+            size = std::max(size, LfgActivityPartySize(itr->size, map && map->IsRaid(), map ? uint32(map->MaxPlayers) : 0));
         }
         return size;
     }
@@ -409,6 +409,7 @@ namespace
         uint32 startMs = 0, lifetimeMs = 0;
         bool alliance = true;
         uint32 bots = 0;                    // members, for the bot budget
+        uint32 activity = 0;                // the Group Finder activity id it is listed for
         uint32 capacity = 5;                // the party size of the dungeon: a player joining a full group takes a bot's place
     };
     std::vector<ListedBotGroup> g_botGroups;
@@ -445,6 +446,7 @@ namespace
             }
         if (!human)
             return;
+        uint32 const partySize = ListedGroupOf(group) ? ListedGroupOf(group)->capacity : kLfgMinPartySize;
         if (Player const* leader = ObjectAccessor::FindConnectedPlayer(listedLeader))
             GroupFinderListings::RemoveBotListing(leader);
         group->ChangeLeader(human->GetGUID());
@@ -458,6 +460,17 @@ namespace
         TC_LOG_INFO("playerbot.v2", "[lfg] {} joined the listed bot group of {}: {} bot(s) are now their companions", human->GetName(),
                     listedLeader.ToString(), bots);
         Tell(human, "Group Finder: you are the leader of this group now. Its " + std::to_string(bots) + " bot(s) follow you like your companions.");
+
+        // The open places fill up with companions one at a time, the same as after a posted listing (Lfg.Trickle), so the group
+        // reaches its party size (UBRS 10).
+        uint32 const seconds = LfgJoinedFillSeconds(Playerbot::Services::Config().lfg_bot_fill_seconds());
+        if (seconds && group->GetMembersCount() < partySize)
+        {
+            uint32 const now = getMSTime();
+            g_lastSize[human->GetGUID().GetCounter()] = partySize;
+            g_pending[human->GetGUID().GetCounter()] = PendingListing{ now + seconds * IN_MILLISECONDS, 0, partySize, now };
+            TC_LOG_INFO("playerbot.v2", "[lfg] {}: the joined group fills its open places up to {} within {} s", human->GetName(), partySize, seconds);
+        }
     }
 
     void EndListedGroup(ListedBotGroup const& listed, char const* why)
@@ -565,11 +578,14 @@ namespace
         // The dungeons are tried in random order; each is filled only with bots of its own level range, so the level of the listed
         // members fits the dungeon. A dungeon without enough free bots of that range is skipped (a group too small, or without the
         // tank and healer its mix lists, is dissolved again and the next one is tried).
+        // A dungeon with no listed group of the faction yet comes first: every dungeon has a group before one has two.
+        std::vector<uint32> listedHere;
+        for (ListedBotGroup const& g : g_botGroups)
+            if (g.alliance == alliance)
+                listedHere.push_back(g.activity);
         std::vector<ListedActivity const*> order;
-        for (ListedActivity const& candidate : activities)
-            order.push_back(&candidate);
-        for (size_t i = order.size(); i > 1; --i)
-            std::swap(order[i - 1], order[urand(0, uint32(i - 1))]);
+        for (size_t index : ListedActivityOrder(activities, listedHere, [](uint32 n) { return urand(0, n - 1); }))
+            order.push_back(&activities[index]);
 
         ListedActivity const* chosen = nullptr;
         uint32 size = 0;
@@ -633,7 +649,7 @@ namespace
         GroupFinderListings::PostBotListing(leader, category, { act.activity }, "", "", kDefaultPlayStyle);
         g_botGroups.push_back(ListedBotGroup{ leaderLow, nowMs,
             ListedGroupLifetimeMs(config.lfg_bot_groups_min_seconds(), config.lfg_bot_groups_max_seconds(), Roll()), alliance,
-            group->GetMembersCount(), size });
+            group->GetMembersCount(), act.activity, size });
         TC_LOG_INFO("playerbot.v2", "[lfg] bot group listed: leader {} activity {} category {} members {}/{} looking for {} ({}; now {} listed)",
                     leader->GetName(), act.activity, category, group->GetMembersCount(), size, GapText(shape.missing),
                     alliance ? "Alliance" : "Horde", g_botGroups.size());

@@ -2,7 +2,11 @@
 // First real-bodies pass: cast_spell / move_to / hearth wired to TrinityCore.
 // Remaining commands listed in v2/API.md fill in incrementally.
 
+#include <functional>
+#include <atomic>
 #include <mutex>
+#include <set>
+#include <optional>
 #include <unordered_map>
 #include "Api/ForeignClassSpell.h"
 #include "PlayerbotAPI.h"
@@ -13,8 +17,10 @@
 #include "ClassicTalentBuilds.h"
 #include "ClassicSupplies.h"
 #include "Bot/ClassicUpkeep.h"
+#include "Bot/AlwaysBuffs.h"
 #include "Bot/SpellFamily.h"
 #include "Bot/Raid/ShieldRules.h"
+#include "Diagnostics/DamageParity.h"
 #include "BotItemScorer.h"
 #include "Player.h"
 #include "Corpse.h"
@@ -775,6 +781,23 @@ Result API::cast_spell(uint32 spell_id, ObjectGuid target, bool exact_rank)
     last_cast_fail_ = CastRejectNotKnown;
     if (!spell_id) return Result::NotKnown;
 
+    // Reincarnation: 20608 is the passive that grants it and has nothing to cast. The resurrection is 21169, which the core offers a dead
+    // shaman through SelfResSpells when the passive is known and 21169 is off cooldown; a client casts it with CMSG_SELF_RES
+    // (WorldSession::HandleSelfResOpcode). The bot's cast of 20608 while dead takes the same path.
+    if (spell_id == 20608 && !p_->IsAlive())
+    {
+        constexpr int32 reincarnation_res = 21169;
+        if (p_->m_activePlayerData->SelfResSpells.FindIndex(reincarnation_res) < 0)
+            return Result::NotReady;
+        if (p_->HasAuraType(SPELL_AURA_PREVENT_RESURRECTION))
+            return Result::Locked;
+        SpellCastResult const res = p_->CastSpell(p_, uint32(reincarnation_res), false);
+        if (res != SPELL_CAST_OK)
+            return Result::ServerRefused;
+        p_->RemoveSelfResSpell(reincarnation_res);
+        return Result::Ok;
+    }
+
     uint32 const requested_id = spell_id;
     if (!exact_rank || !p_->HasSpell(spell_id))
         spell_id = HighestKnownRank(p_, spell_id);
@@ -1039,7 +1062,10 @@ Result API::cast_spell(uint32 spell_id, ObjectGuid target, bool exact_rank)
     SpellCastResult sr = p_->CastSpell(tu, spell_id, false);
     last_cast_fail_ = sr == SPELL_CAST_OK ? 0u : uint32(sr);
     if (sr == SPELL_CAST_OK)
+    {
         LogCastWhileMoving(p_, "casts", spell_id);
+        Diagnostics::Parity::NoteCast(p_, spell_id);
+    }
     if (sr != SPELL_CAST_OK)
     {
         // Throttled diagnostic: log the first failure per (spell, reason) combo
@@ -3137,6 +3163,17 @@ Result API::start_attack(ObjectGuid target, uint8 avoid_school_mask)
             p_->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
     };
 
+    // Auto Shot's minimum and maximum against this mob, from the same function the core's range check uses (Spell::CalcMinMaxRange): the caster's
+    // and the mob's combat reach, the range entry and the ranged weapon's range modifier. Estimating them here left a hunter standing 9-11 y from a
+    // mob, shot refused OUT_OF_RANGE on every try, and not knowing it was inside the zone (PC 20 Oct, Halorio on Blackhand trash).
+    auto autoShotRange = [&](Unit const* target) -> std::optional<SpellRange>
+    {
+        SpellInfo const* shot = sSpellMgr->GetSpellInfo(75, DIFFICULTY_NONE);
+        if (!shot || !shot->RangeEntry)
+            return std::nullopt;
+        return Spell::CalcMinMaxRange(p_, target, false, shot, true);
+    };
+
     auto ensureAutoShot = [&](Unit* victim)
     {
         constexpr uint32 AUTO_SHOT = 75;
@@ -3157,9 +3194,9 @@ Result API::start_attack(ObjectGuid target, uint8 avoid_school_mask)
                 // Inside Auto Shot's minimum range the hunter fights in melee (hunter_dead_zone below), and the repeat is held there by
                 // design: only a hold outside that range is worth a line.
                 bool in_min_range = false;
-                if (check == SPELL_FAILED_OUT_OF_RANGE)
-                    if (SpellInfo const* shot = sSpellMgr->GetSpellInfo(75, DIFFICULTY_NONE); shot && shot->RangeEntry)
-                        in_min_range = p_->GetExactDist(victim) < shot->GetMinRange(false) + (shot->RangeEntry->Flags & SPELL_RANGE_RANGED ? p_->GetMeleeRange(victim) : 0.0f) + 1.0f;
+                std::optional<SpellRange> const shot_range = autoShotRange(victim);
+                if (check == SPELL_FAILED_OUT_OF_RANGE && shot_range)
+                    in_min_range = p_->GetExactDist(victim) < shot_range->Min + 1.0f;
                 if (check != SPELL_CAST_OK && check != SPELL_FAILED_DONT_REPORT && !in_min_range)
                 {
                     static std::mutex sHeldLogMutex;
@@ -3178,8 +3215,8 @@ Result API::start_attack(ObjectGuid target, uint8 avoid_school_mask)
                         }
                     }
                     if (log_now)
-                        TC_LOG_INFO("playerbot.v2", "[autoshot_held] {} on {}: check {} dist {:.1f} moving {} in_front {} los {} ammo {} count {}", p_->GetName(), victim->GetName(),
-                            uint32(check), p_->GetExactDist(victim), int(p_->isMoving()), int(p_->HasInArc(static_cast<float>(M_PI), victim)),
+                        TC_LOG_INFO("playerbot.v2", "[autoshot_held] {} on {}: check {} dist {:.1f} min {:.1f} max {:.1f} moving {} in_front {} los {} ammo {} count {}", p_->GetName(), victim->GetName(),
+                            uint32(check), p_->GetExactDist(victim), shot_range ? shot_range->Min : -1.0f, shot_range ? shot_range->Max : -1.0f, int(p_->isMoving()), int(p_->HasInArc(static_cast<float>(M_PI), victim)),
                             int(p_->IsWithinLOSInMap(victim)), p_->GetAmmoId(), p_->GetAmmoId() ? p_->GetItemCount(p_->GetAmmoId()) : 0u);
                     // Facing is the one cause the bot can mend here: it never turns between shots, a client's player does.
                     if (check == SPELL_FAILED_UNIT_NOT_INFRONT)
@@ -3218,8 +3255,11 @@ Result API::start_attack(ObjectGuid target, uint8 avoid_school_mask)
                 }
             }
             if (log_now)
-                TC_LOG_INFO("playerbot.v2", "[autoshot_fail] {} on {}: result {} dist {:.1f} ammo {} count {}", p_->GetName(), victim->GetName(), uint32(shot),
-                    p_->GetExactDist(victim), p_->GetAmmoId(), p_->GetAmmoId() ? p_->GetItemCount(p_->GetAmmoId()) : 0u);
+            {
+                std::optional<SpellRange> const shot_range = autoShotRange(victim);
+                TC_LOG_INFO("playerbot.v2", "[autoshot_fail] {} on {}: result {} dist {:.1f} min {:.1f} max {:.1f} ammo {} count {}", p_->GetName(), victim->GetName(), uint32(shot),
+                    p_->GetExactDist(victim), shot_range ? shot_range->Min : -1.0f, shot_range ? shot_range->Max : -1.0f, p_->GetAmmoId(), p_->GetAmmoId() ? p_->GetItemCount(p_->GetAmmoId()) : 0u);
+            }
         }
     };
 
@@ -3264,21 +3304,66 @@ Result API::start_attack(ObjectGuid target, uint8 avoid_school_mask)
     // hunter that neither shoots nor swings stands and lets it kill the group. Inside it the hunter fights in melee, like a player closing in.
     bool hunter_dead_zone = false;
     if (p_->GetClass() == CLASS_HUNTER)
-        if (SpellInfo const* shot = sSpellMgr->GetSpellInfo(75, DIFFICULTY_NONE); shot && shot->RangeEntry)
-        {
-            float shot_min = shot->GetMinRange(false);
-            if (shot->RangeEntry->Flags & SPELL_RANGE_RANGED)
-                shot_min += p_->GetMeleeRange(tu);
-            hunter_dead_zone = p_->GetExactDist(tu) < shot_min + 1.0f;
-        }
+        if (std::optional<SpellRange> const shot_range = autoShotRange(tu))
+            hunter_dead_zone = p_->GetExactDist(tu) < shot_range->Min + 1.0f;
     const bool ranged_hunter_engage =
         p_->GetClass() == CLASS_HUNTER &&
         !hunter_dead_zone &&
-        ::Playerbot::Classic::EffectiveSpecId(p_) != uint32(ChrSpecialization::HunterSurvival) &&
+        // Vanilla Survival shoots like the other two specs; only the retail table makes it the melee one.
+        (::Playerbot::IsVanillaRealm() || ::Playerbot::Classic::EffectiveSpecId(p_) != uint32(ChrSpecialization::HunterSurvival)) &&
         p_->GetWeaponForAttack(RANGED_ATTACK, true) != nullptr &&
         // With nothing to shoot the hunter fights in melee, like a player without arrows: Auto Shot would be refused every time.
         (!p_->NeedsAmmo() || (p_->AutoSelectAmmo(), p_->GetAmmoId() != 0 && p_->HasItemCount(p_->GetAmmoId())));
     const bool melee_swing = !ranged_hunter_engage && !physical_avoided;
+    // Every chase a hunter is given, with the distance and the shooting state it was given at (159: hunters put back at 24 y were 3.5 y from the dummy
+    // by the next check, and nothing in the log said who sent them in). One line a bot per 2 s.
+    auto logHunterChase = [&](char const* site)
+    {
+        if (p_->GetClass() != CLASS_HUNTER)
+            return;
+        static std::mutex sChaseLogMutex;
+        static std::unordered_map<uint64, uint32> sChaseLog;
+        uint32 const now = getMSTime();
+        {
+            std::lock_guard<std::mutex> lock(sChaseLogMutex);
+            if (sChaseLog.size() > 4096)
+                sChaseLog.clear();
+            uint32& last = sChaseLog[p_->GetGUID().GetCounter()];
+            if (last && now - last < 2000u)
+                return;
+            last = now;
+        }
+        TC_LOG_INFO("playerbot.v2", "[hunter_chase] {} on {}: {} dist {:.1f} dead_zone {} ranged_engage {} melee_swing {}", p_->GetName(), tu->GetName(), site, p_->GetExactDist(tu), int(hunter_dead_zone), int(ranged_hunter_engage), int(melee_swing));
+    };
+    if (p_->GetClass() == CLASS_HUNTER && !ranged_hunter_engage)
+    {
+        // Why a hunter engages in melee (157: Raptor Strike and white swings against the dummy while the harness had it 15 y away): every
+        // condition of the ranged engage, once per 5 s per hunter.
+        static std::mutex sMeleeLogMutex;
+        static std::unordered_map<uint64, uint32> sMeleeLog;
+        uint32 const now = getMSTime();
+        bool log_now = false;
+        {
+            std::lock_guard<std::mutex> lock(sMeleeLogMutex);
+            if (sMeleeLog.size() > 4096)
+                sMeleeLog.clear();
+            uint32& last = sMeleeLog[p_->GetGUID().GetCounter()];
+            if (!last || now - last > 5000u)
+            {
+                last = now;
+                log_now = true;
+            }
+        }
+        if (log_now)
+        {
+            Item const* ranged = p_->GetWeaponForAttack(RANGED_ATTACK, true);
+            Item const* equipped = p_->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_RANGED);
+            TC_LOG_INFO("playerbot.v2", "[hunter_melee_engage] {} on {}: dist {:.1f} dead_zone {} spec {} usable_ranged_weapon {} equipped_ranged {} needs_ammo {} ammo_id {} ammo_count {} physical_avoided {} los {}",
+                p_->GetName(), tu->GetName(), p_->GetExactDist(tu), int(hunter_dead_zone), ::Playerbot::Classic::EffectiveSpecId(p_), ranged ? ranged->GetEntry() : 0u,
+                equipped ? equipped->GetEntry() : 0u, int(p_->NeedsAmmo()), p_->GetAmmoId(), p_->GetAmmoId() ? p_->GetItemCount(p_->GetAmmoId()) : 0u,
+                int(physical_avoided), int(p_->IsWithinLOSInMap(tu)));
+        }
+    }
 
     if (p_->GetVictim() == tu)
     {
@@ -3298,14 +3383,14 @@ Result API::start_attack(ObjectGuid target, uint8 avoid_school_mask)
         // fight turns to melee, but this path never chased again: the hunter stood a few yards off, unable to shoot or swing (Isane, 2026-10-20).
         // Close in once it stands still; a hunter already walking keeps its chase.
         if (p_->GetClass() == CLASS_HUNTER && hunter_dead_zone && melee_swing && p_->movespline->Finalized() && !p_->IsWithinMeleeRange(tu))
-            p_->GetMotionMaster()->MoveChase(tu);
+            { p_->GetMotionMaster()->MoveChase(tu); logHunterChase("dead_zone_close_in"); }
         // The opening engage chases once; another layer's move (formation slot, follow) replaces that chase and this path never issued it
         // again, so a hunter ordered at a mob beyond its shooting range stood in the aim pose for good (PC 20 Oct, whelp ~30+ y away).
         // Take the chase up again whenever the bot is not chasing and the mob is out of its 28 y shooting spot.
         else if (p_->GetClass() == CLASS_HUNTER && ranged_hunter_engage && p_->GetExactDist(tu) > 28.0f &&
                  !(tu->IsCreature() && !tu->IsInCombat() && !tu->GetVictim() && p_->GetGroup() && p_->GetMap()->Instanceable()) &&   // an idle mob in an instance: see below
                  p_->GetMotionMaster()->GetCurrentMovementGeneratorType() != CHASE_MOTION_TYPE)
-            p_->GetMotionMaster()->MoveChase(tu, ChaseRange(0.0f, 28.0f));
+            { p_->GetMotionMaster()->MoveChase(tu, ChaseRange(0.0f, 28.0f)); logHunterChase("ranged_28"); }
         return Result::Ok;
     }
 
@@ -3365,7 +3450,7 @@ Result API::start_attack(ObjectGuid target, uint8 avoid_school_mask)
             // check instead of class check; pre-L10 (spec None) hunters
             // default to ranged, which matches their Steady Shot kit.
             is_pure_caster =
-                ::Playerbot::Classic::EffectiveSpecId(p_) != uint32(ChrSpecialization::HunterSurvival) && ranged_hunter_engage;   // melee fallback: close in
+                (::Playerbot::IsVanillaRealm() || ::Playerbot::Classic::EffectiveSpecId(p_) != uint32(ChrSpecialization::HunterSurvival)) && ranged_hunter_engage;   // melee fallback: close in
             break;
         case CLASS_EVOKER:
             // Evoker is pure-caster like Mage/Hunter (no melee spec Ã¢Â€Â”
@@ -3434,11 +3519,21 @@ Result API::start_attack(ObjectGuid target, uint8 avoid_school_mask)
         // MaxRange=28 still keeps the bot inside Frostbolt / Shadow Bolt /
         // Steady Shot's 30y range with a small safety margin; Evoker
         // (25y range baseline) gets a tighter 23y to stay in range.
-        const float max_chase = is_short_range_caster ? 23.0f : 28.0f;
+        // 28 stopped the 167 warlock at 29.2 y: the chase range is edge to edge (the combat reaches come on top), so the bot stood at the edge of
+        // the 30 y cast range, where a step of the dummy or a wobble put it out of range. 25 puts it at about 26-27 y.
+        // Mind Flay and Earth Shock reach 20 y, not 30: the shadow priest and the elemental shaman stood at 27.5 y (190: 25 plus the combat reaches),
+        // so their rotation's channel and shock were never in range (no Mind Flay in the t1 and buffed legs) and only the 30 y spells fired.
+        ChrSpecialization const caster_spec = ChrSpecialization(::Playerbot::Classic::EffectiveSpecId(p_));
+        bool const twenty_yard_rotation = caster_spec == ChrSpecialization::PriestShadow || caster_spec == ChrSpecialization::ShamanElemental;
+        const float max_chase = is_short_range_caster ? 21.0f : twenty_yard_rotation ? (caster_spec == ChrSpecialization::ShamanElemental ? 13.0f : 16.0f) : 25.0f;   // the elemental also keeps the victim inside Searing Totem's 18 y
         p_->GetMotionMaster()->MoveChase(tu, ChaseRange(0.0f, max_chase));
+        logHunterChase("opening_ranged");
     }
     else
+    {
         p_->GetMotionMaster()->MoveChase(tu);
+        logHunterChase("opening_melee");
+    }
     return Result::Ok;
 }
 
@@ -3778,6 +3873,68 @@ Result API::near_teleport_to(float x, float y, float z, float o, bool navmesh_po
     return Result::Ok;
 }
 
+Result API::always_buffs(uint8 set, uint8 mask)
+{
+    if (!p_ || set >= kBuffSetCount) return Result::Other;
+    std::string changed;
+    bool const horde = p_->GetTeam() == HORDE;
+    // One row: put on when its kind is on here, taken off when it is off here.
+    auto const row = [&](AlwaysAura const& a)
+    {
+        bool const on = (mask & (a.world ? kAlwaysMaskWorldBuffs : kAlwaysMaskConsumables)) != 0 && (!a.horde_only || horde);
+        for (uint32 id : AlwaysAuraEffects(a))
+        {
+            if (a.kind == AlwaysKind::Stone)
+            {
+                // The temporary enchantment on the main hand (a stone lasts an hour; two here, so it is not renewed every tick).
+                Item* mh = p_->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
+                if (!mh) continue;
+                uint32 const now = mh->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT);
+                if (on ? now != 0 : now != id) continue;   // already on / another oil or stone is on / ours is not there to take off
+                p_->ApplyEnchantment(mh, TEMP_ENCHANTMENT_SLOT, false);
+                mh->SetEnchantment(TEMP_ENCHANTMENT_SLOT, on ? id : 0, on ? 2u * 60u * 60u * 1000u : 0u, 0);
+                p_->ApplyEnchantment(mh, TEMP_ENCHANTMENT_SLOT, true);
+                changed += (on ? " +enchant " : " -enchant ") + std::to_string(id);
+            }
+            else if (on)
+            {
+                if (!p_->HasAura(id) && p_->AddAura(id, p_))
+                    changed += " +" + std::to_string(id);
+            }
+            else if (p_->HasAura(id))
+            {
+                p_->RemoveAurasDueToSpell(id);
+                changed += " -" + std::to_string(id);
+            }
+        }
+    };
+    for (AlwaysAura const& a : kWorldBuffs) row(a);
+    for (uint8 b = 0; b < kBuffSetCount; ++b)
+        if (b == set || !(mask & (kAlwaysMaskConsumables | kAlwaysMaskWorldBuffs)))   // the other roles' rows only to strip them
+            for (AlwaysAura const& a : AlwaysBuffRoleRows(BuffSet(b))) row(a);
+    if (mask & kAlwaysMaskRepair)
+    {
+        // Gear never wears out and the bot is never broke: a full repair at no cost, and the gold back up to the floor.
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+            if (Item* it = p_->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                if (*it->m_itemData->MaxDurability && *it->m_itemData->Durability < *it->m_itemData->MaxDurability)
+                {
+                    p_->DurabilityRepairAll(/*takeCost*/ false, 0.0f, /*guildBank*/ false);
+                    changed += " +repair";
+                    break;
+                }
+        uint64 const floor = uint64(kAlwaysGoldFloor) * 10000ull;   // copper per gold
+        if (p_->GetMoney() < floor)
+        {
+            p_->SetMoney(floor);
+            changed += " +gold";
+        }
+    }
+    if (!changed.empty())
+        TC_LOG_INFO("playerbot.v2", "[always_buff] {} mask {}{}", p_->GetName(), uint32(mask), changed);
+    return changed.empty() ? Result::NotKnown : Result::Ok;
+}
+
 Result API::cancel_aura(uint32 spell_id)
 {
     if (!p_) return Result::Other;
@@ -4042,11 +4199,61 @@ Result API::face_target(ObjectGuid target, bool combat)
         ClearStaleMoveFlags(p_);
         if (p_->isMoving() || !p_->movespline->Finalized() || p_->HasUnitState(UNIT_STATE_LOST_CONTROL | UNIT_STATE_STUNNED) ||
             p_->GetCurrentSpell(CURRENT_CHANNELED_SPELL) || p_->HasUnitState(UNIT_STATE_CASTING))
+        {
+            // The caller logs "refaced" for every request it sends, so a bot the core never turns (damage_parity 166: a priest 90 degrees
+            // off its dummy for 3 minutes, 84 "refaced" lines, 5 s of casting) is told apart from a turned one by this line.
+            static std::mutex sLockedLogMutex;
+            static std::unordered_map<uint64, uint32> sLockedLog;
+            uint32 const now = getMSTime();
+            bool log_now = false;
+            {
+                std::lock_guard<std::mutex> lock(sLockedLogMutex);
+                if (sLockedLog.size() > 4096)
+                    sLockedLog.clear();
+                uint32& last = sLockedLog[p_->GetGUID().GetCounter()];
+                if (!last || now - last > 5000u)
+                {
+                    last = now;
+                    log_now = true;
+                }
+            }
+            if (log_now)
+                TC_LOG_INFO("playerbot.v2", "[face_locked] {} cannot be turned to {}: moving {} flags 0x{:X} spline_finalized {} spline_left {} ms generator {} lost_control {} stunned {} channeling {} casting_state {}",
+                            p_->GetName(), u->GetName(), int(p_->isMoving()), uint32(p_->GetUnitMovementFlags()), int(p_->movespline->Finalized()), p_->movespline->timeRemaining(),
+                            int(p_->GetMotionMaster()->GetCurrentMovementGeneratorType()), int(p_->HasUnitState(UNIT_STATE_LOST_CONTROL)), int(p_->HasUnitState(UNIT_STATE_STUNNED)),
+                            int(p_->GetCurrentSpell(CURRENT_CHANNELED_SPELL) != nullptr), int(p_->HasUnitState(UNIT_STATE_CASTING)));
             return Result::Locked;
+        }
         float const off = Position::NormalizeOrientation(p_->GetOrientation() - p_->GetAbsoluteAngle(u));
         if (off < 0.1f || off > 2.0f * float(M_PI) - 0.1f)
             return Result::Ok;
+        float const before = p_->GetOrientation();
         p_->SetFacingToPoint(u->GetPosition(), /*force*/ true);
+        // A turn the core accepted but did not apply (damage_parity 189: a priest 90 degrees off its dummy for a whole leg, no refusal logged)
+        // leaves this line behind: the orientation before and after, the bearing wanted and the states that stop a unit turning.
+        float const after_off = Position::NormalizeOrientation(p_->GetOrientation() - p_->GetAbsoluteAngle(u));
+        if (after_off > 0.1f && after_off < 2.0f * float(M_PI) - 0.1f)
+        {
+            static std::mutex sTurnLogMutex;
+            static std::unordered_map<uint64, uint32> sTurnLog;
+            uint32 const now = getMSTime();
+            bool log_now = false;
+            {
+                std::lock_guard<std::mutex> lock(sTurnLogMutex);
+                if (sTurnLog.size() > 4096)
+                    sTurnLog.clear();
+                uint32& last = sTurnLog[p_->GetGUID().GetCounter()];
+                if (!last || now - last > 5000u)
+                {
+                    last = now;
+                    log_now = true;
+                }
+            }
+            if (log_now)
+                TC_LOG_INFO("playerbot.v2", "[face_not_applied] {} asked to face {}: orientation {:.2f} -> {:.2f}, wanted {:.2f}, spline_finalized {} cannot_turn {} root {} on_transport {}",
+                            p_->GetName(), u->GetName(), before, p_->GetOrientation(), p_->GetAbsoluteAngle(u), int(p_->movespline->Finalized()), int(p_->HasUnitState(UNIT_STATE_CANNOT_TURN)), int(p_->HasUnitState(UNIT_STATE_ROOT)),
+                            int(p_->GetTransport() != nullptr));
+        }
         return Result::Ok;
     }
     // Already facing it (within ~0.1 rad) and standing still: nothing to do.
@@ -6390,7 +6597,10 @@ Result API::use_game_object(ObjectGuid go_guid)
 
     // A battleground flag or banner is not used in a shapeshift form (a bear-form druid stood at the Lumber Mill banner doing nothing,
     // the owner AB 2026-10-11): leave the form first, the next click (the rule re-emits) goes through as a caster.
-    if (p_->InBattleground() && p_->GetShapeshiftForm() != FORM_NONE &&
+    // Only a real shapeshift (druid animal forms, Ghost Wolf) blocks the click; a warrior stance or Stealth does not (SpellInfo::CheckShapeshift).
+    // The log showed warriors (form 17, 18) and rogues (form 30) dropping their stance or stealth for every flag click.
+    SpellShapeshiftFormEntry const* const formInfo = p_->GetShapeshiftForm() != FORM_NONE ? sSpellShapeshiftFormStore.LookupEntry(p_->GetShapeshiftForm()) : nullptr;
+    if (p_->InBattleground() && formInfo && !formInfo->GetFlags().HasFlag(SpellShapeshiftFormFlags::Stance) &&
         (obj->GetGoType() == GAMEOBJECT_TYPE_BUTTON || obj->GetGoType() == GAMEOBJECT_TYPE_GOOBER || obj->GetGoType() == GAMEOBJECT_TYPE_FLAGSTAND ||
          obj->GetGoType() == GAMEOBJECT_TYPE_FLAGDROP || obj->GetGoType() == GAMEOBJECT_TYPE_NEW_FLAG || obj->GetGoType() == GAMEOBJECT_TYPE_NEW_FLAG_DROP ||
          obj->GetGoType() == GAMEOBJECT_TYPE_CAPTURE_POINT))
@@ -7701,6 +7911,23 @@ Result API::apply_starter_talents()
     return ranks > 0 ? Result::Ok : Result::Locked;
 }
 
+// The trait edges that end at a node, indexed once. sTraitEdgeStore is a sparse array of about 1.4 million slots, and the talent walk below asks for the
+// parents of a node for every refused pick, again after every rank it places and in each recursion: a scan of the whole store each time held the
+// world thread for 60 s when a group of bots logged in together (168 freeze, the hot loop was this scan).
+static std::vector<TraitEdgeEntry const*> const& TraitEdgesInto(int32 nodeId)
+{
+    static std::unordered_map<int32, std::vector<TraitEdgeEntry const*>> byRight;
+    static std::once_flag once;
+    static std::vector<TraitEdgeEntry const*> const none;
+    std::call_once(once, []
+    {
+        for (TraitEdgeEntry const* edge : sTraitEdgeStore)
+            byRight[edge->RightTraitNodeID].push_back(edge);
+    });
+    auto itr = byRight.find(nodeId);
+    return itr != byRight.end() ? itr->second : none;
+}
+
 Result API::apply_classic_talents()
 {
     if (!p_) return Result::Other;
@@ -7712,6 +7939,73 @@ Result API::apply_classic_talents()
     uint32 const spec = ::Playerbot::Classic::EffectiveSpecId(p_);
     auto const build = ::Playerbot::Classic::GetTalentBuild(p_->GetClass(), spec);
     if (build.empty()) return Result::NotKnown;
+
+    // The walk below validates the whole trait config once per rank and per refused pick (TraitMgr::FillOwnedCurrenciesMap and
+    // MeetsTraitCondition each time), which is seconds of world thread for one bot. Companions ask for it on every upkeep and a group of
+    // them logs in together (169 freeze: 60 s), so a bot whose level, specialization and purchased ranks are what its last walk left
+    // is not walked again, and walks that are still needed are spaced by a duty cycle (the caller is told Locked and asks again later).
+    struct TalentWalkState { uint8 level; uint32 spec; uint32 ranks; };
+    static std::mutex s_walkLock;
+    static std::unordered_map<uint64, TalentWalkState> s_walked;
+    static std::atomic<uint32> s_nextWalkMs{ 0 };
+    uint64 const walkKey = p_->GetGUID().GetCounter();
+    {
+        std::lock_guard<std::mutex> lock(s_walkLock);
+        auto const walked = s_walked.find(walkKey);
+        if (walked != s_walked.end() && walked->second.level == uint8(p_->GetLevel()) && walked->second.spec == spec
+            && walked->second.ranks == CountActiveTraitRanks(p_))
+            return Result::Ok;
+    }
+    // Playerbot.ClassicTalents.ApplyOnLogin = 0 (default): a bot that already holds all the points of its level on the build its talents
+    // say it has (171 froze with 17 walks in one second at login) is not walked again; one that changed spec or still has points to place is.
+    static bool const applyOnLogin = sConfigMgr->GetBoolDefault("Playerbot.ClassicTalents.ApplyOnLogin", false, true);
+    if (!applyOnLogin)
+    {
+        uint32 const held = CountActiveTraitRanks(p_);
+        int32 const points = std::max<int32>(0, int32(p_->GetLevel()) - 9);
+        // The bot must hold the build as it is defined now: every pick, in the build's order, up to the points of its level, at the ranks the
+        // build lists. A build definition that changed (talent names corrected to Forever's nodes) or a spec pinned by a scenario fails this
+        // and the bot is walked once; a pick the class trees have no node for cannot be held and does not count against the bot.
+        bool holdsBuild = held > 0 && int32(held) >= points;
+        if (holdsBuild)
+        {
+            UF::TraitConfig const* activeCfg = p_->GetTraitConfig(p_->m_activePlayerData->ActiveCombatTraitConfigID);
+            int32 placed = 0;
+            for (::Playerbot::Classic::TalentPick const& pick : build)
+            {
+                if (placed >= points)
+                    break;
+                if (pick.filler)
+                    continue;
+                placed += pick.ranks;
+                ::Playerbot::Classic::TalentNode const* node = ::Playerbot::Classic::FindTalent(p_, pick.name);
+                if (!node)
+                    continue;
+                int32 rank = 0;
+                for (UF::TraitEntry const& e : activeCfg->Entries)
+                    if (e.TraitNodeID == node->TraitNodeID && e.TraitNodeEntryID == node->TraitNodeEntryID)
+                        rank = e.Rank + e.GrantedRanks;
+                if (rank < std::min<int32>(pick.ranks, node->MaxRanks))
+                {
+                    holdsBuild = false;
+                    break;
+                }
+            }
+        }
+        if (holdsBuild)
+        {
+            std::lock_guard<std::mutex> lock(s_walkLock);
+            s_walked[walkKey] = { uint8(p_->GetLevel()), spec, held };
+            return Result::Ok;
+        }
+    }
+    // At most one walk per world update, whatever the duty cycle says.
+    static std::atomic<uint32> s_lastWalkLoop{ 0 };
+    uint32 const loopNow = World::m_worldLoopCounter.load();
+    if (loopNow == s_lastWalkLoop.load() || int32(getMSTime() - s_nextWalkMs.load()) < 0)
+        return Result::Locked;
+    s_lastWalkLoop.store(loopNow);
+    uint32 const walkStartMs = getMSTime();
 
     // Start from the free (granted) ranks only and buy the build rank by
     // rank. ValidateConfig enforces tier gates and the points the bot's
@@ -7739,18 +8033,126 @@ Result API::apply_classic_talents()
     std::vector<TreeKey> buildTrees;   // the trees the build spends in, in the order it first names them
 
     std::string unresolved;   // build talents the class trees have no node for, by name
-    for (::Playerbot::Classic::TalentPick const& pick : build)
+    std::map<std::string, int32> rankOf;      // pick name -> ranks held when its last visit ended
+    std::map<std::string, int32> refusedBy;   // pick name -> the last LearnResult that stopped its ranks (the reason a talent is missing)
+
+    // ValidateConfig answers from the config and the player alone, and the player does not change during the walk, so a rank it refused stays refused
+    // until another rank is bought. `cfgVersion` counts the ranks bought; a node or pick refused at the current version is not validated again.
+    // Without it fillParents filled every ancestor once per path to it (a node under two parents that share a parent: that one twice, and so on
+    // five levels up), and every refused pick, with its parents, was validated again after each leftover rank. On the 70532 client data (234,
+    // 2026-10-23) the walk held the world thread past the 60 s freeze detector, inside ValidateConfig, when chris targeted or cast.
+    uint32 cfgVersion = 0;
+    std::map<int32, uint32> parentsTriedAt;      // node id -> cfgVersion when its parents were last filled
+    std::map<std::string, uint32> pickTriedAt;   // pick name -> cfgVersion when its ranks were last refused
+
+    // Whatever the data, one walk may not hold the world thread longer than this: a walk cut short keeps the ranks it validated, says so once per
+    // class and spec, and the bot is not walked again until its level, spec or ranks change.
+    static uint32 const walkBudgetMs = sConfigMgr->GetIntDefault("Playerbot.ClassicTalents.WalkBudgetMs", 250, true);
+    uint32 validations = 0;
+    bool cutShort = false;
+    auto const overBudget = [&]
+    {
+        if (!cutShort && getMSTimeDiff(walkStartMs, getMSTime()) > walkBudgetMs)
+            cutShort = true;
+        return cutShort;
+    };
+    auto const validate = [&]
+    {
+        ++validations;
+        return TraitMgr::ValidateConfig(cfg, p_);
+    };
+
+    // A talent below another is refused until a parent node is filled to its maximum (ValidateConfig), and a build that takes a
+    // parent only partway (3 of 5) loses everything under it. Buys the parents of a node, and theirs, up to their maximum ranks as
+    // far as ValidateConfig allows; true when at least one rank was bought.
+    // The class trees have edges both ways between two nodes (70532: ten pairs, 104708 <-> 104709 among them). Following one
+    // back to a node still being filled (`path`) found that node's entry before it held a rank and erased it, under the
+    // indexes the callers hold: the walk then wrote ranks past the end of the vector and erased from beyond it, which corrupted
+    // the heap and spun the world thread in memmove until the freeze detector ended it (234, crashes 00:49 and 00:55).
+    std::vector<int32> path;
+    std::vector<TraitMgr::NodeEntryInfo> const configNodes = TraitMgr::GetNodeEntriesForConfig(cfg);
+    std::function<bool(int32, int32)> fillParents = [&](int32 nodeId, int32 depth) -> bool
+    {
+        bool bought = false;
+        if (depth > 4 || overBudget() || std::ranges::find(path, nodeId) != path.end())
+            return false;
+        // Filled already with the config as it stands: the same ranks would be refused again.
+        if (auto [tried, first] = parentsTriedAt.try_emplace(nodeId, cfgVersion); !first)
+        {
+            if (tried->second == cfgVersion)
+                return false;
+            tried->second = cfgVersion;
+        }
+        path.push_back(nodeId);
+        for (TraitEdgeEntry const* edge : TraitEdgesInto(nodeId))
+        {
+            if (overBudget())
+                break;
+            if (std::ranges::find(path, int32(edge->LeftTraitNodeID)) != path.end())
+                continue;
+            auto info = std::ranges::find(configNodes, edge->LeftTraitNodeID, &TraitMgr::NodeEntryInfo::TraitNodeID);
+            if (info == configNodes.end())
+                continue;
+
+            auto itr = std::ranges::find_if(cfg.Entries, [&](WorldPackets::Traits::TraitEntry const& e)
+            {
+                return e.TraitNodeID == info->TraitNodeID && e.TraitNodeEntryID == info->TraitNodeEntryID;
+            });
+            bool const added = itr == cfg.Entries.end();
+            if (added)
+            {
+                WorldPackets::Traits::TraitEntry& entry = cfg.Entries.emplace_back();
+                entry.TraitNodeID = info->TraitNodeID;
+                entry.TraitNodeEntryID = info->TraitNodeEntryID;
+                itr = std::prev(cfg.Entries.end());
+            }
+            size_t const index = size_t(std::distance(cfg.Entries.begin(), itr));
+
+            // the parent's own parents first, or its ranks are refused as well
+            if (cfg.Entries[index].Rank + cfg.Entries[index].GrantedRanks < info->MaxRanks && fillParents(info->TraitNodeID, depth + 1))
+                bought = true;
+            // that call can add entries, but only after this one
+            while (cfg.Entries[index].Rank + cfg.Entries[index].GrantedRanks < info->MaxRanks && !overBudget())
+            {
+                ++cfg.Entries[index].Rank;
+                if (validate() != TraitMgr::LearnResult::Ok)
+                {
+                    --cfg.Entries[index].Rank;
+                    break;
+                }
+                ++cfgVersion;
+                bought = true;
+            }
+            // only the entry this call added: one that was there before belongs to a caller
+            if (added && !cfg.Entries[index].Rank && !cfg.Entries[index].GrantedRanks)
+                cfg.Entries.erase(cfg.Entries.begin() + index);
+        }
+        path.pop_back();
+        return bought;
+    };
+
+    // Buys the pick's ranks as far as ValidateConfig allows; true when at least one rank was bought. `firstVisit` records
+    // the pick's name and tree once (the walk below passes over every pick more than once).
+    auto buyPick = [&](::Playerbot::Classic::TalentPick const& pick, bool firstVisit) -> bool
     {
         ::Playerbot::Classic::TalentNode const* node = ::Playerbot::Classic::FindTalent(p_, pick.name);
         if (!node)
         {
-            if (!unresolved.empty())
-                unresolved += ", ";
-            unresolved += pick.name;
-            continue;
+            if (firstVisit)
+            {
+                if (!unresolved.empty())
+                    unresolved += ", ";
+                unresolved += pick.name;
+            }
+            return false;
         }
-        if (std::ranges::find(buildTrees, treeOf(node->TraitNodeID)) == buildTrees.end())
+        if (firstVisit && std::ranges::find(buildTrees, treeOf(node->TraitNodeID)) == buildTrees.end())
             buildTrees.push_back(treeOf(node->TraitNodeID));
+        if (overBudget())
+            return false;
+        // refused with the config as it stands (its parents tried as well): nothing has been bought since that would let a rank through
+        if (auto tried = pickTriedAt.find(pick.name); tried != pickTriedAt.end() && tried->second == cfgVersion)
+            return false;
 
         auto entryItr = std::ranges::find_if(cfg.Entries, [&](WorldPackets::Traits::TraitEntry const& e)
         {
@@ -7765,18 +8167,48 @@ Result API::apply_classic_talents()
         }
         size_t const entryIndex = size_t(std::distance(cfg.Entries.begin(), entryItr));
 
+        int32 const before = cfg.Entries[entryIndex].Rank;
         int32 const target = std::min<int32>(pick.ranks, node->MaxRanks - cfg.Entries[entryIndex].GrantedRanks);
-        while (cfg.Entries[entryIndex].Rank < target)
+        for (bool parentsTried = false; ; parentsTried = true)
         {
-            ++cfg.Entries[entryIndex].Rank;
-            if (TraitMgr::ValidateConfig(cfg, p_) != TraitMgr::LearnResult::Ok)
+            while (cfg.Entries[entryIndex].Rank < target && !overBudget())
             {
-                --cfg.Entries[entryIndex].Rank;
-                break;
+                ++cfg.Entries[entryIndex].Rank;
+                if (TraitMgr::LearnResult const result = validate(); result != TraitMgr::LearnResult::Ok)
+                {
+                    --cfg.Entries[entryIndex].Rank;
+                    refusedBy[pick.name] = int32(AsUnderlyingType(result));
+                    break;
+                }
+                ++cfgVersion;
+                refusedBy.erase(pick.name);
             }
+            // refused: fill the parent nodes to their maximum once and try the remaining ranks again
+            if (parentsTried || cfg.Entries[entryIndex].Rank >= target || !fillParents(node->TraitNodeID, 0))
+                break;
         }
+        bool const bought = cfg.Entries[entryIndex].Rank > before;
+        if (cfg.Entries[entryIndex].Rank < target)
+            pickTriedAt[pick.name] = cfgVersion;
+        rankOf[pick.name] = cfg.Entries[entryIndex].Rank;
         if (!cfg.Entries[entryIndex].Rank && !cfg.Entries[entryIndex].GrantedRanks)
             cfg.Entries.erase(cfg.Entries.begin() + entryIndex);
+        return bought;
+    };
+
+    // A talent in a deeper tier is refused until the tab holds enough points (ValidateConfig's tier gates), and the build lists
+    // talents in levelling order, so a single walk lost every talent whose tier the earlier picks had not opened yet (the arms
+    // bot ended with no Deep Wounds, Two-Handed Weapon Specialization, Impale or Sweeping Strikes: damage_parity 2026-10-21).
+    // Walk the build again until a pass buys nothing; the fillers come last, with the points left.
+    for (bool filler : { false, true })
+    {
+        for (bool progress = true, firstVisit = true; progress; firstVisit = false)
+        {
+            progress = false;
+            for (::Playerbot::Classic::TalentPick const& pick : build)
+                if (pick.filler == filler && buyPick(pick, firstVisit))
+                    progress = true;
+        }
     }
     // Points the build couldn't place (a name Forever's trees spell differently, a prerequisite it doesn't list) were
     // left unspent: a level 60 paladin sat on 13 of 51 (Celestera, 2026-10-05). Spend the rest down the trees, the one
@@ -7807,11 +8239,23 @@ Result API::apply_classic_talents()
         });
         // One rank per talent per pass, repeated until a pass places nothing: the first tree takes every point it can
         // (its deeper tiers open as it fills) before a point goes to the next one.
-        for (bool placed = true; placed; )
+        // A level L bot has L - 9 points to spend (51 at 60). Every point bought ends the walk below, and the pass that finds nothing
+        // left to place validates every talent of the class once more, so a bot whose points are all spent does not go through it.
+        int32 const pointsForLevel = std::max<int32>(0, int32(p_->GetLevel()) - 9);
+        auto const ranksBought = [&cfg]
+        {
+            int32 total = 0;
+            for (WorldPackets::Traits::TraitEntry const& e : cfg.Entries)
+                total += std::max<int32>(0, e.Rank);
+            return total;
+        };
+        for (bool placed = true; placed && ranksBought() < pointsForLevel && !overBudget(); )
         {
             placed = false;
             for (TraitMgr::NodeEntryInfo const& info : nodes)
             {
+                if (overBudget())
+                    break;
                 auto entryItr = std::ranges::find_if(cfg.Entries, [&](WorldPackets::Traits::TraitEntry const& e)
                 {
                     return e.TraitNodeID == info.TraitNodeID && e.TraitNodeEntryID == info.TraitNodeEntryID;
@@ -7827,9 +8271,19 @@ Result API::apply_classic_talents()
                 if (entryItr->Rank + entryItr->GrantedRanks < info.MaxRanks)
                 {
                     ++entryItr->Rank;
-                    if (TraitMgr::ValidateConfig(cfg, p_) == TraitMgr::LearnResult::Ok)
+                    if (validate() == TraitMgr::LearnResult::Ok)
                     {
+                        ++cfgVersion;
                         placed = true;
+                        // A build talent refused for want of points in its tab (Vengeance, 147) is tried again as each rank lands: the
+                        // leftover points would otherwise take all of what it needs by the time its tier opens.
+                        std::vector<std::string> retry;
+                        for (auto const& [name, result] : refusedBy)
+                            retry.push_back(name);
+                        for (std::string const& name : retry)
+                            for (::Playerbot::Classic::TalentPick const& pick : build)
+                                if (name == pick.name)
+                                    buyPick(pick, false);
                         break;   // restart from the top: the preferred tree's next rank may have just opened
                     }
                     --entryItr->Rank;
@@ -7854,8 +8308,7 @@ Result API::apply_classic_talents()
     for (UF::TraitEntry const& e : active->Entries)
         if (e.Rank > 0)
             current[{ e.TraitNodeID, e.TraitNodeEntryID }] = e.Rank;
-    if (ranksOf(cfg.Entries) == current)
-        return Result::Ok;   // already on the build for this level
+    bool const already = ranksOf(cfg.Entries) == current;   // already on the build for this level
 
     // Ranks per tree, the build's trees first: shows whether the tabs were told apart.
     std::map<TreeKey, int32> perTree;
@@ -7869,9 +8322,119 @@ Result API::apply_classic_talents()
         if (std::ranges::find(buildTrees, tree) == buildTrees.end())
             split += (split.empty() ? "" : "/") + std::to_string(ranks);
 
-    p_->UpdateTraitConfig(std::move(cfg), 0, /*withCastTime*/ false);
-    TC_LOG_INFO("playerbot.api", "[API::talents] {} classic build for spec {} committed: {} ranks, per tree {} (build talents not found: {})",
-        p_->GetName(), spec, CountActiveTraitRanks(p_), split, unresolved.empty() ? "none" : unresolved);
+    // Every talent the walk left ranks in, by name (read before UpdateTraitConfig moves the config): the build's picks and the points the leftover pass
+    // spent. Parity 200 (fire mage 575 against 743) had the same auras up as 184 and nothing to say which ranks differed.
+    std::string heldRanks;
+    if (!already && p_->GetLevel() >= 60)
+        for (std::string const& n : ::Playerbot::Classic::ListTalentNames(p_))
+            if (::Playerbot::Classic::TalentNode const* node = ::Playerbot::Classic::FindTalent(p_, n))
+                for (WorldPackets::Traits::TraitEntry const& e : cfg.Entries)
+                    if (e.Rank > 0 && e.TraitNodeID == node->TraitNodeID && e.TraitNodeEntryID == node->TraitNodeEntryID)
+                        heldRanks += fmt::format("{}{}={}/{}", heldRanks.empty() ? "" : ", ", n, e.Rank, node->MaxRanks);
+
+    if (!already)
+        p_->UpdateTraitConfig(std::move(cfg), 0, /*withCastTime*/ false);
+    if (!unresolved.empty() && p_->GetLevel() >= 60)
+    {
+        // once per class and process: the names the client data gives this class's talents, to correct the build's
+        static std::mutex s_namesLock;
+        static std::set<uint8> s_namesLogged;
+        std::lock_guard lock(s_namesLock);
+        if (s_namesLogged.insert(p_->GetClass()).second)
+        {
+            std::string all;
+            // with each node's row, the ranks this bot holds and the nodes it hangs under, so a build can be mapped onto the tab
+            for (std::string const& n : ::Playerbot::Classic::ListTalentNames(p_))
+            {
+                std::string info;
+                if (::Playerbot::Classic::TalentNode const* node = ::Playerbot::Classic::FindTalent(p_, n))
+                {
+                    TraitNodeEntry const* tn = sTraitNodeStore.LookupEntry(node->TraitNodeID);
+                    int32 held = 0;
+                    for (WorldPackets::Traits::TraitEntry const& e : cfg.Entries)
+                        if (e.TraitNodeID == node->TraitNodeID && e.TraitNodeEntryID == node->TraitNodeEntryID)
+                            held = e.Rank;
+                    std::string parents;
+                    for (TraitEdgeEntry const* edge : TraitEdgesInto(node->TraitNodeID))
+                        parents += (parents.empty() ? "" : "+") + std::to_string(edge->LeftTraitNodeID) + "t" + std::to_string(edge->Type);
+                    info = fmt::format("[{} y{} {}/{}{}{}]", node->TraitNodeID, tn ? tn->PosY : -1, held, node->MaxRanks, parents.empty() ? "" : " under ", parents);
+                }
+                all += (all.empty() ? "" : ", ") + n + info;
+            }
+            TC_LOG_INFO("playerbot.api", "[API::talents] class {} talent names in the client data: {}", uint32(p_->GetClass()), all);
+        }
+    }
+    std::string refused;   // build talents left short of their ranks, with ValidateConfig's LearnResult
+    for (auto const& [name, result] : refusedBy)
+        refused += (refused.empty() ? "" : ", ") + name + "=" + std::to_string(result) + " (holds " + std::to_string(rankOf.contains(name) ? rankOf[name] : 0) + ")";
+    // The detail walks the edge store per refused talent: once per class and spec, and only for a bot with every point (a levelling bot's
+    // refusals are its level; build 171 hung the world thread for 60 s with the lines written for every bot of the roster).
+    static std::mutex s_detailLock;
+    static std::set<uint32> s_detailLogged;
+    bool logDetail = false;
+    if (!refusedBy.empty() && p_->GetLevel() >= 60)
+    {
+        std::lock_guard lock(s_detailLock);
+        logDetail = s_detailLogged.insert(uint32(p_->GetClass()) << 16 | spec).second;
+    }
+    if (logDetail)
+    {
+        // Where each build pick sits and what it holds, to see which tab's points the refused one is waiting for: node id, the currencies
+        // its tab spends (Forever's three tabs share one tree and differ by currency), the posY row, and the ranks held.
+        std::string detail;
+        for (::Playerbot::Classic::TalentPick const& pick : build)
+            if (::Playerbot::Classic::TalentNode const* node = ::Playerbot::Classic::FindTalent(p_, pick.name))
+            {
+                std::string currencies;
+                for (int32 c : std::get<2>(treeOf(node->TraitNodeID)))
+                    currencies += (currencies.empty() ? "" : "+") + std::to_string(c);
+                TraitNodeEntry const* tn = sTraitNodeStore.LookupEntry(node->TraitNodeID);
+                int32 held = 0;
+                for (WorldPackets::Traits::TraitEntry const& e : cfg.Entries)
+                    if (e.TraitNodeID == node->TraitNodeID && e.TraitNodeEntryID == node->TraitNodeEntryID)
+                        held = e.Rank;
+                detail += fmt::format("{}{}[node {} cur {} y {} {}/{}]", detail.empty() ? "" : ", ", pick.name, node->TraitNodeID, currencies, tn ? tn->PosY : -1, held, node->MaxRanks);
+            }
+        TC_LOG_INFO("playerbot.api", "[API::talents] refused detail: {}", detail);
+        // The nodes a refused pick hangs under: ValidateConfig refuses it (LearnResult 2) until a RequiredForAvailability parent is full.
+        for (auto const& [name, result] : refusedBy)
+            if (::Playerbot::Classic::TalentNode const* node = ::Playerbot::Classic::FindTalent(p_, name))
+            {
+                std::string parents;
+                for (TraitEdgeEntry const* edge : TraitEdgesInto(node->TraitNodeID))
+                {
+                    auto info = std::ranges::find(configNodes, edge->LeftTraitNodeID, &TraitMgr::NodeEntryInfo::TraitNodeID);
+                    int32 held = 0;
+                    for (WorldPackets::Traits::TraitEntry const& e : cfg.Entries)
+                        if (info != configNodes.end() && e.TraitNodeID == info->TraitNodeID && e.TraitNodeEntryID == info->TraitNodeEntryID)
+                            held = e.Rank + e.GrantedRanks;
+                    parents += fmt::format("{}node {} edge type {} {}/{}", parents.empty() ? "" : ", ", edge->LeftTraitNodeID, edge->Type, held,
+                                           info != configNodes.end() ? info->MaxRanks : -1);
+                }
+                TC_LOG_INFO("playerbot.api", "[API::talents] refused {} (node {}) has parents: {}", name, node->TraitNodeID, parents.empty() ? "none" : parents);
+            }
+    }
+    TC_LOG_INFO("playerbot.api", "[API::talents] {} classic build for spec {} {}: {} ranks, per tree {} (build talents not found: {}; refused: {})",
+        p_->GetName(), spec, already ? "already in place" : "committed", CountActiveTraitRanks(p_), split, unresolved.empty() ? "none" : unresolved, refused.empty() ? "none" : refused);
+    if (!heldRanks.empty())
+        TC_LOG_INFO("playerbot.api", "[API::talents] {} spec {} holds: {}", p_->GetName(), spec, heldRanks);
+    {
+        static std::mutex s_cutLock;
+        static std::set<uint32> s_cutLogged;
+        std::lock_guard lock(s_cutLock);
+        if (cutShort && s_cutLogged.insert(uint32(p_->GetClass()) << 16 | spec).second)
+            TC_LOG_ERROR("playerbot.api", "[API::talents] {} classic build for spec {} cut short after {} ms and {} validations ({} ranks placed, budget "
+                "Playerbot.ClassicTalents.WalkBudgetMs = {}): the class trees make the walk too long", p_->GetName(), spec,
+                getMSTimeDiff(walkStartMs, getMSTime()), validations, CountActiveTraitRanks(p_), walkBudgetMs);
+    }
+    {
+        uint32 const now = getMSTime();
+        s_nextWalkMs.store(now + 3 * getMSTimeDiff(walkStartMs, now));
+        std::lock_guard<std::mutex> lock(s_walkLock);
+        if (s_walked.size() > 8192)
+            s_walked.clear();
+        s_walked[walkKey] = { uint8(p_->GetLevel()), spec, CountActiveTraitRanks(p_) };
+    }
     return CountActiveTraitRanks(p_) > 0 ? Result::Ok : Result::Locked;
 }
 
@@ -7963,7 +8526,7 @@ Result API::restock_class_supplies()
             skipped(f, entry, "StoreNewItem refused", 0);
     }
     // Ammo for the equipped bow / crossbow / gun (thrown needs none): the best arrows or
-    // bullets the level allows, topped up in whole stacks to AMMO_TARGET once under 30%.
+    // bullets the level allows, topped up in whole stacks to AMMO_TARGET once under 60%.
     // Hunter pet food is the plain "Food" family above and is not touched here.
     if (p_->NeedsAmmo())
     {
@@ -7983,7 +8546,7 @@ Result API::restock_class_supplies()
                     have += item->GetCount();
                 return ItemSearchCallbackResult::Continue;
             });
-            if (have < Classic::AmmoLowBelow())
+            if (have < Classic::AMMO_TARGET)   // whenever the restock runs: to the full stack
             {
                 uint32 given = 0;
                 uint32 const stack = std::max<uint32>(1u, ammoProto->GetMaxStackSize());
@@ -9382,6 +9945,89 @@ Result API::trainer_buy_all_available(ObjectGuid trainer_npc,
     return Result::Ok;
 }
 
+// The top vanilla ranks (Shadow Bolt 25307, Greater Heal 25314, ...) are Ahn'Qiraj book ranks: no trainer sells them, so the trainer pass never
+// teaches them. A rank is another spell of the same name, class family, kind and first effect as one the bot knows (the match HighestKnownRank
+// uses, because the spell data chains few class spells) with a spell level the bot has reached, listed under the class's skill lines.
+// Vanilla-era ids only: the Forever spells above 100000 come with talents and runes, not as ranks.
+static uint32 LearnHigherRanksOfKnownSpells(Player* p)
+{
+    ChrClassesEntry const* classEntry = sChrClassesStore.LookupEntry(p->GetClass());
+    if (!classEntry)
+        return 0;
+    LocaleConstant const loc = sWorld->GetDefaultDbcLocale();
+    auto const keyOf = [loc](SpellInfo const* si) -> std::string
+    {
+        char const* name = si->SpellName ? (*si->SpellName)[loc] : nullptr;
+        if (!name || !*name || si->GetEffects().empty())
+            return {};
+        return fmt::format("{}|{}|{}|{}", name, uint32(si->SpellFamilyName), uint32(si->GetEffect(EFFECT_0).Effect), si->IsPassive());
+    };
+    std::unordered_set<std::string> knownNames;
+    std::unordered_map<std::string, std::pair<int32, uint32>> known;   // key -> (spell level, id) of the highest rank the bot has: the level, then the id, orders ranks
+    for (auto const& [id, ps] : p->GetSpellMap())
+    {
+        if (ps.state == PLAYERSPELL_REMOVED || ps.disabled)
+            continue;
+        SpellInfo const* si = sSpellMgr->GetSpellInfo(id, DIFFICULTY_NONE);
+        if (!si || si->SpellFamilyName != classEntry->SpellClassSet)
+            continue;
+        if (std::string key = keyOf(si); !key.empty())
+        {
+            auto const rank = std::make_pair(int32(si->SpellLevel), si->Id);
+            auto [it, inserted] = known.try_emplace(key, rank);
+            if (!inserted && rank > it->second)
+                it->second = rank;
+            knownNames.insert(key.substr(0, key.find('|')));
+        }
+    }
+    std::vector<uint32> toLearn;
+    std::unordered_set<uint32> seen;
+    static std::atomic<uint32> rejectLog{ 0 };
+    for (SkillLineAbilityEntry const* entry : sSkillLineAbilityStore)
+    {
+        if (!entry || entry->Spell >= 100000 || !seen.insert(entry->Spell).second || p->HasSpell(entry->Spell))
+            continue;
+        SpellInfo const* si = sSpellMgr->GetSpellInfo(entry->Spell, DIFFICULTY_NONE);
+        if (!si || si->IsPassive() || si->SpellLevel == 0 || si->SpellLevel > p->GetLevel() || si->SpellFamilyName != classEntry->SpellClassSet)
+            continue;
+        std::string const key = keyOf(si);
+        auto const itr = key.empty() ? known.end() : known.find(key);
+        if (itr == known.end())
+        {
+            if (!key.empty() && knownNames.count(key.substr(0, key.find('|'))) && rejectLog.fetch_add(1) < 400)
+                TC_LOG_INFO("playerbot.v2", "[BookRanks] {} {}: candidate {} \"{}\" level {} skipped: a spell of that name is known, but family, first effect or kind differs", p->GetName(),
+                    uint32(p->GetClass()), si->Id, key, si->SpellLevel);
+            continue;
+        }
+        // Vanilla ranks of one spell can share a spell level (the last two ranks of many spells are both level 60): the level, then the id, orders them.
+        auto const reject = [&](char const* why)
+        {
+            if (rejectLog.fetch_add(1) < 400)
+                TC_LOG_INFO("playerbot.v2", "[BookRanks] {} {}: candidate {} \"{}\" level {} rejected: {} (best known {} at level {})", p->GetName(), uint32(p->GetClass()),
+                    si->Id, key, si->SpellLevel, why, itr->second.second, itr->second.first);
+        };
+        if (std::make_pair(int32(si->SpellLevel), si->Id) <= itr->second)
+        {
+            reject("not above the best known rank");
+            continue;
+        }
+        if (!p->IsSpellFitByClassAndRace(si->Id))
+        {
+            reject("IsSpellFitByClassAndRace");
+            continue;
+        }
+        if (!SpellMgr::IsSpellValid(si, p, false))
+        {
+            reject("IsSpellValid");
+            continue;
+        }
+        toLearn.push_back(si->Id);
+    }
+    for (uint32 id : toLearn)
+        p->LearnSpell(id, false);
+    return uint32(toLearn.size());
+}
+
 uint32 API::learn_trainer_spells_free()
 {
     if (!p_) return 0;
@@ -9404,6 +10050,10 @@ uint32 API::learn_trainer_spells_free()
         if (!learned)
             break;
     }
+    uint32 const higher_ranks = LearnHigherRanksOfKnownSpells(p_);
+    if (higher_ranks)
+        TC_LOG_INFO("playerbot.v2", "[BotSetupPipeline] {} learned {} higher ranks no trainer sells (book ranks)", p_->GetName(), higher_ranks);
+    total += higher_ranks;
     if (!total)
     {
         // Nothing learned: say which trainers were in reach, so a data problem shows in the log.
@@ -9653,6 +10303,76 @@ uint32 API::learn_class_quest_spells_free()
     return learned;
 }
 
+namespace
+{
+// A granted pet is one the hunter has raised: a fresh tame is Rebellious (no training points, so no Bite or Claw), Unhappy (x0.75 damage, Pet::GetHappinessDamageMod)
+// and loses loyalty until it runs away. The grant makes it a Best Friend, fed, and teaches the highest rank of each damage ability of its family that its level and
+// training points allow (cost per chain from classic_pet_spell_training_points), with autocast on, as a player's pet is trained at 60.
+void RaiseGrantedHunterPet(Pet* pet, Player const* owner)
+{
+    pet->InitLoyalty(Pet::BEST_FRIEND, Pet::GetLoyaltyStartPoints(Pet::BEST_FRIEND));
+    pet->SetPower(POWER_HAPPINESS, Pet::HAPPINESS_MAX);
+
+    CreatureTemplate const* tpl = pet->GetCreatureTemplate();
+    CreatureFamilyEntry const* family = tpl && tpl->family ? sCreatureFamilyStore.LookupEntry(tpl->family) : nullptr;
+    if (!family)
+        return;
+
+    uint32 budget = pet->GetTrainingPointsTotal();
+    std::vector<uint32> learned;
+    std::set<uint32> chains;
+    for (uint8 line = 0; line < 2; ++line)
+    {
+        if (!family->SkillLine[line])
+            continue;
+        std::vector<SkillLineAbilityEntry const*> const* abilities = sDB2Manager.GetSkillLineAbilitiesBySkill(family->SkillLine[line]);
+        if (!abilities)
+            continue;
+        for (SkillLineAbilityEntry const* ability : *abilities)
+        {
+            uint32 const first = sSpellMgr->GetFirstSpellInChain(ability->Spell);
+            if (!Pet::GetSpellTrainingPoints(ability->Spell) || !chains.insert(first).second)
+                continue;
+            // The highest rank of the chain the pet's level reaches and the points pay for.
+            uint32 best = 0;
+            for (uint32 id = first; id; id = sSpellMgr->GetNextSpellInChain(id))
+            {
+                SpellInfo const* info = sSpellMgr->GetSpellInfo(id, DIFFICULTY_NONE);
+                if (!info || info->SpellLevel > pet->GetLevel() || Pet::GetSpellTrainingPoints(id) > budget)
+                    break;
+                best = id;
+            }
+            SpellInfo const* info = best ? sSpellMgr->GetSpellInfo(best, DIFFICULTY_NONE) : nullptr;
+            if (!info || info->IsPositive() || !info->IsAutocastable())
+                continue;
+            bool damaging = false;
+            for (SpellEffectInfo const& eff : info->GetEffects())
+                damaging = damaging || eff.IsEffect(SPELL_EFFECT_SCHOOL_DAMAGE) || eff.IsEffect(SPELL_EFFECT_WEAPON_DAMAGE)
+                        || eff.IsEffect(SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL) || eff.IsEffect(SPELL_EFFECT_NORMALIZED_WEAPON_DMG)
+                        || eff.IsEffect(SPELL_EFFECT_WEAPON_PERCENT_DAMAGE);
+            if (!damaging)
+                continue;
+            budget -= Pet::GetSpellTrainingPoints(best);
+            learned.push_back(best);
+        }
+    }
+
+    for (uint32 spellId : learned)
+    {
+        pet->learnSpell(spellId);
+        if (SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId, DIFFICULTY_NONE))
+        {
+            pet->ToggleAutocast(info, true);
+            if (CharmInfo* ci = pet->GetCharmInfo())
+                ci->SetSpellAutocast(info, true);
+        }
+    }
+    pet->UpdateTrainingPoints();
+    TC_LOG_INFO("playerbot.api", "[API::starter_pet] {} pet {} (family {}) raised: Best Friend, happy, {} damage abilities trained ({} of {} points left)",
+        owner->GetName(), pet->GetEntry(), tpl->family, learned.size(), budget, pet->GetTrainingPointsTotal());
+}
+}
+
 API::StarterPetResult API::grant_starter_hunter_pet(uint32 entry)
 {
     if (!p_ || p_->GetClass() != CLASS_HUNTER || p_->GetLevel() < 10)
@@ -9690,6 +10410,7 @@ API::StarterPetResult API::grant_starter_hunter_pet(uint32 entry)
     }
     pet->GetMap()->AddToMap(pet->ToCreature());
     p_->SetMinion(pet, true);
+    RaiseGrantedHunterPet(pet, p_);
     pet->SavePetToDB(PET_SAVE_AS_CURRENT);
     p_->PetSpellInitialize();
     // characters.summonedPetNumber now, as BotSetupPipeline::DoAcquireMount does: a teleport before the next

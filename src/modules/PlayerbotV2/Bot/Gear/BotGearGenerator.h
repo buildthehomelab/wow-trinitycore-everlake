@@ -90,7 +90,13 @@ int32 OwnedSlotScore(ItemTemplate const* tpl, uint8 cls, uint16 spec, uint8 leve
 // The item entries of a class's tier set (ItemSet.db2, found by name, see Owned::TierSetName), tier 1..3; empty when the data has none.
 std::vector<uint32> const& TierSetPieces(uint8 cls, int32 tier);
 // Whether `entry` is a piece of the tier set the mode names for the class.
-bool IsTierSetPick(uint8 cls, Owned::GearMode mode, uint32 entry);
+bool TierSetIsHealerSet(uint8 cls, uint16 spec);
+bool IsTierSetPick(uint8 cls, Owned::GearMode mode, uint32 entry, uint16 spec = 0);
+
+struct SourcedGearPick { uint8 slot; uint32 entry; };
+// The Naxxramas gear list of a class and spec when the tier mode wears a sourced best-in-slot list instead of the tier set (warrior dps in the
+// Tier 3 mode); empty otherwise.
+std::vector<SourcedGearPick> const& SourcedTierGear(uint8 cls, uint16 spec, Owned::GearMode mode);
 
 // Variety: a pick may be any candidate of the best's quality whose effective item level is within this many points of
 // the best's (and that scores about as well), chosen by bot_id and slot. Two items of one quality this close are

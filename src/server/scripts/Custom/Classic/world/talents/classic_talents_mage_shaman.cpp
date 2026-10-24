@@ -23,15 +23,21 @@
 #include "AreaTrigger.h"
 #include "CellImpl.h"
 #include "Creature.h"
+#include "Item.h"
+#include "ItemTemplate.h"
 #include "GridNotifiersImpl.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "Random.h"
+#include "DB2Stores.h"
+#include "Spell.h"
 #include "SpellAuraEffects.h"
 #include "SpellHistory.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "Unit.h"
+#include <cmath>
 
 enum ClassicMageTalentSpells
 {
@@ -45,7 +51,12 @@ enum ClassicMageTalentSpells
     SPELL_MAGE_HEATING_UP_BUFF              = 400625,   // -25% Pyroblast cast time per stack, 3 stacks, 20 s, 1 charge
     SPELL_MAGE_FINGERS_OF_FROST_TALENT      = 400647,   // effect 0: charges, effect 1: proc chance
     SPELL_MAGE_FINGERS_OF_FROST_IGNORE      = 400669,   // ability ignore aura state (frozen) for the spells that need it
-    SPELL_MAGE_FINGERS_OF_FROST_STACKS      = 400670    // 2 stacks, one used per spell cast
+    SPELL_MAGE_FINGERS_OF_FROST_STACKS      = 400670,   // 2 stacks, one used per spell cast
+    SPELL_MAGE_COLD_SNAP                    = 12472,
+    SPELL_MAGE_ICE_LANCE                    = 400640,
+    SPELL_MAGE_COMBUSTION                   = 11129,
+    SPELL_MAGE_COMBUSTION_BUFF              = 28682,    // +10% Fire critical chance per stack
+    SPELL_MAGE_ARCANE_CONCENTRATION         = 11213     // effect 0: proc trigger of Clearcasting 12536, the amount is the chance
 };
 
 enum ClassicShamanTalentSpells
@@ -62,7 +73,8 @@ enum ClassicShamanTalentSpells
     SPELL_SHAMAN_IMPROVED_STORMSTRIKE_BUFF  = 1238931,  // 50% mana regeneration while casting, 15 s
     SPELL_SHAMAN_STORMSTRIKE                = 17364,
     SPELL_SHAMAN_ANCESTRAL_GUIDANCE_HEAL    = 409333,
-    SPELL_SHAMAN_ANCESTRAL_GUIDANCE_DAMAGE  = 409337
+    SPELL_SHAMAN_ANCESTRAL_GUIDANCE_DAMAGE  = 409337,
+    SPELL_SHAMAN_ANCESTRAL_FORTITUDE        = 16177     // Ancestral Healing: armor percent on the healed target, 15 s
 };
 
 // Mage "Chill effects" (Frostbolt, Cone of Cold, Frostfire Bolt, Blast Wave...): mage spells with a snare. Triggered chills do not
@@ -359,6 +371,200 @@ class classic_spell_mage_heating_up : public AuraScript
     }
 };
 
+// 12472 - Cold Snap: "When activated, this spell finishes the cooldown on all Frost spells you recently cast." The client spell is a bare
+// dummy effect and nothing handled it, so the spell used up its own cooldown and reset nothing (Ice Block, Frost Nova, Cone of Cold, Ice
+// Barrier and Frost Ward stayed on cooldown). Every Frost mage spell on cooldown except Cold Snap itself is reset.
+// Same behaviour as vMaNGOS (GPL-2.0, src/scripts/spells/spell_mage.cpp, MageColdSnapScript): Frost spells of the mage family are reset.
+class classic_spell_mage_cold_snap : public SpellScript
+{
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        GetCaster()->GetSpellHistory()->ResetCooldowns([](SpellHistory::CooldownEntry const& cooldown)
+        {
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(cooldown.SpellId, DIFFICULTY_NONE);
+            return spellInfo && spellInfo->Id != SPELL_MAGE_COLD_SNAP && spellInfo->SpellFamilyName == SPELLFAMILY_MAGE
+                && (spellInfo->GetSchoolMask() & SPELL_SCHOOL_MASK_FROST);
+        }, true);
+    }
+
+    void Register() override
+    {
+        OnEffectHit += SpellEffectFn(classic_spell_mage_cold_snap::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
+// 400640 - Ice Lance: "Deals Frost damage to an enemy target, three times as much if the target is Frozen." The client spell is a damage
+// effect, a dummy effect with the 300 percent and a second dummy effect; nothing used the 300 percent, so a Frozen target took the base hit.
+// The damage is multiplied (before the critical roll) when the target is Frozen by Frost Nova or another root, or when a charge of Fingers
+// of Frost was on the mage as the cast began (classic_spell_mage_frozen_target spends the charge in OnCast, after BeforeCast).
+class classic_spell_mage_ice_lance : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellInfo({ SPELL_MAGE_FINGERS_OF_FROST_STACKS }) && ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
+    }
+
+    void CheckFingersOfFrost()
+    {
+        _fingersOfFrost = !GetSpell()->IsTriggered() && GetCaster()->HasAura(SPELL_MAGE_FINGERS_OF_FROST_STACKS);
+    }
+
+    void HandleHit(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        if (_fingersOfFrost || GetHitUnit()->HasAuraState(AURA_STATE_FROZEN, GetSpellInfo(), caster))
+            SetHitDamage(CalculatePct(GetHitDamage(), GetEffectInfo(EFFECT_1).CalcValue(caster)));
+    }
+
+    void Register() override
+    {
+        BeforeCast += SpellCastFn(classic_spell_mage_ice_lance::CheckFingersOfFrost);
+        OnEffectHitTarget += SpellEffectFn(classic_spell_mage_ice_lance::HandleHit, EFFECT_0, SPELL_EFFECT_SCHOOL_DAMAGE);
+    }
+
+    bool _fingersOfFrost = false;
+};
+
+// 11129 - Combustion: "Each of your Fire damage spell hits increases your critical strike chance with Fire damage spells by 10%. This
+// effect lasts until you have caused 3 critical strikes with Fire spells." The cast puts one stack of 28682 on the mage (trigger effect)
+// and the client data gives 11129 three proc charges and 28682 an endless duration, with no handler for either: the first stack stayed
+// for ever and no more were added. 11129 now procs on fire critical hits only (spell_proc), so each critical spends a charge, and
+// ends 28682 with it; 28682 procs on every fire damage hit and adds a stack.
+class classic_spell_mage_combustion : public AuraScript
+{
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetTarget()->RemoveAurasDueToSpell(SPELL_MAGE_COMBUSTION_BUFF);
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_mage_combustion::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_mage_combustion::HandleRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 28682 - Combustion (critical chance): every fire damage spell hit adds a stack (up to the stacks of the client spell). As in vMaNGOS
+// (GPL-2.0, src/scripts/spells/spell_mage.cpp, MageCombustionBuffScript / MageCombustionProcScript), losing the buff by cancelling or
+// dispelling it ends the Combustion proc aura 11129 too, which starts its cooldown.
+class classic_spell_mage_combustion_stacks : public AuraScript
+{
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetTarget()->RemoveAurasDueToSpell(SPELL_MAGE_COMBUSTION);
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        GetAura()->ModStackAmount(1);
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_mage_combustion_stacks::HandleProc, EFFECT_0, SPELL_AURA_ADD_FLAT_MODIFIER);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_mage_combustion_stacks::HandleRemove, EFFECT_0, SPELL_AURA_ADD_FLAT_MODIFIER, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// Rank of a talent: Forever's talents are trait nodes with one spell, the ranks are held on the node entry of the active spec's trait config.
+// Returns 0 when the player does not have the talent.
+static int32 GetClassicTalentRank(Player const* player, uint32 spellId)
+{
+    UF::TraitConfig const* config = player->GetClassicSpecGroupConfig(player->GetActiveTalentGroup() == 1);
+    if (!config)
+        return 0;
+
+    for (UF::TraitEntry const& entry : config->Entries)
+    {
+        TraitNodeEntryEntry const* nodeEntry = sTraitNodeEntryStore.LookupEntry(entry.TraitNodeEntryID);
+        TraitDefinitionEntry const* definition = nodeEntry ? sTraitDefinitionStore.LookupEntry(nodeEntry->TraitDefinitionID) : nullptr;
+        if (definition && uint32(definition->SpellID) == spellId)
+            return entry.Rank + entry.GrantedRanks + entry.BonusRanks;
+    }
+    return 0;
+}
+
+// 29441 - Magic Absorption: "Increases all resistances by 2 and causes all spells you fully resist to restore 1% of your total mana." (per talent rank). The
+// client aura is a resistance aura plus a dummy aura; the mana is the energize 29442 (VMaNGOS casts it with amount percent of the maximum
+// mana as the amount). spell_proc: harmful spells and abilities taken that were fully resisted.
+class classic_spell_mage_magic_absorption : public AuraScript
+{
+    static constexpr uint32 SPELL_MAGE_MAGIC_ABSORPTION_ENERGIZE = 29442;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_MAGE_MAGIC_ABSORPTION_ENERGIZE });
+    }
+
+    bool CheckProc(ProcEventInfo& /*eventInfo*/)
+    {
+        return GetTarget()->GetPowerType() == POWER_MANA && GetTarget()->ToPlayer();
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        Player* mage = GetTarget()->ToPlayer();
+        // 1% of the maximum mana per rank (vanilla 1/2/3/4/5%)
+        int32 const rank = std::max(1, GetClassicTalentRank(mage, GetId()));
+        mage->EnergizeBySpell(mage, sSpellMgr->AssertSpellInfo(SPELL_MAGE_MAGIC_ABSORPTION_ENERGIZE, DIFFICULTY_NONE),
+            CalculatePct(mage->GetMaxPower(POWER_MANA), rank), POWER_MANA);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_mage_magic_absorption::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_mage_magic_absorption::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 29074 - Master of the Elements: "Your Fire and Frost spell criticals will refund a percent of their base mana cost." The client spell is a
+// dummy aura whose amount (10) is the percent; nothing handled it. The mana the critical spell cost is given back by percent (spell_proc:
+// Fire and Frost, direct damage, critical hit).
+class classic_spell_mage_master_of_elements : public AuraScript
+{
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Spell const* spell = eventInfo.GetProcSpell();
+        return spell && spell->GetPowerTypeCostAmount(POWER_MANA).value_or(0) > 0;
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        int32 const cost = eventInfo.GetProcSpell()->GetPowerTypeCostAmount(POWER_MANA).value_or(0);
+        GetTarget()->EnergizeBySpell(GetTarget(), GetSpellInfo(), CalculatePct(cost, aurEff->GetAmount()), POWER_MANA);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_mage_master_of_elements::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_mage_master_of_elements::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 11213 - Arcane Concentration: "Gives you a $s1% chance of entering a Clearcasting state after any damage spell hits a target." The client
+// spell is a proc trigger (Clearcasting 12536) with 100 as spell proc chance and the talent chance as the effect amount, so it entered
+// Clearcasting on every damage spell hit. The chance is rolled from the amount (spell_proc: harmful spell, damage, hit).
+class classic_spell_mage_arcane_concentration : public AuraScript
+{
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        return roll_chance(float(aurEff->GetAmount()));
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_mage_arcane_concentration::CheckProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
 /*######
 ## Shaman
 ######*/
@@ -595,8 +801,21 @@ class classic_spell_sha_stormstrike : public SpellScript
                 caster->CastSpell(caster, SPELL_SHAMAN_IMPROVED_STORMSTRIKE_BUFF, CastSpellExtraArgs(talent));
     }
 
+    // "Instantly attack with both weapons": the client spell has one normalized weapon damage effect, which the spell code runs with the
+    // main hand only, so the off-hand weapon gets its swing here, after the main hand hit.
+    void HandleOffHandStrike()
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!target || !target->IsAlive() || !caster->haveOffhandWeapon())
+            return;
+
+        caster->AttackerStateUpdate(target, OFF_ATTACK, true);
+    }
+
     void Register() override
     {
+        AfterHit += SpellHitFn(classic_spell_sha_stormstrike::HandleOffHandStrike);
         AfterCast += SpellCastFn(classic_spell_sha_stormstrike::HandleAfterCast);
     }
 };
@@ -633,6 +852,134 @@ class classic_spell_sha_improved_stormstrike : public AuraScript
         OnEffectProc += AuraEffectProcFn(classic_spell_sha_improved_stormstrike::PreventProc, EFFECT_0, SPELL_AURA_DUMMY);
         OnEffectProc += AuraEffectProcFn(classic_spell_sha_improved_stormstrike::PreventProc, EFFECT_1, SPELL_AURA_DUMMY);
         OnEffectProc += AuraEffectProcFn(classic_spell_sha_improved_stormstrike::HandleProc, EFFECT_2, SPELL_AURA_DUMMY);
+    }
+};
+
+// 8026, 8028, 8029, 10445, 16343, 16344 - Flametongue Weapon Proc; 8248, 8253, 10523, 16389 - Flametongue Totem Proc. The client spells are a dummy
+// effect (base points 326 .. 2498) that nothing handled, so Flametongue dealt no damage. Behaviour ported from vMaNGOS (GPL-2.0, src/scripts/spells/
+// spell_shaman.cpp ShamanFlametongueProcDummyScript): the dummy casts the Flametongue Attack spell 10444 for base points * weapon speed in seconds / 100.
+// vMaNGOS adds 3.85 * spell damage * speed / 100 to that; here 10444 carries the spell power coefficient of the classic spell value table (0.1), which is
+// the same term at the usual 2.6 s weapon speed, so only the base points part is passed. The speed is that of the item that procced (the enchanted
+// weapon), or the main hand weapon of the shaman whose melee hit procced the totem aura.
+class classic_spell_sha_flametongue_proc : public SpellScript
+{
+    static constexpr uint32 SPELL_SHAMAN_FLAMETONGUE_ATTACK = 10444;
+    static constexpr float FLAMETONGUE_DAMAGE_PER_SECOND_PCT = 0.01f;   // base points are per 100 seconds of weapon speed
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_SHAMAN_FLAMETONGUE_ATTACK });
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!target)
+            return;
+
+        Item* weapon = GetCastItem();
+        if (!weapon)
+            if (Player* player = caster->ToPlayer())
+                weapon = player->GetWeaponForAttack(BASE_ATTACK, true);
+
+        float const delaySeconds = weapon ? float(weapon->GetTemplate()->GetDelay()) / 1000.0f : float(caster->GetBaseAttackTime(BASE_ATTACK)) / 1000.0f;
+        int32 const basePoints = GetEffectValue();
+        int32 const damage = int32(std::lround(float(basePoints) * FLAMETONGUE_DAMAGE_PER_SECOND_PCT * delaySeconds));
+
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        args.SetTriggeringSpell(GetSpell());
+        args.AddSpellBP0(damage);
+        if (GetCastItem())
+            args.SetCastItem(GetCastItem());
+        caster->CastSpell(target, SPELL_SHAMAN_FLAMETONGUE_ATTACK, args);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_sha_flametongue_proc::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
+// 6495 - Sentry Totem: "Summons a Sentry Totem that allows the shaman to see through its eyes." The dummy aura on the shaman moves the view to the
+// totem while the aura lasts and back when it ends. Behaviour ported from vMaNGOS (GPL-2.0, SpellAuras.cpp, Aura::HandleAuraDummy case 6495:
+// the totem in the air slot becomes the camera). Nothing in this core set the viewpoint for the spell.
+class classic_spell_sha_sentry_totem : public AuraScript
+{
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Player* player = GetTarget()->ToPlayer();
+        if (!player || player->GetViewpoint())
+            return;
+
+        // Air totems sit in the last of the four totem summon slots
+        Creature* totem = ObjectAccessor::GetCreature(*player, player->m_SummonSlot[SUMMON_SLOT_TOTEM_4]);
+        if (totem && totem->IsTotem() && totem->IsAlive())
+            player->SetViewpoint(totem, true);
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Player* player = GetTarget()->ToPlayer();
+        if (!player)
+            return;
+
+        // Only a totem view is ours to end; a Far Sight view stays
+        if (WorldObject* viewpoint = player->GetViewpoint())
+            if (Creature* totem = viewpoint->ToCreature(); totem && totem->IsTotem())
+                player->SetViewpoint(totem, false);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_spell_sha_sentry_totem::HandleApply, EFFECT_1, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_sha_sentry_totem::HandleRemove, EFFECT_1, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 20860, 20865, 20866, 20867, 20868, 20870, 20871 - Rockbiter Weapon Proc: the client spell is a script effect with the threat in its base points.
+// Behaviour ported from vMaNGOS (GPL-2.0, SpellEffects.cpp Spell::EffectScriptEffect, shaman cases 20865-20871): the shaman adds base points times the
+// main hand attack time in seconds as threat, and only on a target that already has threat on him. vMaNGOS leaves out rank 1 (20860); the client
+// data has the same effect on it, so it is bound here too.
+class classic_spell_sha_rockbiter_threat : public SpellScript
+{
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!target || !target->CanHaveThreatList())
+            return;
+
+        if (target->GetThreatManager().GetThreat(caster) <= 0.0f)
+            return;
+
+        int32 const basePoints = GetEffectValue();
+        target->GetThreatManager().AddThreat(caster, float(basePoints) * float(caster->GetBaseAttackTime(BASE_ATTACK)) / 1000.0f, GetSpellInfo(), true);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_sha_rockbiter_threat::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
+// 408490, 1238299, 1238300 - Lava Burst: "Hurls molten lava at the target. Lava Burst will always critically strike if the target is
+// affected by Flame Shock." Flame Shock is told by the shaman family flag its periodic damage carries (8050, 8052, 8053, 10447, 10448, 29228).
+class classic_spell_sha_lava_burst : public SpellScript
+{
+    void CalcCritChance(Unit const* victim, float& chance) const
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !victim)
+            return;
+
+        if (victim->GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_SHAMAN, flag128(0x10000000, 0, 0, 0), caster->GetGUID()))
+            chance = 100.0f;
+    }
+
+    void Register() override
+    {
+        OnCalcCritChance += SpellOnCalcCritChanceFn(classic_spell_sha_lava_burst::CalcCritChance);
     }
 };
 
@@ -782,6 +1129,140 @@ class classic_spell_sha_ancestral_guidance : public AuraScript
     }
 };
 
+// 324, 325, 905, 945, 8134, 10431, 10432 - Lightning Shield (ranks 1-7): "Protects the caster. When a melee or ranged attack hits the caster, the attacker
+// takes Nature damage. 3 charges." The client spell is a proc trigger aura whose trigger spell 26545 has a bare dummy effect, so a hit on the shaman cast
+// nothing. Behaviour ported from vMaNGOS (GPL-2.0, UnitAuraProcHandler.cpp Unit::HandleProcTriggerSpell, shaman case: the aura rank selects the damage spell
+// 26363-26370, cast on the attacker). Damage amounts and spell power coefficients are those of the damage spells (classic_spell_value).
+class classic_spell_sha_lightning_shield : public AuraScript
+{
+    static uint32 GetDamageSpell(uint32 auraSpellId)
+    {
+        switch (auraSpellId)
+        {
+            case 324:   return 26364;
+            case 325:   return 26365;
+            case 905:   return 26366;
+            case 945:   return 26367;
+            case 8134:  return 26369;
+            case 10431: return 26370;
+            case 10432: return 26363;
+            default:    return 0;
+        }
+    }
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellInfo({ GetDamageSpell(spellInfo->Id) });
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        Unit* attacker = eventInfo.GetActor();
+        if (!attacker || !attacker->IsAlive())
+            return;
+
+        GetTarget()->CastSpell(attacker, GetDamageSpell(GetSpellInfo()->Id), CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_sha_lightning_shield::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
+// 8515, 10609, 10612 - Windfury Totem (passive, ranks 1-3); 8230, 8250, 10521, 15036 - Flametongue Totem (passive, ranks 1-4): the totem's area aura on
+// the party members. The client data has no trigger spell on these effects: the Windfury ones carry the Windfury Totem attack spell (8516, 10608, 10610)
+// in the base points of the effect, Flametongue rank 1, 3 and 4 the proc spell (8253, 10523, 16389) there and rank 2 (8250) nothing at all, so the party
+// members' melee hits cast nothing and neither totem did anything. Windfury grants the member 1 extra attack (the spell is a self buff), Flametongue
+// casts its proc spell (fire damage by weapon speed, classic_spell_sha_flametongue_proc) on the target of the hit.
+class classic_spell_sha_weapon_totem_aura : public AuraScript
+{
+    struct TotemProc
+    {
+        uint32 AuraSpellId;
+        uint32 ProcSpellId;
+        bool OnSelf;
+    };
+
+    static constexpr TotemProc Procs[] =
+    {
+        { 8515,  8516,  true  }, { 10609, 10608, true  }, { 10612, 10610, true  },     // Windfury Totem
+        { 8230,  8253,  false }, { 8250,  8248,  false }, { 10521, 10523, false }, { 15036, 16389, false }   // Flametongue Totem
+    };
+
+    static TotemProc const* Find(uint32 auraSpellId)
+    {
+        for (TotemProc const& proc : Procs)
+            if (proc.AuraSpellId == auraSpellId)
+                return &proc;
+        return nullptr;
+    }
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        TotemProc const* proc = Find(spellInfo->Id);
+        return proc && ValidateSpellInfo({ proc->ProcSpellId });
+    }
+
+    // melee hits only: the 1.60 data lets a spell hit of the party member proc these auras too
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        return (eventInfo.GetTypeMask() & PROC_FLAG_DEAL_MELEE_SWING) || (eventInfo.GetTypeMask() & PROC_FLAG_DEAL_MELEE_ABILITY);
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        TotemProc const* proc = Find(GetSpellInfo()->Id);
+        Unit* member = GetTarget();
+        Unit* target = proc->OnSelf ? member : eventInfo.GetActionTarget();
+        if (!target || !target->IsAlive())
+            return;
+
+        member->CastSpell(target, proc->ProcSpellId, CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_sha_weapon_totem_aura::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_sha_weapon_totem_aura::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
+// 16176 - Ancestral Healing: "Your critical heals increase your target's Armor by X% for 15 sec." Critical direct heals cast 16177 (armor percent) on the
+// healed target with the talent amount, like Inspiration (priest). The client spell is a dummy aura with the buff as its trigger spell and nothing used it.
+// Crit only + triggered heals via spell_proc.
+class classic_spell_sha_ancestral_healing : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_SHAMAN_ANCESTRAL_FORTITUDE });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        HealInfo* healInfo = eventInfo.GetHealInfo();
+        return healInfo && healInfo->GetHeal() && eventInfo.GetActionTarget() && (eventInfo.GetHitMask() & PROC_HIT_CRITICAL);
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        CastSpellExtraArgs args(aurEff);
+        if (aurEff->GetAmountAsInt() > 0)
+            args.AddSpellBP0(aurEff->GetAmountAsInt());
+        GetTarget()->CastSpell(eventInfo.GetActionTarget(), SPELL_SHAMAN_ANCESTRAL_FORTITUDE, args);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_sha_ancestral_healing::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_sha_ancestral_healing::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 void AddSC_classic_talents_mage_shaman()
 {
     // Mage
@@ -793,6 +1274,13 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_improved_blizzard);
     RegisterSpellScript(classic_spell_mage_counterspell);
     RegisterSpellScript(classic_spell_mage_heating_up);
+    RegisterSpellScript(classic_spell_mage_cold_snap);
+    RegisterSpellScript(classic_spell_mage_ice_lance);
+    RegisterSpellScript(classic_spell_mage_combustion);
+    RegisterSpellScript(classic_spell_mage_combustion_stacks);
+    RegisterSpellScript(classic_spell_mage_master_of_elements);
+    RegisterSpellScript(classic_spell_mage_magic_absorption);
+    RegisterSpellScript(classic_spell_mage_arcane_concentration);
 
     // Shaman
     RegisterSpellScript(classic_spell_sha_flurry);
@@ -804,5 +1292,12 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_sha_stormstrike);
     RegisterSpellScript(classic_spell_sha_improved_stormstrike);
     RegisterSpellScript(classic_spell_sha_fire_nova);
+    RegisterSpellScript(classic_spell_sha_lava_burst);
+    RegisterSpellScript(classic_spell_sha_flametongue_proc);
+    RegisterSpellScript(classic_spell_sha_sentry_totem);
+    RegisterSpellScript(classic_spell_sha_rockbiter_threat);
     RegisterSpellScript(classic_spell_sha_ancestral_guidance);
+    RegisterSpellScript(classic_spell_sha_lightning_shield);
+    RegisterSpellScript(classic_spell_sha_weapon_totem_aura);
+    RegisterSpellScript(classic_spell_sha_ancestral_healing);
 }

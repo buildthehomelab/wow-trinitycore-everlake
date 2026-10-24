@@ -29,6 +29,10 @@ struct ScenarioMember
     std::uint8_t race;
     std::uint8_t cls;
     ScenarioRoleKind role;
+    // The talent build the member runs (Classic virtual spec id, the retail ids of Api/ClassicTalentBuilds.cpp: 71 Arms, 253 Beast Mastery ...).
+    // 0 = the role's default spec. Set after the role is pinned and applied as a respec, so a reused character changes build.
+    std::uint32_t spec = 0;
+    bool melee = false;                // the dps_scorecard raid stands a melee member at the boss, everyone else at casting range
 };
 
 // Parity: the damage_parity family (DamageParity.h) - one bot, a target dummy, measurements; done when its legs have run.
@@ -84,6 +88,8 @@ struct ScenarioDef
     // The damage_parity family (goal Parity): which measurement (Parity::Kind: 1 damage legs, 2 finisher sweep, 3 talent audit) and how long a
     // damage leg measures. 0 = not a parity scenario.
     std::uint8_t parity = 0;
+    // A damage_parity run played as this specialization (ChrSpecialization id, warrior Fury 72, Protection 73); 0 = what the talents say.
+    std::uint32_t parity_spec = 0;
     std::uint32_t parity_leg_s = 180;
     // The name of a member played like the owner's own character: from the start of the run its bot logic is detached and the runner drives it,
     // following the main tank and attacking what the tank attacks (a player who only presses "assist"). The group logic still sees a
@@ -537,8 +543,9 @@ inline std::vector<ScenarioDef> MakeOtherRaidScenarios()
 }
 
 // ---- damage_parity: one level 60 bot per class against a level 63 target dummy ----
-// damage_parity_<class>   seven legs of `leg_s` seconds (no gear / tier 1 / tier 3 / +spell power / +attack power / 0 armor / five Sunders)
+// damage_parity_<class>   four reference legs of `leg_s` seconds (no gear / tier 1 / tier 3 / tier 3 with raid buffs and five Sunders), then on request or after a failed check the sensitivity legs (+spell power / +attack power / 0 armor / five Sunders)
 // finisher_sweep_<class>  rogue, druid, warrior: every combo point or rage scaled spell at 1-5 points / rising rage, the damage must grow
+// threat_audit_<class>    rogue, priest, hunter, druid: the threat reducer's drop on a dummy's threat list against vanilla's
 // talent_audit_<class>    the class's key talents in the spellbook with their effects, and (warlock) Improved Shadow Bolt's +20 % after a crit
 struct ParityRow
 {
@@ -579,6 +586,120 @@ inline ScenarioDef MakeParityScenario(ParityRow const& r, char const* name, char
     d.limits.expected_map = 0;
     d.parity = kind;
     d.full_clear = true;               // long: `runall` with no filter leaves it out, `runall damage_parity` runs the family
+    return d;
+}
+
+// ---- dps_scorecard_raid: one raid, every dps spec, one boss dummy ----
+// A tank, three raid buffers and one bot per dps spec (Classic builds: 19) in Tier 3, all hitting one level 63 dummy (armor 3731, no resistances,
+// two billion health) at the same time for `parity_leg_s` seconds. The runner forms one raid group; the bots keep their own logic, so the
+// buffers cast the raid buffs, the shared debuffs come from whoever has them (Sunder Armor, curses, Shadow Weaving ...), and the bots drink
+// their flasks and elixirs as in any raid. Parity::Kind::Group writes one row per bot to DpsScorecard.tsv. Alliance only (one raid group).
+struct ScorecardRow
+{
+    char const* name;
+    std::uint8_t race;
+    std::uint8_t cls;
+    std::uint32_t spec;
+    ScenarioRoleKind role;
+    bool melee;
+};
+
+inline constexpr ScorecardRow kScorecardRaid[] = {
+    // Not scored: the main tank (Sunder Armor, Demoralizing Shout) and the three buffers (Fortitude/Spirit, Kings/Might/Wisdom, Mark of the Wild).
+    { "Dsctank",    ScnRace::Human,    ScnClass::Warrior, 73,  ScenarioRoleKind::Tank,   true  },
+    { "Dscpriest",  ScnRace::Human,    ScnClass::Priest,  257, ScenarioRoleKind::Healer, false },
+    { "Dscpaladin", ScnRace::Human,    ScnClass::Paladin, 65,  ScenarioRoleKind::Healer, false },
+    { "Dscdruid",   ScnRace::NightElf, ScnClass::Druid,   105, ScenarioRoleKind::Healer, false },
+    // The dps specs.
+    { "Dscarms",    ScnRace::Human,    ScnClass::Warrior, 71,  ScenarioRoleKind::Dps,    true  },
+    { "Dscfury",    ScnRace::Human,    ScnClass::Warrior, 72,  ScenarioRoleKind::Dps,    true  },
+    { "Dscret",     ScnRace::Human,    ScnClass::Paladin, 70,  ScenarioRoleKind::Dps,    true  },
+    { "Dscbm",      ScnRace::Dwarf,    ScnClass::Hunter,  253, ScenarioRoleKind::Dps,    false },
+    { "Dscmm",      ScnRace::Dwarf,    ScnClass::Hunter,  254, ScenarioRoleKind::Dps,    false },
+    { "Dscsurv",    ScnRace::Dwarf,    ScnClass::Hunter,  255, ScenarioRoleKind::Dps,    false },
+    { "Dsccombat",  ScnRace::Human,    ScnClass::Rogue,   260, ScenarioRoleKind::Dps,    true  },
+    { "Dscassn",    ScnRace::Human,    ScnClass::Rogue,   259, ScenarioRoleKind::Dps,    true  },
+    { "Dscshadow",  ScnRace::Human,    ScnClass::Priest,  258, ScenarioRoleKind::Dps,    false },
+    { "Dscele",     ScnRace::Dwarf,    ScnClass::Shaman,  262, ScenarioRoleKind::Dps,    false },
+    { "Dscenh",     ScnRace::Dwarf,    ScnClass::Shaman,  263, ScenarioRoleKind::Dps,    true  },
+    { "Dscfire",    ScnRace::Human,    ScnClass::Mage,    63,  ScenarioRoleKind::Dps,    false },
+    { "Dscfrost",   ScnRace::Human,    ScnClass::Mage,    64,  ScenarioRoleKind::Dps,    false },
+    { "Dscarcane",  ScnRace::Human,    ScnClass::Mage,    62,  ScenarioRoleKind::Dps,    false },
+    { "Dscaff",     ScnRace::Human,    ScnClass::Warlock, 265, ScenarioRoleKind::Dps,    false },
+    { "Dscdemo",    ScnRace::Human,    ScnClass::Warlock, 266, ScenarioRoleKind::Dps,    false },
+    { "Dscdest",    ScnRace::Human,    ScnClass::Warlock, 267, ScenarioRoleKind::Dps,    false },
+    { "Dscbalance", ScnRace::NightElf, ScnClass::Druid,   102, ScenarioRoleKind::Dps,    false },
+    { "Dscferal",   ScnRace::NightElf, ScnClass::Druid,   103, ScenarioRoleKind::Dps,    true  },
+};
+
+// ---- support_scorecard_<tank>: one raid with five healers and four dps, a boss that hits the tank and pulses the raid ----
+// The healers and the tank of the support scorecard (Parity::BeginGroup with support): the boss swings at the tank and shoots a pulse at raiders in turn,
+// the healers keep everyone up, four dps give the tank something to out-thread. One scenario per tank, so each tank spec is measured on its own
+// against the same healers. The healers also buff (Fortitude and Spirit, Kings, Mark of the Wild). Alliance only.
+struct SupportTank
+{
+    char const* suffix;
+    ScorecardRow row;
+};
+
+inline constexpr SupportTank kSupportTanks[] = {
+    { "warrior", { "Spttankw", ScnRace::Human,    ScnClass::Warrior, 73,  ScenarioRoleKind::Tank, true } },
+    { "paladin", { "Spttankp", ScnRace::Human,    ScnClass::Paladin, 66,  ScenarioRoleKind::Tank, true } },
+    { "druid",   { "Spttankd", ScnRace::NightElf, ScnClass::Druid,   104, ScenarioRoleKind::Tank, true } },
+};
+
+inline constexpr ScorecardRow kSupportRaid[] = {
+    { "Spthpriest", ScnRace::Human,    ScnClass::Priest,  257, ScenarioRoleKind::Healer, false },
+    { "Sptdpriest", ScnRace::Human,    ScnClass::Priest,  256, ScenarioRoleKind::Healer, false },
+    { "Spthpala",   ScnRace::Human,    ScnClass::Paladin, 65,  ScenarioRoleKind::Healer, false },
+    { "Sptrdruid",  ScnRace::NightElf, ScnClass::Druid,   105, ScenarioRoleKind::Healer, false },
+    { "Sptrshaman", ScnRace::Dwarf,    ScnClass::Shaman,  264, ScenarioRoleKind::Healer, false },
+    { "Sptfury",    ScnRace::Human,    ScnClass::Warrior, 72,  ScenarioRoleKind::Dps,    true  },
+    { "Sptcombat",  ScnRace::Human,    ScnClass::Rogue,   260, ScenarioRoleKind::Dps,    true  },
+    { "Sptfire",    ScnRace::Human,    ScnClass::Mage,    63,  ScenarioRoleKind::Dps,    false },
+    { "Sptaff",     ScnRace::Human,    ScnClass::Warlock, 265, ScenarioRoleKind::Dps,    false },
+};
+
+inline ScenarioDef MakeSupportScenario(SupportTank const& tank, char const* name, char const* summary)
+{
+    ScenarioDef d{};
+    d.name = name;
+    d.summary = summary;
+    d.level = 60;
+    d.squad.push_back({ tank.row.name, tank.row.race, tank.row.cls, tank.row.role, tank.row.spec, tank.row.melee });
+    for (ScorecardRow const& r : kSupportRaid)
+        d.squad.push_back({ r.name, r.race, r.cls, r.role, r.spec, r.melee });
+    d.map = 0;
+    d.x = 0.f; d.y = 0.f; d.z = 0.f; d.o = 0.f;
+    d.goal = ScenarioGoalKind::Parity;
+    d.goal_entry = 0;
+    d.goal_name = "";
+    d.timeout_ms = 30u * 60u * 1000u;
+    d.limits.expected_map = 0;
+    d.parity = 9;                      // the group runtime in support mode
+    d.parity_leg_s = 120;
+    d.full_clear = true;
+    return d;
+}
+
+inline ScenarioDef MakeScorecardScenario()
+{
+    ScenarioDef d{};
+    d.name = "dps_scorecard_raid";
+    d.summary = "DPS scorecard: one Tier 3 raid, a tank, three buffers and one bot per dps spec, all on one boss dummy for 2 minutes (Playerbot.DamageParity.LegSeconds changes it); one row per bot in DpsScorecard.tsv";
+    d.level = 60;
+    for (ScorecardRow const& r : kScorecardRaid)
+        d.squad.push_back({ r.name, r.race, r.cls, r.role, r.spec, r.melee });
+    d.map = 0;
+    d.x = 0.f; d.y = 0.f; d.z = 0.f; d.o = 0.f;
+    d.goal = ScenarioGoalKind::Parity;
+    d.goal_entry = 0;
+    d.goal_name = "";
+    d.timeout_ms = 40u * 60u * 1000u;   // 23 characters set up four a step, then 60 s of buffing, a warm-up and the measurement
+    d.limits.expected_map = 0;
+    d.parity = 8;                      // Parity::Kind::Group
+    d.parity_leg_s = 120;
+    d.full_clear = true;               // long: `runall` with no filter leaves it out
     return d;
 }
 
@@ -631,8 +752,11 @@ inline std::vector<ScenarioDef> const& ScenarioCatalogue()
         for (ParityRow const& r : kParityClasses)
         {
             s_parity_names.push_back(std::string("damage_parity_") + r.cls_name);
-            s_parity_names.push_back("Damage parity, " + std::string(r.cls_name) + ": seven legs against a level 63 dummy, per-spell outcomes, stat sensitivity, armor, DPS against the vanilla ranges");
+            s_parity_names.push_back("Damage parity, " + std::string(r.cls_name) + ": up to eight legs against a level 63 dummy, per-spell outcomes, stat sensitivity, armor, DPS against the vanilla ranges");
             v.push_back(MakeParityScenario(r, s_parity_names[s_parity_names.size() - 2].c_str(), s_parity_names.back().c_str(), 1, 45));
+            // The hunter of a raid was Marksmanship (Aimed Shot, Mortal Shots, Lethal Shots): the 146 and 147 runs took the class's default, Beast Mastery.
+            if (r.cls == ScnClass::Hunter)
+                v.back().parity_spec = 254;
             if (r.cls == ScnClass::Rogue || r.cls == ScnClass::Druid || r.cls == ScnClass::Warrior)
             {
                 s_parity_names.push_back(std::string("finisher_sweep_") + r.cls_name);
@@ -658,10 +782,61 @@ inline std::vector<ScenarioDef> const& ScenarioCatalogue()
                 s_parity_names.push_back("Trap audit, hunter: Explosive, Immolation, Frost and Freezing Trap out of combat, a dummy walked onto each, the trap must fire and do its effect");
                 v.push_back(MakeParityScenario(r, s_parity_names[s_parity_names.size() - 2].c_str(), s_parity_names.back().c_str(), 6, 8));
             }
+            if (r.cls == ScnClass::Rogue || r.cls == ScnClass::Priest || r.cls == ScnClass::Hunter || r.cls == ScnClass::Druid)
+            {
+                s_parity_names.push_back(std::string("threat_audit_") + r.cls_name);
+                s_parity_names.push_back("Threat audit, " + std::string(r.cls_name) + ": the threat reducer (Feint, Fade, Disengage, Cower) cast with 500 and 5000 threat on a level 63 dummy, the drop measured against vanilla's");
+                v.push_back(MakeParityScenario(r, s_parity_names[s_parity_names.size() - 2].c_str(), s_parity_names.back().c_str(), 7, 6));
+            }
             s_parity_names.push_back(std::string("talent_audit_") + r.cls_name);
             s_parity_names.push_back("Talent audit, " + std::string(r.cls_name) + ": key talents in the spellbook with their effects" +
                                      (r.cls == ScnClass::Warlock ? ", Improved Shadow Bolt +20 % after a crit" : ""));
             v.push_back(MakeParityScenario(r, s_parity_names[s_parity_names.size() - 2].c_str(), s_parity_names.back().c_str(), 3, 10));
+        }
+        // The other specializations of the classes that play one spec in the base scenario (warrior Arms, mage Frost, warlock Affliction/Demonology).
+        for (ScenarioDef const& base : std::vector<ScenarioDef>(v))
+        {
+            struct SpecVariant { char const* cls; char const* suffix; std::uint32_t spec; char const* label; };
+            static constexpr SpecVariant kVariants[] = {
+                { "warrior", "fury", 72u, "Fury" }, { "warrior", "prot", 73u, "Protection" },
+                { "mage", "fire", 63u, "Fire" }, { "mage", "arcane", 62u, "Arcane" },
+                { "warlock", "affliction", 265u, "Affliction" }, { "warlock", "demonology", 266u, "Demonology" }, { "warlock", "destruction", 267u, "Destruction" },
+                { "druid", "cat", 103u, "Feral (cat)" }, { "shaman", "elemental", 262u, "Elemental" },
+            };
+            for (SpecVariant const& variant : kVariants)
+            {
+                if (std::string(base.name) != std::string("damage_parity_") + variant.cls)
+                    continue;
+                static std::deque<std::string> s_spec_names;
+                s_spec_names.push_back(std::string("damage_parity_") + variant.cls + "_" + variant.suffix);
+                s_spec_names.push_back(std::string("Damage parity, ") + variant.cls + " played as " + variant.label + ": up to eight legs against a level 63 dummy, per-spell outcomes");
+                ScenarioDef d = base;
+                d.name = s_spec_names[s_spec_names.size() - 2].c_str();
+                d.summary = s_spec_names.back().c_str();
+                d.parity_spec = variant.spec;
+                v.push_back(std::move(d));
+            }
+        }
+        // The base mage and warlock scenarios name their spec too: with parity_spec 0 the run kept whatever talents the character held, and after a
+        // fire run the "frost" mage was a Fire mage (166: Fireball and Scorch cast, "never got Frostbolt accepted").
+        for (ScenarioDef& d : v)
+        {
+            if (std::string(d.name) == "damage_parity_mage") d.parity_spec = 64u;
+            if (std::string(d.name) == "damage_parity_warlock") d.parity_spec = 265u;
+            if (std::string(d.name) == "damage_parity_shaman") d.parity_spec = 263u;   // an elemental run left its talents on the character (195: the base ran as a caster)
+            // The rest of the base scenarios, pinned to the spec their reference ranges were written for, so no run depends on the talents the last run left.
+            if (std::string(d.name) == "damage_parity_paladin") d.parity_spec = 70u;    // Retribution
+            if (std::string(d.name) == "damage_parity_rogue") d.parity_spec = 260u;     // Assassination, the build the runs have played
+            if (std::string(d.name) == "damage_parity_priest") d.parity_spec = 258u;    // Shadow
+            if (std::string(d.name) == "damage_parity_druid") d.parity_spec = 102u;     // Balance (the cat is damage_parity_druid_cat)
+        }
+        v.push_back(MakeScorecardScenario());
+        static std::deque<std::string> s_support_names;   // ScenarioDef carries char const*
+        for (SupportTank const& t : kSupportTanks)
+        {
+            s_support_names.push_back(std::string("support_scorecard_") + t.suffix);
+            s_support_names.push_back(std::string("Healer and tank scorecard: one Tier 3 raid with a ") + t.suffix + " tank, five healers and four dps on a boss that hits the tank and pulses the raid; effective healing, overheal, mana, threat and damage taken per bot in DpsScorecard.tsv");
+            v.push_back(MakeSupportScenario(t, s_support_names[s_support_names.size() - 2].c_str(), s_support_names.back().c_str()));
         }
         return v;
     }();

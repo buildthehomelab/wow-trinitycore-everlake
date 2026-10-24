@@ -383,6 +383,8 @@ struct LfgRoleCheckIntent { uint8 roles; };
 // reviving at the graveyard outside. Lives in QueueIntent with the other
 // instance-entry ops (BG port, LFG proposal). Calls API::enter_area_trigger.
 struct EnterAreaTriggerIntent { uint32 area_trigger_id; };
+// Playerbot.AlwaysBuffs: keep the bot in the always-on state of its place: `set` is a BuffSet, `mask` the kAlwaysMask* kinds that are on there (0 = take every always-on aura off).
+struct AlwaysBuffIntent { uint8 set; uint8 mask; };
 
 // ---- World interaction ----
 struct UseObjectIntent       { ObjectGuid object; };
@@ -614,7 +616,7 @@ struct QueueIntent
     std::variant<
         BgQueueIntent, BgLeaveIntent, BgPortIntent,
         LfgQueueIntent, LfgUnqueueIntent, LfgProposalRespondIntent,
-        LfgRoleCheckIntent, EnterAreaTriggerIntent
+        LfgRoleCheckIntent, EnterAreaTriggerIntent, AlwaysBuffIntent
     > op;
 };
 // Housing (12.0+) — 4 sub-ops. Wrapped per feedback_intent_variant_capacity

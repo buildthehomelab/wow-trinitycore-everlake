@@ -47,6 +47,11 @@ constexpr SupplyRank kRebirthReagent[] = {
 
 // ---- Warlock ----
 constexpr SupplyRank kSoulShard[] = { { 6265, 10 } };
+constexpr SupplyRank kInfernalStone[]   = { { 5565, 50 } };    // Inferno
+constexpr SupplyRank kDemonicFigurine[] = { { 16583, 60 } };   // Ritual of Doom
+constexpr SupplyRank kRuneTeleport[]    = { { 17031, 20 } };   // Teleport spells
+constexpr SupplyRank kRunePortals[]     = { { 17032, 40 } };   // Portal spells
+constexpr SupplyRank kBlindingPowder[]  = { { 5530, 34 } };    // Blind
 
 // ---- Every class: vendor food and water, potions, bandages (1.12 ids) ----
 // Rank = the item's required level (bandages: the bot's First Aid at that
@@ -86,6 +91,11 @@ constexpr SupplyFamily kFamilies[] = {
     { "Gift Reagent",    CLASS_DRUID,   20, kGiftReagent },
     { "Rebirth Reagent", CLASS_DRUID,   5,  kRebirthReagent },
     { "Soul Shard",      CLASS_WARLOCK, 5,  kSoulShard },
+    { "Infernal Stone",  CLASS_WARLOCK, 5,  kInfernalStone },
+    { "Demonic Figurine", CLASS_WARLOCK, 5, kDemonicFigurine },
+    { "Rune of Teleportation", CLASS_MAGE, 10, kRuneTeleport },
+    { "Rune of Portals", CLASS_MAGE,    10, kRunePortals },
+    { "Blinding Powder", CLASS_ROGUE,   10, kBlindingPowder },
     // Open-world bots keep a small stock; raid-level (55+) bots carry what a
     // raid night needs (the owner: full potion stacks, 20 food, 40 drinks).
     { "Food",            0, 5,  kFood,          kConsumable,                     20 },
@@ -118,6 +128,12 @@ constexpr RaidConsumable kMeleeKit[] = {
 };
 constexpr RaidConsumable kCasterKit[] = {
     { 13512, false, 5, true }, { 13454, false, 5 }, { 18254, true, 20 },
+    // Stocked, never drunk by the pre-pull picker (combat flag): Brilliant Wizard Oil goes on the main hand by idle:classic_weapon, the Major Mana
+    // Potion and the Dark / Demonic Rune by the fight's mana item rule (PickCombatManaItem).
+    { 20749, false, 5, false, true },   // Brilliant Wizard Oil: +36 spell damage, +1% spell crit on the weapon
+    { 13444, false, 5, false, true },   // Major Mana Potion
+    { 12662, false, 5, false, true },   // Demonic Rune
+    { 20520, false, 5, false, true },   // Dark Rune
     { 13457, false, 5, false, true },   // Greater Fire Protection Potion: drunk in the fight where the boss data orders it (Ragnaros, Geddon, Onyxia, Firemaw, Vaelastrasz)
     { 13459, false, 5, false, true },   // Greater Shadow Protection Potion: BWL Shadow Flame (Ebonroc, Flamegor, Nefarian)
     { 13458, false, 5, false, true },   // Greater Nature Protection Potion: AQ40 Huhuran's Poison Bolt Volley

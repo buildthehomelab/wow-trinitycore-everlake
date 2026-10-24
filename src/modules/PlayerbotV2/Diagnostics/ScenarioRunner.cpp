@@ -9,7 +9,9 @@
 #include "../Bot/BotSnapshotView.h"
 #include "../Bot/Gear/OwnedGearPolicy.h"
 #include "../Group/GroupSnapshot.h"
+#include "../Api/ClassicSpec.h"
 #include "../Api/ClassicSupplies.h"
+#include "../Bot/World/HunterPetsByRace.h"
 #include "../Fleet/BotCharacterFactory.h"
 #include "../Fleet/BotIdentityRegistry.h"
 #include "../Fleet/BotPool.h"
@@ -44,6 +46,7 @@
 #include "Player.h"
 #include "WaypointManager.h"
 #include "PlayerbotAPI.h"
+#include "../Api/ClassicSpec.h"
 #include "PlayerbotMovement.h"
 #include "Util.h"
 #include "fmt/format.h"
@@ -75,6 +78,38 @@ namespace {
 // the same spot `.playerbot dungeontest` stages at).
 constexpr std::uint32_t kStageMap = 0;
 constexpr float kStageX = -8985.0f, kStageY = 511.0f, kStageZ = 79.8f;
+// A Horde character cannot stand in Stormwind: the city guards kill it (damage_parity_shaman 152, an Orc dead after 38 s). Its staging spot is Razor Hill,
+// a Horde town with open, flat ground around it.
+constexpr std::uint32_t kHordeStageMap = 1;
+constexpr float kHordeStageX = 340.36f, kHordeStageY = -4686.29f, kHordeStageZ = 16.54f;
+
+// The Stormwind harbour ledge killed two parity runs (a rogue fell off it, a hunter walked into the water). An Alliance parity subject stages at the
+// Northshire Abbey start instead: the human racial start (playercreateinfo), open flat ground with no water or ledge; World.cpp checks its map and vmap on boot.
+// Dungeon scenarios keep the Stormwind spot they path from.
+constexpr float kAllianceParityStageX = -8949.95f, kAllianceParityStageY = -132.493f, kAllianceParityStageZ = 83.5312f;
+
+inline void StagePoint(Player const* p, std::uint32_t& map, float& x, float& y, float& z, bool parity = false)
+{
+    if (p && p->GetTeam() == HORDE)
+    {
+        map = kHordeStageMap; x = kHordeStageX; y = kHordeStageY; z = kHordeStageZ;
+        return;
+    }
+    if (parity)
+    {
+        map = 0; x = kAllianceParityStageX; y = kAllianceParityStageY; z = kAllianceParityStageZ;
+        return;
+    }
+    map = kStageMap; x = kStageX; y = kStageY; z = kStageZ;
+}
+
+// Sends the character to its staging spot.
+inline void SendToStage(Player* p, bool parity = false)
+{
+    std::uint32_t map; float x, y, z;
+    StagePoint(p, map, x, y, z, parity);
+    ::Playerbot::BotMovement::SafeTeleport(p, map, x, y, z, 0.f, 0);
+}
 
 constexpr std::uint32_t kStepMs = 1000;                 // one staging / sampling step a second; setup is never looped on the world thread
 constexpr std::uint32_t kStageTimeoutMs = 8u * 60u * 1000u;
@@ -95,6 +130,10 @@ struct Member
     ScenarioMember def;
     std::uint64_t id = 0;
     bool role_pinned = false;
+    std::uint32_t parity_talent_tries = 0;   // damage_parity: attempts to commit the class's classic build
+    bool parity_talents = false;
+    std::uint32_t parity_pet_tries = 0;   // damage_parity hunter: attempts to give it the pet every hunter has
+    bool parity_pet = false;   // damage_parity: the classic build is committed
     bool kit_learned = false;   // the class trainer spells of the squad level are taught (LearnLevelKit)
     bool tier_geared = false;   // the raid's tier gear (RaidGearTier) and the fight's resistance gear are on (see the staging step)
     bool ready = false;
@@ -114,6 +153,7 @@ struct PullStat
 
 struct Run
 {
+    bool flat_ground_done = false;   // damage_parity: the flat spot the measurement runs from is chosen and remembered (Parity::NoteFlatSpot)
     ScenarioDef const* def = nullptr;
     Phase phase = Phase::Idle;
     std::vector<Member> members;
@@ -148,6 +188,7 @@ struct Run
     std::uint32_t attack_run_ms = 0;     // run_ms of the Attack order
     bool tank_probe_done = false;        // the tanks' state a few seconds into the fight was logged
     bool stand_in_detached = false;      // the stand-in logic is off and the runner plays it
+    std::uint32_t spot_moved = 0;        // the dps scorecard raid was moved to flat ground
     ObjectGuid group_guid;               // the squad's group: a member found in another one is put back before the run starts
     bool group_logged = false;
     bool refusal_logged = false;   // the map's refusal of the squad's entry is logged once per run
@@ -262,7 +303,7 @@ Owned::GearMode RaidGearTier(std::string_view name)
         return Owned::GearMode::T1;
     if (name.starts_with("bwl_") || name.starts_with("aq40_"))
         return Owned::GearMode::T2;
-    if (name.starts_with("naxx_"))
+    if (name.starts_with("naxx_") || name.starts_with("dps_scorecard") || name.starts_with("support_scorecard"))
         return Owned::GearMode::T3;
     return Owned::GearMode::Match;
 }
@@ -332,7 +373,7 @@ bool StageMember(Run& run, Member& m)
     {
         LeaveGroup(p);
         p->CombatStop(true);
-        ::Playerbot::BotMovement::SafeTeleport(p, kStageMap, kStageX, kStageY, kStageZ, 0.f, 0);
+        SendToStage(p, run.def->goal == ScenarioGoalKind::Parity);
         run.stage_status += fmt::format("{}=staged ", m.def.name);
         return false;
     }
@@ -365,6 +406,18 @@ bool StageMember(Run& run, Member& m)
         return false;
     }
 
+    // A damage_parity run played as another specialization (damage_parity_warrior_fury) gets that specialization's talents before it is
+    // geared: the role above pins the class's default DPS spec, so the fury run kept the Arms talents (Mortal Strike, no Bloodthirst) and
+    // only its rotation rules were Fury's (136: Mortal Strike and Whirlwind cast, no Bloodthirst).
+    if (def.parity && def.parity_spec && ::Playerbot::Classic::GetSpecOverride(p->GetGUID()) != def.parity_spec)
+    {
+        ::Playerbot::Classic::SetSpecOverride(p, def.parity_spec);
+        ::Playerbot::API api(p);
+        api.apply_talent_build(0);
+        run.stage_status += fmt::format("{}=spec ", m.def.name);
+        return false;
+    }
+
     // Level, gear and spells through the standard setup pipeline, exactly one pipeline step per call. A character set up for another
     // level (the shared dungeon party is re-levelled for each row) has its pipeline marked done: it runs again for this level.
     if (uint32(p->GetLevel()) != def.level)
@@ -391,6 +444,42 @@ bool StageMember(Run& run, Member& m)
         run.stage_status += fmt::format("{}=setup ", m.def.name);
         return false;
     }
+
+    // A damage_parity run measures the class's own build, committed before the first leg. The setup pipeline's talent step and the idle
+    // rule only commit out of combat, and the bot stands in combat with the dummy as soon as it is staged: the paladin (143) first
+    // committed its build between the t3 and t3_buffed legs, so the none/t1/t3 legs ran without Seal of Command and Vengeance.
+    if (def.parity && !m.parity_talents && m.parity_talent_tries < 20)
+    {
+        ++m.parity_talent_tries;
+        // The base scenario plays the class's own default (warrior: Arms, 71). The override of an earlier run of the same character stays in
+        // the registry: the arms run after a fury run committed the Fury build (144: spec 72, Bloodthirst and Whirlwind, no Mortal Strike).
+        ::Playerbot::Classic::SetSpecOverride(p, m.def.spec ? m.def.spec : def.parity_spec ? def.parity_spec : (p->GetClass() == CLASS_WARRIOR ? 71u : 0u));
+        if (::Playerbot::API(p).apply_talent_build(0) == ::Playerbot::Result::Ok)
+            m.parity_talents = true;
+        else if (m.parity_talent_tries == 20)
+            TC_LOG_WARN("playerbot.v2", "[scenario] {} {}: the classic build was not committed in 20 tries", def.name, m.def.name);
+        run.stage_status += fmt::format("{}=talents ", m.def.name);
+        return false;
+    }
+
+    // A hunter's pet is a fifth to a third of its damage in vanilla; a scenario hunter had none (161: pet_dps 0, no stabled pet for the call rule;
+    // the setup pipeline's pet step never ran for a reused character). Every scenario hunter gets the race's starter pet.
+    if (p->GetClass() == CLASS_HUNTER && p->GetLevel() >= 10 && !m.parity_pet && m.parity_pet_tries < 20)
+    {
+        ++m.parity_pet_tries;
+        using PetResult = ::Playerbot::API::StarterPetResult;
+        PetResult const r = ::Playerbot::API(p).grant_starter_hunter_pet(::Playerbot::V2::World::StarterHunterPetEntry(p->GetRace(), p->GetTeam() == ALLIANCE));
+        if (r != PetResult::NotNow)
+        {
+            m.parity_pet = true;
+            TC_LOG_INFO("playerbot.v2", "[scenario] {} {}: starter pet {}", def.name, m.def.name,
+                        r == PetResult::Tamed ? "tamed" : r == PetResult::HasPet ? "already there" : "unavailable (no tameable beast in this data)");
+        }
+        run.stage_status += fmt::format("{}=pet ", m.def.name);
+        return false;
+    }
+    if (m.def.spec)
+        ::Playerbot::Classic::SetSpecOverride(p, m.def.spec);   // the dps scorecard: the pipeline rolls a spec of its own, the member's pin stays
 
     // A raid scenario fields the gear the owner's raid wears for that raid (RaidGearTier: the class tier set plus raid pieces up to its item
     // level) and the resistance gear a vanilla raid dressed for the fight (ScenarioDef::resist_school). The setup pipeline's generated gear
@@ -1713,7 +1802,7 @@ void Finish(Run& run, bool timed_out, std::string const& note = {})
         // The damage_parity family: the dummy, the stat bonuses and the gear override go; a bot whose bot logic was taken off for a sweep is logged out
         // (the next staging logs it in with a fresh one).
         Parity::End();
-        if (def.parity != 1 && !run.members.empty())
+        if (def.parity != 1 && def.parity != 8 && def.parity != 9 && !run.members.empty())
             ::Playerbot::Services::SessionMgr().LogoutBot(ObjectGuid::Create<HighGuid::Player>(run.members.front().id));
     }
     if (timed_out)
@@ -1813,7 +1902,7 @@ void Finish(Run& run, bool timed_out, std::string const& note = {})
                 p->ResurrectPlayer(1.0f);
                 p->SpawnCorpseBones();
             }
-            ::Playerbot::BotMovement::SafeTeleport(p, kStageMap, kStageX, kStageY, kStageZ, 0.f, 0);
+            SendToStage(p, run.def->goal == ScenarioGoalKind::Parity);
         }
     // Take the run out of the list but keep it alive to the end of this function: `run` is a reference into it.
     std::unique_ptr<Run> owned;
@@ -2112,20 +2201,106 @@ static void TickRun(Run& run, std::uint32_t diff_ms)
                 Finish(run, false);   // a character that cannot be made: the run cannot start
                 return;
             }
+            if (all && (run.def->parity == 8 || run.def->parity == 9))
+            {
+                // The dps scorecard: the whole raid on the staging spot, grouped, then on flat ground, then the measurement begins.
+                bool placed = true;
+                for (Member const& m : run.members)
+                {
+                    Player* p = Find(m.id);
+                    if (!p || !p->IsInWorld() || p->IsBeingTeleported())
+                    {
+                        placed = false;
+                        continue;
+                    }
+                    if (run.group_guid.IsEmpty() && (p->GetMapId() != kStageMap || p->GetDistance2d(kStageX, kStageY) > 30.f))
+                    {
+                        ::Playerbot::BotMovement::SafeTeleport(p, kStageMap, kStageX, kStageY, kStageZ, 0.f, 0);
+                        placed = false;
+                    }
+                }
+                if (!placed)
+                {
+                    if (run.phase_ms >= run.stage_timeout_ms)
+                    {
+                        run.monitor->NoteSetupFailure(run.run_ms, "", "the raid did not reach the staging spot");
+                        Finish(run, false);
+                    }
+                    return;
+                }
+                if (run.group_guid.IsEmpty())
+                {
+                    FormGroup(run);
+                    return;
+                }
+                if (!GroupSettled(run))
+                {
+                    if (run.phase_ms >= run.stage_timeout_ms + 120u * 1000u)
+                    {
+                        run.monitor->NoteSetupFailure(run.run_ms, "", "the raid group did not settle");
+                        Finish(run, false);
+                    }
+                    return;
+                }
+                Player* leader = nullptr;
+                for (Member const& m : run.members)
+                    if (m.def.role == ScenarioRoleKind::Tank)
+                        leader = Find(m.id);
+                if (!leader)
+                    leader = Find(run.members.front().id);
+                float sx = 0.f, sy = 0.f, sz = 0.f, so = 0.f;
+                if (leader && run.spot_moved == 0 && Parity::FindOpenSpot(leader, 15.0f, sx, sy, sz, so) && leader->GetExactDist(sx, sy, sz) > 1.5f)
+                {
+                    TC_LOG_INFO("playerbot.v2", "[scenario] {} measures from flat ground at {:.1f},{:.1f},{:.1f}", run.def->name, sx, sy, sz);
+                    for (Member const& m : run.members)
+                        if (Player* p = Find(m.id))
+                            ::Playerbot::BotMovement::SafeTeleport(p, kStageMap, sx, sy, sz, so, 0);
+                    run.spot_moved = 1;
+                    return;
+                }
+                std::vector<Parity::GroupMember> raid;
+                for (Member const& m : run.members)
+                {
+                    Player* p = Find(m.id);
+                    if (!p)
+                        continue;
+                    Parity::GroupMember gm;
+                    gm.player = p;
+                    gm.spec = m.def.spec;
+                    gm.label = m.def.name;
+                    gm.melee = m.def.melee;
+                    gm.role = m.def.role == ScenarioRoleKind::Tank ? 2 : m.def.role == ScenarioRoleKind::Healer ? 1 : 0;
+                    gm.scored = run.def->parity == 9 || m.def.role == ScenarioRoleKind::Dps;   // the support scorecard audits everyone
+                    raid.push_back(std::move(gm));
+                }
+                std::string error;
+                if (!Parity::BeginGroup(raid, run.def->parity_leg_s, error, run.def->parity == 9))
+                {
+                    run.monitor->NoteSetupFailure(run.run_ms, "", error.empty() ? "the raid could not begin" : error);
+                    Finish(run, false);
+                    return;
+                }
+                TC_LOG_INFO("playerbot.v2", "[scenario] {} {} bots staged and grouped, the measurement begins", run.def->name, raid.size());
+                run.phase = Phase::Parity;
+                run.phase_ms = 0;
+                return;
+            }
             if (all && run.def->parity)
             {
                 // One bot, no group, no instance: it stays where it was staged and meets a target dummy.
                 Player* subject = Find(run.members.front().id);
                 // On the open ground of the staging spot, not wherever the bot logged out.
+                std::uint32_t stage_map = kStageMap; float stage_x = kStageX, stage_y = kStageY, stage_z = kStageZ;
+                StagePoint(subject, stage_map, stage_x, stage_y, stage_z, true);
                 if (subject && run.phase_ms < 60u * 1000u &&
-                    (subject->GetMapId() != kStageMap || subject->GetDistance2d(kStageX, kStageY) > 30.f || subject->IsBeingTeleported()))
+                    (subject->GetMapId() != stage_map || subject->GetDistance2d(stage_x, stage_y) > 30.f || subject->IsBeingTeleported()))
                 {
                     if (!subject->IsBeingTeleported())
-                        ::Playerbot::BotMovement::SafeTeleport(subject, kStageMap, kStageX, kStageY, kStageZ, 0.f, 0);
+                        ::Playerbot::BotMovement::SafeTeleport(subject, stage_map, stage_x, stage_y, stage_z, 0.f, 0);
                     return;
                 }
                 // The staging spot is a ledge: a dummy 15 y ahead stands 11 y lower with no line of sight. Measure from flat ground nearby.
-                if (subject && run.phase_ms < 120u * 1000u && !subject->IsBeingTeleported())
+                if (subject && !run.flat_ground_done && run.phase_ms < 120u * 1000u && !subject->IsBeingTeleported())
                 {
                     float sx = 0.f, sy = 0.f, sz = 0.f, so = 0.f;
                     if (Parity::FindOpenSpot(subject, 15.0f, sx, sy, sz, so))
@@ -2134,16 +2309,22 @@ static void TickRun(Run& run, std::uint32_t diff_ms)
                         {
                             TC_LOG_INFO("playerbot.v2", "[scenario] {} measures from flat ground at {:.1f},{:.1f},{:.1f} ({:.1f} y from the staging spot)", subject->GetName(), sx, sy, sz,
                                         subject->GetExactDist(sx, sy, sz));
-                            ::Playerbot::BotMovement::SafeTeleport(subject, kStageMap, sx, sy, sz, so, 0);
+                            // Once only, and remembered: each search starts from where the bot stands, so a bot nudged off the ground by its idle
+                            // rules between ticks was moved again and again, 30 y, 6 y, 24 y, down into the harbour water (162: it drowned).
+                            run.flat_ground_done = true;
+                            Parity::NoteFlatSpot(subject->GetMapId(), sx, sy, sz, so);
+                            ::Playerbot::BotMovement::SafeTeleport(subject, subject->GetMapId(), sx, sy, sz, so, 0);
                             return;
                         }
+                        run.flat_ground_done = true;
+                        Parity::NoteFlatSpot(subject->GetMapId(), sx, sy, sz, so);
                         subject->SetFacingTo(so);
                     }
                     else
                         TC_LOG_INFO("playerbot.v2", "[scenario] {}: no flat ground within 48 y of the staging spot, measuring from where it stands", subject->GetName());
                 }
                 std::string error;
-                if (!subject || !Parity::Begin(subject, Parity::Kind(run.def->parity), run.def->parity_leg_s, error))
+                if (!subject || !Parity::Begin(subject, Parity::Kind(run.def->parity), run.def->parity_leg_s, error, run.def->parity_spec))
                 {
                     run.monitor->NoteSetupFailure(run.run_ms, run.members.front().def.name, error.empty() ? "the bot is gone" : error);
                     Finish(run, false);

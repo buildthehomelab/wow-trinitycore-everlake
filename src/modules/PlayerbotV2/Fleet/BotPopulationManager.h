@@ -196,6 +196,10 @@ public:
     void CompanionUpkeep(BotId id, Player* p);
     // A hunter companion's starter pet, granted once per bot (OwnerRegistry::StarterPetGranted).
     void GrantCompanionStarterPet(BotId id, Player* p);
+    // A bot hunter of level 10+ nobody owns (world, pool and scenario bots) that has no pet, summoned, dismissed or stabled, gets a beast of its own:
+    // the setup pipeline's pet step is marked done for characters made before it existed (live DB: 423 of 925 hunters petless). Not a player's
+    // character, and not an owned companion (its pet, or its abandoned pet, is the owner's: GrantCompanionStarterPet). Logged when one is given.
+    static void EnsureBotHunterPet(Player* p);
 
     struct PendingCompanion
     {

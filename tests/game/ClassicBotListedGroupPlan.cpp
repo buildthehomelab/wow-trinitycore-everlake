@@ -18,6 +18,9 @@
 
 #include "../../src/modules/PlayerbotV2/BotListedGroupPlan.h"
 
+#include <algorithm>
+#include <vector>
+
 using namespace Playerbot::V2;
 
 TEST_CASE("BotListedGroupPlan: the activity list reads", "[listedgroups]")
@@ -111,4 +114,25 @@ TEST_CASE("BotListedGroupPlan: every shape seats at least two and never more tha
                     CHECK(shape.members < size);
                     CHECK(shape.members + shape.missing.Total() == size);
                 }
+}
+
+TEST_CASE("BotListedGroupPlan: a dungeon without a listed group comes first", "[listedgroups]")
+{
+    std::vector<ListedActivity> const all{ { 1, 10, 1, 10 }, { 2, 20, 1, 10 }, { 3, 30, 1, 10 }, { 4, 40, 1, 10 } };
+    auto first = [](uint32 n) { return n - 1; };        // a fixed "random" source
+    // nothing listed: all four, in some order
+    auto order = ListedActivityOrder(all, {}, first);
+    REQUIRE(order.size() == 4);
+    // dungeons 2 and 4 already have a group: 1 and 3 come before them, whatever the shuffle gives
+    for (uint32 pick : { 0u, 1u })
+    {
+        auto const o = ListedActivityOrder(all, { 2, 4 }, [&](uint32 n) { return std::min(pick, n - 1); });
+        REQUIRE(o.size() == 4);
+        CHECK((o[0] == 0 || o[0] == 2));
+        CHECK((o[1] == 0 || o[1] == 2));
+        CHECK((o[2] == 1 || o[2] == 3));
+        CHECK((o[3] == 1 || o[3] == 3));
+    }
+    // all listed: every dungeon is still offered (a second group)
+    CHECK(ListedActivityOrder(all, { 1, 2, 3, 4 }, first).size() == 4);
 }

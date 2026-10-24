@@ -141,10 +141,11 @@ inline int32 ManaPct(BotSnapshotView const& s)
 }
 
 // The mana-efficiency rules apply (see the header comment): any group inside a raid or 5-man instance map
-// (Bot/ClassicHealScope.h). The name is the older "raid" one.
+// (Bot/ClassicHealScope.h), and a raid group anywhere: five healers of the support scorecard on open ground (230) played by the plain
+// rules, every one rolling Renew on every raider a pulse hit (57% overheal, the holy priest out of mana). The name is the older "raid" one.
 inline bool RaidHealing(BotSnapshotView const& s)
 {
-    return EfficiencyRulesApply(s.is_in_raid(), s.is_in_dungeon(), s.in_battleground(), IsVanillaRealm());
+    return EfficiencyRulesApply(s.is_in_raid() || s.in_raid_group(), s.is_in_dungeon(), s.in_battleground(), IsVanillaRealm());
 }
 
 // Playerbot.Behavior.HealClaims (default on): the raid in-flight heal dedupe, the HoT claims and
