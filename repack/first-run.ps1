@@ -9,6 +9,14 @@ New-Item -ItemType Directory -Force "$root\config", "$root\secrets" | Out-Null
 if (-not (Test-Path "$root\config\my.ini")) {
     (Get-Content "$PSScriptRoot\templates\my.ini" -Raw).Replace('@ROOT@', ($root -replace '\\', '/')) | Set-Content "$root\config\my.ini" -Encoding ascii
 }
+# The mysql program reads a file in the character set of the Windows language unless told otherwise (gbk on Chinese Windows, for
+# example). The dumps are utf8mb4, and read as gbk the Korean and Chinese texts swallow quotes: the import stops halfway, the world
+# misses tables and the worldserver closes ("database structure is not up to date"). An install made before this line gets it here.
+$ini = Get-Content "$root\config\my.ini"
+if (-not ($ini -match '^\s*default-character-set\s*=')) {
+    $ini = $ini -replace '^\[client\]\s*$', "[client]`r`ndefault-character-set=utf8mb4"
+    Set-Content "$root\config\my.ini" $ini -Encoding ascii
+}
 if (-not (Test-Path "$root\mysql-data\mysql")) {
     & "$mysqlBin\mysqld.exe" "--defaults-file=$root\config\my.ini" --initialize-insecure --console
     if ($LASTEXITCODE) { throw 'mysql initialize failed' }
@@ -26,7 +34,8 @@ foreach ($db in 'world', 'hotfixes') {
     $dump = "$root\sql\$db.sql"
     if (Test-Path $dump) {
         "Importing $db (a few minutes)..."
-        cmd /c "`"$mysqlBin\mysql.exe`" --defaults-file=`"$root\config\my.ini`" -u root $db < `"$dump`""
+        cmd /c "`"$mysqlBin\mysql.exe`" --defaults-file=`"$root\config\my.ini`" --default-character-set=utf8mb4 -u root $db < `"$dump`""
+        if ($LASTEXITCODE) { throw "Importing $db failed (the error is shown above). Run Install.cmd again; if it stops here again, post repack\install.log in our Discord." }
     }
 }
 # Shared bot database (roads, talent builds, names ...): the worldserver reads it while loading, before any migration runs,
@@ -37,7 +46,7 @@ if ([int]$haveShared -eq 0) {
         $p = "$root\sql\playerbot_shared\$f"
         if (Test-Path $p) {
             "Importing $f..."
-            cmd /c "`"$mysqlBin\mysql.exe`" --defaults-file=`"$root\config\my.ini`" -u root playerbot < `"$p`""
+            cmd /c "`"$mysqlBin\mysql.exe`" --defaults-file=`"$root\config\my.ini`" --default-character-set=utf8mb4 -u root playerbot < `"$p`""
             if ($LASTEXITCODE) { throw "importing $f failed" }
         }
     }

@@ -15,8 +15,8 @@ regroup, formation and spacing, tanks and markers), Assign a bot to an icon, You
 - "Add bots >" at the top opens a separate drop-down beside the window: "Select gear" (Match my gear, Best for their level,
   Best in slot, Tier 1, 2, 3; remembered; sent to the group as `gear match|best|bis|t1|t2|t3` before an add) and one button per
   class and role.
-- Two switches beside it: AoE (whispers `aoe_all on|off` to one of your bots; it applies to the whole group) and CC (group
-  order `crowdcontrol on|off`). The icon shows the state last sent.
+- Two switches beside it: Area spells (whispers `aoe_all on|off` to one of your bots; it applies to the whole group; off = no
+  spell that hits more than one enemy) and CC (group order `crowdcontrol on|off`). The icon shows the state last sent.
 - One button per class and role: adds that bot (`.bot add <class> <role>`). It joins you at your level, geared,
   in your group.
 - Orders to the group: Follow, Stay, Attack (your target), Resume; Pull (your tank bots open on your target, the
@@ -90,8 +90,21 @@ the bot, right-click clears; the Role button picks tank/cc/kill for the next cli
 (your target), Pull back, Dist -/+ (this bot only), Dismiss, and a status line showing the bot's confirmation. The
 confirmation whispers are hidden from chat. `/fb bot on|off` toggles the panel (default on). The client cannot tell a bot
 from a human group member, so the panel shows for any friendly party/raid member (a `?` after the name until that player
-has answered a whisper order); do not use it on real players. Unit right-click menu: an entry "ForeverBots" is added only
-where the client offers `Menu.ModifyMenu` (untested here); the legacy UnitPopupMenus tables are deliberately not touched.
+has answered a whisper order); do not use it on real players. Unit right-click menu: entries are added only through the
+client's `Menu.ModifyMenu`; the legacy UnitPopupMenus tables are deliberately not touched (`/fb menu off` leaves the menus alone).
+Right-clicking a member of your group shows "WoW Forever Bots" with a submenu, each entry a whisper to that bot:
+- Open the bot panel, Follow me, Stay here, Attack my target; Area spells on / off for this bot (`aoe on|off`); Role (`setrole tank|healer|dps|clear`) for classes with more
+  than one role; Raid icon: kill it first, crowd-control it, tank it (`assign <marker> kill|cc|tank`), Clear.
+- The bot's own picks (`prefer <slot> <name>`, `prefer <slot> auto`): paladin Blessing and Aura, shaman Earth / Fire / Water /
+  Air totem, hunter Aspect (Cheetah and Pack only out of combat), warlock Demon. A pick replaces the group plan for that one
+  choice; the other paladins plan around a pinned blessing or aura. A mark shows what you picked in this session.
+- Pet (hunter, warlock): keep it out or dismiss it and keep it away (`pet on|off`). Stealth (rogue): `stealth on|off`.
+- Warlock: Summon a player (`ritual <name>`, then "Help click the portal" sends `use summoning` to the party) and Soulstone
+  on a group member (`soulstone <name>`). Mage: Open a portal to a city of the mage's faction (`portal <city>`).
+- Danger spells (all bots of that class): the crowd-control orders `@<class> no <kind>`, `@<class> off cc`, `@<class> on cc`.
+- What did I pick? (`prefer`) and Clear my picks (`prefer clear`).
+Class entries appear from the level the spell is trained at; a talent spell the bot lacks gets "I don't know ... yet". The
+picks are memory only on the server: a relog or restart clears them.
 
 `/fb add <class> [tank|healer|dps]`, `/fb call|dismiss|save|unsave|regear [name|all]`, `/fb delete <name>`, `/fb list`,
 The window stays where you put it and stays open (it is not closed by Escape, clicks, combat or target changes; its open state survives /reload and relog). `/fb` toggles it, or use the X button.

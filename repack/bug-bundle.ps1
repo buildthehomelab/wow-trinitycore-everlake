@@ -21,6 +21,7 @@ try {
     }
     foreach ($l in 'Server.log', 'DBErrors.log', 'Bnet.log', 'Playerbot.log', 'Errors.log') { Scrub "$root\server\logs\$l" "$stage\$l" }
     foreach ($l in 'install.log', 'update.log', 'autorestart.log') { Scrub "$PSScriptRoot\$l" "$stage\repack-$l" }
+    Scrub "$root\mysql-data\mysql-error.log" "$stage\mysql-error.log"   # why the database did not start or an import failed
     foreach ($c in 'worldserver.conf', 'bnetserver.conf', 'playerbot.conf') { Scrub "$root\server\$c" "$stage\$c" }
     foreach ($c in Get-ChildItem "$root\server\worldserver.conf.d" -Filter '*.conf' -File -ErrorAction SilentlyContinue) { Scrub $c.FullName "$stage\conf.d-$($c.Name)" }
     foreach ($c in Get-ChildItem $stage -Filter '*.conf' -File) { (Get-Content $c.FullName) | Where-Object { $_ -notmatch 'DatabaseInfo' } | Set-Content $c.FullName }

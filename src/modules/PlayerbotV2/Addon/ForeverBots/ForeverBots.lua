@@ -219,7 +219,7 @@ end
 
 -- Deletes the targeted companion for good, after a confirmation.
 StaticPopupDialogs["FOREVERBOTS_DELETE"] = {
-    text = "Delete %s for good? Its character is removed.",
+    text = "Delete %s for good? Its character is removed. (Your own characters summoned as bots are never deleted: use Dismiss for them.)",
     button1 = YES,
     button2 = NO,
     OnAccept = function(_, name) ServerCommand(".bot delete " .. name) end,
@@ -906,9 +906,9 @@ function UI.BuildOrders()
     Tip(stanceBtn, "Stance", "Passive (the start setting): bots start nothing, fight only what you pull or what attacks the group, and come back to follow you. Aggressive: they also attack anything hostile within about 10 yards of you. Shows what you last sent; it is sent again to every bot that joins.")
     RefreshStance()
 
-    -- Two on/off check boxes at the bottom (the client's own check box). AoE: the bots use their area spells whenever they can
-    -- (server: "aoe_all on|off", whispered to one of your bots, which applies it to every bot in the group). Crowd control: on (the
-    -- default) the bots crowd-control the mobs you mark.
+    -- Two on/off check boxes at the bottom (the client's own check box). Area spells: on (the server's start setting) the bots use
+    -- them as their rotations call for; off, nothing that hits more than one enemy (server: "aoe_all on|off", whispered to one of
+    -- your bots, which applies it to every bot in the group). Crowd control: on (the default) the bots crowd-control the mobs you mark.
     local function Switch(y, key, default, caption, onText, offText, send)
         local cb = CreateFrame("CheckButton", nil, ordersGrid, "UICheckButtonTemplate")
         cb:SetSize(26, 26)
@@ -934,9 +934,9 @@ function UI.BuildOrders()
         end)
         cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
     end
-    Switch(LAYOUT.PANE_H - 56, "aoe", false, "Use area spells freely",
-        "The bots use their area spells whenever they can.",
-        "The bots use area spells only when several mobs are close together.",
+    Switch(LAYOUT.PANE_H - 56, "aoeOn", true, "Area spells",
+        "The bots use their area spells as their rotations call for.",
+        "No spell that hits more than one enemy (Blizzard, Consecration, Multi-Shot, Cleave...): keeps a sheep or sap safe.",
         function(on)
             local asker = ListAsker()
             if asker then SendChatMessage("aoe_all " .. (on and "on" or "off"), "WHISPER", nil, asker)
@@ -1794,6 +1794,203 @@ end
 -- the box from those callbacks. That is chat-box access without a player action and is what the client blocks
 -- (2026-10-15), so the hooks are gone. The portrait menu's "Whisper (Forever Bots)" and typed /w are the supported ways.
 
+-- The bot submenu of the unit right-click menu (a group member): orders and the bot's own picks, each a whisper to that bot.
+-- Class entries appear from the level the spell is trained at; the server answers "I don't know ... yet" for one the bot lacks
+-- (a talent such as Kings or Sanctity). The picks are the server's "prefer <slot> <name>" (memory only there, and here), so the
+-- marks below show what was sent in this session.
+local MARKERS = { "star", "circle", "diamond", "triangle", "moon", "square", "cross", "skull" }
+local MARKER_LABEL = { star = "Star", circle = "Circle", diamond = "Diamond", triangle = "Triangle", moon = "Moon", square = "Square",
+    cross = "Cross", skull = "Skull" }
+-- slot word, menu title, class token, { word, label, level } (word = the server's first word for the choice, Bot/OwnerPicks.h)
+local PICKS = {
+    { "blessing", "Blessing", "PALADIN", {
+        { "might", "Blessing of Might", 4 }, { "wisdom", "Blessing of Wisdom", 14 }, { "kings", "Blessing of Kings", 20 },
+        { "salvation", "Blessing of Salvation", 26 }, { "light", "Blessing of Light", 40 }, { "sanctuary", "Blessing of Sanctuary", 30 } } },
+    { "aura", "Aura", "PALADIN", {
+        { "devotion", "Devotion Aura", 1 }, { "retribution", "Retribution Aura", 16 }, { "concentration", "Concentration Aura", 22 },
+        { "shadow", "Shadow Resistance Aura", 28 }, { "frost", "Frost Resistance Aura", 32 }, { "fire", "Fire Resistance Aura", 36 },
+        { "sanctity", "Sanctity Aura", 20 } } },
+    { "earth", "Earth totem", "SHAMAN", {
+        { "stoneskin", "Stoneskin Totem", 4 }, { "earthbind", "Earthbind Totem", 6 }, { "stoneclaw", "Stoneclaw Totem", 8 },
+        { "strength", "Strength of Earth Totem", 10 }, { "tremor", "Tremor Totem", 18 } } },
+    { "fire", "Fire totem", "SHAMAN", {
+        { "searing", "Searing Totem", 10 }, { "nova", "Fire Nova Totem", 12 }, { "frost", "Frost Resistance Totem", 24 },
+        { "magma", "Magma Totem", 26 }, { "flametongue", "Flametongue Totem", 28 } } },
+    { "water", "Water totem", "SHAMAN", {
+        { "healing", "Healing Stream Totem", 20 }, { "poison", "Poison Cleansing Totem", 22 }, { "mana", "Mana Spring Totem", 26 },
+        { "fire", "Fire Resistance Totem", 28 }, { "disease", "Disease Cleansing Totem", 38 } } },
+    { "air", "Air totem", "SHAMAN", {
+        { "grounding", "Grounding Totem", 30 }, { "nature", "Nature Resistance Totem", 30 }, { "windfury", "Windfury Totem", 32 },
+        { "windwall", "Windwall Totem", 36 }, { "grace", "Grace of Air Totem", 42 }, { "tranquil", "Tranquil Air Totem", 50 } } },
+    { "aspect", "Aspect", "HUNTER", {
+        { "monkey", "Aspect of the Monkey", 4 }, { "hawk", "Aspect of the Hawk", 10 }, { "cheetah", "Aspect of the Cheetah (out of combat)", 20 },
+        { "pack", "Aspect of the Pack (out of combat)", 30 }, { "wild", "Aspect of the Wild", 46 } } },
+    { "demon", "Demon", "WARLOCK", {
+        { "imp", "Imp", 1 }, { "voidwalker", "Voidwalker", 10 }, { "succubus", "Succubus", 20 }, { "felhunter", "Felhunter", 30 } } },
+}
+local PORTALS = {
+    Alliance = { { "stormwind", "Stormwind" }, { "ironforge", "Ironforge" }, { "darnassus", "Darnassus" } },
+    Horde = { { "orgrimmar", "Orgrimmar" }, { "undercity", "Undercity" }, { "thunder bluff", "Thunder Bluff" } },
+}
+-- Crowd control the owner can say no to for a whole class (the server's "@<class> no <kind>", CcDeny.h): kind word, label.
+local DANGER = {
+    WARRIOR = { { "fear", "Intimidating Shout" } },
+    PRIEST  = { { "fear", "Psychic Scream" }, { "shackle", "Shackle Undead" } },
+    WARLOCK = { { "fear", "Fear, Howl of Terror, Death Coil" }, { "banish", "Banish" }, { "seduce", "Seduction, Enslave Demon" } },
+    MAGE    = { { "sheep", "Polymorph" } },
+    HUNTER  = { { "fear", "Scare Beast" }, { "trap", "Freezing Trap" }, { "sleep", "Wyvern Sting" } },
+    ROGUE   = { { "sap", "Sap" } },
+    DRUID   = { { "sleep", "Hibernate" } },
+    PALADIN = { { "fear", "Turn Undead" } },
+}
+local sentPicks = {}   -- [bot name][slot word] = choice word, this session
+
+local function MenuWhisper(who, text)
+    local ok, err = pcall(SendChatMessage, text, "WHISPER", nil, who)
+    if not ok then Print("could not whisper " .. who .. ": " .. tostring(err)) end
+end
+
+-- The group members by name (yourself first), for the summon and soulstone lists.
+local function GroupNames()
+    local names = {}
+    local me = SafeName("player")
+    if me then names[#names + 1] = me end
+    local raid = IsInRaid and IsInRaid()
+    local n = (GetNumGroupMembers and GetNumGroupMembers()) or 0
+    for i = 1, raid and n or math.max(0, n - 1) do
+        local nm = SafeName((raid and "raid" or "party") .. i)
+        if nm and nm ~= me then names[#names + 1] = strtrim((strsplit("-", nm))) end
+    end
+    return names
+end
+
+local function AddBotMenu(root, unit, who)
+    local token = select(2, UnitClass(unit))
+    local level = UnitLevel(unit) or 0
+    local function Send(text) MenuWhisper(who, text) end
+    local function Mark(on) return on and "|cff40ff40>|r " or "" end
+    local menu = root:CreateButton("WoW Forever Bots")
+    menu:CreateButton("Open the bot panel", function()
+        botForced = { name = who, token = token }
+        if not botPanel then BuildBotPanel() end
+        UpdateBotPanel()
+    end)
+    menu:CreateButton("Follow me", function() Send("follow") end)
+    menu:CreateButton("Stay here", function() Send("stay") end)
+    menu:CreateButton("Attack my target", function() Send("attack") end)
+    local mineAoe = sentPicks[who] and sentPicks[who].aoe
+    local aoe = menu:CreateButton("Area spells")
+    aoe:CreateButton(Mark(mineAoe ~= "off") .. "On", function()
+        sentPicks[who] = sentPicks[who] or {}; sentPicks[who].aoe = nil; Send("aoe on")
+    end)
+    aoe:CreateButton(Mark(mineAoe == "off") .. "Off: nothing that hits more than one enemy", function()
+        sentPicks[who] = sentPicks[who] or {}; sentPicks[who].aoe = "off"; Send("aoe off")
+    end)
+
+    -- Role: the roles of the class (CLASSES), and auto (the spec decides again).
+    for _, c in ipairs(CLASSES) do
+        if c.token == token and #c.roles > 1 then
+            local roleMenu = menu:CreateButton("Role")
+            for _, r in ipairs(c.roles) do
+                roleMenu:CreateButton(ROLE_LABEL[r] or r, function() Send("setrole " .. r) end)
+            end
+            roleMenu:CreateButton("Auto (by spec)", function() Send("setrole clear") end)
+        end
+    end
+
+    -- Raid icons: the bot follows the icon you put on a mob (the server's "assign <marker> [kill|cc|tank]").
+    local icons = menu:CreateButton("Raid icon")
+    local function IconList(parent, role)
+        for _, m in ipairs(MARKERS) do
+            parent:CreateButton(MARKER_LABEL[m], function() Send("assign " .. m .. (role and (" " .. role) or "")) end)
+        end
+    end
+    IconList(icons:CreateButton("Kill it first"), "kill")
+    if token ~= "WARRIOR" and token ~= "SHAMAN" then IconList(icons:CreateButton("Crowd-control it"), "cc") end
+    if token == "WARRIOR" or token == "PALADIN" or token == "DRUID" then IconList(icons:CreateButton("Tank it"), "tank") end
+    icons:CreateButton("Clear", function() Send("assign clear " .. who) end)
+
+    -- The bot's own picks for its class.
+    local mine = sentPicks[who] or {}
+    for _, slot in ipairs(PICKS) do
+        if slot[3] == token then
+            local sub
+            for _, ch in ipairs(slot[4]) do
+                if level >= ch[3] then
+                    sub = sub or menu:CreateButton(slot[2])
+                    sub:CreateButton(Mark(mine[slot[1]] == ch[1]) .. ch[2], function()
+                        sentPicks[who] = sentPicks[who] or {}
+                        sentPicks[who][slot[1]] = ch[1]
+                        Send("prefer " .. slot[1] .. " " .. ch[1])
+                    end)
+                end
+            end
+            if sub then
+                sub:CreateButton(Mark(mine[slot[1]] == nil) .. "Auto (the group plan)", function()
+                    if sentPicks[who] then sentPicks[who][slot[1]] = nil end
+                    Send("prefer " .. slot[1] .. " auto")
+                end)
+            end
+        end
+    end
+    if token == "HUNTER" or token == "WARLOCK" then
+        local pet = menu:CreateButton("Pet")
+        pet:CreateButton(Mark(mine.pet ~= "off") .. "Keep the pet out", function()
+            sentPicks[who] = sentPicks[who] or {}; sentPicks[who].pet = nil; Send("pet on")
+        end)
+        pet:CreateButton(Mark(mine.pet == "off") .. "Dismiss it and keep it away", function()
+            sentPicks[who] = sentPicks[who] or {}; sentPicks[who].pet = "off"; Send("pet off")
+        end)
+    end
+    if token == "ROGUE" then
+        local st = menu:CreateButton("Stealth")
+        st:CreateButton(Mark(mine.stealth ~= "off") .. "Open from Stealth", function()
+            sentPicks[who] = sentPicks[who] or {}; sentPicks[who].stealth = nil; Send("stealth on")
+        end)
+        st:CreateButton(Mark(mine.stealth == "off") .. "No Stealth (and no Sap)", function()
+            sentPicks[who] = sentPicks[who] or {}; sentPicks[who].stealth = "off"; Send("stealth off")
+        end)
+    end
+    if token == "WARLOCK" and level >= 20 then
+        local sm = menu:CreateButton("Summon a player")
+        for _, nm in ipairs(GroupNames()) do
+            if nm ~= who then sm:CreateButton(nm, function() Send("ritual " .. nm) end) end
+        end
+        sm:CreateButton("Help click the portal (party)", function() GroupOrder("use summoning") end)
+    end
+    if token == "WARLOCK" and level >= 18 then
+        local ss = menu:CreateButton("Soulstone")
+        for _, nm in ipairs(GroupNames()) do
+            ss:CreateButton(nm, function() Send("soulstone " .. nm) end)
+        end
+    end
+    if token == "MAGE" and level >= 40 then
+        local ok, faction = pcall(UnitFactionGroup, unit)
+        local list = ok and PORTALS[faction]
+        if list then
+            local pm = menu:CreateButton("Open a portal")
+            for _, c in ipairs(list) do pm:CreateButton(c[2], function() Send("portal " .. c[1]) end) end
+        end
+    end
+
+    -- No danger spells: the owner's crowd-control orders for the whole class (every bot of it, and ones that join later).
+    local danger = DANGER[token]
+    if danger then
+        local cls = strlower(token)
+        local dm = menu:CreateButton("Danger spells (all " .. cls .. "s)")
+        for _, d in ipairs(danger) do
+            dm:CreateButton("No " .. d[2], function() Send("@" .. cls .. " no " .. d[1]) end)
+        end
+        dm:CreateButton("No crowd control at all", function() Send("@" .. cls .. " off cc") end)
+        dm:CreateButton("Allow all again", function() Send("@" .. cls .. " on cc") end)
+    end
+    menu:CreateButton("What did I pick?", function() Send("prefer") end)
+    menu:CreateButton("Clear my picks", function()
+        sentPicks[who] = { aoe = sentPicks[who] and sentPicks[who].aoe }   -- the area-spell switch is not a pick
+        Send("prefer clear")
+    end)
+end
+
 local function AddPopupEntry()
     Step("portrait menu entries")
     if not (Menu and Menu.ModifyMenu) then return end
@@ -1822,12 +2019,7 @@ local function AddPopupEntry()
             root:CreateDivider()
             root:CreateButton("Whisper (Forever Bots)", function() OpenWhisperBox(who) end)
             if grouped then
-                root:CreateButton("WoW Forever Bots", function()
-                    local token = select(2, UnitClass(unit))
-                    botForced = { name = who, token = token }
-                    if not botPanel then BuildBotPanel() end
-                    UpdateBotPanel()
-                end)
+                AddBotMenu(root, unit, who)
             else
                 -- The client's own Invite entry sends nothing on this build: point it at the working call instead of
                 -- leaving a dead entry next to ours. Our own entry stays when the native one is not found.
@@ -2291,11 +2483,40 @@ end
 -- only part of the add-on that runs inside the client's own menus, the place such taint comes from (reported 2026-10-15 when
 -- interacting with a bot portrait). /fb menu on re-enables them.
 do
+    -- The add-on itself never calls SetBinding (its keys come from Bindings.xml and the player's own choice in Key Bindings), yet
+    -- Warsong Gulch 2026-10-25 showed "the client blocked SetBinding() for ForeverBots" four times: client code ran with our taint
+    -- and called it in a fight. A secure post-hook (it does not taint the caller) keeps who called it last, so the report names the
+    -- caller instead of a guess; ForeverBotsDB.lastForbidden.stack keeps it for the SavedVariables file.
+    local lastBinding, bindingPending
+    if hooksecurefunc and SetBinding then
+        pcall(hooksecurefunc, "SetBinding", function(key, action)
+            pcall(function()
+                lastBinding = {
+                    key = SafeStr(key) or "?", action = SafeStr(action) or "nil",
+                    combat = (InCombatLockdown and InCombatLockdown()) and true or false,
+                    stack = debugstack and (SafeStr(debugstack(3, 6, 0)) or "") or "",
+                }
+            end)
+        end)
+    end
+    local function BindingReport()
+        local b = lastBinding
+        if not b then return "no SetBinding call seen by the add-on" end
+        local callers = {}
+        for line in string.gmatch(b.stack, "[^\n]+") do
+            callers[#callers + 1] = (line:gsub("^%s+", ""):gsub("Interface\\AddOns\\", ""):gsub("Interface/AddOns/", ""))
+            if #callers == 3 then break end
+        end
+        return "SetBinding(" .. b.key .. ", " .. b.action .. ")" .. (b.combat and " in combat" or "") .. " from " ..
+            (#callers > 0 and table.concat(callers, " < ") or "?")
+    end
+
     local guard = CreateFrame("Frame")
     guard:RegisterEvent("ADDON_ACTION_FORBIDDEN")
     pcall(guard.RegisterEvent, guard, "ADDON_ACTION_BLOCKED")
     guard:SetScript("OnEvent", function(_, event, addon, func)
-        func = type(func) == "string" and func or "?"
+        -- the client passes the name with its brackets ("SetBinding()"); every line below adds them itself
+        func = (type(func) == "string" and not IsSecret(func)) and func:gsub("%(%)$", "") or "?"
         -- "Interface action failed because of an AddOn" in the chat frame right after login: say which add-on and which call, for
         -- ours and for any other add-on, so the line can be read instead of guessed at (the pop-up names them only for a moment).
         if addon ~= ADDON then
@@ -2303,8 +2524,22 @@ do
             return
         end
         if event == "ADDON_ACTION_BLOCKED" then
-            ForeverBotsDB.lastForbidden = { func = func, at = date and date("%Y-%m-%d %H:%M:%S") or "", blocked = true, step = currentStep }
-            Print("the client blocked " .. func .. "() for ForeverBots (blocked) during: " .. (currentStep ~= "" and currentStep or "no step marked"))
+            local rec = { func = func, at = date and date("%Y-%m-%d %H:%M:%S") or "", blocked = true, step = currentStep }
+            ForeverBotsDB.lastForbidden = rec
+            local step = currentStep ~= "" and currentStep or "no step marked"
+            if func == "SetBinding" then
+                -- the post-hook runs once the blocked call returns: read it a moment later, once per burst of blocked calls
+                if bindingPending then return end
+                bindingPending = true
+                local function Report()
+                    bindingPending = nil
+                    rec.stack = lastBinding and lastBinding.stack or ""
+                    Print("the client blocked SetBinding() for ForeverBots during: " .. step .. ". " .. BindingReport() .. ". Please report this line.")
+                end
+                if C_Timer and C_Timer.After then C_Timer.After(0, Report) else Report() end
+                return
+            end
+            Print("the client blocked " .. func .. "() for ForeverBots (blocked) during: " .. step)
             return
         end
         ForeverBotsDB.lastForbidden = { func = func, at = date and date("%Y-%m-%d %H:%M:%S") or "" }

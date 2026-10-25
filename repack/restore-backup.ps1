@@ -29,7 +29,7 @@ foreach ($db in 'auth', 'characters', 'playerbot') {
     $in = [IO.File]::OpenRead($gz); $z = New-Object IO.Compression.GZipStream($in, [IO.Compression.CompressionMode]::Decompress)
     $out = [IO.File]::Create($tmp); $z.CopyTo($out); $out.Dispose(); $z.Dispose(); $in.Dispose()
     & "$mysqlBin\mysql.exe" "--defaults-file=$ini" -u root -e "DROP DATABASE IF EXISTS ``$db``; CREATE DATABASE ``$db`` DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-    cmd /c "`"$mysqlBin\mysql.exe`" --defaults-file=`"$ini`" -u root $db < `"$tmp`""
+    cmd /c "`"$mysqlBin\mysql.exe`" --defaults-file=`"$ini`" --default-character-set=utf8mb4 -u root $db < `"$tmp`""
     if ($LASTEXITCODE) { throw "Restoring $db failed (the backup file is still in $dir)." }
     Remove-Item $tmp
 }
