@@ -8,7 +8,9 @@
 # wow-forever-db-*.zip under <root>\release\. Without one the full zip is built without dumps (worldserver then imports on first start).
 # Expects <root>\TrinityCore\repack\ (this folder), <root>\server-bot\ (installed build) and <root>\mysql-portable\ (a copy
 # of the MySQL 8.4 folder that has bin\mysqld.exe; its data dir is NOT included), optional <root>\openssl-portable\.
-param([Parameter(Mandatory)][string]$Version, [string]$DbZip, [string]$LegacyDll)
+# Refuses to pack when this checkout's sql\, add-on or repack scripts lack what the programs' commit has (see Assert-KitMatchesPrograms);
+# -BinCommit names that commit when worldserver.exe carries none.
+param([Parameter(Mandatory)][string]$Version, [string]$DbZip, [string]$LegacyDll, [string]$BinCommit)
 $ErrorActionPreference = 'Stop'
 # Windows PowerShell 5.1 reads a script without a BOM as ANSI, so a non-ASCII character in a string can break parsing. Installer scripts must be plain ASCII.
 $bad = Get-ChildItem (Join-Path $PSScriptRoot '*') -Include *.ps1,*.cmd,*.bat -File | Where-Object { [IO.File]::ReadAllBytes($_.FullName) | Where-Object { $_ -gt 127 } | Select-Object -First 1 }
@@ -16,6 +18,62 @@ $bad += Get-Item (Join-Path $PSScriptRoot '..\tools\extract_client_data.ps1') | 
 if ($bad) { throw ('Non-ASCII characters in installer scripts: ' + (($bad | ForEach-Object Name) -join ', ')) }
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $src  = Split-Path $PSScriptRoot -Parent
+# The kit takes sql\, the ForeverBots add-on and the repack scripts from this checkout and only the programs from server-bot\.
+# 0.1.17 shipped 245 programs with SQL that stopped at 2026_10_23_03, so an update never got the 2026_10_24 files. Before anything is
+# staged: the programs' commit (from the rev. line in worldserver.exe) must be in this checkout, sql\ and the add-on must be that
+# commit's exactly, and every line that commit's branch added to the repack scripts must be in this checkout's copy.
+function Invoke-SrcGit {
+    $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { $o = & git -C $src @args 2>$null; $script:gitExit = $LASTEXITCODE; $o } finally { $ErrorActionPreference = $eap }
+}
+function Assert-KitMatchesPrograms {
+    $exe = Join-Path $root 'server-bot\worldserver.exe'
+    if (-not (Test-Path $exe)) { throw "No worldserver.exe in $root\server-bot" }
+    $rev = [regex]::Match([Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($exe)), 'TrinityCore rev\. ([0-9a-f]{7,40})(\+?) [^()]*\(([^()]*) branch\)')
+    $bin = $script:BinCommit
+    if (-not $bin) {
+        if (-not $rev.Success) { throw 'worldserver.exe carries no "TrinityCore rev." line: pass -BinCommit <the commit the programs were built from>' }
+        if ($rev.Groups[2].Value) { throw "worldserver.exe was built from $($rev.Groups[1].Value) with uncommitted changes (+): build from a clean commit, or pass -BinCommit" }
+        $bin = $rev.Groups[1].Value
+    }
+    $binFull = Invoke-SrcGit rev-parse --verify --quiet "$bin^{commit}"
+    if ($gitExit -ne 0 -or -not $binFull) { throw "The programs' commit $bin is not in $src : fetch it there first (git -C `"$src`" fetch origin <its branch>)" }
+    $kitHead = Invoke-SrcGit rev-parse HEAD
+    $kitBranch = Invoke-SrcGit rev-parse --abbrev-ref HEAD
+    if ($rev.Success) { "Programs:   worldserver.exe built from $binFull ($($rev.Groups[3].Value) branch)" } else { "Programs:   $binFull (given with -BinCommit)" }
+    "Kit source: $src at $kitHead ($kitBranch)"
+    $taken = 'sql', 'src/modules/PlayerbotV2/Addon', 'src/modules/PlayerbotV2/conf', 'repack', 'tools/addon-installer', 'tools/extract_client_data.ps1'
+    $dirty = @(Invoke-SrcGit status --porcelain --untracked-files=all -- @taken)
+    if ($dirty.Count) { throw ("The kit source has uncommitted or untracked files the package would take; commit or remove them:`n  " + ($dirty -join "`n  ")) }
+    # sql\ and the add-on: exactly the programs' commit (D = missing from the kit, A = only in the kit, M = changed)
+    $diff = @(Invoke-SrcGit diff --name-status --no-renames $binFull HEAD -- sql src/modules/PlayerbotV2/Addon)
+    if ($gitExit -ne 0) { throw 'git diff of sql\ and the add-on failed' }
+    if ($diff.Count) {
+        throw ("The kit source's sql\ / add-on differ from the programs' commit $binFull (D = missing from the kit, A = only in the kit, M = changed):`n  " + ($diff -join "`n  ") +
+            "`nBring them to that commit (git checkout $binFull -- sql src/modules/PlayerbotV2/Addon), commit, and pack again.")
+    }
+    # repack scripts: the kit branch has its own newer scripts, so it only has to carry what the programs' branch added since the two split
+    $base = Invoke-SrcGit merge-base $binFull HEAD
+    if ($gitExit -ne 0 -or -not $base) { throw "The kit source and $binFull share no history: the repack scripts cannot be checked" }
+    $missing = New-Object System.Collections.Generic.List[string]
+    foreach ($row in @(Invoke-SrcGit diff --name-status --no-renames $base $binFull -- repack tools/addon-installer tools/extract_client_data.ps1)) {
+        $st, $path = $row -split "`t", 2
+        $kitFile = Join-Path $src $path
+        if ($st -eq 'D') { if (Test-Path $kitFile) { Write-Warning "$path was removed on the programs' branch but is still in the kit" }; continue }
+        if (-not (Test-Path $kitFile)) { $missing.Add("$path (the whole file)"); continue }
+        $have = New-Object 'System.Collections.Generic.HashSet[string]'
+        foreach ($l in [IO.File]::ReadAllLines($kitFile)) { [void]$have.Add($l.Trim()) }
+        foreach ($l in @(Invoke-SrcGit diff --unified=0 --no-renames $base $binFull -- $path)) {
+            if ($l.StartsWith('+') -and -not $l.StartsWith('+++')) {
+                $t = $l.Substring(1).Trim()
+                if ($t -and -not $have.Contains($t)) { $missing.Add("$path : $t"); break }
+            }
+        }
+    }
+    if ($missing.Count) { throw ("The kit source lacks repack changes from the programs' commit $binFull (since $base):`n  " + ($missing -join "`n  ") + "`nApply them to the kit branch, commit, and pack again.") }
+    $script:BinFull = $binFull; $script:KitHead = $kitHead
+}
+Assert-KitMatchesPrograms
 $out = Join-Path $root "release\$Version"; New-Item -ItemType Directory -Force $out | Out-Null
 $stage = Join-Path $out '_stage'; Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force "$stage\server", "$stage\repack", "$stage\config", "$stage\addons", "$stage\tools" | Out-Null
@@ -66,7 +124,7 @@ foreach ($f in 'README-TESTER.md:README.md', 'SOURCE.txt:SOURCE.txt', 'NOTICE.tx
 }
 if (Test-Path "$src\COPYING") { Copy-Item "$src\COPYING" "$stage\COPYING" -Force }
 if (Test-Path "$root\BOT_COMMANDS.pdf") { Copy-Item "$root\BOT_COMMANDS.pdf" "$stage\BOT_COMMANDS.pdf" }
-@{ version = $Version; client = [string](. { . "$PSScriptRoot\ClientBuild.ps1"; Get-RealmBuild $src }); dataVersion = '1'; built = (Get-Date -Format s); commit = (git -C $src rev-parse HEAD) } | ConvertTo-Json | Set-Content "$stage\version.json"
+@{ version = $Version; client = [string](. { . "$PSScriptRoot\ClientBuild.ps1"; Get-RealmBuild $src }); dataVersion = '1'; built = (Get-Date -Format s); commit = $BinFull; kitCommit = $KitHead } | ConvertTo-Json | Set-Content "$stage\version.json"
 # debug symbols stay with the dev (crash dumps), never in the tester zip
 New-Item -ItemType Directory -Force "$out\symbols" | Out-Null
 Get-ChildItem "$root\server-bot" -Filter *.pdb | Copy-Item -Destination "$out\symbols" -Force

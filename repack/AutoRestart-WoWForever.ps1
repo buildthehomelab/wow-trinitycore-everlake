@@ -8,6 +8,7 @@ $log = Join-Path $PSScriptRoot 'autorestart.log'
 $server = Join-Path $root 'server'
 . "$PSScriptRoot\mysql-helpers.ps1"
 . "$PSScriptRoot\WorldUp.ps1"
+. "$PSScriptRoot\ClientLanguage.ps1"
 function Log($m) { $l = "$(Get-Date -Format 's')  $m"; Write-Host $l; Add-Content $log $l }
 Remove-Item $flag -ErrorAction SilentlyContinue
 $crashes = New-Object System.Collections.Generic.List[datetime]
@@ -21,6 +22,7 @@ while (-not (Test-Path $flag)) {
     if (-not $w) {
         Log 'Starting worldserver...'
         Repair-ConfDir $server | ForEach-Object { Log $_ }
+        Set-ClientLanguageConf $server
         $w = Start-Process (Join-Path $server 'worldserver.exe') -WorkingDirectory $server -WindowStyle Minimized -PassThru
         $null = $w.Handle   # Windows PowerShell 5.1 leaves ExitCode empty unless the process handle is read right after the start
         $logDir = Join-Path $server 'logs'

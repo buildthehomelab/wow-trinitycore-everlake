@@ -10,6 +10,8 @@ Start-OurMySql $root
 Sync-TrinityUser $root   # repairs an install whose first database step left the user without its password
 $dir = Join-Path $root 'server'
 $logDir = Join-Path $dir 'logs'
+. "$PSScriptRoot\ClientLanguage.ps1"
+Set-ClientLanguageConf $dir
 . "$PSScriptRoot\WorldUp.ps1"
 Repair-ConfDir $dir
 foreach ($exe in 'worldserver', 'bnetserver') {

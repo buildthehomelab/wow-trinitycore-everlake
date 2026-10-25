@@ -30,7 +30,7 @@ end
 local CLASSES = {
     { key = "warrior", label = "Warrior", token = "WARRIOR", roles = { "tank", "dps" } },
     { key = "paladin", label = "Paladin", token = "PALADIN", roles = { "tank", "healer", "dps" } },
-    { key = "shaman",  label = "Shaman",  token = "SHAMAN",  roles = { "healer", "dps" }, faction = "Horde" },
+    { key = "shaman",  label = "Shaman",  token = "SHAMAN",  roles = { "healer", "dps" } },
     { key = "hunter",  label = "Hunter",  token = "HUNTER",  roles = { "dps" } },
     { key = "rogue",   label = "Rogue",   token = "ROGUE",   roles = { "dps" } },
     { key = "priest",  label = "Priest",  token = "PRIEST",  roles = { "healer", "dps" } },
@@ -525,6 +525,58 @@ do
     _G["BINDING_NAME_CLICK ForeverBotsKeyLazy:LeftButton"] = "Lazy lock (warlock: next spell on your target)"
 end
 
+-- Duplicate macros: a key bound to a macro ("bind ALT-E MACRO Corruption" in bindings-cache.wtf) runs the first macro of that
+-- name. The client sorts the macro list by name, and copies with the same name come out in a different order at each login,
+-- so it renumbers them and saves the list again at logout (live: Karrz's 59 account macros held 9 names two or three times,
+-- and their numbers swapped between the 14:59 and 19:13 saves of 2026-10-24). Once one copy is edited, the key runs the old
+-- copy after the next logout. Out of combat at login, copies that match an earlier macro in name, icon and text are deleted;
+-- copies that differ are kept and named in chat so the player can rename or delete one.
+local function RemoveDuplicateMacros()
+    if not (GetNumMacros and GetMacroInfo and DeleteMacro) then return end
+    if InCombatLockdown and InCombatLockdown() then return end
+    Step("duplicate macros")
+    local numAccount, numChar = GetNumMacros()
+    local charFirst = (MAX_ACCOUNT_MACROS or 120) + 1
+    local function Scan(first, count)
+        local seen, drop, differ = {}, {}, {}
+        for i = first, first + count - 1 do
+            local name, icon, body = GetMacroInfo(i)
+            if name then
+                local kept = seen[name]
+                if not kept then
+                    seen[name] = { icon = icon, body = body }
+                elseif kept.icon == icon and kept.body == body then
+                    drop[#drop + 1] = i
+                else
+                    differ[name] = true
+                end
+            end
+        end
+        for k = #drop, 1, -1 do DeleteMacro(drop[k]) end   -- highest first: a delete moves every later macro down by one
+        return #drop, differ
+    end
+    local droppedA, differA = Scan(1, numAccount or 0)
+    local droppedC, differC = Scan(charFirst, numChar or 0)
+    if droppedA + droppedC > 0 then
+        Print("removed " .. (droppedA + droppedC) .. " duplicate macro(s) (same name and text as another), so macro keys stay on the same macro.")
+    end
+    for _, differ in ipairs({ differA, differC }) do
+        for name in pairs(differ) do
+            Print("two macros are named |cffffd100" .. name .. "|r but differ; a key bound to that name uses the first. Rename or delete one in /macro.")
+        end
+    end
+    Step("")
+end
+
+local macroFrame = CreateFrame("Frame")
+macroFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+macroFrame:SetScript("OnEvent", function(self, _, isLogin, isReload)
+    if isLogin == false and isReload == false then return end   -- zoning: the list has not changed
+    self:UnregisterEvent("PLAYER_ENTERING_WORLD")
+    -- the client fills the macro list during the login; a second later it is complete
+    if C_Timer and C_Timer.After then C_Timer.After(1, RemoveDuplicateMacros) else RemoveDuplicateMacros() end
+end)
+
 ------------------------------------------------------------------------------------------------------------- skin
 -- Own artwork in Textures\ (32-bit .tga, power-of-two sizes): wood body, bronze bead border, medallion, tabs. The buttons are the
 -- client's own red buttons (UIPanelButtonTemplate), so they look and behave like every other button in the game.
@@ -901,11 +953,8 @@ function UI.BuildBots()
     ---------------------------------------------------------------------------------------------- bots
     local botsPane = NewPane()
     Section(botsPane, 0, "Add a bot")
-    local faction = UnitFactionGroup("player")
-    local shown = {}
-    for _, class in ipairs(CLASSES) do
-        if not class.faction or class.faction == faction then shown[#shown + 1] = class end
-    end
+    -- Every class for both factions: Forever has Dwarf Shamans for the Alliance and Undead Paladins for the Horde.
+    local shown = CLASSES
     local selFS = botsPane:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     selFS:SetPoint("TOPLEFT", botsPane, "TOPLEFT", 4, -68)
     selFS:SetWidth(86)
