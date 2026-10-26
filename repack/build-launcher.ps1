@@ -11,8 +11,13 @@ if (-not (Test-Path $csc)) { throw "csc.exe not found at $csc (needs the .NET Fr
 $srcDir = Join-Path $PSScriptRoot 'launcher'
 $cmdArgs = @('/nologo', '/target:winexe', '/platform:x64', '/optimize+', "/out:$Out",
     "/win32icon:$(Join-Path $PSScriptRoot 'wow-forever.ico')", "/win32manifest:$(Join-Path $srcDir 'app.manifest')",
-    '/r:System.dll', '/r:System.Core.dll', '/r:System.Drawing.dll', '/r:System.Windows.Forms.dll', '/r:System.Web.Extensions.dll')
-$cmdArgs += @(Get-ChildItem -Path $srcDir -Filter '*.cs' | ForEach-Object { $_.FullName })   # WoWForeverLauncher.cs + Skin.cs
+    '/r:System.dll', '/r:System.Core.dll', '/r:System.Drawing.dll', '/r:System.Windows.Forms.dll', '/r:System.Web.Extensions.dll', '/r:System.Management.dll')
+# the pictures and fonts of the window (art\gen_art.py draws the pictures), embedded as "art.<file name>"
+$artDir = Join-Path $srcDir 'art'
+foreach ($f in @(Get-ChildItem -Path $artDir -Filter '*.png') + @(Get-ChildItem -Path (Join-Path $artDir 'fonts') -Filter '*.ttf' | Where-Object { $_.Name -ne 'CinzelDecorative-Black.ttf' })) {
+    $cmdArgs += "/resource:$($f.FullName),art.$($f.Name)"
+}
+$cmdArgs += @(Get-ChildItem -Path $srcDir -Filter '*.cs' | ForEach-Object { $_.FullName })   # WoWForeverLauncher.cs + Skin.cs + Lang.cs + ServerOps.cs
 & $csc @cmdArgs
 if ($LASTEXITCODE -ne 0) { throw "csc failed (exit code $LASTEXITCODE)." }
 "Built $Out ($((Get-Item $Out).Length) bytes)"

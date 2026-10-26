@@ -99,6 +99,7 @@ Set-Options "$server\worldserver.conf.dist" "$server\worldserver.conf" ([ordered
         'AuctionHouseBot.Items.Amount.Green'  = '3500'
         'AuctionHouseBot.Items.Amount.Blue'   = '1200'
         'AuctionHouseBot.Items.Amount.Purple' = '250'
+        'AuctionHouseBot.Vanilla.ValueCurve'  = '1'
         'AuctionHouseBot.Items.Vendor'        = '1'
         # Buyer: bots buy player listings at fair prices, with a natural delay and a daily budget
         # Master buyer switch: without it the per-house buyer keys are ignored and nothing is ever bought
@@ -118,12 +119,13 @@ Set-Options "$server\worldserver.conf.dist" "$server\worldserver.conf" ([ordered
         'AuctionHouseBot.Buyer.DailyBudgetGold'    = '5000'
         'AuctionHouseBot.Buyer.MaxBuysPerHour'     = '60'
         # Broader stock: weight towards trade goods, consumables, recipes, reagents, bags and ammo; varied stacks; faster restock
+        'AuctionHouseBot.Class.WeightByPoolSize' = '1'
         'AuctionHouseBot.Class.TradeGood'     = '10'
         'AuctionHouseBot.Class.Consumable'    = '8'
-        'AuctionHouseBot.Class.Recipe'        = '6'
+        'AuctionHouseBot.Class.Recipe'        = '3'
         'AuctionHouseBot.Class.Container'     = '5'
-        'AuctionHouseBot.Class.Weapon'        = '4'
-        'AuctionHouseBot.Class.Armor'         = '4'
+        'AuctionHouseBot.Class.Weapon'        = '6'
+        'AuctionHouseBot.Class.Armor'         = '6'
         'AuctionHouseBot.Class.Reagent'       = '2'
         'AuctionHouseBot.Class.Projectile'    = '3'
         'AuctionHouseBot.Class.Misc'          = '2'
