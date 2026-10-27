@@ -430,6 +430,7 @@ end)
 ------------------------------------------------------------------------------------------------------------- window
 
 local frame
+local UI = {}   -- window builders as table functions: BuildFrame alone captured over 60 file-level locals, a Lua 5.1 compile error
 
 local function MakeButton(parent, text, width, onClick, height)
     local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
@@ -513,6 +514,23 @@ for _, k in ipairs(KEY_ORDERS) do
     _G["BINDING_NAME_CLICK " .. name .. ":LeftButton"] = k[3]
 end
 RefreshOrderMacros()
+
+-- A secure window key: it shows or hides the window in combat too (the plain toggle key and /fb wait for the end of combat). Its
+-- reference to the window is set when the window is built, at login.
+do
+    local ok, b = pcall(CreateFrame, "Button", "ForeverBotsKeyWindow", UIParent, "SecureHandlerClickTemplate")
+    if ok and b and b.SetFrameRef then
+        b:RegisterForClicks("AnyUp")
+        b:SetAttribute("_onclick", [[
+            local w = self:GetFrameRef("fbwin")
+            if w then
+                if w:IsShown() then w:Hide() else w:Show() end
+            end
+        ]])
+        UI.keyWindow = b
+        _G["BINDING_NAME_CLICK ForeverBotsKeyWindow:LeftButton"] = "Show / hide the bot window (works in combat)"
+    end
+end
 
 -- Lazy lock (warlock): one key, the server picks the next spell (dots, curse, Shadow Bolt, cooldowns) and casts it on your target.
 -- The client will not let an add-on choose spells in a fight, so the key clicks a secure button that runs the server command
@@ -787,11 +805,58 @@ local function WindowScale()
     return math.max(SCALE_MIN, math.min(SCALE_MAX, n))
 end
 
+-- In combat the client refuses Show, Hide and moving for a protected frame, and the secure order buttons make the window and its
+-- Orders and Form tabs protected: every refused call printed a "the client blocked Frame:Show()" line (Upper Blackrock Spire raid
+-- 2026-10-26, a tab click and a drag in a fight). Such a change waits for the end of combat instead; the last one asked for wins.
+UI.afterCombat = {}   -- frame -> true (show) or false (hide), done on PLAYER_REGEN_ENABLED
+
+function UI.Locked(f)
+    if not (InCombatLockdown and InCombatLockdown()) then return false end
+    if f and f.IsProtected then return f:IsProtected() and true or false end
+    return true
+end
+
+-- Shows or hides f now, or once combat ends when the client would refuse it. Returns false when it waits.
+function UI.SetShown(f, show)
+    show = show and true or false
+    if UI.Locked(f) then
+        if f:IsShown() == show then UI.afterCombat[f] = nil else UI.afterCombat[f] = show end
+        return false
+    end
+    UI.afterCombat[f] = nil
+    if show then f:Show() else f:Hide() end
+    return true
+end
+
+local shownTab, tabWaitSaid
+function UI.TabShown(i)
+    UI.pendingTab = nil
+    shownTab = i
+    ForeverBotsDB.tab = i
+    for k, t in pairs(frameTabs) do t:SetChecked(k == i) end
+end
 local function ShowTab(i)
     i = (framePanes[i] and i) or 1
+    for k, pane in ipairs(framePanes) do
+        if pane:IsShown() ~= (k == i) and UI.Locked(pane) then
+            -- Bots and Marks still switch in a fight; a switch that shows or hides Orders or Form waits for the end of combat
+            UI.pendingTab = i
+            for n, t in pairs(frameTabs) do t:SetChecked(n == shownTab) end
+            if not tabWaitSaid then
+                tabWaitSaid = true
+                Print("that tab opens when combat ends (the client keeps the order buttons fixed in a fight).")
+            end
+            return
+        end
+    end
+    UI.pendingTab = nil
+    shownTab = i
     ForeverBotsDB.tab = i
     for k, pane in ipairs(framePanes) do
-        if k == i then pane:Show() else pane:Hide() end
+        -- only the panes that change: in a fight even a Show of a shown protected pane is a refused call
+        if pane:IsShown() ~= (k == i) then
+            if k == i then pane:Show() else pane:Hide() end
+        end
         if frameTabs[k] then frameTabs[k]:SetChecked(k == i) end
     end
 end
@@ -841,9 +906,11 @@ local function SetRoleTexture(tex, role)
     tex:SetTexCoord(c[1], c[2], c[3], c[4])
 end
 
-local UI = {}   -- window builders as table functions: BuildFrame alone captured over 60 file-level locals, a Lua 5.1 compile error
+-- Every pane is a protected frame (SecureFrameTemplate), so the secure tab click below may show and hide each of them in a fight:
+-- restricted code only moves protected frames, and Orders and Form are protected anyway through their secure order buttons.
 function UI.NewPane()
-    local pane = CreateFrame("Frame", nil, frame)
+    local ok, pane = pcall(CreateFrame, "Frame", nil, frame, "SecureFrameTemplate")
+    if not (ok and pane) then pane = CreateFrame("Frame", nil, frame) end
     pane:SetSize(LAYOUT.CONTENT, LAYOUT.PANE_H)
     pane:SetPoint("TOPLEFT", frame, "TOPLEFT", 11, -LAYOUT.TOP)
     framePanes[#framePanes + 1] = pane
@@ -1162,7 +1229,7 @@ function UI.BuildMarks()
     statusFS:SetJustifyH("LEFT")
     for i = 1, MAX_LIST do
         local fs = marksPane:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        fs:SetPoint("TOPLEFT", marksPane, "TOPLEFT", 4, -120 - (i - 1) * 12)
+        fs:SetPoint("TOPLEFT", marksPane, "TOPLEFT", 4, -118 - (i - 1) * 11)
         fs:SetWidth(LAYOUT.CONTENT - 8)
         fs:SetJustifyH("LEFT")
         fs:SetWordWrap(false)
@@ -1170,21 +1237,22 @@ function UI.BuildMarks()
     end
     RefreshList()
 
-    Section(marksPane, 180, "Tanks")
+    -- the five list lines end at 174; the Tanks block sits below them and clear of the footer buttons
+    Section(marksPane, 178, "Tanks")
     local markerBtn
-    local mt = Btn(marksPane, 0, 202, 117, 22, "Main tank", {})
+    local mt = Btn(marksPane, 0, 200, 117, 22, "Main tank", {})
     mt:SetScript("OnClick", function() GroupOrder("set main tank") end)
     Tip(mt, "Make main tank", "Sets the raid Main Tank flag on the raid member you target. Raid groups only.")
-    markerBtn = Btn(marksPane, 121, 202, 117, 22, "Mark: " .. TANK_MARKERS[tankMarker], {})
+    markerBtn = Btn(marksPane, 121, 200, 117, 22, "Mark: " .. TANK_MARKERS[tankMarker], {})
     markerBtn:SetScript("OnClick", function(self)
         tankMarker = tankMarker % #TANK_MARKERS + 1
         self:SetText("Mark: " .. TANK_MARKERS[tankMarker])
     end)
     Tip(markerBtn, "Marker", "Click to cycle the marker (skull, cross, star, circle, diamond, triangle, moon, square) the next button hands out.")
-    local give = Btn(marksPane, 0, 226, 117, 22, "Give to tank", {})
+    local give = Btn(marksPane, 0, 224, 117, 22, "Give to tank", {})
     give:SetScript("OnClick", function() GroupOrder("tank target " .. TANK_MARKERS[tankMarker]) end)
     Tip(give, "Give marker to tank", "The tank bot you target holds whichever mob carries this marker (mark the mob yourself with the raid icons).")
-    local clearTanks = Btn(marksPane, 121, 226, 117, 22, "Clear tanks", {})
+    local clearTanks = Btn(marksPane, 121, 224, 117, 22, "Clear tanks", {})
     clearTanks:SetScript("OnClick", function() GroupOrder("clear tanks") end)
     Tip(clearTanks, "Clear tanks", "Back to the automatic tank split.")
 end
@@ -1217,8 +1285,28 @@ function UI.BuildTabs()
         form = "Interface\\Icons\\INV_Misc_Map_01",
         marks = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8",
     }
+    -- The tabs are secure click handlers: the client runs their pane switch as its own code, so they work in combat too (an add-on
+    -- function may not show or hide the Orders pane in a fight, 0.5.15 in UBRS 2026-10-26: Follow and Stop could not be reached).
+    -- Without the secure template (an older client) a tab is a plain button and a switch to or from Orders waits for the end of combat.
+    local switchSnippet = [[
+        local want = self:GetAttribute("fbtab")
+        for k = 1, 4 do
+            local p = self:GetFrameRef("fbpane" .. k)
+            if p then
+                if k == want then p:Show() else p:Hide() end
+            end
+        end
+    ]]
     for i, def in ipairs(TAB_DEFS) do
-        local t = CreateFrame("CheckButton", nil, frame)
+        local okT, t = pcall(CreateFrame, "CheckButton", nil, frame, "SecureHandlerClickTemplate")
+        if okT and t and t.SetFrameRef then
+            t:SetAttribute("fbtab", i)
+            for k, pane in ipairs(framePanes) do t:SetFrameRef("fbpane" .. k, pane) end
+            t:SetAttribute("_onclick", switchSnippet)
+            t.fbSecure = true
+        else
+            t = CreateFrame("CheckButton", nil, frame)
+        end
         t:SetSize(32, 32)
         t:SetPoint("TOPLEFT", frame, "TOPRIGHT", -1, -(36 + (i - 1) * LAYOUT.TAB_STEP))
         local border = t:CreateTexture(nil, "BACKGROUND")
@@ -1237,7 +1325,12 @@ function UI.BuildTabs()
         -- which blacked out whichever tab was selected
         local ct = t:GetCheckedTexture()
         if ct and ct.SetBlendMode then ct:SetBlendMode("ADD") end
-        t:SetScript("OnClick", function() ShowTab(i) end)
+        if t.fbSecure then
+            -- after the secure switch: remember the tab and light it
+            t:HookScript("OnClick", function() UI.TabShown(i) end)
+        else
+            t:SetScript("OnClick", function() ShowTab(i) end)
+        end
         t:SetScript("OnEnter", function(self)
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
             GameTooltip:SetText(def[2])
@@ -1260,12 +1353,13 @@ local function BuildFrame()
     frame:SetClampedToScreen(true)
     frame:EnableMouse(true)
     frame:RegisterForDrag("LeftButton")
-    frame:SetScript("OnDragStart", frame.StartMoving)
-    frame:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        local point, _, relPoint, x, y = self:GetPoint()
-        ForeverBotsDB.pos = { point, relPoint, x, y }
+    -- no drag in a fight (the client refuses moving a protected frame); a drag still going when combat starts is ended then
+    frame:SetScript("OnDragStart", function(self)
+        if UI.Locked(self) then return end
+        self.fbMoving = true
+        self:StartMoving()
     end)
+    frame:SetScript("OnDragStop", function(self) UI.StopDrag(self) end)
     if ForeverBotsDB.pos then
         local p = ForeverBotsDB.pos
         frame:ClearAllPoints()
@@ -1281,10 +1375,25 @@ local function BuildFrame()
         t:SetPoint("TOP", frame, "TOP", 0, -10)
         t:SetText("WoW Forever Bots")
     end
-    if not (native and frame.CloseButton) then
-        local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
+    local close = native and frame.CloseButton
+    if not close then
+        close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
         close:SetPoint("TOPRIGHT", 2, 2)
     end
+    -- The template's close script is replaced by a secure one that hides the window in combat too (an add-on function may not).
+    -- The secure handler sits on its own button over the X, as the X itself was created without the template.
+    local okC, sc = pcall(CreateFrame, "Button", nil, close, "SecureHandlerClickTemplate")
+    if okC and sc and sc.SetFrameRef then
+        sc:SetAllPoints(close)
+        sc:SetFrameRef("fbwin", frame)
+        sc:SetAttribute("_onclick", [[ self:GetFrameRef("fbwin"):Hide() ]])
+        sc:HookScript("OnEnter", function() local f = close:GetScript("OnEnter"); if f then f(close) end end)
+        close:SetScript("OnClick", nil)
+    else
+        close:SetScript("OnClick", function() UI.SetWindowShown(false) end)
+    end
+    -- the secure window key (Key Bindings: "Show / hide the bot window (works in combat)")
+    if UI.keyWindow and UI.keyWindow.SetFrameRef then UI.keyWindow:SetFrameRef("fbwin", frame) end
 
     -- dark inner panel under the contents, as in the client's own windows
     local inset = frame.Inset
@@ -1325,11 +1434,12 @@ local function BuildFrame()
     -- Only /fb (or the X button) closes it, and the open state is remembered across /reload and relog.
     frame:SetScript("OnShow", function(self)
         ForeverBotsDB.open = true
+        UI.afterCombat[self] = nil   -- shown by the secure window key: a waiting open is done
         self.fbTick = 0
         RequestList()
         UpdateEmpty()
     end)
-    frame:SetScript("OnHide", function() ForeverBotsDB.open = false end)
+    frame:SetScript("OnHide", function(self) ForeverBotsDB.open = false; UI.afterCombat[self] = nil end)
 end
 
 
@@ -1390,10 +1500,71 @@ distFrame:SetScript("OnEvent", function(self, event)
     OnGroupChanged()
 end)
 
-local function Toggle()
-    if not frame then BuildFrame() end
-    if frame:IsShown() then frame:Hide() else frame:Show() end
+function UI.StopDrag(self)
+    if not self.fbMoving then return end
+    self.fbMoving = nil
+    self:StopMovingOrSizing()
+    local point, _, relPoint, x, y = self:GetPoint()
+    ForeverBotsDB.pos = { point, relPoint, x, y }
 end
+
+-- Opens or closes the window, or says it will once combat ends. The window is built out of combat only: it creates the secure
+-- order buttons and sets their macros.
+function UI.SetWindowShown(show)
+    if not frame then
+        if not show then UI.buildAfterCombat = nil; return end
+        if InCombatLockdown and InCombatLockdown() then
+            UI.buildAfterCombat = true
+            Print("the bot window opens when combat ends.")
+            return
+        end
+        BuildFrame()
+    end
+    if not UI.SetShown(frame, show) and UI.afterCombat[frame] ~= nil then
+        Print(show and "the bot window opens when combat ends." or "the bot window closes when combat ends.")
+    end
+end
+
+local function Toggle()
+    local open
+    if frame then
+        open = frame:IsShown()
+        if UI.afterCombat[frame] ~= nil then open = UI.afterCombat[frame] end   -- a second press undoes the one waiting
+    else
+        open = UI.buildAfterCombat and true or false
+    end
+    UI.SetWindowShown(not open)
+end
+
+local combatFrame = CreateFrame("Frame")
+combatFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
+combatFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+combatFrame:SetScript("OnEvent", function(_, event)
+    if event == "PLAYER_REGEN_DISABLED" then
+        -- still allowed here, a moment before the lockdown starts
+        if frame then UI.StopDrag(frame) end
+        return
+    end
+    if UI.buildLater then
+        UI.buildLater = nil
+        if not frame then BuildFrame() end
+    end
+    if UI.buildAfterCombat then
+        UI.buildAfterCombat = nil
+        if not frame then BuildFrame() end
+        frame:Show()
+    end
+    if frame and UI.scaleAfterCombat then
+        UI.scaleAfterCombat = nil
+        frame:SetScale(WindowScale())
+    end
+    if UI.pendingTab then ShowTab(UI.pendingTab) end
+    tabWaitSaid = nil
+    for f, show in pairs(UI.afterCombat) do
+        UI.afterCombat[f] = nil
+        if show then f:Show() else f:Hide() end
+    end
+end)
 
 function ForeverBots_ToggleWindow() Toggle() end
 
@@ -2175,7 +2346,7 @@ SlashCmdList.FOREVERBOTS = function(msg)
         local n = tonumber(class)
         if n then
             ForeverBotsDB.scale = math.max(SCALE_MIN, math.min(SCALE_MAX, n))
-            if frame then frame:SetScale(WindowScale()) end
+            if frame and UI.Locked(frame) then UI.scaleAfterCombat = true elseif frame then frame:SetScale(WindowScale()) end
         end
         Print("window size: " .. string.format("%.2f", WindowScale()) .. "  (/fb scale " .. SCALE_MIN .. "-" .. SCALE_MAX .. ", default " .. SCALE_DEFAULT .. ")")
         return
@@ -2396,9 +2567,13 @@ loader:SetScript("OnEvent", function()
     lastGroupSize = GroupSize()
     ShowDistance()
     if ForeverBotsDB.distance and lastGroupSize > 0 then distFrame.groupAt = Now() + 3 end
-    if ForeverBotsDB.open then
+    -- built at login (hidden unless it was open), so the secure window key can show it in a fight
+    if InCombatLockdown and InCombatLockdown() then
+        UI.buildLater = true
+        if ForeverBotsDB.open then UI.buildAfterCombat = true end
+    else
         if not frame then BuildFrame() end
-        frame:Show()
+        if ForeverBotsDB.open then frame:Show() end
     end
 end)
 

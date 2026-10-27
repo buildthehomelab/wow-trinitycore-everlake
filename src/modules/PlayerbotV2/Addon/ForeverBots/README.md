@@ -109,6 +109,8 @@ picks are memory only on the server: a relog or restart clears them.
 `/fb add <class> [tank|healer|dps]`, `/fb call|dismiss|save|unsave|regear [name|all]`, `/fb delete <name>`, `/fb list`,
 The window stays where you put it and stays open (it is not closed by Escape, clicks, combat or target changes; its open state survives /reload and relog). `/fb` toggles it, or use the X button.
 
+In a fight: the side tabs and the X are secure buttons, so every tab (Orders included) and closing work in combat. A second window key, "Show / hide the bot window (works in combat)" in Key Bindings, opens and closes it in combat too. `/fb`, the minimap button, the plain toggle key, dragging and `/fb scale` cannot touch the window in combat (the client keeps it fixed because of its secure order buttons): they wait until combat ends, with one chat line saying so (0.5.16).
+
 `/fb fallback`, `/fb pullback`, `/fb rally`, `/fb formation circle|arrow|line|none`, `/fb spacing tight|close|spread`, `/fb distance <1-20>` and `/fb maintank [name]` and `/fb tank <name> <marker>|clear` work without the window.
 The `.bot` commands for your own bots (add, call, dismiss, save, list, regear and the rest) work for every account; no GM account is needed. Only `.bot world`, `.bot bgstress`, `.bot bgsoak` and `.bot itemstats` are GM.
 
