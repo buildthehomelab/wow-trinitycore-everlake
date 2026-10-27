@@ -19,7 +19,7 @@ function Find-ClientFolders([string[]]$roots, [int]$maxSeconds = 25) {
         while ($stack.Count -and $clock.Elapsed.TotalSeconds -lt $maxSeconds) {
             $item = $stack.Pop(); $dir = $item[0]; $depth = $item[1]
             if (Test-Path (Join-Path $dir '.build.info')) {
-                if ((Test-Path (Join-Path $dir '_classic_beta_')) -or @(Get-ChildItem $dir -Filter 'WowB*.exe' -ErrorAction SilentlyContinue).Count) {
+                if ((Test-Path (Join-Path $dir '_forever_')) -or (Test-Path (Join-Path $dir '_classic_beta_')) -or @(Get-ChildItem $dir -Filter 'WowB*.exe' -ErrorAction SilentlyContinue).Count) {
                     if (-not $found.Contains($dir)) { $found.Add($dir) }
                     continue
                 }
@@ -48,6 +48,34 @@ function Addon-Version($dir) {
     if (-not (Test-Path $toc)) { return $null }
     $m = Select-String -Path $toc -Pattern '^##\s*Version:\s*(.+)$' | Select-Object -First 1
     if ($m) { $m.Matches[0].Groups[1].Value.Trim() } else { '?' }
+}
+
+# Leaves exactly one copy of an add-on ($name: ForeverBots, ForeverDots) in an AddOns folder: copies named like it
+# (ForeverBots.bak, ForeverBots-old, "ForeverBots (2)") are removed, and the add-on folder itself is deleted and copied fresh, never
+# merged into, so no file of an older version stays.
+function Install-CleanAddon([string]$src, [string]$addons, [string]$name = 'ForeverBots') {
+    New-Item -ItemType Directory -Force $addons | Out-Null
+    foreach ($d in @(Get-ChildItem $addons -Directory -ErrorAction SilentlyContinue)) {
+        if ($d.Name -ne $name -and $d.Name -match ('^' + $name + '($|[^A-Za-z0-9])')) {
+            Write-Host "Removing the old copy $($d.FullName)"
+            Remove-Item $d.FullName -Recurse -Force
+        }
+    }
+    $target = Join-Path $addons $name
+    if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+    Copy-Item $src $target -Recurse -Force
+    if (-not (Test-Path (Join-Path $target "$name.toc"))) { throw "the add-on did not copy to $target" }
+}
+# The other game folders of the same install (beta, Forever release, Classic) that already hold the add-on get the same fresh copy,
+# so no game folder keeps an old one.
+function Update-OtherAddonCopies([string]$src, [string]$clientRoot, [string]$done, [string]$name = 'ForeverBots') {
+    foreach ($sub in '_forever_', '_classic_beta_', '_classic_', '_classic_era_', '') {
+        $addons = if ($sub) { Join-Path $clientRoot "$sub\Interface\AddOns" } else { Join-Path $clientRoot 'Interface\AddOns' }
+        if (-not (Test-Path (Join-Path $addons $name))) { continue }
+        if ((Resolve-Path $addons).Path.TrimEnd('\') -eq (Resolve-Path $done).Path.TrimEnd('\')) { continue }
+        Install-CleanAddon $src $addons $name
+        Write-Host "Also refreshed $addons\$name"
+    }
 }
 
 # 1. where the add-on comes from
@@ -94,16 +122,23 @@ Set-Content $memory $Client -Encoding ascii
 
 # 3. install
 $dest = $null
-foreach ($sub in '_classic_beta_\Interface\AddOns', '_classic_\Interface\AddOns', 'Interface\AddOns') {
+# the Forever release first: a client with both the beta and the release folder plays from _forever_
+foreach ($sub in '_forever_\Interface\AddOns', '_classic_beta_\Interface\AddOns', '_classic_\Interface\AddOns', 'Interface\AddOns') {
     $p = Join-Path $Client $sub
     if (Test-Path (Split-Path $p -Parent)) { $dest = $p; break }
 }
-if (-not $dest) { $dest = Join-Path $Client '_classic_beta_\Interface\AddOns' }
-New-Item -ItemType Directory -Force $dest | Out-Null
+if (-not $dest) { $dest = Join-Path $Client '_forever_\Interface\AddOns' }
 $target = Join-Path $dest 'ForeverBots'
 $old = Addon-Version $target
-if (Test-Path $target) { Remove-Item $target -Recurse -Force }   # no stale files from an older version
-Copy-Item $src $target -Recurse -Force
+Install-CleanAddon $src $dest
+Update-OtherAddonCopies $src $Client $dest
+# ForeverDots, when it sits beside the ForeverBots folder (the add-on zip and a source checkout both have it there)
+$dotsSrc = Join-Path (Split-Path $src -Parent) 'ForeverDots'
+if (Test-Path (Join-Path $dotsSrc 'ForeverDots.toc')) {
+    Install-CleanAddon $dotsSrc $dest 'ForeverDots'
+    Update-OtherAddonCopies $dotsSrc $Client $dest 'ForeverDots'
+    Write-Host "ForeverDots add-on installed to $(Join-Path $dest 'ForeverDots')" -ForegroundColor Green
+}
 $new = Addon-Version $target
 Write-Host ''
 Write-Host "ForeverBots add-on $new installed to $target" -ForegroundColor Green

@@ -9,6 +9,8 @@ $server = Join-Path $root 'server'
 . "$PSScriptRoot\mysql-helpers.ps1"
 . "$PSScriptRoot\WorldUp.ps1"
 . "$PSScriptRoot\ClientLanguage.ps1"
+. "$PSScriptRoot\ClientBuild.ps1"
+. "$PSScriptRoot\BotChat.ps1"
 function Log($m) { $l = "$(Get-Date -Format 's')  $m"; Write-Host $l; Add-Content $log $l }
 Remove-Item $flag -ErrorAction SilentlyContinue
 $crashes = New-Object System.Collections.Generic.List[datetime]
@@ -23,6 +25,7 @@ while (-not (Test-Path $flag)) {
         Log 'Starting worldserver...'
         Repair-ConfDir $server | ForEach-Object { Log $_ }
         Set-ClientLanguageConf $server
+        Start-BotChat $root | ForEach-Object { Log $_ }
         $w = Start-Process (Join-Path $server 'worldserver.exe') -WorkingDirectory $server -WindowStyle Minimized -PassThru
         $null = $w.Handle   # Windows PowerShell 5.1 leaves ExitCode empty unless the process handle is read right after the start
         $logDir = Join-Path $server 'logs'
@@ -34,6 +37,7 @@ while (-not (Test-Path $flag)) {
     }
     if (-not $w.HasExited -and -not (Get-Process bnetserver -ErrorAction SilentlyContinue) -and -not (Test-Path $flag)) {
         Log 'World is up (or the wait timed out). Starting bnetserver (the login server)...'
+        Sync-AlsoAcceptBuilds $root
         Start-Process (Join-Path $server 'bnetserver.exe') -WorkingDirectory $server -WindowStyle Minimized
     }
     while (-not $w.HasExited -and -not (Test-Path $flag)) { Start-Sleep 5 }

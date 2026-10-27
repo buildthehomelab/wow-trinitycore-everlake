@@ -117,7 +117,14 @@ function Copy-Tree($src, $dst, $skipFiles, $skipDirs) {
         if ($skip) { continue }
         $target = Join $dst $rel
         New-Item -ItemType Directory -Force (Split-Path $target -Parent) | Out-Null
-        Copy-Item $f.FullName $target -Force
+        try { Copy-Item $f.FullName $target -Force }
+        catch {
+            # a program that is open (the launcher window that started this update) cannot be overwritten, but it can be renamed
+            if (-not (Test-Path $target)) { throw }
+            Remove-Item "$target.old" -Force -ErrorAction SilentlyContinue
+            Move-Item $target "$target.old" -Force
+            Copy-Item $f.FullName $target -Force
+        }
         $n++
     }
     return $n
@@ -169,24 +176,20 @@ try {
     if (-not $SkipDatabase) {
         $mysqlBin = Join (Join $Root 'mysql') 'bin'
         $ini = Join (Join $Root 'config') 'my.ini'
-        # wait until MySQL answers (a slow disk or a first start can take a minute), instead of guessing a fixed time
+        # The same start as the server start: repairs a moved folder or a port Windows now keeps for itself, waits for a MySQL that is
+        # still repairing its files instead of starting a second one, and says the reason from MySQL's own log when it fails.
+        # (It used to start a new mysqld every few seconds; each one found the files locked by the first and the reason got lost.)
+        . (Join $PSScriptRoot 'mysql-helpers.ps1')
+        try { Start-OurMySql $Root | ForEach-Object { Say $_ } }
+        catch { throw "Your data could not be backed up, so nothing was changed. $($_.Exception.Message) If you cannot fix that, double-click Bug-Report.cmd in the main folder and send us the zip." }
         $eapSaved = $ErrorActionPreference; $ErrorActionPreference = 'Continue'   # Windows PowerShell 5.1 turns a native program's error text into a stop under 'Stop'
         $ready = $false
-        for ($i = 0; $i -lt 60 -and -not $ready; $i++) {
-            # (re)start it whenever no MySQL process exists, e.g. when it was still shutting down after the servers were stopped
-            # OUR MySQL listening on its own port is what counts; some other mysqld on the PC must not stop us from starting ours
-            $myPort = 3307; $pm = Select-String -Path $ini -Pattern '^\s*port\s*=\s*(\d+)' -ErrorAction SilentlyContinue | Select-Object -First 1; if ($pm) { $myPort = [int]$pm.Matches[0].Groups[1].Value }
-            $listening = $false; try { $tc = New-Object Net.Sockets.TcpClient; $listening = $tc.BeginConnect('127.0.0.1', $myPort, $null, $null).AsyncWaitHandle.WaitOne(700) -and $tc.Connected; $tc.Close() } catch { }
-            if (-not $listening) {
-                Say 'Starting MySQL for the backup...'
-                Start-Process (Join $mysqlBin 'mysqld.exe') -ArgumentList "`"--defaults-file=$ini`"" -WindowStyle Hidden
-                Start-Sleep 3
-            }
+        for ($i = 0; $i -lt 30 -and -not $ready; $i++) {
             $ping = & (Join $mysqlBin 'mysqladmin.exe') "--defaults-file=$ini" -u root ping 2>&1
             if ($LASTEXITCODE -eq 0) { $ready = $true } else { Start-Sleep 2 }
         }
         $ErrorActionPreference = $eapSaved
-        if (-not $ready) { throw 'MySQL did not start, so your data could not be backed up and nothing was changed. Start the server once with option 1 in the WoW Forever Bots menu, wait until it is up, close it with option 2, then run the update again. If it keeps failing, run bug-bundle.ps1 and send us the file.' }
+        if (-not $ready) { throw "MySQL is running but does not answer, so your data could not be backed up and nothing was changed. MySQL said: $(($ping | Out-String).Trim()). Restart the PC and run the update again." }
         foreach ($db in 'auth', 'characters', 'playerbot') {
             Say "Backing up database $db..."
             $sql = Join $bk "$db.sql"

@@ -17,11 +17,12 @@ if (-not ($ini -match '^\s*default-character-set\s*=')) {
     $ini = $ini -replace '^\[client\]\s*$', "[client]`r`ndefault-character-set=utf8mb4"
     Set-Content "$root\config\my.ini" $ini -Encoding ascii
 }
+. "$PSScriptRoot\mysql-helpers.ps1"
+Repair-MovedFolder $root   # says so plainly when the folder path has letters MySQL cannot read, instead of "mysql initialize failed"
 if (-not (Test-Path "$root\mysql-data\mysql")) {
     & "$mysqlBin\mysqld.exe" "--defaults-file=$root\config\my.ini" --initialize-insecure --console
     if ($LASTEXITCODE) { throw 'mysql initialize failed' }
 }
-. "$PSScriptRoot\mysql-helpers.ps1"
 Start-OurMySql $root
 $pwFile = "$root\secrets\mysql.txt"
 if (-not (Test-Path $pwFile)) {

@@ -1,5 +1,7 @@
 # Shared by the start, first-run, backup and restore scripts: starts OUR MySQL (the one in <root>\mysql, port from config\my.ini,
 # 3307 by default) and waits until it accepts connections. A MySQL that belongs to something else on the PC (other port) does not count.
+# It also repairs what stops MySQL from starting after the install: a moved folder, a port Windows now keeps for itself, a start
+# while the previous MySQL is still running; when it still fails it says the reason from MySQL's own log.
 function Get-OurMySqlPort([string]$Root) {
     $ini = Join-Path $Root 'config\my.ini'
     if (Test-Path $ini) {
@@ -45,7 +47,121 @@ function Sync-TrinityUser([string]$Root) {
     $out = & (Join-Path $Root 'mysql\bin\mysql.exe') "--defaults-file=$Root\config\my.ini" -u root -e $sql 2>&1
     if ($LASTEXITCODE) { throw "Could not set up the database user: $(($out | Out-String).Trim())" }
 }
+# The mysqld.exe of THIS folder that is running now (it can be alive without listening yet: repairing its files after the PC was
+# switched off, or still shutting down), or $null.
+function Get-OurMySqlProcess([string]$Root) {
+    $ours = [IO.Path]::GetFullPath((Join-Path $Root 'mysql\bin\mysqld.exe'))
+    foreach ($p in @(Get-Process mysqld -ErrorAction SilentlyContinue)) {
+        try { if ($p.Path -and ([IO.Path]::GetFullPath($p.Path) -eq $ours)) { return $p } } catch { }
+    }
+    $null
+}
+# The paths in config\my.ini and the server settings are written once, at install. A folder that was moved or renamed afterwards
+# keeps the old paths: mysqld then exits at once (no data folder there, or its log cannot be opened) and nothing listens on the port.
+# Puts this folder's paths back. Only values that point somewhere else are changed.
+function Repair-MovedFolder([string]$Root) {
+    $ini = Join-Path $Root 'config\my.ini'
+    if (-not (Test-Path $ini)) { return }
+    $fwd = ($Root -replace '\\', '/').TrimEnd('/')
+    if ($fwd -match '[^\x20-\x7E]') {
+        throw "MySQL cannot use this folder because its path has letters other than English ones: $Root. Move the whole WoW Forever Bots folder to a simple path such as C:\WoWForeverBots and start again. Your characters and bots move with it."
+    }
+    $want = @{ 'basedir' = "$fwd/mysql"; 'datadir' = "$fwd/mysql-data"; 'log_error' = "$fwd/mysql-data/mysql-error.log" }
+    $lines = @(Get-Content $ini); $changed = $false
+    $out = foreach ($l in $lines) {
+        if ($l -match '^\s*(basedir|datadir|log[-_]error)\s*=\s*(.*?)\s*$') {
+            $v = $want[$Matches[1] -replace '-', '_']
+            if ($Matches[2].Trim('"') -ne $v) { $changed = $true; "$($Matches[1])=$v" } else { $l }
+        } else { $l }
+    }
+    if ($changed) { Set-Content $ini $out -Encoding ascii; Write-Host "The folder was moved: MySQL now uses $Root." }
+    $server = Join-Path $Root 'server'
+    $paths = [ordered]@{
+        'DataDir' = "$fwd/server/data"; 'SourceDirectory' = $fwd; 'MySQLExecutable' = "$fwd/mysql/bin/mysql.exe"
+        'CertificatesFile' = "$fwd/certs/chain.pem"; 'PrivateKeyFile' = "$fwd/certs/server.key"
+    }
+    foreach ($c in 'worldserver.conf', 'bnetserver.conf') {
+        $cf = Join-Path $server $c
+        if (-not (Test-Path $cf)) { continue }
+        $lines = @(Get-Content $cf); $changed = $false
+        $out = foreach ($l in $lines) {
+            if ($l -match '^\s*(DataDir|SourceDirectory|MySQLExecutable|CertificatesFile|PrivateKeyFile)\s*=\s*"?(.*?)"?\s*$' -and
+                $Matches[2] -and -not (Test-Path $Matches[2]) -and (Test-Path $paths[$Matches[1]])) {
+                $changed = $true; "$($Matches[1]) = `"$($paths[$Matches[1]])`""
+            } else { $l }
+        }
+        if ($changed) { Set-Content $cf $out -Encoding ascii }
+    }
+}
+# Windows can reserve port ranges for Hyper-V, WSL or Docker (netsh interface ipv4 show excludedportrange). The reserved ranges can
+# change after a restart or a Windows update, so a port that worked yesterday can be refused today: mysqld then cannot listen and
+# exits. Returns the reserved ranges as @(start, end) pairs, empty when they cannot be read.
+function Get-ExcludedPortRanges {
+    $r = @()
+    try {
+        foreach ($l in @(& netsh.exe interface ipv4 show excludedportrange protocol=tcp 2>$null)) {
+            if ($l -match '^\s*(\d+)\s+(\d+)') { $r += , @([int]$Matches[1], [int]$Matches[2]) }
+        }
+    } catch { }
+    , $r
+}
+function Test-PortUsable([int]$Port, $Ranges) {
+    foreach ($x in $Ranges) { if ($Port -ge $x[0] -and $Port -le $x[1]) { return $false } }
+    -not (Test-MySqlPort $Port)
+}
+# Moves our MySQL to another port: my.ini (server and client part) and the database lines of the server settings.
+function Set-OurMySqlPort([string]$Root, [int]$Old, [int]$New) {
+    $ini = Join-Path $Root 'config\my.ini'
+    (Get-Content $ini) -replace '^\s*port\s*=\s*\d+\s*$', "port=$New" | Set-Content $ini -Encoding ascii
+    $confs = @(Get-ChildItem (Join-Path $Root 'server') -Filter '*.conf' -File -ErrorAction SilentlyContinue) +
+             @(Get-ChildItem (Join-Path $Root 'server\worldserver.conf.d') -Filter '*.conf' -File -ErrorAction SilentlyContinue)
+    foreach ($f in $confs) {
+        $t = @(Get-Content $f.FullName)
+        $n = $t -replace "^(\s*\w*DatabaseInfo\s*=\s*`"?[^;]*);$Old;", "`${1};$New;"
+        if (($n -join "`n") -ne ($t -join "`n")) { Set-Content $f.FullName $n -Encoding ascii }
+    }
+    Write-Host "Port $Old cannot be used on this PC (Windows keeps it for something else), so the database now uses port $New."
+}
+function Move-OurMySqlPort([string]$Root, [int]$Port) {
+    $ranges = Get-ExcludedPortRanges
+    foreach ($p in (3308..3399) + (13307..13399) + (23307..23399)) {
+        if (Test-PortUsable $p $ranges) { Set-OurMySqlPort $Root $Port $p; return $p }
+    }
+    throw "No free port found for the database between 3308 and 23399."
+}
+# The reason in MySQL's own log (mysql-data\mysql-error.log, or a *.err file an older my.ini wrote), as one short text for the player.
+# $Kind is 'port', 'lock', 'damaged', 'disk', 'access', 'files' or '' when the log says nothing we know.
+function Get-MySqlFailure([string]$Root, [datetime]$Since) {
+    $logs = @(Get-ChildItem (Join-Path $Root 'mysql-data') -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'mysql-error.log' -or $_.Extension -eq '.err' } |
+              Sort-Object LastWriteTime -Descending)
+    $res = @{ Kind = ''; Line = ''; Log = '' }
+    if (-not $logs) { $res.Text = "MySQL wrote no log in the mysql-data folder (the folder may be missing, or an antivirus program may have blocked or removed mysql\bin\mysqld.exe)."; $res.Kind = 'files'; return $res }
+    $log = $logs[0]; $res.Log = $log.FullName
+    $tail = @()
+    try { $tail = @(Get-Content $log.FullName -Tail 80 -ErrorAction Stop) } catch { }
+    if ($log.LastWriteTime -lt $Since.AddSeconds(-5)) { $tail = @() }   # an old log says nothing about this start
+    $errors = @($tail | Where-Object { $_ -match '\[ERROR\]|Assertion failure' })
+    $all = $errors -join "`n"
+    if ($errors) { $res.Line = ($errors[-1] -replace '^.*?\[ERROR\]\s*(\[[^\]]*\]\s*)*', '').Trim() }
+    if ($all -match 'Bind on TCP/IP port|already have another mysqld server running on port|10013|10048') {
+        $res.Kind = 'port'; $res.Text = 'Windows did not let MySQL use its port.'
+    } elseif ($all -match 'Unable to lock .*ibdata1|lock.*\./ibdata1|another mysqld .*same data directory') {
+        $res.Kind = 'lock'; $res.Text = 'Another MySQL from this folder is still running and holds the database files. Restart the PC and start again.'
+    } elseif ($all -match 'Errcode: 28|No space left|OS error code 112|disk is full') {
+        $res.Kind = 'disk'; $res.Text = 'The disk is full. Free a few GB and start again.'
+    } elseif ($all -match 'OS error code 5|Errcode: 13|Permission denied|Access is denied|Operating system error number 5') {
+        $res.Kind = 'access'; $res.Text = 'Windows or an antivirus program did not let MySQL open its files. Do not keep the folder in Program Files, OneDrive or another synced folder, allow the folder in your antivirus, and start again.'
+    } elseif ($all -match 'corrupt|Assertion failure|Database page corruption|redo log|ib_logfile|Data Dictionary initialization failed|Upgrade after a crash is not supported|Plugin initialization aborted|Table .* is marked as crashed') {
+        $res.Kind = 'damaged'; $res.Text = 'The database files are damaged, usually after the PC lost power or was switched off while the server ran. Do not delete anything: double-click Bug-Report.cmd in the main folder and send us the zip so we can help you get your characters back.'
+    } elseif ($res.Line) {
+        $res.Text = 'MySQL could not start.'
+    } else {
+        $res.Text = 'MySQL stopped without saying why.'
+    }
+    $res
+}
 function Start-OurMySql([string]$Root, [int]$WaitSeconds = 90) {
+    Repair-MovedFolder $Root
     $port = Get-OurMySqlPort $Root
     if (Test-MySqlPort $port) {
         # Something already answers on our port. Only our own mysqld has this install's databases and password (secrets\mysql.txt);
@@ -58,13 +174,37 @@ function Start-OurMySql([string]$Root, [int]$WaitSeconds = 90) {
         }
         return
     }
-    'Starting MySQL...'
-    $p = Start-Process (Join-Path $Root 'mysql\bin\mysqld.exe') -ArgumentList "`"--defaults-file=$Root\config\my.ini`"" -WindowStyle Hidden -PassThru
-    $deadline = (Get-Date).AddSeconds($WaitSeconds)
-    while ((Get-Date) -lt $deadline) {
-        if (Test-MySqlPort $port) { return }
-        if ($p.HasExited) { break }
-        Start-Sleep 1
+    $mysqld = Join-Path $Root 'mysql\bin\mysqld.exe'
+    if (-not (Test-Path $mysqld)) { throw "mysql\bin\mysqld.exe is missing. An antivirus program may have removed it: allow the WoW Forever Bots folder in it, then run Install.cmd again (your characters are kept)." }
+    if (-not (Get-OurMySqlProcess $Root) -and -not (Test-PortUsable $port (Get-ExcludedPortRanges))) { $port = Move-OurMySqlPort $Root $port }
+    $since = Get-Date
+    $moved = $false; $waitedForOld = $false
+    while ($true) {
+        # A mysqld of this folder that is already running (repairing its files after the PC was switched off, or still shutting
+        # down) is waited for: a second one cannot open the same files, exits at once, and fills the log with lock errors.
+        $p = Get-OurMySqlProcess $Root
+        $mine = -not $p
+        if ($mine) {
+            'Starting MySQL...'
+            $p = Start-Process $mysqld -ArgumentList "`"--defaults-file=$Root\config\my.ini`"" -WindowStyle Hidden -PassThru
+        } else { 'MySQL is already starting, waiting for it...' }
+        # Repairing the files can take much longer than a normal start on a slow disk, so keep waiting while the process is alive.
+        $deadline = (Get-Date).AddSeconds($WaitSeconds); $hard = (Get-Date).AddMinutes(15); $said = Get-Date
+        while ((Get-Date) -lt $hard) {
+            if (Test-MySqlPort $port) { return }
+            if ($p.HasExited) { break }
+            if ((Get-Date) -gt $deadline -and ((Get-Date) - $said).TotalSeconds -ge 30) { 'MySQL is still starting (after the PC was switched off it first repairs its files, this can take some minutes)...'; $said = Get-Date }
+            Start-Sleep 1
+        }
+        # The one we waited for was shutting down: now start our own.
+        if ($p.HasExited -and -not $mine -and -not $waitedForOld) { $waitedForOld = $true; $since = Get-Date; continue }
+        $f = Get-MySqlFailure $Root $since
+        # A port Windows refused: move to a free one once and try again.
+        if ($p.HasExited -and $f.Kind -eq 'port' -and -not $moved) { $port = Move-OurMySqlPort $Root $port; $moved = $true; $since = Get-Date; continue }
+        break
     }
-    throw "MySQL did not start on port $port within $WaitSeconds seconds. Look at the newest *.err file in the mysql-data folder for the reason (a program already using port $port is the usual one), then run this again."
+    $msg = "MySQL did not start on port $port. $($f.Text)"
+    if ($f.Line) { $msg += " MySQL said: $($f.Line)" }
+    if ($f.Log) { $msg += " (full text in $($f.Log))" }
+    throw $msg
 }

@@ -7,7 +7,7 @@ Your feedback is the point: please report what goes wrong (see the end).
 - Windows 10/11 64-bit, 16 GB RAM (8 GB works with the small bot preset), 4+ cores, about 25 GB free disk.
 - Your own WoW Forever client at the build this release names (shown in the release notes and by the installer, which also warns if your client has another build). Copy the client folder first and do not let Battle.net patch the copy; a client of another build logs in to Battle.net but sees no realms.
 - Administrator rights once (hosts entry and a local certificate).
-- The **ForeverBots addon** (included; Install.cmd installs it). It is required: this client cannot whisper bots without it.
+- The **ForeverBots addon** (included; Install.cmd installs it). It is required: this client cannot whisper bots without it. **ForeverDots** comes with it: countdown bars for your own damage-over-time spells (`/dots` for options).
 
 ## Install
 1. Download **WoW-Forever-Bots-<version>.zip** from the Releases page and unzip it into a folder with no spaces, for example `C:\WoWForever`.

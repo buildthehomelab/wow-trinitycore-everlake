@@ -6,7 +6,11 @@
 param([string]$Client)
 $root = Split-Path $PSScriptRoot -Parent
 $marker = Join-Path $root 'server\data\.extract-complete'
-if (Test-Path $marker) { return $true }
+if (Test-Path $marker) {
+    # the client may have been patched since the data was built: bring the server's DB2 tables to its build (maps stay)
+    $null = & (Join-Path $PSScriptRoot 'refresh-db2.ps1') -Client $Client
+    return $true
+}
 Write-Host ''
 Write-Host 'Installing bot pathing: the pathfinding data the bots need to walk is not finished yet.' -ForegroundColor Yellow
 if (-not $Client) {

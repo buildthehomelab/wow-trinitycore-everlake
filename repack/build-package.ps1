@@ -2,7 +2,7 @@
 # Produces in <root>\release\<ver>\ (+ SHA256SUMS.txt):
 #   WoW-Forever-Bots-<ver>.zip   the ONE zip players download: everything, including the game database dumps; they run Install.cmd
 #   wow-forever-update-<ver>.zip the same without MySQL and the database dumps (small); the Update button downloads this one
-# Also run package-source.ps1 (GPL source, separate asset). Nothing is uploaded; publishing is manual. Target client build: 70532.
+# Also run package-source.ps1 (GPL source, separate asset). Nothing is uploaded; publishing is manual. Target client build: 70630 (70532 still accepted).
 #   .\build-package.ps1 -Version 0.1.1 [-DbZip <path to wow-forever-db-*.zip>]
 # The database dumps (sql\world.sql, sql\hotfixes.sql, from a FRESH install) come from the db zip: the one given, else the newest
 # wow-forever-db-*.zip under <root>\release\. Without one the full zip is built without dumps (worldserver then imports on first start).
@@ -97,6 +97,9 @@ robocopy "$src\repack" "$stage\repack" /E /XF Install.cmd WoW-Forever-Bots.cmd P
 # the ForeverBots addon is REQUIRED (whispering bots only works through it); always ship the copy from this commit
 robocopy "$src\src\modules\PlayerbotV2\Addon\ForeverBots" "$stage\addons\ForeverBots" /E /NFL /NDL /NJH /NJS | Out-Null
 if (-not (Test-Path "$stage\addons\ForeverBots\ForeverBots.toc")) { throw 'ForeverBots addon missing from the package' }
+# ForeverDots (countdown bars for your own damage-over-time spells) goes in beside it and is installed the same way
+robocopy "$src\src\modules\PlayerbotV2\Addon\ForeverDots" "$stage\addons\ForeverDots" /E /NFL /NDL /NJH /NJS | Out-Null
+if (-not (Test-Path "$stage\addons\ForeverDots\ForeverDots.toc")) { throw 'ForeverDots addon missing from the package' }
 if (Test-Path "$root\mysql-portable\bin\mysqld.exe") {
     robocopy "$root\mysql-portable" "$stage\mysql" /E /XD data mysql-data /XF *.log /NFL /NDL /NJH /NJS | Out-Null
 } else { Write-Warning 'mysql-portable missing: testers would have to supply MySQL' }
@@ -171,7 +174,7 @@ foreach ($f in Get-ChildItem $stage -Recurse -File) {
 }
 if ($hits.Count) { throw ("Packed files still carry the build-tool words:`n  " + ($hits -join "`n  ")) }
 # Files the package must hold
-foreach ($need in 'server\worldserver.exe', 'server\bnetserver.exe', 'server\legacy.dll', 'server\worldserver.conf.d\zz-0-playerbot-defaults.conf', 'server\worldserver.conf.d\zz-1-wow-forever-realm.conf', 'Install.cmd', 'addons\ForeverBots\ForeverBots.toc') {
+foreach ($need in 'server\worldserver.exe', 'server\bnetserver.exe', 'server\legacy.dll', 'server\worldserver.conf.d\zz-0-playerbot-defaults.conf', 'server\worldserver.conf.d\zz-1-wow-forever-realm.conf', 'Install.cmd', 'addons\ForeverBots\ForeverBots.toc', 'addons\ForeverDots\ForeverDots.toc') {
     if (-not (Test-Path (Join-Path $stage $need))) { throw "Package file missing: $need" }
 }
 New-Zip $stage "$out\WoW-Forever-Bots-$Version.zip"
@@ -179,11 +182,17 @@ New-Zip $stage "$out\WoW-Forever-Bots-$Version.zip"
 $addonTmp = Join-Path $out '_addon'; Remove-Item $addonTmp -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force "$addonTmp\ForeverBots" | Out-Null
 Copy-Item "$stage\addons\ForeverBots\*" "$addonTmp\ForeverBots" -Recurse -Force
+New-Item -ItemType Directory -Force "$addonTmp\ForeverDots" | Out-Null
+Copy-Item "$stage\addons\ForeverDots\*" "$addonTmp\ForeverDots" -Recurse -Force
 Copy-Item "$src\tools\addon-installer\*" $addonTmp -Force   # Install-Addon.cmd/.ps1 + README.txt: double-click installer next to the folder
 New-Zip $addonTmp "$out\ForeverBots-addon-$Version.zip"
 Remove-Item $addonTmp -Recurse -Force
 # 2. the update zip: no MySQL, no dumps (players already have them), no installer
 foreach ($x in "$stage\mysql", "$stage\sql\world.sql", "$stage\sql\hotfixes.sql", "$stage\Install.cmd") { Remove-Item $x -Recurse -Force -ErrorAction SilentlyContinue }
+# The launcher goes in as repack\WoWForeverLauncher.exe.new: the Update button runs while the launcher is open, and Windows does not
+# let the updater overwrite a running WoWForeverLauncher.exe (0.1.21 stopped half-way there). make-shortcuts.ps1, which every updater
+# runs after copying, puts it in place with update-launcher.ps1.
+Move-Item "$stage\WoWForeverLauncher.exe" "$stage\repack\WoWForeverLauncher.exe.new" -Force
 New-Zip $stage "$out\wow-forever-update-$Version.zip"
 Get-ChildItem $out -File | Where-Object { $_.Name -like 'WoW-Forever-Bots-*.zip' -or $_.Name -like 'wow-forever-update-*.zip' -or $_.Name -like 'ForeverBots-addon-*.zip' } | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content "$out\SHA256SUMS.txt"
 Remove-Item $stage -Recurse -Force

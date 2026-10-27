@@ -12,7 +12,7 @@ function Get-RealmBuild([string]$Root) {
 # Battle.net products a WoW Forever client folder can hold, with their game folder and program. Two of them are installed side by side
 # now and have different builds: the beta (wow_classic_beta) and the Forever release (wowf). The build decides which one is used.
 $ClientLayouts = [ordered]@{ 'wow_classic_beta' = @('_classic_beta_', 'WowB.exe'); 'wowf' = @('_forever_', 'Wow.exe') }
-# Shown when no installed client has an accepted build. 70532 is the WoW Forever beta.
+# Shown when no installed client has an accepted build.
 $ClientInstallHint = 'Install the WoW Forever beta with Battle.net: open a command prompt and run "C:\Program Files (x86)\Battle.net\Battle.net.exe" --game=wow_classic_beta --install , then choose its World of Warcraft folder (the one with _classic_beta_).'
 
 # One row per product in the client folder's .build.info: Product, Build (the last number of Version), Dir (its game folder, or $null
@@ -54,6 +54,24 @@ function Get-AcceptedBuilds([string]$Root) {
     $r = Get-RealmBuild $Root
     if ($r) { return @($r) }
     @()
+}
+# The realm is on the first build of client-builds.txt (the newest auth update sets it); bnetserver also lets in the other listed
+# builds (Realm.AlsoAcceptBuilds), so a player whose client Battle.net has not patched yet can still log in. Run before bnetserver
+# starts; writes bnetserver.conf only when the line differs.
+function Sync-AlsoAcceptBuilds([string]$Root) {
+    try {
+        $conf = Join-Path $Root 'server\bnetserver.conf'
+        if (-not (Test-Path $conf)) { return }
+        $realm = Get-RealmBuild $Root
+        if (-not $realm) { return }
+        $also = @(Get-AcceptedBuilds $Root | Where-Object { $_ -ne $realm })
+        $want = 'Realm.AlsoAcceptBuilds = "' + ($also -join ',') + '"'
+        $lines = @(Get-Content $conf)
+        $hit = $false
+        $out = @(foreach ($l in $lines) { if ($l -match '^\s*Realm\.AlsoAcceptBuilds\s*=') { $hit = $true; $want } else { $l } })
+        if (-not $hit) { $out += $want }
+        if (($out -join "`n") -ne ($lines -join "`n")) { Set-Content $conf $out -Encoding ascii }
+    } catch { Write-Warning "Could not set Realm.AlsoAcceptBuilds in bnetserver.conf: $($_.Exception.Message)" }
 }
 # The installed product of $ClientDir to use: the one with the first accepted build that has its game folder, or $null.
 function Select-ClientProduct([string]$Root, [string]$ClientDir) {

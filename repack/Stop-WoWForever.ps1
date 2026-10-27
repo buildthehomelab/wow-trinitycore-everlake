@@ -8,4 +8,6 @@ foreach ($exe in 'bnetserver', 'worldserver') {
 }
 $root = Split-Path $PSScriptRoot -Parent
 & "$root\mysql\bin\mysqladmin.exe" "--defaults-file=$root\config\my.ini" -u root shutdown 2>$null
+. "$PSScriptRoot\BotChat.ps1"
+Stop-BotChat $root   # Ollama, when the launcher installed it for bot chat
 "Stopped."

@@ -11,6 +11,96 @@ frame as it does for typed commands.
 local ADDON = ...
 ForeverBotsDB = ForeverBotsDB or {}
 
+-- Timing of every handler the add-on gives the client (frame scripts, timers, hooks, chat filters, menu callbacks): client 70630
+-- shows "Script from ForeverBots has exceeded its execution time limit" with an empty stack (BRS 2026-10-27), which names no
+-- function. Each handler is wrapped once, where it is handed over, and keeps its count, total and slowest call under the file line
+-- that set it. A call over PERF_SLOW_MS prints one line per handler; "/fb perf" lists the slowest, and the list is saved in
+-- ForeverBotsDB.perf at logout for the SavedVariables file. Secure frames are left alone: their scripts are not ours to wrap.
+local PERF = { stats = {}, said = {} }
+local PERF_SLOW_MS = 15
+local clockMs = debugprofilestop
+local function PerfLabel(kind, level)
+    local where = debugstack and debugstack(level or 3, 1, 0)
+    local line = type(where) == "string" and where:match(":(%d+):") or "?"
+    return kind .. "@" .. line
+end
+local function PerfWrap(label, fn)
+    if type(fn) ~= "function" or not clockMs then return fn end
+    local st = PERF.stats[label]
+    if not st then st = { n = 0, total = 0, max = 0 }; PERF.stats[label] = st end
+    return function(...)
+        local t0 = clockMs()
+        local outer = PERF.running
+        PERF.running = label
+        local r1, r2, r3, r4, r5 = fn(...)
+        PERF.running = outer
+        local ms = clockMs() - t0
+        st.n = st.n + 1
+        st.total = st.total + ms
+        if ms > st.max then st.max = ms end
+        if ms > PERF_SLOW_MS and not PERF.said[label] and DEFAULT_CHAT_FRAME then
+            PERF.said[label] = true
+            DEFAULT_CHAT_FRAME:AddMessage(string.format("|cff66ccffWoW Forever Bots|r: slow handler %s took %.1f ms (/fb perf lists all).", label, ms))
+        end
+        return r1, r2, r3, r4, r5
+    end
+end
+local function PerfFrame(f, tmpl)
+    if type(f) ~= "table" or (type(tmpl) == "string" and tmpl:find("Secure", 1, true)) then return f end
+    local set, hook = f.SetScript, f.HookScript
+    f.SetScript = function(self, what, fn)
+        return set(self, what, PerfWrap(PerfLabel(tostring(what)), fn))
+    end
+    f.HookScript = function(self, what, fn, ...)
+        return hook(self, what, PerfWrap(PerfLabel("hook " .. tostring(what)), fn), ...)
+    end
+    return f
+end
+-- A handler the client stops for running too long never returns, so its timing above is never taken: the label it set stays in
+-- PERF.running, and the next frame names it (also for the add-on's own file load, marked here and cleared at the end of the file).
+PERF.running = "file load"
+PERF.aborted = {}
+do
+    local watchdog = _G.CreateFrame("Frame")
+    watchdog:SetScript("OnUpdate", function()
+        local label = PERF.running
+        if not label then return end
+        PERF.running = nil
+        PERF.aborted[label] = (PERF.aborted[label] or 0) + 1
+        if PERF.aborted[label] == 1 and DEFAULT_CHAT_FRAME then
+            DEFAULT_CHAT_FRAME:AddMessage("|cff66ccffWoW Forever Bots|r: stopped by the client (or a Lua error) inside " .. label .. " (/fb perf lists all).")
+        end
+    end)
+end
+local CreateFrame = function(kind, name, parent, tmpl, ...)
+    return PerfFrame(_G.CreateFrame(kind, name, parent, tmpl, ...), tmpl)
+end
+local C_Timer = _G.C_Timer and {
+    After = function(sec, fn) return _G.C_Timer.After(sec, PerfWrap(PerfLabel("timer"), fn)) end,
+} or nil
+local hooksecurefunc = _G.hooksecurefunc and function(a, b, c)
+    if c ~= nil then return _G.hooksecurefunc(a, b, PerfWrap(PerfLabel("hook " .. tostring(b)), c)) end
+    return _G.hooksecurefunc(a, PerfWrap(PerfLabel("hook " .. tostring(a)), b))
+end or nil
+local ChatFrame_AddMessageEventFilter = _G.ChatFrame_AddMessageEventFilter and function(ev, fn)
+    return _G.ChatFrame_AddMessageEventFilter(ev, PerfWrap(PerfLabel("filter " .. tostring(ev)), fn))
+end or nil
+
+function PERF.Report(top)
+    local rows = {}
+    for label, st in pairs(PERF.stats) do
+        if st.n > 0 then rows[#rows + 1] = { label = label, n = st.n, total = st.total, max = st.max } end
+    end
+    table.sort(rows, function(a, b) return a.max > b.max end)
+    local lines = {}
+    for label, n in pairs(PERF.aborted) do lines[#lines + 1] = "STOPPED BY CLIENT: " .. label .. " x" .. n end
+    for i = 1, math.min(top or 12, #rows) do
+        local r = rows[i]
+        lines[#lines + 1] = string.format("%s  max %.1f ms  total %.0f ms  calls %d", r.label, r.max, r.total, r.n)
+    end
+    return lines
+end
+
 -- This client hands tainted addon code "secret" strings for some units (an enemy NPC in combat) and some chat. A secret
 -- value cannot be compared, concatenated or matched, so every name that comes from the game goes through SafeName / SafeStr
 -- first and a secret one is treated as "not a bot": nothing in the menu or panel path touches it.
@@ -408,13 +498,41 @@ local function OwnListFilter(_, _, msg, author)
     local me = SafeName("player")
     return me ~= nil and author ~= nil and strmatch(author, "^[^-]+") == me
 end
-if ChatFrame_AddMessageEventFilter then
+-- Optional parts that run inside the client's own code (chat filters, the SetBinding hook, the issue reporter search): each can be
+-- switched off with "/fb part <name> off" and /reload, to find which one the client's time limit is about. They start once the
+-- saved settings are loaded (ADDON_LOADED of this add-on).
+local PARTS = { list = {}, start = {} }
+function PARTS.On(name) return not (ForeverBotsDB.partsOff and ForeverBotsDB.partsOff[name]) end
+PARTS.list[1] = "menu"   -- the portrait menu entries (AddPopupEntry at login); listed here so /fb part knows the name
+local function AddPart(name, fn) PARTS.list[#PARTS.list + 1] = name; PARTS.start[name] = fn end
+do
+    local starter = CreateFrame("Frame")
+    starter:RegisterEvent("ADDON_LOADED")
+    starter:RegisterEvent("PLAYER_LOGOUT")
+    starter:SetScript("OnEvent", function(self, event, name)
+        if event == "PLAYER_LOGOUT" then
+            ForeverBotsDB.perf = PERF.Report(25)
+            return
+        end
+        if name ~= ADDON then return end
+        self:UnregisterEvent("ADDON_LOADED")
+        for _, part in ipairs(PARTS.list) do
+            if PARTS.On(part) then
+                local ok, err = pcall(PARTS.start[part])
+                if not ok then Debug("part " .. part .. ": " .. tostring(err)) end
+            end
+        end
+    end)
+end
+
+AddPart("filters", function()
+    if not ChatFrame_AddMessageEventFilter then return end
     ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER", WhisperFilter)
     ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER_INFORM", function(_, _, msg) return type(msg) == "string" and not IsSecret(msg) and msg == "assign list" end)
     for _, ev in ipairs({ "CHAT_MSG_PARTY", "CHAT_MSG_PARTY_LEADER", "CHAT_MSG_RAID", "CHAT_MSG_RAID_LEADER" }) do
         ChatFrame_AddMessageEventFilter(ev, OwnListFilter)
     end
-end
+end)
 
 local whisperFrame = CreateFrame("Frame")
 whisperFrame:RegisterEvent("CHAT_MSG_WHISPER")
@@ -2167,7 +2285,7 @@ local function AddPopupEntry()
     if not (Menu and Menu.ModifyMenu) then return end
     -- /fb menu off (then /reload) leaves the client's unit menus completely untouched: a menu we modified can taint the client's
     -- own menu actions ("ForeverBots has been blocked from an action only available to the Blizzard UI", reported 2026-10-15).
-    if ForeverBotsDB.menuEntries == false then return end
+    if ForeverBotsDB.menuEntries == false or not PARTS.On("menu") then return end
     -- Entries through the client's supported Menu.ModifyMenu only (no UnitPopup tables, no hooks). The client's own portrait
     -- Invite sends nothing for a bot on 70338 (playtest 2026-10-11: no CMSG_PARTY_INVITE from the menu, typed /invite works), so
     -- "Whisper (Forever Bots)" is added for every friendly player, "Invite (Forever Bots)" for one outside my group, and the
@@ -2214,6 +2332,7 @@ local function AddPopupEntry()
         end)
         if not ok then Debug("unit menu entry skipped") end
     end
+    modify = PerfWrap("menu", modify)
     for _, tag in ipairs({ "MENU_UNIT_PARTY", "MENU_UNIT_RAID_PLAYER", "MENU_UNIT_RAID", "MENU_UNIT_PLAYER", "MENU_UNIT_TARGET", "MENU_UNIT_FOCUS" }) do
         pcall(Menu.ModifyMenu, tag, modify)
     end
@@ -2327,6 +2446,7 @@ SLASH_FOREVERBOTS1 = "/fb"
 SLASH_FOREVERBOTS2 = "/foreverbots"
 SlashCmdList.FOREVERBOTS = function(msg)
     local verb, class, role, extra = strsplit(" ", strlower(strtrim(msg or "")))
+    verb = verb and verb:gsub("[%p]+$", "")   -- "/fb perf." (dictated) is still perf
     if verb == "chat" then
         if class == "on" then ForeverBotsDB.showChat = true
         elseif class == "off" then ForeverBotsDB.showChat = false
@@ -2349,6 +2469,32 @@ SlashCmdList.FOREVERBOTS = function(msg)
             if frame and UI.Locked(frame) then UI.scaleAfterCombat = true elseif frame then frame:SetScale(WindowScale()) end
         end
         Print("window size: " .. string.format("%.2f", WindowScale()) .. "  (/fb scale " .. SCALE_MIN .. "-" .. SCALE_MAX .. ", default " .. SCALE_DEFAULT .. ")")
+        return
+    end
+    if verb == "perf" then
+        if class == "reset" then
+            for _, st in pairs(PERF.stats) do st.n, st.total, st.max = 0, 0, 0 end
+            PERF.said = {}
+            Print("handler timings cleared.")
+            return
+        end
+        local lines = PERF.Report(12)
+        Print("slowest handlers since login (/fb perf reset clears; saved at logout):" .. (#lines == 0 and " none yet" or ""))
+        for _, l in ipairs(lines) do Print("  " .. l) end
+        return
+    end
+    if verb == "part" then
+        local known = {}
+        for _, part in ipairs(PARTS.list) do known[part] = true end
+        if known[class] and (role == "on" or role == "off") then
+            ForeverBotsDB.partsOff = ForeverBotsDB.partsOff or {}
+            ForeverBotsDB.partsOff[class] = (role == "off") or nil
+            Print(class .. " " .. role .. " after /reload.")
+            return
+        end
+        local states = {}
+        for _, part in ipairs(PARTS.list) do states[#states + 1] = part .. " " .. (PARTS.On(part) and "on" or "off") end
+        Print("parts: " .. table.concat(states, ", ") .. "  (/fb part <name> on|off, then /reload)")
         return
     end
     if verb == "debug" then
@@ -2419,7 +2565,7 @@ SlashCmdList.FOREVERBOTS = function(msg)
     end
     if verb == "frames" then
         local list = ForeverBotsListIssueFrames and ForeverBotsListIssueFrames() or {}
-        Print("issue reporter frames hidden: " .. (#list > 0 and table.concat(list, ", ") or "none found"))
+        Print("issue reporter frames hidden: " .. (#list > 0 and table.concat(list, ", ") or "none found") .. " (a new search runs over the next second; type /fb frames again for its result)")
         return
     end
     if verb == "chattest" then
@@ -2533,9 +2679,11 @@ SlashCmdList.FOREVERBOTS = function(msg)
     elseif verb == "" or verb == nil then
         Toggle()
     else
-        Print("/fb opens the window; /fb add <class> [tank|healer|dps]; /fb raidready; /fb call|dismiss|save|unsave|regear [name|all]; /fb delete <name>; /fb list; /fb fallback; /fb pullback; /fb rally; /fb formation circle|arrow|line|none; /fb spacing tight|close|spread; /fb distance <1-20>; /fb maintank [name]; /fb bot on|off; /fb tank <name> <marker>|clear; /fb assign <name> <marker> [role]|clear|list; /fb minimap on|off|reset; /fb scale <0.7-1.5>; /fb resume; /fb flee; /fb quick; /fb debug on|off")
+        Print("unknown /fb word \"" .. tostring(verb) .. "\" (add-on " .. (UI.version or "?") .. ")")
+        Print("/fb opens the window; /fb add <class> [tank|healer|dps]; /fb raidready; /fb call|dismiss|save|unsave|regear [name|all]; /fb delete <name>; /fb list; /fb fallback; /fb pullback; /fb rally; /fb formation circle|arrow|line|none; /fb spacing tight|close|spread; /fb distance <1-20>; /fb maintank [name]; /fb bot on|off; /fb tank <name> <marker>|clear; /fb assign <name> <marker> [role]|clear|list; /fb minimap on|off|reset; /fb scale <0.7-1.5>; /fb resume; /fb flee; /fb quick; /fb debug on|off; /fb perf [reset]; /fb part [name on|off]")
     end
 end
+UI.slash = SlashCmdList.FOREVERBOTS
 
 -- Tells the server this client runs the add-on (a self-whisper under the order prefix), so it does not send the download hint.
 -- Tried a few times: the first send can be refused while the client is still loading.
@@ -2560,10 +2708,20 @@ end
 local loader = CreateFrame("Frame")
 loader:RegisterEvent("PLAYER_LOGIN")
 loader:SetScript("OnEvent", function()
-    Print("type /fb for the bot window.")
+    -- the version in the greeting, so a screenshot shows which copy the client loaded
+    local getMeta = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
+    local okV, ver = pcall(getMeta, ADDON, "Version")
+    if okV and type(ver) == "string" then UI.version = ver end
+    Print("type /fb for the bot window." .. (UI.version and (" (" .. UI.version .. ")") or ""))
+    -- A second copy of this add-on under another folder name (an old one) sets /fb too, and the copy loaded last owns it: say which.
+    if SlashCmdList.FOREVERBOTS ~= UI.slash then
+        local okS, secure, who = pcall(issecurevariable, SlashCmdList, "FOREVERBOTS")
+        Print("|cffff4040/fb belongs to another add-on (" .. tostring(okS and not secure and who or "?") .. "), not to this " .. ADDON
+            .. " " .. (UI.version or "") .. ": remove the old copy from Interface\\AddOns.|r")
+    end
     if C_Timer and C_Timer.After then C_Timer.After(2, SayHello) else SayHello() end
-    AddPopupEntry()
-    BuildMinimapButton()
+    PerfWrap("login: menu entries", AddPopupEntry)()
+    PerfWrap("login: minimap button", BuildMinimapButton)()
     lastGroupSize = GroupSize()
     ShowDistance()
     if ForeverBotsDB.distance and lastGroupSize > 0 then distFrame.groupAt = Now() + 3 end
@@ -2572,7 +2730,7 @@ loader:SetScript("OnEvent", function()
         UI.buildLater = true
         if ForeverBotsDB.open then UI.buildAfterCombat = true end
     else
-        if not frame then BuildFrame() end
+        if not frame then PerfWrap("login: build window", BuildFrame)() end
         if ForeverBotsDB.open then frame:Show() end
     end
 end)
@@ -2618,8 +2776,9 @@ end
 -- The beta client's "Issue Reporter" bug button (bottom right, also the "F6 to submit an issue" hint) is hidden (playtest 2026-10-12).
 -- The 70338 interface source is not at hand, so the frame is found by name: any global frame whose name contains "IssueReport"
 -- or "BugReport" (and the common names tried directly). Hide() plus a Show hook that hides it again: nothing is reparented or
--- replaced, the frame is not protected, so there is no taint and it works in combat. Re-applied on PLAYER_ENTERING_WORLD and on
--- every ADDON_LOADED (the button may belong to a load-on-demand Blizzard addon). "/fb frames" lists what was found.
+-- replaced, the frame is not protected, so there is no taint and it works in combat. The known names are tried again on
+-- PLAYER_ENTERING_WORLD and every ADDON_LOADED (the button may belong to a load-on-demand Blizzard addon). "/fb frames" lists
+-- what was found.
 do
     local hooked, found = {}, {}
     local function HideFrame(name, f)
@@ -2630,25 +2789,60 @@ do
         pcall(f.SetAlpha, f, 0)
         pcall(hooksecurefunc, f, "Show", function(self) pcall(self.SetAlpha, self, 0) end)
     end
-    local function Scan()
+    local KNOWN = { "IssueReporterButton", "IssueReporterFrame", "IssueReporter", "BetaIssueReporter", "BugReportButton", "BugReportFrame" }
+    local function ScanKnown()
         Step("issue reporter hide")
-        for _, name in ipairs({ "IssueReporterButton", "IssueReporterFrame", "IssueReporter", "BetaIssueReporter", "BugReportButton", "BugReportFrame" }) do
+        for _, name in ipairs(KNOWN) do
             local f = _G[name]
             if type(f) == "table" and f.Hide and f.GetObjectType then HideFrame(name, f) end
         end
-        for name, f in pairs(_G) do
-            if type(name) == "string" and not hooked[f] and (name:find("IssueReport", 1, true) or name:find("BugReport", 1, true)) then
-                if type(f) == "table" and f.Hide and f.GetObjectType and f.IsProtected then HideFrame(name, f) end
-            end
+        Step("")
+    end
+    local function Match(name, f)
+        if type(name) == "string" and not hooked[f] and (name:find("IssueReport", 1, true) or name:find("BugReport", 1, true)) then
+            if type(f) == "table" and f.Hide and f.GetObjectType and f.IsProtected then HideFrame(name, f) end
         end
     end
-    local watch = CreateFrame("Frame")
-    watch:RegisterEvent("PLAYER_ENTERING_WORLD")
-    watch:RegisterEvent("ADDON_LOADED")
-    watch:SetScript("OnEvent", function() pcall(Scan); Step("") end)
-    pcall(Scan)
-    Step("")
-    ForeverBotsListIssueFrames = function() pcall(Scan); return found end
+    -- The walk over every global name is spread over frames, SCAN_STEP names a frame: on client 70630 one walk per ADDON_LOADED
+    -- (about a hundred of them at login) raised "Script from ForeverBots has exceeded its execution time limit" (BRS 2026-10-27).
+    -- It runs once after login or /reload, and on "/fb frames"; ADDON_LOADED and zoning only try the known names.
+    local SCAN_STEP = 2000
+    local walker = CreateFrame("Frame")
+    walker:Hide()
+    walker:SetScript("OnUpdate", function(self)
+        Step("issue reporter scan")
+        local ok, done = pcall(function()
+            local k, v = self.key, nil
+            for _ = 1, SCAN_STEP do
+                k, v = next(_G, k)
+                if k == nil then return true end
+                Match(k, v)
+            end
+            self.key = k
+            return false
+        end)
+        Step("")
+        if not ok or done then
+            self.key = nil
+            self:Hide()
+        end
+    end)
+    local function ScanAll()
+        ScanKnown()
+        walker.key = nil
+        walker:Show()
+    end
+    AddPart("reporter", function()
+        local watch = CreateFrame("Frame")
+        watch:RegisterEvent("PLAYER_ENTERING_WORLD")
+        watch:RegisterEvent("ADDON_LOADED")
+        watch:SetScript("OnEvent", function(_, event, isLogin, isReload)
+            pcall(ScanKnown)
+            if event == "PLAYER_ENTERING_WORLD" and (isLogin or isReload) then ScanAll() end
+        end)
+        pcall(ScanKnown)
+    end)
+    ForeverBotsListIssueFrames = function() ScanAll(); return found end
 end
 
 ------------------------------------------------------------------------------------------------------ forbidden-action guard
@@ -2663,7 +2857,8 @@ do
     -- and called it in a fight. A secure post-hook (it does not taint the caller) keeps who called it last, so the report names the
     -- caller instead of a guess; ForeverBotsDB.lastForbidden.stack keeps it for the SavedVariables file.
     local lastBinding, bindingPending
-    if hooksecurefunc and SetBinding then
+    AddPart("bindhook", function()
+        if not (hooksecurefunc and SetBinding) then return end
         pcall(hooksecurefunc, "SetBinding", function(key, action)
             pcall(function()
                 lastBinding = {
@@ -2673,7 +2868,7 @@ do
                 }
             end)
         end)
-    end
+    end)
     local function BindingReport()
         local b = lastBinding
         if not b then return "no SetBinding call seen by the add-on" end
@@ -2740,3 +2935,4 @@ do
     end)
 end
 
+PERF.running = nil   -- the file loaded to the end

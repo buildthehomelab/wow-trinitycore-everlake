@@ -35,7 +35,9 @@ function Set-Options($dist, $out, $options) {
     if ($extra.Count) { $text += ''; $text += '# Added by make-tester-configs.ps1'; foreach ($k in $extra.Keys) { $text += "$k = $($extra[$k])" } }
     Set-Content -Path $out -Value $text -Encoding ascii
 }
-$db = { param($name) "`"127.0.0.1;3307;trinity;$pw;$name`"" }
+. "$PSScriptRoot\mysql-helpers.ps1"
+$dbPort = Get-OurMySqlPort $root   # 3307 unless the start moved MySQL to another port (one Windows had reserved)
+$db = { param($name) "`"127.0.0.1;$dbPort;trinity;$pw;$name`"" }
 New-Item -ItemType Directory -Force "$server\logs", "$server\data" | Out-Null
 
 # Protocol-layer keys for the supported client build (e.g. opcode index shifts) are NOT hard-coded here. They come from

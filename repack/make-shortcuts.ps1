@@ -7,6 +7,9 @@
 param([switch]$NoDesktop)
 $ErrorActionPreference = 'Stop'
 $root = (Split-Path $PSScriptRoot -Parent).TrimEnd('\')
+# a new launcher from an update goes in first (see update-launcher.ps1: the updaters of 0.1.21 and older reach it only through here)
+$swap = Join-Path $PSScriptRoot 'update-launcher.ps1'
+if (Test-Path $swap) { try { & $swap | ForEach-Object { Write-Host $_ } } catch { Write-Warning $_.Exception.Message } }
 $sh = New-Object -ComObject WScript.Shell
 $programs = [Environment]::GetFolderPath('Programs')
 $desktop = [Environment]::GetFolderPath('Desktop')

@@ -1,4 +1,4 @@
-# Builds the game data from YOUR OWN WoW Forever client (build 70532): maps, vmaps and the pathfinding data (mmaps) for EVERY map.
+# Builds the game data from YOUR OWN WoW Forever client (build 70630): maps, vmaps and the pathfinding data (mmaps) for EVERY map.
 # The bots need the mmaps to walk; the server must not be started before this has finished.
 #   .\extract-data.ps1 -Client "C:\WoW Forever Client"
 # Safe to run again after an interruption: finished stages are skipped and the long stage (mmaps) continues where it stopped.
@@ -47,6 +47,9 @@ foreach ($d in 'dbc', 'gt', 'maps', 'vmaps', 'mmaps', 'Cameras') {
     }
 }
 foreach ($m in '.extract-maps.done', '.extract-vmaps.done', '.extract-mmaps.done') { Remove-Item (Join-Path $server $m) -ErrorAction SilentlyContinue }
+# the client build the DB2 tables came from; refresh-db2.ps1 extracts them again when Battle.net patches the client
+$use = Select-ClientProduct $root $Client
+if ($use) { Set-Content (Join-Path $data 'dbc\.client-build') "$($use.Build)" -Encoding ascii }
 Set-Content (Join-Path $data '.extract-complete') (Get-Date -Format s)
 $global:LASTEXITCODE = 0
 "Done. The game data is in $data."

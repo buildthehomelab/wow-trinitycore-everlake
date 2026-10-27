@@ -14,6 +14,10 @@ $logDir = Join-Path $dir 'logs'
 Set-ClientLanguageConf $dir
 . "$PSScriptRoot\WorldUp.ps1"
 Repair-ConfDir $dir
+. "$PSScriptRoot\ClientBuild.ps1"
+Sync-AlsoAcceptBuilds $root
+. "$PSScriptRoot\BotChat.ps1"
+Start-BotChat $root   # Ollama, only when bot chat is switched on
 foreach ($exe in 'worldserver', 'bnetserver') {
     if (Get-Process $exe -ErrorAction SilentlyContinue) { "$exe already running"; continue }
     $since = (Get-Date).AddMinutes(-1)
