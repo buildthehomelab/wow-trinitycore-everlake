@@ -2,7 +2,7 @@
 # Produces in <root>\release\<ver>\ (+ SHA256SUMS.txt):
 #   WoW-Forever-Bots-<ver>.zip   the ONE zip players download: everything, including the game database dumps; they run Install.cmd
 #   wow-forever-update-<ver>.zip the same without MySQL and the database dumps (small); the Update button downloads this one
-# Also run package-source.ps1 (GPL source, separate asset). Nothing is uploaded; publishing is manual. Target client build: 70630 (70532 still accepted).
+# Also run package-source.ps1 (GPL source, separate asset). Nothing is uploaded; publishing is manual. Target client build: 70634 (70630 and 70532 still accepted).
 #   .\build-package.ps1 -Version 0.1.1 [-DbZip <path to wow-forever-db-*.zip>]
 # The database dumps (sql\world.sql, sql\hotfixes.sql, from a FRESH install) come from the db zip: the one given, else the newest
 # wow-forever-db-*.zip under <root>\release\. Without one the full zip is built without dumps (worldserver then imports on first start).
@@ -196,4 +196,7 @@ Move-Item "$stage\WoWForeverLauncher.exe" "$stage\repack\WoWForeverLauncher.exe.
 New-Zip $stage "$out\wow-forever-update-$Version.zip"
 Get-ChildItem $out -File | Where-Object { $_.Name -like 'WoW-Forever-Bots-*.zip' -or $_.Name -like 'wow-forever-update-*.zip' -or $_.Name -like 'ForeverBots-addon-*.zip' } | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content "$out\SHA256SUMS.txt"
 Remove-Item $stage -Recurse -Force
+# a release file of its own: launchers read it with the release list to learn which client builds the newest repack takes (and when
+# Battle.net patches, an edited copy can be uploaded to the release on its own, without a new kit)
+Copy-Item "$src\repack\client-builds.txt" "$out\client-builds.txt" -Force
 "Built $out. Now package-source.ps1, then test Install.cmd in a clean Windows user or VM before publishing."

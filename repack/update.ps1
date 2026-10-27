@@ -117,12 +117,16 @@ function Copy-Tree($src, $dst, $skipFiles, $skipDirs) {
         if ($skip) { continue }
         $target = Join $dst $rel
         New-Item -ItemType Directory -Force (Split-Path $target -Parent) | Out-Null
-        try { Copy-Item $f.FullName $target -Force }
-        catch {
-            # a program that is open (the launcher window that started this update) cannot be overwritten, but it can be renamed
-            if (-not (Test-Path $target)) { throw }
+        # A program that is open (the launcher window that started this update) cannot be overwritten, but it can be renamed.
+        # The first try must not throw: the transcript (update.log) records every thrown error, even one caught here, and a
+        # "used by another process" line before the success line reads as a failed update.
+        $cpErr = $null
+        Copy-Item $f.FullName $target -Force -ErrorAction SilentlyContinue -ErrorVariable cpErr
+        if ($cpErr) {
+            if (-not (Test-Path $target)) { throw $cpErr[0] }
             Remove-Item "$target.old" -Force -ErrorAction SilentlyContinue
-            Move-Item $target "$target.old" -Force
+            $aside = if (Test-Path "$target.old") { "$target.old-$(Get-Date -Format yyyyMMddHHmmss)" } else { "$target.old" }   # an older one still open
+            Move-Item $target $aside -Force
             Copy-Item $f.FullName $target -Force
         }
         $n++

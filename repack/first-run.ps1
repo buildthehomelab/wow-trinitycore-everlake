@@ -19,9 +19,35 @@ if (-not ($ini -match '^\s*default-character-set\s*=')) {
 }
 . "$PSScriptRoot\mysql-helpers.ps1"
 Repair-MovedFolder $root   # says so plainly when the folder path has letters MySQL cannot read, instead of "mysql initialize failed"
+if (-not (Test-VcRuntime $root)) { try { Install-VcRuntime $root } catch { Write-Warning $_.Exception.Message } }   # if mysqld still cannot run, the code below says so
 if (-not (Test-Path "$root\mysql-data\mysql")) {
-    & "$mysqlBin\mysqld.exe" "--defaults-file=$root\config\my.ini" --initialize-insecure --console
-    if ($LASTEXITCODE) { throw 'mysql initialize failed' }
+    # A data folder without the mysql system folder is what an earlier try that stopped halfway leaves (closed window, antivirus).
+    # mysqld refuses to set up a folder with files in it, so every new try failed the same way. No database can be in it yet
+    # (those are made after this step), so it is set aside, never deleted.
+    $data = Join-Path $root 'mysql-data'
+    $dbDirs = @('auth', 'characters', 'world', 'hotfixes', 'playerbot' | Where-Object { Test-Path (Join-Path $data $_) })
+    if ((Test-Path $data) -and @(Get-ChildItem $data -Force -ErrorAction SilentlyContinue).Count -and -not $dbDirs) {
+        $aside = "$data-unfinished-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+        Rename-Item $data (Split-Path $aside -Leaf)
+        Write-Host "Set aside the mysql-data folder of an earlier try that did not finish ($aside)."
+    }
+    # Its text goes into install.log too: printed straight to the console it is missing there, and the window closes with it.
+    $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'   # Windows PowerShell 5.1 stops on a native program's error text under 'Stop'
+    $initOut = @(& "$mysqlBin\mysqld.exe" "--defaults-file=$root\config\my.ini" --initialize-insecure --console 2>&1 | ForEach-Object { "$_" })
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $eap
+    $initOut | ForEach-Object { Write-Host $_ }
+    if ($code) {
+        if ($code -in $script:VcRuntimeExitCodes) {
+            throw "mysql\bin\mysqld.exe could not run (code $('0x{0:X8}' -f $code)): a part of the Microsoft Visual C++ runtime (x64) is missing or damaged. Install it from https://aka.ms/vs/17/release/vc_redist.x64.exe (run the file, choose Repair or Install), restart the PC, then run Install.cmd again."
+        }
+        $why = Get-MySqlReason $initOut
+        if (-not $initOut) { $why.Text = 'MySQL printed nothing: an antivirus program may have blocked mysql\bin\mysqld.exe. Allow the WoW Forever Bots folder in it and run Install.cmd again.' }
+        $msg = "MySQL could not set up its data folder (code $code). $($why.Text)"
+        if ($why.Line) { $msg += " MySQL said: $($why.Line)" }
+        if ($why.Kind -eq 'leftover') { $msg += ' Close every WoW Forever Bots window, restart the PC and run Install.cmd again.' }
+        throw $msg
+    }
 }
 Start-OurMySql $root
 $pwFile = "$root\secrets\mysql.txt"

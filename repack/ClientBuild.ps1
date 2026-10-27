@@ -13,7 +13,7 @@ function Get-RealmBuild([string]$Root) {
 # now and have different builds: the beta (wow_classic_beta) and the Forever release (wowf). The build decides which one is used.
 $ClientLayouts = [ordered]@{ 'wow_classic_beta' = @('_classic_beta_', 'WowB.exe'); 'wowf' = @('_forever_', 'Wow.exe') }
 # Shown when no installed client has an accepted build.
-$ClientInstallHint = 'Install the WoW Forever beta with Battle.net: open a command prompt and run "C:\Program Files (x86)\Battle.net\Battle.net.exe" --game=wow_classic_beta --install , then choose its World of Warcraft folder (the one with _classic_beta_).'
+$ClientInstallHint = 'Update the game with Battle.net (WoW Forever), then choose its folder: the one with _forever_ (Wow.exe) or _classic_beta_ (WowB.exe). If Battle.net already has a newer build than this repack, a repack update for it usually follows soon (see our Discord).'
 
 # One row per product in the client folder's .build.info: Product, Build (the last number of Version), Dir (its game folder, or $null
 # when that folder is not there). $ClientDir can be the folder with .build.info or a game folder in it (_forever_ / _classic_beta_);

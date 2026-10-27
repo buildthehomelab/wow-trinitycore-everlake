@@ -101,6 +101,8 @@ Right-clicking a member of your group shows "WoW Forever Bots" with a submenu, e
 - Pet (hunter, warlock): keep it out or dismiss it and keep it away (`pet on|off`). Stealth (rogue): `stealth on|off`.
 - Warlock: Summon a player (`ritual <name>`, then "Help click the portal" sends `use summoning` to the party) and Soulstone
   on a group member (`soulstone <name>`). Mage: Open a portal to a city of the mage's faction (`portal <city>`).
+  Mage: Conjure water / Conjure food (`craft water x20`, `craft food x20`): the mage conjures them and asks you to open a trade
+  with it, then puts them in the window (conjured items cannot go by mail).
 - Danger spells (all bots of that class): the crowd-control orders `@<class> no <kind>`, `@<class> off cc`, `@<class> on cc`.
 - What did I pick? (`prefer`) and Clear my picks (`prefer clear`).
 Class entries appear from the level the spell is trained at; a talent spell the bot lacks gets "I don't know ... yet". The
@@ -127,5 +129,5 @@ Built on the client's own portrait window (the one its Raid and Looking For Grou
 
 - `/fb scale <0.7-1.5>` sets the window size (default 1.2, saved).
 - `/fb minimap on|off|reset` shows, hides or re-centres the minimap button.
-- `/fb quick` adds a tank, a healer and three damage dealers; `/fb resume` and `/fb flee` send those two orders.
+- `/fb quick` fills your group with bots: to five in the open world and 5-player dungeons, to the instance size in a bigger one (10 in Upper Blackrock Spire, 20 or 40 in a raid), with tanks, healers and damage dealers; `/fb resume` and `/fb flee` send those two orders.
 - When the client blocks an add-on call, one chat line names the add-on and the call.

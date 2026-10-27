@@ -129,22 +129,45 @@ function Move-OurMySqlPort([string]$Root, [int]$Port) {
     }
     throw "No free port found for the database between 3308 and 23399."
 }
-# The reason in MySQL's own log (mysql-data\mysql-error.log, or a *.err file an older my.ini wrote), as one short text for the player.
-# $Kind is 'port', 'lock', 'damaged', 'disk', 'access', 'files' or '' when the log says nothing we know.
-function Get-MySqlFailure([string]$Root, [datetime]$Since) {
-    $logs = @(Get-ChildItem (Join-Path $Root 'mysql-data') -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'mysql-error.log' -or $_.Extension -eq '.err' } |
-              Sort-Object LastWriteTime -Descending)
+# mysqld.exe and the servers need the Microsoft Visual C++ 2015-2022 runtime (x64). A PC without it cannot even load mysqld: it ends
+# at once with exit code 0xC0000135 and prints nothing, so the install only said "mysql initialize failed".
+$script:VcRuntimeExitCodes = @(-1073741515, -1073741701)   # 0xC0000135 a DLL is missing, 0xC000007B a DLL of the wrong kind
+function Test-VcRuntime([string]$Root) {
+    $dirs = @((Join-Path $env:SystemRoot 'System32'), (Join-Path $Root 'mysql\bin'))   # installed for all programs, or shipped next to mysqld
+    foreach ($d in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll') {
+        if (-not @($dirs | Where-Object { Test-Path (Join-Path $_ $d) }).Count) { return $false }
+    }
+    $true
+}
+# Downloads Microsoft's own installer and runs it without questions. Needs administrator rights (Install.cmd has them).
+function Install-VcRuntime([string]$Root) {
+    $url = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
+    Write-Host 'This PC lacks the Microsoft Visual C++ runtime that MySQL and the server need. Installing it from Microsoft (about 25 MB)...'
+    $exe = Join-Path $env:TEMP 'vc_redist.x64.exe'
+    try {
+        try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
+        (New-Object Net.WebClient).DownloadFile($url, $exe)
+        $sig = Get-AuthenticodeSignature $exe
+        if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { throw 'the downloaded file is not signed by Microsoft' }
+        $code = (Start-Process $exe -ArgumentList '/install', '/quiet', '/norestart' -Wait -PassThru).ExitCode
+        if ($code -notin 0, 1638, 3010) { throw "its installer ended with code $code" }   # 1638: a newer one is already there, 3010: restart wanted
+    } catch {
+        throw "The Microsoft Visual C++ runtime is missing and could not be installed ($($_.Exception.Message)). Install it yourself from $url (run the file, press Install), then run Install.cmd again."
+    } finally { Remove-Item $exe -ErrorAction SilentlyContinue }
+    if (-not (Test-VcRuntime $Root)) { throw "The Microsoft Visual C++ runtime still seems to be missing. Restart the PC; if it still fails, install it yourself from $url, then run Install.cmd again." }
+    Write-Host 'Visual C++ runtime installed.'
+}
+# The reason in lines MySQL wrote (its log, or what it printed), as one short text for the player.
+# Kind is 'port', 'lock', 'damaged', 'disk', 'access', 'leftover', 'files' or '' when the text says nothing we know.
+function Get-MySqlReason([string[]]$Lines) {
     $res = @{ Kind = ''; Line = ''; Log = '' }
-    if (-not $logs) { $res.Text = "MySQL wrote no log in the mysql-data folder (the folder may be missing, or an antivirus program may have blocked or removed mysql\bin\mysqld.exe)."; $res.Kind = 'files'; return $res }
-    $log = $logs[0]; $res.Log = $log.FullName
-    $tail = @()
-    try { $tail = @(Get-Content $log.FullName -Tail 80 -ErrorAction Stop) } catch { }
-    if ($log.LastWriteTime -lt $Since.AddSeconds(-5)) { $tail = @() }   # an old log says nothing about this start
-    $errors = @($tail | Where-Object { $_ -match '\[ERROR\]|Assertion failure' })
+    $errors = @($Lines | Where-Object { $_ -match '\[ERROR\]|Assertion failure' })
     $all = $errors -join "`n"
     if ($errors) { $res.Line = ($errors[-1] -replace '^.*?\[ERROR\]\s*(\[[^\]]*\]\s*)*', '').Trim() }
     if ($all -match 'Bind on TCP/IP port|already have another mysqld server running on port|10013|10048') {
         $res.Kind = 'port'; $res.Text = 'Windows did not let MySQL use its port.'
+    } elseif ($all -match 'data directory has files in it|--initialize specified but the data directory') {
+        $res.Kind = 'leftover'; $res.Text = 'The mysql-data folder has files from an earlier try that did not finish.'
     } elseif ($all -match 'Unable to lock .*ibdata1|lock.*\./ibdata1|another mysqld .*same data directory') {
         $res.Kind = 'lock'; $res.Text = 'Another MySQL from this folder is still running and holds the database files. Restart the PC and start again.'
     } elseif ($all -match 'Errcode: 28|No space left|OS error code 112|disk is full') {
@@ -158,6 +181,19 @@ function Get-MySqlFailure([string]$Root, [datetime]$Since) {
     } else {
         $res.Text = 'MySQL stopped without saying why.'
     }
+    $res
+}
+# The reason in MySQL's own log (mysql-data\mysql-error.log, or a *.err file an older my.ini wrote).
+function Get-MySqlFailure([string]$Root, [datetime]$Since) {
+    $logs = @(Get-ChildItem (Join-Path $Root 'mysql-data') -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'mysql-error.log' -or $_.Extension -eq '.err' } |
+              Sort-Object LastWriteTime -Descending)
+    if (-not $logs) { $res = @{ Kind = ''; Line = ''; Log = '' }; $res.Text = "MySQL wrote no log in the mysql-data folder (the folder may be missing, or an antivirus program may have blocked or removed mysql\bin\mysqld.exe)."; $res.Kind = 'files'; return $res }
+    $log = $logs[0]
+    $tail = @()
+    try { $tail = @(Get-Content $log.FullName -Tail 80 -ErrorAction Stop) } catch { }
+    if ($log.LastWriteTime -lt $Since.AddSeconds(-5)) { $tail = @() }   # an old log says nothing about this start
+    $res = Get-MySqlReason $tail
+    $res.Log = $log.FullName
     $res
 }
 function Start-OurMySql([string]$Root, [int]$WaitSeconds = 90) {
@@ -187,6 +223,7 @@ function Start-OurMySql([string]$Root, [int]$WaitSeconds = 90) {
         if ($mine) {
             'Starting MySQL...'
             $p = Start-Process $mysqld -ArgumentList "`"--defaults-file=$Root\config\my.ini`"" -WindowStyle Hidden -PassThru
+            $null = $p.Handle   # keeps the exit code readable after it ends
         } else { 'MySQL is already starting, waiting for it...' }
         # Repairing the files can take much longer than a normal start on a slow disk, so keep waiting while the process is alive.
         $deadline = (Get-Date).AddSeconds($WaitSeconds); $hard = (Get-Date).AddMinutes(15); $said = Get-Date
@@ -199,6 +236,9 @@ function Start-OurMySql([string]$Root, [int]$WaitSeconds = 90) {
         # The one we waited for was shutting down: now start our own.
         if ($p.HasExited -and -not $mine -and -not $waitedForOld) { $waitedForOld = $true; $since = Get-Date; continue }
         $f = Get-MySqlFailure $Root $since
+        if ($mine -and $p.HasExited -and ($p.ExitCode -in $script:VcRuntimeExitCodes)) {
+            $f = @{ Kind = 'runtime'; Line = ''; Log = ''; Text = 'mysqld.exe could not run: a part of the Microsoft Visual C++ runtime (x64) is missing or damaged. Install it from https://aka.ms/vs/17/release/vc_redist.x64.exe (run the file, choose Repair or Install), restart the PC and start again.' }
+        }
         # A port Windows refused: move to a free one once and try again.
         if ($p.HasExited -and $f.Kind -eq 'port' -and -not $moved) { $port = Move-OurMySqlPort $Root $port; $moved = $true; $since = Get-Date; continue }
         break

@@ -15,4 +15,4 @@ This package is distributed under the GNU General Public License version 2 (the 
   files are in the folders they came from.
 
 World of Warcraft is a trademark of Blizzard Entertainment. This is an unofficial fan project. No game client files are
-included; you must supply your own client, build 70630.
+included; you must supply your own client, build 70634.

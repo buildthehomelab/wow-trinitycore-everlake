@@ -803,11 +803,61 @@ local function SetGearChoice(g)
     SendGear()
 end
 
--- One click for a ready party: a tank, a healer and three damage dealers, added a moment apart so each reads the gear word.
-local QUICK_PARTY = { { "warrior", "tank" }, { "priest", "healer" }, { "mage", "dps" }, { "rogue", "dps" }, { "hunter", "dps" } }
+-- One click for a ready group, sized to where you are: a party of five in the open world and in 5-player dungeons, the size the
+-- instance holds in a bigger one (10 in Upper Blackrock Spire, 20 or 40 in a raid). The members already in the group count, so it
+-- never adds past that size: a sixth member made an open-world party a raid, and a raid gets no credit for normal quests
+-- (Discord report, 2026-10-27), while in Upper Blackrock Spire it stopped at six of ten.
+local QUICK_DPS = { "mage", "rogue", "hunter", "warlock" }
+local QUICK_HEALERS = { "priest", "druid" }
+local PARTY_SIZE = 5
+
+-- How many players the group should hold here.
+local function QuickPartySize()
+    local okI, inInstance, kind = pcall(IsInInstance)
+    if not (okI and inInstance) or (kind ~= "party" and kind ~= "raid") then return PARTY_SIZE end
+    local maxPlayers = 0
+    if GetInstanceInfo then
+        local okG, _, _, _, _, mp = pcall(GetInstanceInfo)
+        if okG and type(mp) == "number" then maxPlayers = mp end
+    end
+    if maxPlayers <= 0 then maxPlayers = (kind == "raid") and 40 or PARTY_SIZE end
+    return math.max(PARTY_SIZE, math.min(maxPlayers, 40))
+end
+
+-- The roles for a group of `size`, tanks first, then healers, then damage dealers; the first `count` are added.
+-- 5: 1 tank, 1 healer, 2 damage (you are the fifth). 10: 2 tanks, 3 healers. 20: 2 and 5. 40: 4 and 10.
+local function QuickPartyRoster(size, count)
+    local tanks = (size <= PARTY_SIZE) and 1 or (size <= 20 and 2 or 4)
+    local healers = (size <= PARTY_SIZE) and 1 or math.ceil(size / 4)
+    local roster = {}
+    for i = 1, count do
+        if i <= tanks then
+            roster[i] = { "warrior", "tank" }
+        elseif i <= tanks + healers then
+            roster[i] = { QUICK_HEALERS[(i - tanks - 1) % #QUICK_HEALERS + 1], "healer" }
+        else
+            roster[i] = { QUICK_DPS[(i - tanks - healers - 1) % #QUICK_DPS + 1], "dps" }
+        end
+    end
+    return roster
+end
+
 local function QuickParty()
-    for i, q in ipairs(QUICK_PARTY) do
-        AddBotWithGear(q[1], q[2])
+    local members = 1
+    if GetNumGroupMembers then members = math.max(GetNumGroupMembers(), 1)
+    elseif GetNumPartyMembers then members = GetNumPartyMembers() + 1 end
+    local size = QuickPartySize()
+    local free = size - members
+    if free <= 0 then
+        Print("quick party: your group is full (" .. members .. " of " .. size .. ").")
+        return
+    end
+    for i, q in ipairs(QuickPartyRoster(size, free)) do
+        if i == 1 or not (C_Timer and C_Timer.After) then
+            AddBotWithGear(q[1], q[2])
+        else
+            C_Timer.After(0.4 * (i - 1), function() AddBotWithGear(q[1], q[2]) end)   -- a moment apart, as one chat line each
+        end
     end
 end
 
@@ -1214,7 +1264,7 @@ function UI.BuildBots()
     SelectClass(1)
     local quick = Btn(botsPane, 0, 106, 117, 24, "Quick party", {})
     quick:SetScript("OnClick", QuickParty)
-    Tip(quick, "Quick party", "Adds a tank, a healer and three damage dealers at your level.")
+    Tip(quick, "Quick party", "Fills your group with bots at your level: to five in the open world and 5-player dungeons, to the size of a bigger instance (10 in Upper Blackrock Spire) or raid.")
     gearBtn = Btn(botsPane, 121, 106, 117, 24, "", {})
     gearBtn:SetScript("OnClick", function()
         local cur = ForeverBotsDB.gear or "match"
@@ -2252,6 +2302,11 @@ local function AddBotMenu(root, unit, who)
         for _, nm in ipairs(GroupNames()) do
             ss:CreateButton(nm, function() Send("soulstone " .. nm) end)
         end
+    end
+    -- Mage: conjured water and food are a craft order; the mage asks you to open a trade with it and hands them over.
+    if token == "MAGE" and level >= 4 then
+        menu:CreateButton("Conjure water", function() Send("craft water x20") end)
+        if level >= 6 then menu:CreateButton("Conjure food", function() Send("craft food x20") end) end
     end
     if token == "MAGE" and level >= 40 then
         local ok, faction = pcall(UnitFactionGroup, unit)
