@@ -146,9 +146,17 @@ local function Debug(msg)
     if debugOn then Print(msg) end
 end
 
--- A dot command is handled by the server when it arrives as a normal say message.
+-- A dot command is handled by the server when it arrives as a normal say message. From a timer or an event (Quick party adds
+-- its second and later bots a moment apart) the client blocks SendChatMessage ("the client blocked UNKNOWN()"), so there the
+-- line goes to the server as an addon message to yourself under the order prefix instead (Cmd.Queue below).
 local helloDotSent = false
+local inAuto = false
+local Cmd = {}
 local function ServerCommand(text)
+    if inAuto then
+        Cmd.Queue(text)
+        return
+    end
     if not helloDotSent then
         helloDotSent = true
         SendChatMessage(".bot addon", "SAY")
@@ -201,7 +209,6 @@ local ORDER_RETRIES = 6
 -- Anything the add-on sends on its own (a timer, OnUpdate, an event) is not a player action: the client blocks chat sent from
 -- there ("Interface action failed because of an AddOn", Emberseer 2026-10-20). Those paths run under Auto(), and GroupOrder then
 -- only ever uses the addon message (never SendChatMessage, never the chat box) and drops the order when that fails.
-local inAuto = false
 local function Auto(fn, ...)
     local was, step = inAuto, currentStep
     inAuto = true
@@ -210,6 +217,48 @@ local function Auto(fn, ...)
     inAuto = was
     Step(step)
     if not ok then Debug("auto: " .. tostring(err)) end
+end
+
+-- Commands sent without a click, one at a time: the client's addon message budget (about ten at once, then one a second) would
+-- drop most of a 40-player Quick party, so a refused send waits a second and tries the same line again, in order. Kept in one
+-- table: the main chunk is near Lua 5.1's limit of 200 locals.
+Cmd.queue, Cmd.pumping = {}, false
+Cmd.GAP, Cmd.WAIT, Cmd.TRIES = 0.4, 1.0, 20
+function Cmd.SendSelf(text)
+    local send = C_ChatInfo and C_ChatInfo.SendAddonMessage or SendAddonMessage
+    local me = SafeName("player")
+    if not (prefixOk and send and me) then return false, nil end
+    local ok, res = pcall(send, ORDER_PREFIX, text, "WHISPER", me)
+    if ok and (res == nil or res == true or res == 0 or (Enum and Enum.SendAddonMessageResult and res == Enum.SendAddonMessageResult.Success)) then
+        return true
+    end
+    return false, ok and tonumber(res) or nil
+end
+function Cmd.Pump()
+    local head = Cmd.queue[1]
+    if not head then Cmd.pumping = false return end
+    local sent, code = Cmd.SendSelf(head.text)
+    if not sent and code and THROTTLED[code] and head.tries < Cmd.TRIES and C_Timer and C_Timer.After then
+        head.tries = head.tries + 1
+        C_Timer.After(Cmd.WAIT, function() Auto(Cmd.Pump) end)
+        return
+    end
+    table.remove(Cmd.queue, 1)
+    if not sent then
+        Print("could not send \"" .. head.text .. "\"" .. (code and (" (addon message result " .. code .. ")") or "") .. ": type it in chat.")
+    end
+    if Cmd.queue[1] and C_Timer and C_Timer.After then
+        C_Timer.After(Cmd.GAP, function() Auto(Cmd.Pump) end)
+    else
+        Cmd.pumping = false
+    end
+end
+function Cmd.Queue(text)
+    Cmd.queue[#Cmd.queue + 1] = { text = text, tries = 0 }
+    if not Cmd.pumping then
+        Cmd.pumping = true
+        Cmd.Pump()
+    end
 end
 
 local function GroupOrder(text, attempt)
@@ -852,12 +901,18 @@ local function QuickParty()
         Print("quick party: your group is full (" .. members .. " of " .. size .. ").")
         return
     end
-    for i, q in ipairs(QuickPartyRoster(size, free)) do
-        if i == 1 or not (C_Timer and C_Timer.After) then
-            AddBotWithGear(q[1], q[2])
-        else
-            C_Timer.After(0.4 * (i - 1), function() AddBotWithGear(q[1], q[2]) end)   -- a moment apart, as one chat line each
-        end
+    -- The first bot is said straight from the click and makes the group; the rest follow a moment apart from a timer, where
+    -- chat is blocked, so they run under Auto() and go out one by one as addon messages (ServerCommand, Cmd.Queue).
+    local roster = QuickPartyRoster(size, free)
+    AddBotWithGear(roster[1][1], roster[1][2])
+    if roster[2] and C_Timer and C_Timer.After then
+        C_Timer.After(0.4, function()
+            Auto(function()
+                for i = 2, #roster do AddBotWithGear(roster[i][1], roster[i][2]) end
+            end)
+        end)
+    else
+        for i = 2, #roster do AddBotWithGear(roster[i][1], roster[i][2]) end
     end
 end
 

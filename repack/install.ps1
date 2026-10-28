@@ -69,8 +69,10 @@ $total = 8
 try {
     Step 1 $total 'Checking the folder'
     if ($root -match '\s') { throw "The folder path has spaces ($root). Move the folder to something like C:\WoWForever and run Install.cmd again." }
-    foreach ($f in 'mysql\bin\mysqld.exe', 'server\worldserver.exe', 'server\bnetserver.exe') {
-        if (-not (Test-Path (Join-Path $root $f))) { throw "$f is missing. Unzip the WHOLE package into this folder first." }
+    foreach ($f in 'mysql\bin\mysqld.exe', 'server\worldserver.exe', 'server\bnetserver.exe',
+                   'server\mapextractor.exe', 'server\vmap4extractor.exe', 'server\vmap4assembler.exe', 'server\mmaps_generator.exe') {
+        # checked here, not only at step 4: an antivirus that quarantines one of the map tools otherwise stops the install halfway
+        if (-not (Test-Path (Join-Path $root $f))) { throw "$f is missing. Either the zip was not fully unpacked (unzip the WHOLE package into this folder again, overwriting), or an antivirus program removed it: look in its quarantine or protection history (Windows Security > Virus & threat protection > Protection history), restore the file, allow this folder, then run Install.cmd again." }
     }
     $freeGb = [math]::Round((Get-PSDrive ($root.Substring(0, 1))).Free / 1GB)
     if ($freeGb -lt 50) { Write-Warning "Only $freeGb GB free on this drive; about 50 GB are needed while the game data is built (about 45 GB of it is removed again at the end)." }

@@ -118,7 +118,9 @@ foreach ($bin in $required) {
     $p = Join-Path $OutputPath $bin
     if (-not (Test-Path $p)) {
         Fail "Required binary not found: $p
-Build the worldserver project first (cmake --build build --config RelWithDebInfo)."
+In the WoW Forever Bots package it is in the server folder: an antivirus program may have removed it (look in its quarantine or
+protection history, restore it and allow the folder), or the zip was not unpacked completely (unpack the server folder again).
+When building from source: build the worldserver project first (cmake --build build --config RelWithDebInfo)."
     }
 }
 
@@ -213,9 +215,19 @@ Check stdout above; usual culprits: CASC init failure, wrong client path, antivi
     $vmapArgs = @("-d", "$ClientPath") + $productArgs
     if ($Threads -gt 0) { $vmapArgs += @("--threads", "$Threads") }
     & ".\vmap4extractor.exe" @vmapArgs
-    if ($LASTEXITCODE -ne 0) {
-        Fail "vmap4extractor failed with exit code $LASTEXITCODE.
-Its output above says why (the client could not be opened as product '$Product', or a leftover Buildings/dir_bin/ in $OutputPath)."
+    $vmapExit = $LASTEXITCODE
+    if ($vmapExit -ne 0 -and $Threads -ne 1) {
+        # A crash with all cores (seen on a many-core VPS: 0xC0000005) is retried once on one thread, which also needs the least memory.
+        # The first exit code stays in the log so the crash itself can be looked into.
+        Write-Warning ("vmap4extractor stopped with exit code $vmapExit ({0}). Trying again on one thread (slower)..." -f ('0x{0:X8}' -f $vmapExit))
+        foreach ($junk in 'Buildings', 'dir_bin') { Remove-Item (Join-Path $OutputPath $junk) -Recurse -Force -ErrorAction SilentlyContinue }
+        & ".\vmap4extractor.exe" (@("-d", "$ClientPath") + $productArgs + @("--threads", "1"))
+        $vmapExit = $LASTEXITCODE
+    }
+    if ($vmapExit -ne 0) {
+        Fail "vmap4extractor failed with exit code $vmapExit ($('0x{0:X8}' -f $vmapExit)).
+Its output above says why (the client could not be opened as product '$Product', or a leftover Buildings/dir_bin/ in $OutputPath).
+If the game shows an update in the Battle.net app, let it finish first; with a game that is up to date, run Battle.net's Scan and Repair for it."
     }
 
     # --- Step 3: vmap4assembler --------------------------------------------
