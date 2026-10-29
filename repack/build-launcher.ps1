@@ -17,7 +17,7 @@ $artDir = Join-Path $srcDir 'art'
 foreach ($f in @(Get-ChildItem -Path $artDir -Filter '*.png') + @(Get-ChildItem -Path (Join-Path $artDir 'fonts') -Filter '*.ttf' | Where-Object { $_.Name -ne 'CinzelDecorative-Black.ttf' })) {
     $cmdArgs += "/resource:$($f.FullName),art.$($f.Name)"
 }
-$cmdArgs += @(Get-ChildItem -Path $srcDir -Filter '*.cs' | ForEach-Object { $_.FullName })   # WoWForeverLauncher.cs + Skin.cs + Lang.cs + ServerOps.cs + Setup.cs + ChatSetup.cs
+$cmdArgs += @(Get-ChildItem -Path $srcDir -Filter '*.cs' | ForEach-Object { $_.FullName })   # WoWForeverLauncher.cs + Skin.cs + Lang.cs + ServerOps.cs + Setup.cs + ChatSetup.cs + Friends.cs + StartForm.cs
 & $csc @cmdArgs
 if ($LASTEXITCODE -ne 0) { throw "csc failed (exit code $LASTEXITCODE)." }
 "Built $Out ($((Get-Item $Out).Length) bytes)"

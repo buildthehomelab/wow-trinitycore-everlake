@@ -10,9 +10,18 @@ $root = Split-Path $PSScriptRoot -Parent
 
 function Test-AccountName($n) { $n -match '^[A-Za-z0-9._@+-]{3,60}$' }
 function Test-Password($p) { $p.Length -ge 6 -and $p.Length -le 16 -and $p -match '^[\x21-\x7E]+$' -and $p -notmatch '[''"`;]' }
+# The query's output, trimmed (empty when it found no row). A failed call throws with MySQL's own message: it used to come back as
+# empty output, which the name check below read as "an account with this name exists". Runs with ErrorActionPreference Continue,
+# since under Stop a line on stderr would end the script before the exit code is read.
 function Invoke-Query($sql) {
     $mysql = Join-Path $root 'mysql\bin\mysql.exe'
-    (& $mysql "--defaults-file=$root\config\my.ini" -u root -N -B -e $sql 2>$null | Out-String).Trim()
+    if (-not (Test-Path $mysql)) { throw "mysql\bin\mysql.exe is missing. An antivirus program may have removed it: allow the WoW Forever Bots folder in it and run Install.cmd again." }
+    $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { $out = @(& $mysql "--defaults-file=$root\config\my.ini" -u root -N -B -e $sql 2>&1 | ForEach-Object { "$_" }); $code = $LASTEXITCODE }
+    finally { $ErrorActionPreference = $eap }
+    $rows = @($out | Where-Object { $_ -notmatch '^mysql(\.exe)?: \[Warning\]' })
+    if ($code) { throw "The database could not be read (MySQL exit code $code): $(($rows -join ' ').Trim())" }
+    ($rows -join "`n").Trim()
 }
 function Read-Plain($prompt) {
     $s = Read-Host $prompt -AsSecureString
@@ -39,7 +48,9 @@ while (-not $Name -or -not (Test-AccountName $Name)) {
     $Name = (Read-Host 'Account name (this is what you type to log in)').Trim()
 }
 if ($Name -notmatch '@') { $Name = "$Name@local" }
-if ((Invoke-Query "SELECT COUNT(*) FROM auth.battlenet_accounts WHERE UPPER(email)=UPPER('$Name')") -ne '0') {
+$taken = Invoke-Query "SELECT COUNT(*) FROM auth.battlenet_accounts WHERE UPPER(email)=UPPER('$Name')"
+if ($taken -notmatch '^\d+$') { throw "The database gave no answer to the account check (got '$taken'). Is MySQL running? Start the server first." }
+if ($taken -ne '0') {
     Write-Host "An account called $Name already exists. Use another name." -ForegroundColor Yellow
     return
 }

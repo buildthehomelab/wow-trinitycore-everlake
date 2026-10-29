@@ -8,6 +8,8 @@ if (-not (& "$PSScriptRoot\ensure-data.ps1")) { throw 'The game data is not fini
 . "$PSScriptRoot\mysql-helpers.ps1"
 Start-OurMySql $root
 Sync-TrinityUser $root   # repairs an install whose first database step left the user without its password
+. "$PSScriptRoot\HostForOthers.ps1"
+Sync-HostForOthers $root   # only while Host-For-Others.cmd has hosting on: settings an update rewrote, a changed internet address
 $dir = Join-Path $root 'server'
 $logDir = Join-Path $dir 'logs'
 . "$PSScriptRoot\ClientLanguage.ps1"

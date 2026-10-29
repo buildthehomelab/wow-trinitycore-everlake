@@ -6,6 +6,11 @@ does not depend on the addon-message protocol PlayerbotControl uses.
 Install: copy this folder to `<client>\_classic_beta_\Interface\AddOns\ForeverBots` (the folder name must stay
 `ForeverBots`). If the character screen's AddOns list marks it out of date, tick "Load out of date AddOns".
 
+Languages: the windows, menus, tooltips and chat lines follow the client language. `Locale_ruRU.lua` holds the Russian text
+(proofread by Tornn), keyed by the English text; anything missing there shows in English. Spell, class and raid marker names come
+from the client itself. The words sent to the server (orders, `.bot` commands) and typed `/fb` words stay English, and what the
+bots answer comes from the server in English.
+
 In game: `/fb` opens the window. The Raid ready button (or `/fb raidready`) calls your saved bots (`.bot summon saved`) when you are alone (already in a group, it uses that group and never changes it), makes the group a raid if needed, sets formation and spacing, and starts a ready check once the bots have buffed.
 
 On login the add-on greets the server once (a self-whisper under the `FBOTS` prefix). A player whose client does not greet within 30 seconds gets one chat line with the download link (`Playerbot.AddonHint.*` in the module config).
@@ -130,4 +135,31 @@ Built on the client's own portrait window (the one its Raid and Looking For Grou
 - `/fb scale <0.7-1.5>` sets the window size (default 1.2, saved).
 - `/fb minimap on|off|reset` shows, hides or re-centres the minimap button.
 - `/fb quick` fills your group with bots: to five in the open world and 5-player dungeons, to the instance size in a bigger one (10 in Upper Blackrock Spire, 20 or 40 in a raid), with tanks, healers and damage dealers; `/fb resume` and `/fb flee` send those two orders.
+- Group finder tab (the fifth tab, after Marks): the bot dungeon finder without typing. Pick your role (Auto, Tank, Heal, DPS;
+  remembered) and a dungeon with < and > (Any for my level, then the dungeons of your level, then the rest; Upper Blackrock Spire
+  from 58), then Queue: your bots fill the missing places at your level, in the gear picked on the Bots tab, and the group is
+  put inside the dungeon. Cancel stops a queue that is still forming, Leave dungeon takes you back to where you queued, Fill my
+  group fills the party here (`.bot lfg`). The status line (queued, how many of how many, the wait, inside) asks the server
+  every 2 seconds while the tab is open. All of it goes as hidden add-on messages. `/fb dungeon <name|any|leave|cancel>` still
+  works typed; `/fb dungeon` lists the dungeons.
 - When the client blocks an add-on call, one chat line names the add-on and the call.
+
+## 0.6.0 bot manager
+
+`/fb bots` (also `/fb manage`, `/fb roster`) or "Manage bots" on the Bots tab opens a second window. It talks to the server
+with hidden add-on messages (prefix `PBC`, the bot module's AddonControl), so nothing it asks for or sends shows in chat;
+the bots' confirming whispers stay hidden as before. `/fb ping` checks that the server answers (an older server does not). The answers come as hidden add-on whispers, or, on a client that drops those (Classic 70658), as system lines starting `PBC~` that the chat frames hide: the add-on finds which works a few seconds after login and the server remembers it for the account. The requests (and the greeting and queued `.bot` lines) go out on the party or raid channel when you are in a group, because Classic 70658 add-on whispers never reach the server; alone they are whispers to yourself.
+
+- Left: every bot you own, online or not, in your group first, with class, level and role. The mouse wheel scrolls.
+- Details: spec, role, where it is, health, mana, experience and what it is doing. Call (offline) / Summon (online),
+  Dismiss, Save / Unsave, Regear, Delete (asks first): the same `.bot` lines as the main window, sent hidden.
+- Gear: the 19 worn slots and the bags (best first), with the real item tooltips and the item level on this bot. Click a
+  bag item to have the bot wear it, shift-click to link it. Equip upgrades, Sell grey, Repair.
+- Quests: the quest log with each objective's progress. Click a quest, then Drop (asks first) or Share; Accept and Turn in
+  work on the quest givers next to the bot.
+- Spec: spec and role; a button per role the class can play (`setrole`), From talents (`setrole clear`), Re-pick talents
+  (`talents apply`).
+
+The window reads the roster every 5 seconds and the open page every 2 (Details), 5 (Quests, Spec) or 10 (Gear) seconds
+while it is open. Files: `ForeverBots_Net.lua` (requests), `ForeverBots_Windows.lua` (window, roster, Details),
+`ForeverBots_Gear.lua`, `ForeverBots_Quests.lua`, `ForeverBots_Spec.lua`.

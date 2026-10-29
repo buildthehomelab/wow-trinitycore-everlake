@@ -1,4 +1,4 @@
-# Copies the ForeverBots addon into the client's AddOns folder and leaves it enabled. Required: the client (70658) has no
+# Copies the ForeverBots addon into the client's AddOns folder and leaves it enabled. Required: the client (70685) has no
 # working native /w, so whispering a bot (/w, /whisper, /t, /tell, /cw) only works through this addon.
 #   .\install-addon.ps1 -Client "C:\WoW Forever Client"
 param([string]$Client)

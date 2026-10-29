@@ -2,7 +2,7 @@
 # Produces in <root>\release\<ver>\ (+ SHA256SUMS.txt):
 #   WoW-Forever-Bots-<ver>.zip   the ONE zip players download: everything, including the game database dumps; they run Install.cmd
 #   wow-forever-update-<ver>.zip the same without MySQL and the database dumps (small); the Update button downloads this one
-# Also run package-source.ps1 (GPL source, separate asset). Nothing is uploaded; publishing is manual. Target client build: 70658 (70634, 70630 and 70532 still accepted).
+# Also run package-source.ps1 (GPL source, separate asset). Nothing is uploaded; publishing is manual. Target client build: 70685 (70658, 70634, 70630 and 70532 still accepted).
 #   .\build-package.ps1 -Version 0.1.1 [-DbZip <path to wow-forever-db-*.zip>]
 # The database dumps (sql\world.sql, sql\hotfixes.sql, from a FRESH install) come from the db zip: the one given, else the newest
 # wow-forever-db-*.zip under <root>\release\. Without one the full zip is built without dumps (worldserver then imports on first start).
@@ -12,9 +12,15 @@
 # -BinCommit names that commit when worldserver.exe carries none.
 param([Parameter(Mandatory)][string]$Version, [string]$DbZip, [string]$LegacyDll, [string]$BinCommit)
 $ErrorActionPreference = 'Stop'
-# Windows PowerShell 5.1 reads a script without a BOM as ANSI, so a non-ASCII character in a string can break parsing. Installer scripts must be plain ASCII.
-$bad = Get-ChildItem (Join-Path $PSScriptRoot '*') -Include *.ps1,*.cmd,*.bat -File | Where-Object { [IO.File]::ReadAllBytes($_.FullName) | Where-Object { $_ -gt 127 } | Select-Object -First 1 }
-$bad += Get-Item (Join-Path $PSScriptRoot '..\tools\extract_client_data.ps1') | Where-Object { [IO.File]::ReadAllBytes($_.FullName) | Where-Object { $_ -gt 127 } | Select-Object -First 1 }
+# Windows PowerShell 5.1 reads a script without a BOM as ANSI, so a non-ASCII character in a string can break parsing. Installer scripts must be
+# plain ASCII, or UTF-8 with a BOM (HostForOthers.ps1 has Russian text and a BOM; 5.1 reads those right).
+function Test-NonAsciiNoBom([string]$Path) {
+    $b = [IO.File]::ReadAllBytes($Path)
+    if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { return $false }
+    [bool]($b | Where-Object { $_ -gt 127 } | Select-Object -First 1)
+}
+$bad = @(Get-ChildItem (Join-Path $PSScriptRoot '*') -Include *.ps1,*.cmd,*.bat -File | Where-Object { Test-NonAsciiNoBom $_.FullName })
+$bad += @(Get-Item (Join-Path $PSScriptRoot '..\tools\extract_client_data.ps1') | Where-Object { Test-NonAsciiNoBom $_.FullName })
 if ($bad) { throw ('Non-ASCII characters in installer scripts: ' + (($bad | ForEach-Object Name) -join ', ')) }
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $src  = Split-Path $PSScriptRoot -Parent
@@ -93,7 +99,7 @@ if (-not (Test-Path "$stage\server\legacy.dll")) {
     Copy-Item $pick.FullName "$stage\server\legacy.dll" -Force
     "Added legacy.dll from $($pick.FullName)"
 }
-robocopy "$src\repack" "$stage\repack" /E /XF Install.cmd WoW-Forever-Bots.cmd Play-WoWForever.cmd Bug-Report.cmd build-package.ps1 package-data.ps1 package-source.ps1 README-TESTER.md SOURCE.txt NOTICE.txt UPDATER.md update.log clean-release.ps1 *.log *.bak* *.orig *~ /XD feedback-repo /NFL /NDL /NJH /NJS | Out-Null
+robocopy "$src\repack" "$stage\repack" /E /XF Install.cmd WoW-Forever-Bots.cmd Play-WoWForever.cmd Bug-Report.cmd Host-For-Others.cmd build-package.ps1 package-data.ps1 package-source.ps1 README-TESTER.md SOURCE.txt NOTICE.txt UPDATER.md update.log clean-release.ps1 *.log *.bak* *.orig *~ /XD feedback-repo /NFL /NDL /NJH /NJS | Out-Null
 # the ForeverBots addon is REQUIRED (whispering bots only works through it); always ship the copy from this commit
 robocopy "$src\src\modules\PlayerbotV2\Addon\ForeverBots" "$stage\addons\ForeverBots" /E /NFL /NDL /NJH /NJS | Out-Null
 if (-not (Test-Path "$stage\addons\ForeverBots\ForeverBots.toc")) { throw 'ForeverBots addon missing from the package' }
@@ -121,6 +127,7 @@ Copy-Item "$src\repack\Install.cmd" "$stage\Install.cmd" -Force
 Copy-Item "$src\repack\WoW-Forever-Bots.cmd" "$stage\WoW-Forever-Bots.cmd" -Force
 Copy-Item "$src\repack\Play-WoWForever.cmd" "$stage\Play-WoWForever.cmd" -Force
 Copy-Item "$src\repack\Bug-Report.cmd" "$stage\Bug-Report.cmd" -Force
+Copy-Item "$src\repack\Host-For-Others.cmd" "$stage\Host-For-Others.cmd" -Force
 & "$src\repack\build-launcher.ps1" -Out "$stage\WoWForeverLauncher.exe"   # the launcher window, compiled with the .NET Framework compiler that ships with Windows
 foreach ($f in 'README-TESTER.md:README.md', 'SOURCE.txt:SOURCE.txt', 'NOTICE.txt:NOTICE.txt') {
     $a, $b = $f -split ':'; Copy-Item "$src\repack\$a" "$stage\$b" -Force
