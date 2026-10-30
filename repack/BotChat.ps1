@@ -51,6 +51,7 @@ function Start-BotChat([string]$Root) {
 
 function Stop-BotChat([string]$Root) {
     $f = Join-Path $Root 'config\bot-chat.txt'
+    if (-not (Test-Path $f)) { return }   # bot chat was never switched on: nothing to stop, and no red error on every stop
     if (-not (Select-String -Path $f -Pattern '^\s*managed\s*=\s*1' -Quiet -ErrorAction SilentlyContinue)) { return }
     $p = @(Get-Process 'ollama app', 'ollama', 'ollama_llama_server' -ErrorAction SilentlyContinue)
     if (-not $p.Count) { return }

@@ -24,6 +24,7 @@ while (-not (Test-Path $flag)) {
     if (-not $w) {
         Log 'Starting worldserver...'
         Repair-ConfDir $server | ForEach-Object { Log $_ }
+        Sync-NetworkKeys $server
         Set-ClientLanguageConf $server
         Start-BotChat $root | ForEach-Object { Log $_ }
         Sync-UntestedBuildRows $root | ForEach-Object { Log $_ }

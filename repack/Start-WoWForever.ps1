@@ -16,6 +16,7 @@ $logDir = Join-Path $dir 'logs'
 Set-ClientLanguageConf $dir
 . "$PSScriptRoot\WorldUp.ps1"
 Repair-ConfDir $dir
+Sync-NetworkKeys $dir
 . "$PSScriptRoot\ClientBuild.ps1"
 Sync-AlsoAcceptBuilds $root
 Sync-UntestedBuildRows $root

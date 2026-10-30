@@ -17,3 +17,27 @@ function Repair-ConfDir([string]$ServerDir) {
         if (-not $settings.Count) { Move-Item $cf.FullName "$($cf.FullName).empty" -Force; "Set aside $($cf.Name): it had no settings in it (now $($cf.Name).empty)." }
     }
 }
+
+# The network limits the 0.1.25 server reads (connections per address and the login timeouts) are missing from the settings files of
+# installs made before them, and the server logs a "Missing name ..." line for each one on every connection. The defaults are used
+# anyway, so this changes nothing in how the server behaves: it writes the same values into the files, once, to end that log noise.
+# Settings files are written without a byte order mark: the server does not read a file that starts with one.
+function Sync-NetworkKeys([string]$ServerDir) {
+    $want = @(
+        @{ File = 'worldserver.conf'; Keys = [ordered]@{ 'Network.ConnectionsPerIp' = '16'; 'Network.AuthTimeout' = '60' } },
+        @{ File = 'bnetserver.conf';  Keys = [ordered]@{ 'Network.ConnectionsPerIp' = '16'; 'Network.HandshakeTimeout' = '30'; 'Network.LoginTimeout' = '600' } })
+    foreach ($w in $want) {
+        try {
+            $path = Join-Path $ServerDir $w.File
+            if (-not (Test-Path $path)) { continue }
+            $text = [IO.File]::ReadAllText($path)
+            $add = ''
+            foreach ($k in $w.Keys.Keys) {
+                if ($text -notmatch ('(?m)^\s*' + [regex]::Escape($k) + '\s*=')) { $add += "$k = $($w.Keys[$k])`r`n" }
+            }
+            if (-not $add) { continue }
+            if (-not $text.EndsWith("`n")) { $text += "`r`n" }
+            [IO.File]::WriteAllText($path, $text + "`r`n# added by the updater: the defaults the server used anyway`r`n" + $add, (New-Object Text.UTF8Encoding $false))
+        } catch { Write-Warning "Could not add the network settings to $($w.File): $($_.Exception.Message)" }
+    }
+}
