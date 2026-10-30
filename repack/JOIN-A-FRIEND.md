@@ -3,33 +3,18 @@
 ## The easy way: a join code (launcher)
 
 **Host** (the one whose server it is): open the launcher, **Settings** > **Host for friends...** (also on the **Server** tab).
-Type a name for your server and press **Turn on**. The launcher opens a tunnel through Cloudflare and shows a **join code**
-(`WFB-...`). Press **Copy** and send it to your friend. Make an account for each friend: **Server** tab > **Create account**.
-**Turn off** closes the tunnel.
-
-How the tunnel works: the first time, the launcher downloads Cloudflare's free tunnel program `cloudflared` (version
-2026.10.3, about 55 MB, checked against its published SHA-256, kept in the `tunnel` folder). While hosting is on it runs
-hidden and connects out to Cloudflare, so nothing is opened in your router or Windows Firewall, no Windows prompt, no
-account, and your home address is not in the code. The server keeps its normal one-PC settings and is not restarted.
-Cloudflare gives the tunnel a new random name each time, so **the code changes every time you turn hosting on** (and if
-the tunnel has to reconnect: the window then shows the new code). Nothing runs while hosting is off, and nothing starts with
-Windows: after a restart of the PC, turn hosting on again. Cloudflare offers these tunnels for free without any promise of
-uptime; if it does not work for you, use **Port forwarding** below.
-
-**Port forwarding** (the button in the same window, picked while hosting is off): for a host whose router forwards TCP
-1119, 8081 and 8085 to this PC. **Turn on** then opens those ports in Windows Firewall (one Windows prompt), asks your
-router to forward them (UPnP; if the router does not allow that, the window says which ports to forward by hand) and
-restarts the server. That code holds your internet address.
+Type a name for your server, press **Turn on** and say Yes to the Windows prompt. The launcher opens the game ports (TCP
+1119, 8081, 8085; MySQL stays closed), asks your router to forward them (UPnP; if the router does not allow that, the window
+says which ports to forward by hand), restarts the server and shows a **join code** (`WFB-...`). Press **Copy** and send it to
+your friend. Make an account for each friend: **Server** tab > **Create account**. **Turn off** undoes all of it.
 
 **Friend**: open the launcher, **Server** tab > **Join a friend**, paste the code and press **Join**. The launcher finds the
 server, checks its certificate against the code, asks once to trust it (Windows prompt; it is limited to names under
 `actual.battle.net`), adds the server to the list and picks it. Press **PLAY NOW** and log in with the account your friend made.
-Removing the server from the list later removes the certificate too. Through a tunnel your launcher carries the game's
-connections on this PC's ports 1119, 8081 and 8085, so your own server (if you have one) is stopped first; the launcher asks.
-Keep the launcher open while you play.
+Removing the server from the list later removes the certificate too.
 
-Give the code only to people you trust. When the host's launcher shows a new code, the friend joins with the new one and the
-same server entry is updated.
+The code holds the host's internet address, so give it only to people you trust. Home internet addresses can change: when
+the host's launcher shows a new code, the friend joins with the new one and the same server entry is updated.
 
 The rest of this file is the same thing by hand, for setups the code does not cover.
 
