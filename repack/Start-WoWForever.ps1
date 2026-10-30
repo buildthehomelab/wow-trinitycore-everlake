@@ -18,6 +18,7 @@ Set-ClientLanguageConf $dir
 Repair-ConfDir $dir
 . "$PSScriptRoot\ClientBuild.ps1"
 Sync-AlsoAcceptBuilds $root
+Sync-UntestedBuildRows $root
 . "$PSScriptRoot\BotChat.ps1"
 Start-BotChat $root   # Ollama, only when bot chat is switched on
 foreach ($exe in 'worldserver', 'bnetserver') {

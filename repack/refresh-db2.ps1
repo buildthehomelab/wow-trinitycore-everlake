@@ -16,6 +16,9 @@ if (-not $Client) {
 if (-not $Client) { return $true }
 $use = Select-ClientProduct $root $Client
 if (-not $use) { return $true }               # not an accepted build: Test-ClientBuild warns at start
+# an untested build (config\untested-builds.txt) may have changed a table layout, and the server does not start with tables it cannot
+# read: keep the tables of the newest build this release knows until a release knows this one
+if (@(Get-KnownBuilds $root) -notcontains $use.Build) { return $true }
 $stamp = Join-Path $dbc '.client-build'
 $have = if (Test-Path $stamp) { (Get-Content $stamp -TotalCount 1).Trim() } else { '' }
 if ($have -eq "$($use.Build)") { return $true }

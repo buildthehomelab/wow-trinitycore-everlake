@@ -11,11 +11,73 @@ frame as it does for typed commands.
 local ADDON = ...
 ForeverBotsDB = ForeverBotsDB or {}
 
--- Client 70685's own bag code (Blizzard_UIPanels_Game ContainerFrame.lua, ApplyEmptySlotAppearanceToTexture) reads
--- EMPTY_BAG_SLOT_EFFECT_COLOR, which no file of that client defines: every bag with an empty slot raised a Lua error and drew the
--- slot blank. Until Blizzard ships it, a neutral white (the empty-slot art as it is); a client that has it keeps its own.
+-- Client 70685's own bag code (Blizzard_UIPanels_Game ContainerFrame.lua) reads EMPTY_BAG_SLOT_EFFECT_COLOR, which no file of that
+-- client defines: opening bags raised a Lua error and drew empty slots blank. Defining it stops the error, but the same code then
+-- draws a grey bag icon in place of the slot frame of every empty slot. So the global is defined (a client that has it keeps its
+-- own and nothing below runs), and after Blizzard's SyncAppearanceWithHasItem an empty slot gets back the slot frame a filled slot
+-- shows (its NormalTexture). Post-hooks only (hooksecurefunc), and only textures are touched: no Blizzard function is replaced.
 if EMPTY_BAG_SLOT_EFFECT_COLOR == nil and CreateColor then
     EMPTY_BAG_SLOT_EFFECT_COLOR = CreateColor(1, 1, 1, 1)
+    local look                                          -- the slot frame of a filled slot, once one was seen
+    local waiting = setmetatable({}, { __mode = "k" })  -- empty slots drawn before that
+    local hooked = setmetatable({}, { __mode = "k" })
+    local function HasItem(button)
+        local bag = button.GetBagID and button:GetBagID()
+        return bag ~= nil and C_Container and C_Container.GetContainerItemID(bag, button:GetID()) ~= nil
+    end
+    local function Restore(button)
+        local t = button:GetNormalTexture()
+        if not t then return end
+        if look.atlas then t:SetAtlas(look.atlas) else t:SetTexture(look.file) end
+        t:SetTexCoord(unpack(look.coords))
+        t:SetVertexColor(unpack(look.color))
+        t:SetDesaturated(look.desaturated)
+        t:SetAlpha(look.alpha)
+    end
+    local function AfterSync(button)
+        local t = button:GetNormalTexture()
+        if not t then return end
+        if HasItem(button) then
+            if not look then
+                look = { atlas = t:GetAtlas(), file = t:GetTexture(), coords = { t:GetTexCoord() }, color = { t:GetVertexColor() },
+                         desaturated = t:IsDesaturated() and true or false, alpha = t:GetAlpha() }
+                for b in pairs(waiting) do if not HasItem(b) then Restore(b) end end
+                wipe(waiting)
+            end
+        elseif look then
+            Restore(button)
+        else
+            waiting[button] = true
+        end
+    end
+    local function Hook(button)
+        if hooked[button] or type(button.SyncAppearanceWithHasItem) ~= "function" then return end
+        hooked[button] = true
+        hooksecurefunc(button, "SyncAppearanceWithHasItem", AfterSync)
+    end
+    -- buttons made from now on get it from the mixin; the ones that already exist are hooked one by one
+    local mixinSync
+    if ContainerFrameItemButtonMixin and type(ContainerFrameItemButtonMixin.SyncAppearanceWithHasItem) == "function" then
+        hooksecurefunc(ContainerFrameItemButtonMixin, "SyncAppearanceWithHasItem", AfterSync)
+        mixinSync = ContainerFrameItemButtonMixin.SyncAppearanceWithHasItem
+    end
+    -- EnumerateValidItems counts up to the bag size, not the buttons made: the combined-bags frame knows its size (all bags, 96)
+    -- before it has made its buttons, so before it is first shown every index gives nil (Lua error at login, 2026-10-29). Buttons
+    -- it makes later copy the hooked mixin function, so skipping the missing ones loses nothing.
+    local function HookFrame(frame)
+        if frame and frame.EnumerateValidItems then
+            for _, button in frame:EnumerateValidItems() do
+                if type(button) == "table" and button.SyncAppearanceWithHasItem ~= mixinSync then Hook(button) end
+            end
+        end
+    end
+    local bagHook = CreateFrame("Frame")
+    bagHook:RegisterEvent("PLAYER_ENTERING_WORLD")
+    bagHook:RegisterEvent("BAG_OPEN")
+    bagHook:SetScript("OnEvent", function()
+        HookFrame(ContainerFrameCombinedBags)
+        for i = 1, (NUM_CONTAINER_FRAMES or 13) do HookFrame(_G["ContainerFrame" .. i]) end
+    end)
 end
 
 -- Text the player reads goes through L: the table of the client's language (Locale_ruRU.lua, loaded first, fills
@@ -2407,15 +2469,21 @@ local function AddBotMenu(root, unit, who)
     end
 
     -- Raid icons: the bot follows the icon you put on a mob (the server's "assign <marker> [kill|cc|tank]").
+    -- One list, a title per job: a submenu per job made this menu four levels deep, and where the screen has no room on the
+    -- right the client opens each level on the other side, so the fourth level lay over the bot menu and the third over the
+    -- unit menu, the text of both mixed (Tornn, 2026-10-29). Every bot submenu is now one level below the bot menu.
     local icons = menu:CreateButton(L["Raid icon"])
-    local function IconList(parent, role)
+    local function IconList(title, role)
+        local titled = icons.CreateTitle and pcall(icons.CreateTitle, icons, title)
         for _, m in ipairs(MARKERS) do
-            parent:CreateButton(MarkerName(m), function() Send("assign " .. m .. (role and (" " .. role) or "")) end)
+            local label = titled and MarkerName(m) or (title .. ": " .. MarkerName(m))
+            icons:CreateButton(label, function() Send("assign " .. m .. (role and (" " .. role) or "")) end)
         end
+        icons:CreateDivider()
     end
-    IconList(icons:CreateButton(L["Kill it first"]), "kill")
-    if token ~= "WARRIOR" and token ~= "SHAMAN" then IconList(icons:CreateButton(L["Crowd-control it"]), "cc") end
-    if token == "WARRIOR" or token == "PALADIN" or token == "DRUID" then IconList(icons:CreateButton(L["Tank it"]), "tank") end
+    IconList(L["Kill it first"], "kill")
+    if token ~= "WARRIOR" and token ~= "SHAMAN" then IconList(L["Crowd-control it"], "cc") end
+    if token == "WARRIOR" or token == "PALADIN" or token == "DRUID" then IconList(L["Tank it"], "tank") end
     icons:CreateButton(L["Clear"], function() Send("assign clear " .. who) end)
 
     -- The bot's own picks for its class.
@@ -2794,6 +2862,37 @@ SlashCmdList.FOREVERBOTS = function(msg)
         end
         show("SendChatMessage", function() return type(SendChatMessage) end)
         show("C_ChatInfo.SendChatMessage", function() return type(C_ChatInfo and C_ChatInfo.SendChatMessage) end)
+        return
+    end
+    if verb == "bagdebug" then
+        -- Read-only: the texture regions of one empty and one filled bag slot (open the bags first), to find which region holds the
+        -- empty-slot frame that client 70685's bag code replaces (see EMPTY_BAG_SLOT_EFFECT_COLOR at the top of this file)
+        local frame = (ContainerFrameCombinedBags and ContainerFrameCombinedBags:IsShown() and ContainerFrameCombinedBags) or ContainerFrame1
+        if not (frame and frame:IsShown() and frame.EnumerateValidItems) then Print("bagdebug: open your bags first, then type /fb bagdebug") return end
+        local empty, filled
+        for _, b in frame:EnumerateValidItems() do
+            local has = type(b) == "table" and b.GetBagID and C_Container.GetContainerItemID(b:GetBagID(), b:GetID()) ~= nil
+            if has then filled = filled or b else empty = empty or b end
+        end
+        local function dump(label, b)
+            if not b then Print("bagdebug " .. label .. ": none") return end
+            local keys = {}
+            for k, v in pairs(b) do if type(v) == "table" and v.GetObjectType then keys[v] = tostring(k) end end
+            Print("bagdebug " .. label .. " " .. tostring(b:GetDebugName()) .. " bag " .. tostring(b.GetBagID and b:GetBagID()) .. " slot " .. b:GetID()
+                .. " normal=" .. tostring(keys[b:GetNormalTexture() or false] or (b:GetNormalTexture() and "yes" or "nil")))
+            for _, r in ipairs({ b:GetRegions() }) do
+                if r:GetObjectType() == "Texture" then
+                    local ok, line = pcall(function()
+                        local cr, cg, cb, ca = r:GetVertexColor()
+                        return string.format("  %s %s layer=%s tex=%s atlas=%s shown=%s a=%.2f col=%.2f,%.2f,%.2f,%.2f", keys[r] or "?", tostring(r:GetDebugName()),
+                            tostring(r:GetDrawLayer()), tostring(r:GetTexture()), tostring(r:GetAtlas()), tostring(r:IsShown()), r:GetAlpha(), cr, cg, cb, ca)
+                    end)
+                    Print(ok and line or ("  error " .. tostring(line)))
+                end
+            end
+        end
+        dump("empty", empty)
+        dump("filled", filled)
         return
     end
     if verb == "frames" then

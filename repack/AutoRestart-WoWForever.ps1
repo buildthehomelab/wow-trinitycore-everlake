@@ -26,6 +26,7 @@ while (-not (Test-Path $flag)) {
         Repair-ConfDir $server | ForEach-Object { Log $_ }
         Set-ClientLanguageConf $server
         Start-BotChat $root | ForEach-Object { Log $_ }
+        Sync-UntestedBuildRows $root | ForEach-Object { Log $_ }
         $w = Start-Process (Join-Path $server 'worldserver.exe') -WorkingDirectory $server -WindowStyle Minimized -PassThru
         $null = $w.Handle   # Windows PowerShell 5.1 leaves ExitCode empty unless the process handle is read right after the start
         $logDir = Join-Path $server 'logs'

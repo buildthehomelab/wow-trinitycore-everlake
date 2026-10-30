@@ -10,7 +10,7 @@
 # RAM preset rewrites the server settings, and a home internet address can change from day to day.
 # Windows PowerShell 5.1. Saved as UTF-8 with BOM (the Russian text needs it). Administrator rights only for the firewall rule
 # (one Windows prompt): the server itself must keep running as the normal user, or the launcher could not stop it.
-param([switch]$On, [switch]$Off, [string]$Address, [switch]$NoFirewall, [switch]$NoRestart)
+param([switch]$On, [switch]$Off, [string]$Address, [switch]$NoFirewall, [switch]$NoRestart, [string]$AllowBuild, [string]$DisallowBuild)
 
 $script:HostRule = 'WoW Forever Bots (friends)'   # the launcher's Host switch uses the same name, so either side can undo it
 $script:HostPorts = @(1119, 8081, 8085)
@@ -176,6 +176,27 @@ $interactive = -not ($On -or $Off)
 $state = Get-HostStateFile $root
 $wasUp = ServerUp
 $restart = $wasUp -and -not $NoRestart
+# -AllowBuild N (or 1.60.1.N): friends whose Battle.net already patched the game to a build this release does not know yet may join,
+# at their own risk (the launcher's Host for friends, New game build, does the same). -DisallowBuild N takes it back.
+if ($AllowBuild -or $DisallowBuild) {
+    . "$PSScriptRoot\ClientBuild.ps1"
+    if ($DisallowBuild) {
+        Remove-UntestedBuild $root ([int]($DisallowBuild -replace '^.*\.', ''))
+        Say "Build $DisallowBuild is no longer let in after the server restarts." "Версия $DisallowBuild больше не будет пускаться после перезапуска сервера." 'Green'
+    } else {
+        $full = if ($AllowBuild -match '^\d+$') { "$(Get-RealmVersion $root).$AllowBuild" } else { $AllowBuild }
+        Say "Build $full is untested with this repack: players on it play AT THEIR OWN RISK (crashes, disconnects, visual bugs, odd game data). Ask them to report problems in #bug-report on our Discord." "Версия $full не проверена с этой сборкой: игроки на ней играют НА СВОЙ СТРАХ И РИСК (вылеты, отключения, графические ошибки, странные игровые данные). Попросите их сообщать о проблемах в #bug-report в нашем Discord." 'Yellow'
+        $why = Add-UntestedBuild $root $full
+        if ($why) { throw $why }
+        Say "Build $full is let in after the server restarts." "Версия $full будет пускаться после перезапуска сервера." 'Green'
+    }
+    if ($restart) {
+        Say 'Restarting the server...' 'Перезапускаю сервер...'
+        Invoke-HostScript 'Stop-WoWForever.ps1' | Out-Null
+        Invoke-HostScript 'Start-WoWForever.ps1'
+    }
+    return
+}
 $lan = Get-HostLan
 $fp = Get-HostCaFingerprint $root
 # for the launcher (and anyone reading the output): one line each, last

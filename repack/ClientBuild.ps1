@@ -47,13 +47,92 @@ function Get-ClientProducts([string]$ClientDir) {
 }
 # The client builds this package works with, preferred first: repack\client-builds.txt (one list for the scripts and the launcher),
 # else the realm's build.
+# Builds the player chose to play although no release knows them yet (config\untested-builds.txt) come last, so a known client
+# is always preferred.
 function Get-AcceptedBuilds([string]$Root) {
+    $list = @(Get-KnownBuilds $Root)
+    foreach ($b in @(Get-UntestedBuilds $Root)) { if ($list -notcontains $b.Build) { $list += $b.Build } }
+    $list
+}
+function Get-KnownBuilds([string]$Root) {
     $f = Join-Path $Root 'repack\client-builds.txt'
     $list = @(Get-Content $f -ErrorAction SilentlyContinue | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ })
     if ($list.Count) { return $list }
     $r = Get-RealmBuild $Root
     if ($r) { return @($r) }
     @()
+}
+# The version (major, minor, bugfix) of the realm's build, from the newest build_info row of the shipped auth updates for it.
+function Get-RealmVersion([string]$Root) {
+    $realm = Get-RealmBuild $Root
+    if (-not $realm) { return $null }
+    $v = $null
+    foreach ($f in @(Get-ChildItem (Join-Path $Root 'sql\custom\auth') -Filter '*.sql' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+        $m = [regex]::Matches((Get-Content $f.FullName -Raw -ErrorAction SilentlyContinue), "\(\s*$realm\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,")
+        if ($m.Count) { $g = $m[$m.Count - 1].Groups; $v = '{0}.{1}.{2}' -f $g[1].Value, $g[2].Value, $g[3].Value }
+    }
+    $v
+}
+# Untested client builds: newer than every build this release knows, of the same game version (1.60.1.N), which the player agreed to
+# play at their own risk in the launcher (or the host allowed: launcher Host for friends, New game build, or Host-For-Others.cmd -AllowBuild N). One full version per line in
+# config\untested-builds.txt. A build a release later knows is no longer untested and is left out (and cleaned from the file).
+function Get-UntestedBuilds([string]$Root) {
+    $f = Join-Path $Root 'config\untested-builds.txt'
+    if (-not (Test-Path $f)) { return @() }
+    $known = @(Get-KnownBuilds $Root)
+    $max = ($known + @(0) | Measure-Object -Maximum).Maximum
+    $ver = Get-RealmVersion $Root
+    $keep = @(); $out = @()
+    foreach ($l in @(Get-Content $f -ErrorAction SilentlyContinue)) {
+        $t = $l.Trim()
+        if (-not ($t -match '^(\d+\.\d+\.\d+)\.(\d+)$')) { continue }
+        $b = [int]$Matches[2]
+        if ($b -le $max -or ($ver -and $Matches[1] -ne $ver)) { continue }
+        $keep += $t
+        $out += [pscustomobject]@{ Build = $b; Version = $Matches[1] }
+    }
+    if ($keep.Count -ne @(Get-Content $f -ErrorAction SilentlyContinue | Where-Object { $_.Trim() }).Count) {
+        try { if ($keep.Count) { Set-Content $f $keep -Encoding ascii } else { Remove-Item $f -Force } } catch { }
+    }
+    $out
+}
+# Adds client version $Version (1.60.1.N) to config\untested-builds.txt. $null when added (or already there), else why not.
+function Add-UntestedBuild([string]$Root, [string]$Version) {
+    if (-not ($Version -match '^(\d+\.\d+\.\d+)\.(\d+)$')) { return "$Version is not a client version like 1.60.1.70700." }
+    $b = [int]$Matches[2]; $v = $Matches[1]
+    $known = @(Get-KnownBuilds $Root)
+    if ($known -contains $b) { return $null }
+    $max = ($known + @(0) | Measure-Object -Maximum).Maximum
+    if ($b -le $max) { return "Build $b is older than build $max, the newest this release knows: update the game with Battle.net." }
+    $ver = Get-RealmVersion $Root
+    if ($ver -and $v -ne $ver) { return "$Version is not a $ver build; only a newer $ver build can be played untested." }
+    if (@(Get-UntestedBuilds $Root | Where-Object { $_.Build -eq $b }).Count) { return $null }
+    $f = Join-Path $Root 'config\untested-builds.txt'
+    New-Item -ItemType Directory -Force (Split-Path $f -Parent) | Out-Null
+    Add-Content $f "$v.$b" -Encoding ascii
+    $null
+}
+function Remove-UntestedBuild([string]$Root, [int]$Build) {
+    $f = Join-Path $Root 'config\untested-builds.txt'
+    if (-not (Test-Path $f)) { return }
+    $keep = @(Get-Content $f | Where-Object { $_.Trim() -and $_.Trim() -notmatch "\.$Build$" })
+    if ($keep.Count) { Set-Content $f $keep -Encoding ascii } else { Remove-Item $f -Force }
+}
+# bnetserver and worldserver only let in a build that has a build_info row, and read the table at startup: run before they start.
+# Writes the rows of the untested builds (the realm's own gamebuild never changes); safe to run every start.
+function Sync-UntestedBuildRows([string]$Root) {
+    try {
+        $rows = @(Get-UntestedBuilds $Root)
+        if (-not $rows.Count) { return }
+        $sql = ''
+        foreach ($r in $rows) {
+            $p = $r.Version -split '\.'
+            $sql += "DELETE FROM build_info WHERE build=$($r.Build); INSERT INTO build_info (build,majorVersion,minorVersion,bugfixVersion,hotfixVersion) VALUES ($($r.Build),$([int]$p[0]),$([int]$p[1]),$([int]$p[2]),NULL); "
+        }
+        & "$Root\mysql\bin\mysql.exe" "--defaults-file=$Root\config\my.ini" -u root auth -e $sql
+        if ($LASTEXITCODE) { throw "mysql exit code $LASTEXITCODE" }
+        "Untested client build(s) $(($rows | ForEach-Object { $_.Build }) -join ', ') allowed (played at your own risk)."
+    } catch { Write-Warning "Could not allow the untested client build(s): $($_.Exception.Message)" }
 }
 # The realm is on the first build of client-builds.txt (the newest auth update sets it); bnetserver also lets in the other listed
 # builds (Realm.AlsoAcceptBuilds), so a player whose client Battle.net has not patched yet can still log in. Run before bnetserver
