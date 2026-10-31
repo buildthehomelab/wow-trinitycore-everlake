@@ -19,6 +19,7 @@
 #include "ByteBuffer.h"
 #include "ClassicOpcodes.h"
 #include "Containers.h"
+#include "DB2LegacyLayout.h"
 #include "DB2LoadInfo.h"
 #include "DatabaseEnv.h"
 #include "Hash.h"
@@ -678,6 +679,9 @@ uint32 DB2Manager::LoadStores(std::string const& dataPath, LocaleConstant defaul
 
     if (!availableDb2Locales[defaultLocale])
         return 0;
+
+    // game tables extracted from a client up to 70685 have the old SpellDuration layout: rewrite them into the 70707 layout the server reads
+    DB2LegacyLayout::UpgradeLegacyDB2Files(db2Path);
 
     auto LOAD_DB2 = [&]<typename T>(DB2Storage<T>& store)
     {
