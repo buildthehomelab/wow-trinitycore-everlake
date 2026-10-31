@@ -8,6 +8,7 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include <algorithm>
+#include <initializer_list>
 #include <array>
 
 namespace Playerbot::Classic {
@@ -268,6 +269,29 @@ uint32 BestSupplyRank(SupplyFamily const& family, uint8 level)
         if (it->min_level <= level && sObjectMgr->GetItemTemplate(it->item))
             return it->item;
     return 0;
+}
+
+uint32 VirtualRecoveryRank(bool water, uint8 cls, uint8 level)
+{
+    SupplyFamily const* f = FindSupplyFamily(water ? "Water" : "Food");
+    return f && SupplyFamilyForClass(*f, cls) ? BestSupplyRank(*f, level) : 0;
+}
+
+bool IsVirtualRecoveryItem(uint32 item, uint8 cls, uint8 level, bool& water)
+{
+    for (bool const w : { false, true })
+    {
+        SupplyFamily const* f = FindSupplyFamily(w ? "Water" : "Food");
+        if (!f || !SupplyFamilyForClass(*f, cls))
+            continue;
+        for (SupplyRank const& r : f->ranks)
+            if (r.item == item && r.min_level <= level)
+            {
+                water = w;
+                return true;
+            }
+    }
+    return false;
 }
 
 uint32 BestAmmo(uint8 kind, uint8 level)

@@ -63,7 +63,7 @@ struct classic_go_field_repair_bot_74A : public GameObjectAI
 ######*/
 
 // Classic 1.60 (WoW Forever) camping: sitting near a campfire starts this 60 s rest (WorldSession::HandleStandStateChangeOpcode);
-// when it runs out the player gets the "Boosted ..." buff of every camp feature placed near the fire (client spell texts: "Players
+// when it runs out the player gets the "Boosted ..." buff of every camp feature near where they sit (client spell texts: "Players
 // sitting or crafting nearby for 1 min will gain benefits from other camp features") and, still sitting by the fire, the next rest
 // starts (ymir sniff of the official beta). Standing up removes it early, so the minute has to be sat out in one go.
 enum CampfireRest
@@ -84,7 +84,9 @@ enum CampfireRest
 };
 
 static constexpr float CAMPFIRE_RANGE = 15.0f;      // sitting this close to the fire (same as HandleStandStateChangeOpcode)
-static constexpr float CAMP_FEATURE_RANGE = 20.0f;  // features this close to the fire count ("Camp Benefits" 1229741, radius 9)
+// features this close to the resting player count: Camp Benefits 1229741 finds them with its area effects 1 and 2 (creatures and
+// gameobjects round the caster's spot, radius index 9 = 20 yards), not round the fire
+static constexpr float CAMP_FEATURE_RANGE = 20.0f;
 
 // Camp features -> their "Boosted ..." buff. The features are the gameobjects summoned by the placement spells (1307229 Camp Chair,
 // 1307254 Lodestone, ... effect 50); only Chair, Lodestone and Mana Well have templates so far (sniffed next to the camping
@@ -196,9 +198,9 @@ class classic_spell_campfire_rest : public AuraScript
         std::set<uint32> buffs;
         for (CampFeature const& feature : CampFeatures)
         {
-            bool nearFire = feature.IsCreature ? fire->FindNearestCreature(feature.Entry, CAMP_FEATURE_RANGE) != nullptr
-                : fire->FindNearestGameObject(feature.Entry, CAMP_FEATURE_RANGE) != nullptr;
-            if (nearFire && sSpellMgr->GetSpellInfo(feature.Buff, DIFFICULTY_NONE))
+            bool nearby = feature.IsCreature ? target->FindNearestCreature(feature.Entry, CAMP_FEATURE_RANGE) != nullptr
+                : target->FindNearestGameObject(feature.Entry, CAMP_FEATURE_RANGE) != nullptr;
+            if (nearby && sSpellMgr->GetSpellInfo(feature.Buff, DIFFICULTY_NONE))
                 buffs.insert(feature.Buff);
         }
         for (uint32 buff : buffs)
@@ -265,10 +267,12 @@ struct classic_go_camp_chair : public GameObjectAI
 ## classic_spell_plainsrunning (1259918)
 ######*/
 
-// Classic 1.60 Tauren racial: "Gain 1% increased movement speed every 5 sec spent moving, up to a maximum of 30% increase. Taking
-// damage or standing still will reduce this effect." The racial is a 1 s periodic dummy (effect 0) with the step seconds and the
-// maximum in effects 1 and 2; the speed is the stacking aura Plainsrunning (1299038, +1% per stack). How fast it decays is not in
-// the spell data: here one stack per second standing still and five stacks when hit.
+// Classic 1.60 Tauren racial: "Gain 2% increased movement speed every 5 sec spent moving, up to a maximum of 60% increase. Taking
+// damage or standing still will reduce this effect." (WoW Forever beta notes 2026-10-26: was 1% up to 30%, and no longer adds mounted
+// speed; values in the hotfixes of 2026_10_27_05). The racial is a 1 s periodic dummy (effect 0, the percent per step) with the step
+// seconds and the maximum percent in effects 1 and 2; the speed is the stacking aura Plainsrunning (1299038, +2% per stack), so the
+// stack cap is the maximum divided by the step. How fast it decays is not in the spell data: here one stack per second standing still
+// and five stacks when hit.
 enum Plainsrunning
 {
     SPELL_PLAINSRUNNING_SPEED       = 1299038,
@@ -298,7 +302,7 @@ class classic_spell_plainsrunning : public AuraScript
     {
         Unit* target = GetTarget();
         int32 secondsPerStack = std::max(1, int32(GetEffect(EFFECT_1)->GetAmount()));
-        int32 maxStacks = std::max(1, int32(GetEffect(EFFECT_2)->GetAmount()));
+        int32 maxStacks = std::max(1, int32(GetEffect(EFFECT_2)->GetAmount()) / std::max(1, int32(GetEffect(EFFECT_0)->GetAmount())));
 
         uint64 health = target->GetHealth();
         bool hit = health < _lastHealth;

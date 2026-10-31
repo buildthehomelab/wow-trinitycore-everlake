@@ -82,3 +82,16 @@ TEST_CASE("PartialRouteStall: creeping gains under five yards still count as sta
     }
     CHECK(driven < 20);
 }
+
+TEST_CASE("PartialRouteStall: a near goal behind a long route is walked, a goal off the mesh is not", "[partialroutestall]")
+{
+    // RFC: the tank on the ledge 27 yards from Oggleflint's floor; the only way down winds back through the pit, so the capped
+    // partial ends 98.9 yards from him. That is a route cut by the cap and is walked.
+    CHECK(PartialIsTruncatedRoute(26.9f, 98.9f));
+    // A near goal off the navmesh: Detour's partial ends at the polygon nearest it, about as far as the bot already is. Refused.
+    CHECK_FALSE(PartialIsTruncatedRoute(26.9f, 27.5f));
+    CHECK_FALSE(PartialIsTruncatedRoute(12.0f, 9.0f));
+    // A far goal is walked as before, whatever the partial's end.
+    CHECK(PartialIsTruncatedRoute(254.0f, 301.0f));
+    CHECK(PartialIsTruncatedRoute(254.0f, 250.0f));
+}

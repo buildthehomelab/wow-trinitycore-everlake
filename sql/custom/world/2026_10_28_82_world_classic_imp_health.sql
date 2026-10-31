@@ -2,7 +2,7 @@
 -- a third of its warlock's, and every mob that turned on it killed it in one or two hits (Discord report 2026-10-28). Warlock pets
 -- get nothing from their stamina here (no owner share before The Burning Crusade, and base stamina adds no health), so this
 -- column is all the health they have. Levels 1-59 take the TrinityCore curve (the values before 2026_10_11_15, also in the
--- AnoCore world: 140 at level 1, 204 at 8, 403 at 20), capped at the level 60 value of 769, which stays as it is; from level
+-- The other Forever server world: 140 at level 1, 204 at 8, 403 at 20), capped at the level 60 value of 769, which stays as it is; from level
 -- 53 that cap holds the curve flat instead of going past level 60. Only health changes: mana, armor and stats stay vanilla.
 -- No Forever or retail Classic source gives the Imp's health by level. Safe to run again.
 CREATE TEMPORARY TABLE `tmp_imp_hp` (`level` TINYINT UNSIGNED NOT NULL PRIMARY KEY, `hp` SMALLINT UNSIGNED NOT NULL);

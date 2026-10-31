@@ -20,6 +20,8 @@
 #include <unordered_map>
 
 #include "../BotSnapshot.h"
+#include "../CcDeny.h"
+#include "../States/MaintainHelpers.h"   // States::SightSpotMove: the walk round a wall to see the mob
 
 namespace Playerbot::MarkCc {
 
@@ -100,14 +102,16 @@ inline uint8 TypeOf(NearbyUnit const& u)
     return t ? uint8(t->type) : uint8(0);
 }
 
-// The option this bot can hold `creature_type` with (known spell, type fits, Sap only out of combat), else nullptr.
-// `ooc` = neither the bot nor the mob is in combat.
+// The option this bot can hold `creature_type` with (known spell, type fits, Sap only out of combat, a kind its owner has not
+// said no to: "@warlock no fear", CcDeny.h; no Sap while the owner keeps the rogue out of Stealth: "stealth off"), else nullptr. `ooc` = neither the bot nor the mob is in combat.
 template <class View>
 Option const* PickOption(View const& s, uint8 cls, uint8 creature_type, bool ooc)
 {
     if (creature_type == 0) return nullptr;   // a player: never by symbol
     for (Option const& o : OptionsFor(cls))
-        if ((o.type_mask & (1u << creature_type)) && (!o.ooc_only || ooc) && s.knows_spell(SpellFor(s, o)) &&
+        if ((o.type_mask & (1u << creature_type)) && (!o.ooc_only || ooc) && (CcDeny::KindOfSpell(o.spell) & s.raw().cc_deny) == 0 &&
+            (!o.needs_stealth || !s.raw().owner_picks.stealth_off) &&
+            s.knows_spell(SpellFor(s, o)) &&
             (!o.needs_no_pet || !s.has_pet()) && (!o.needs_reagent || s.has_reagents(SpellFor(s, o))))
             return &o;
     return nullptr;
@@ -182,7 +186,7 @@ bool TryCast(View const& s, Emit& emit, ObjectGuid target)
     float const dx = u->x - p.x, dy = u->y - p.y, dz = u->z - p.z;
     float const dist = std::sqrt(dx * dx + dy * dy + dz * dz);
     if (!o)
-        return LogRefusal(low, now, s.name().c_str(), "no spell of this class holds that creature type (or not known / no shard)",
+        return LogRefusal(low, now, s.name().c_str(), "no spell of this class holds that creature type (or not known / no shard / the owner said no to it)",
                           u->entry, TypeOf(*u), dist), false;
     if (o->needs_stealth && !s.has_aura(kStealth))
     {
@@ -222,6 +226,19 @@ bool TryCast(View const& s, Emit& emit, ObjectGuid target)
         LogRefusal(low, now, s.name().c_str(), "out of range, moving in", u->entry, TypeOf(*u), dist);
         float const f = stop / dist;   // fraction of the mob->bot line
         return emit.move_to(u->x + (p.x - u->x) * f, u->y + (p.y - u->y) * f, u->z + (p.z - u->z) * f, /*run=*/true);
+    }
+    // In range but no line of sight: walk to a spot that sees the mob, clear of the other packs' reach. Casting from where it stands
+    // only fails again (smgraveyard_vishas, RC10: Polymorph on the Scarlet Torturer five times in 8 s from 28 y behind a wall, every
+    // cast LINE_OF_SIGHT, the hold never landed and the tank pulled three mobs with six more beside them and died).
+    if (!o->self_cast && !u->in_los)
+    {
+        float ox = 0.f, oy = 0.f, oz = 0.f, orad = 0.f;
+        if (States::SightSpotMove(s, *u, /*melee=*/false, /*pack_safe=*/true, emit, ox, oy, oz, orad))
+        {
+            LogRefusal(low, now, s.name().c_str(), "no line of sight, walking to a spot that sees it", u->entry, TypeOf(*u), dist);
+            return true;
+        }
+        return LogRefusal(low, now, s.name().c_str(), "no line of sight and no spot in reach sees it", u->entry, TypeOf(*u), dist), false;
     }
     // In range but walking (a formation step): stop, the cast goes out next tick (a hard cast is refused while moving).
     if (s.is_moving() && s.knows_spell(spell))

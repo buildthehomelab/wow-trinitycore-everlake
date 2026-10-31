@@ -16,6 +16,7 @@
  */
 
 #include "AuctionHouseBotBuyerPolicy.h"
+#include "AuctionHouseBotVanilla.h"
 #include "AuctionHouseMgr.h"
 #include "Common.h"
 #include "Config.h"
@@ -76,7 +77,8 @@ namespace
     {
         uint64 buy = proto->GetBuyPrice() / std::max<uint32>(1, proto->GetBuyCount());
         uint64 sell = uint64(proto->GetSellPrice()) * 4;
-        return std::max<uint64>({ buy, sell, SILVER });
+        // the seller's market value when AuctionHouseBot.Vanilla.ValueCurve is on, so the buyer pays what the bot asks
+        return std::max<uint64>({ buy, sell, AuctionBotVanilla::UnitValue(proto), SILVER });
     }
 }
 

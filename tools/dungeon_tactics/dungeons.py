@@ -20,9 +20,9 @@ BATCHES = {
        bosses=[3983, 4543, 3974, 6487, 3975, 3977, 3976, 4542, 3981]),
   dict(key='rfk', map=47, name='Razorfen Kraul', scenario='rfk_aggem',
        bosses=[4424, 4420, 4421, 4422, 4428]),
-  dict(key='gnomer', map=90, name='Gnomeregan', scenario='gnomeregan_grubbis',
+  dict(key='gnomer', map=90, name='Gnomeregan', scenario='gnomeregan_electrocutioner',
        bosses=[7361, 6228, 7079, 7800, 6235, 6229]),
-  dict(key='rfd', map=129, name='Razorfen Downs', scenario='rfd_tutenkash',
+  dict(key='rfd', map=129, name='Razorfen Downs', scenario='rfd_glutton',
        bosses=[7355, 7356, 7357, 7358, 7354, 8567]),
  ],
  3: [

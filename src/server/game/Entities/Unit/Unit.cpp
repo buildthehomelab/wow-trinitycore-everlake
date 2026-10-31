@@ -1896,14 +1896,16 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
 
     // Classic 1.60: the caller (CalcSpellResistedDamage) wants the average resisted fraction, retail returns the raw resistance
     // (creatures have none there): with 1 point of resistance every spell was fully resisted. Vanilla formula: resistance
-    // * 0.75 / (5 * caster level), at most 75%; creatures above the caster's level resist 8 more per level (not binary spells).
+    // * 0.75 / (5 * caster level), at most 75%; creatures above the caster's level resist 8 more per level (not binary spells),
+    // scaled by caster level / 63 and rounded down as in VMaNGOS (SpellCaster::GetSpellResistChance). Unscaled, a level 1 caster
+    // lost 75% of every spell on a level 2 creature (8 * 0.75 / 5 = 1.2).
     uint32 casterLevel = 1;
     if (caster && caster->ToUnit())
     {
         casterLevel = std::max<uint32>(caster->ToUnit()->GetLevelForTarget(victim), 1);
         int32 levelDiff = int32(victim->GetLevelForTarget(caster)) - int32(casterLevel);
         if (levelDiff > 0 && victim->GetTypeId() == TYPEID_UNIT && !(spellInfo && spellInfo->HasAttribute(SPELL_ATTR0_CU_BINARY_SPELL)))
-            victimResistance += float(levelDiff * 8);
+            victimResistance += float(int32(8.0f * levelDiff * casterLevel / 63.0f));
     }
 
     return std::min(victimResistance * 0.75f / (5.0f * casterLevel), 0.75f);

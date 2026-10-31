@@ -1399,6 +1399,8 @@ AreaTrigger::MovementUpdateWorldResult AreaTrigger::CalculateWorldPositionAndRot
             if (worldResult.Status == MovementUpdateResult::None)
                 worldResult.Status = MovementUpdateResult::Moved;
         }
+        else // target not in the map yet (aura applied while the unit is being added): start at the creation point
+            worldResult.Position = GetStationaryPosition().GetPositionWithOffset(worldResult.Position);
     }
     else if (TransportBase const* transport = GetTransport())
     {

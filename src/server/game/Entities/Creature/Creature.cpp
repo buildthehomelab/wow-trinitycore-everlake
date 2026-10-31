@@ -17,6 +17,7 @@
 
 #include "Creature.h"
 #include "BattlegroundMgr.h"
+#include "BotGroupRules.h"
 #include "CellImpl.h"
 #include "CharmInfo.h"
 #include "CombatPackets.h"
@@ -52,6 +53,7 @@
 #include "TemporarySummon.h"
 #include "Vehicle.h"
 #include "World.h"
+#include "WorldSession.h"
 #include "ZoneScript.h"
 #include <G3D/g3dmath.h>
 #include <sstream>
@@ -1404,10 +1406,17 @@ void Creature::SetTappedBy(Unit const* unit, bool withGroup)
 
     m_tapList.insert(player->GetGUID());
     if (withGroup)
+    {
         if (Group const* group = player->GetGroup())
+        {
+            // with bots in the group its players share every tap, whatever subgroup tagged first (BotGroupRules::SharesTap)
+            bool const groupHasBot = group->HasBotMember();
             for (GroupReference const& itr : group->GetMembers())
-                if (GetMap()->IsRaid() || group->SameSubGroup(player, itr.GetSource()))
+                if (BotGroupRules::SharesTap(GetMap()->IsRaid(), group->SameSubGroup(player, itr.GetSource()), groupHasBot,
+                    itr.GetSource()->GetSession()->IsBot()))
                     m_tapList.insert(itr.GetSource()->GetGUID());
+        }
+    }
 
     if (m_tapList.size() >= CREATURE_TAPPERS_SOFT_CAP)
         SetDynamicFlag(UNIT_DYNFLAG_TAPPED);
@@ -1648,7 +1657,10 @@ void Creature::UpdateLevelDependantStats()
         ClassicCreatureClassLevelStats const* classicBase = classicStats ? sObjectMgr->GetCreatureClassicClassLevelStats(level, cInfo->unit_class) : nullptr;
         if (classicBase)
         {
-            uint32 health = std::max(1u, uint32(std::round(GetHealthMod(classification) * classicBase->Health * classicStats->HealthMultiplier)));
+            // Classic.ForeverCreatureHealth: the curve fit to sniffed official Forever creatures instead of the VMaNGOS one
+            uint32 const baseHealth = sWorld->getBoolConfig(CONFIG_CLASSIC_FOREVER_CREATURE_HEALTH) && classicBase->HealthForever
+                ? classicBase->HealthForever : classicBase->Health;
+            uint32 health = std::max(1u, uint32(std::round(GetHealthMod(classification) * baseHealth * classicStats->HealthMultiplier)));
             SetCreateHealth(health);
             SetMaxHealth(health);
             SetHealth(health);

@@ -1,4 +1,5 @@
 #include "OwnerRegistry.h"
+#include "Bot/CcDeny.h"
 #include "DatabaseEnv.h"
 #include "Log.h"
 #include <cstdio>
@@ -289,6 +290,54 @@ bool OwnerRegistry::SetCcEnabled(uint32 account_id, bool enabled)
 {
     std::unique_lock lk(mtx_);
     return enabled ? cc_disabled_.erase(account_id) > 0 : cc_disabled_.insert(account_id).second;
+}
+
+uint16 OwnerRegistry::CcDenied(uint32 account_id, uint8 cls) const
+{
+    static_assert(kDefaultCcDenied == CcDeny::Fear, "the default crowd-control deny is Fear");
+    std::shared_lock lk(mtx_);
+    auto it = cc_deny_.find(account_id);
+    if (it == cc_deny_.end())
+        return kDefaultCcDenied;
+    CcDenyState const& st = it->second;
+    if (cls >= st.deny.size())
+        return st.every;
+    return uint16((st.every & ~st.allow[cls]) | st.deny[cls]);
+}
+
+void OwnerRegistry::SetCcDeny(uint32 account_id, uint8 cls, uint16 kinds, bool deny)
+{
+    std::unique_lock lk(mtx_);
+    CcDenyState& st = cc_deny_[account_id];
+    if (cls == 0 || cls >= st.deny.size())
+    {
+        // Every class: a class's own "yes" or "no" for these kinds gives way to this order.
+        if (deny) st.every |= kinds; else st.every &= uint16(~kinds);
+        for (size_t c = 0; c < st.deny.size(); ++c)
+        {
+            st.deny[c]  &= uint16(~kinds);
+            st.allow[c] &= uint16(~kinds);
+        }
+    }
+    else if (deny)
+    {
+        st.deny[cls]  |= kinds;
+        st.allow[cls] &= uint16(~kinds);
+    }
+    else
+    {
+        st.deny[cls]  &= uint16(~kinds);
+        st.allow[cls] |= uint16(kinds & st.every);
+    }
+}
+
+void OwnerRegistry::ClearCcDeny(uint32 account_id)
+{
+    // "on cc" turns every kind on, Fear included: an explicit state, not the default (which keeps Fear off).
+    std::unique_lock lk(mtx_);
+    CcDenyState st;
+    st.every = 0;
+    cc_deny_[account_id] = st;
 }
 
 Role OwnerRegistry::DeclaredRole(BotId bot) const

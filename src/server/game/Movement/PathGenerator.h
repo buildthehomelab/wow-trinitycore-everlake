@@ -76,7 +76,8 @@ class TC_GAME_API PathGenerator
 
         // Optional check (set by a module): returns true when `source` should keep out of liquid and `path` touches liquid.
         // CalculatePath then searches a land-only route and keeps it when it is dry, else keeps the first route (IsWetRoute).
-        using LiquidRouteCheck = bool(*)(WorldObject const* source, Movement::PointsArray const& path);
+        // `waterPolys`: the corridor runs over navmesh water polygons past its first one (the liquid probes miss some of them).
+        using LiquidRouteCheck = bool(*)(WorldObject const* source, Movement::PointsArray const& path, bool waterPolys);
         static void SetLiquidRouteCheck(LiquidRouteCheck check) { _liquidRouteCheck = check; }
         bool CalculatePath(float destX, float destY, float destZ, bool forceDest = false);
         bool IsInvalidDestinationZ(WorldObject const* target) const;
@@ -113,6 +114,7 @@ class TC_GAME_API PathGenerator
     private:
 
         dtPolyRef _pathPolyRefs[MAX_PATH_LENGTH];   // array of detour polygon references
+        bool CrossesWaterPolys() const;
         uint32 _polyLength;                         // number of polygons in the path
 
         Movement::PointsArray _pathPoints;  // our actual (x,y,z) path to the target
@@ -183,6 +185,7 @@ class TC_GAME_API PathGenerator
 
         dtPolyRef GetPathPolyByPosition(dtPolyRef const* polyPath, uint32 polyPathSize, float const* Point, float* Distance = nullptr) const;
         dtPolyRef GetPolyByLocation(float const* Point, float* Distance) const;
+        dtPolyRef PreferPolyAtHeight(float const* point, float const* extents, dtPolyRef nearestRef, float* nearestPoint) const;
         bool HaveTile(G3D::Vector3 const& p) const;
 
         void BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 const& endPos);
@@ -196,8 +199,9 @@ class TC_GAME_API PathGenerator
 
         // smooth path aux functions
         uint32 FixupCorridor(dtPolyRef* path, uint32 npath, uint32 maxPath, dtPolyRef const* visited, uint32 nvisited);
+        // steerPos carries startPos's height; steerPosHeight is the steer point's own height on the navmesh.
         bool GetSteerTarget(float const* startPos, float const* endPos, float minTargetDist, dtPolyRef const* path, uint32 pathSize, float* steerPos,
-                            unsigned char& steerPosFlag, dtPolyRef& steerPosRef);
+                            unsigned char& steerPosFlag, dtPolyRef& steerPosRef, float& steerPosHeight);
         dtStatus FindSmoothPath(float const* startPos, float const* endPos,
                               dtPolyRef const* polyPath, uint32 polyPathSize,
                               float* smoothPath, int* smoothPathSize, uint32 maxSmoothPathSize);

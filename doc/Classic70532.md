@@ -4,7 +4,7 @@ Status: **not verified.** Nothing in this branch changes the live realms 70-73. 
 
 ## What the client changed
 
-70532 is the build Battle.net now offers; 70450 is no longer offered. Another Forever server (AnoCore v10) reports that all DB2,
+70532 is the build Battle.net now offers; 70450 is no longer offered. Another Forever server reports that all DB2,
 locale DB2, maps, vmaps, Buildings, cameras and gt files are identical to 70450, so the 70450 game data (and `data/dbc`) should still
 apply. This is their statement and has not been checked here.
 

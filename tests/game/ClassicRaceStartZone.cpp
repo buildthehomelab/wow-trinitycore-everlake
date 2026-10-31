@@ -19,11 +19,21 @@ TEST_CASE("A start zone takes only its own races at the start levels", "[Classic
     REQUIRE_FALSE(RaceFitsStartZone(1, 4, 1));    // human in Dun Morogh
 }
 
-TEST_CASE("Above the start levels or outside a start zone nobody is limited", "[ClassicRaceStartZone]")
+TEST_CASE("Outside a start zone nobody is limited", "[ClassicRaceStartZone]")
 {
-    REQUIRE(RaceFitsStartZone(2, kStartZoneMaxLevel + 1, 85));
     REQUIRE(RaceFitsStartZone(2, 4, 1519));       // Stormwind
+    REQUIRE(RaceFitsStartZone(1, 60, 1519));
+    REQUIRE(RaceFitsStartZone(5, 25, 130));       // Silverpine
     REQUIRE(RaceFitsStartZone(10, 4, 85));        // a race without a start zone here
+}
+
+TEST_CASE("A start zone takes nobody above the start levels", "[ClassicRaceStartZone]")
+{
+    REQUIRE(RaceFitsStartZone(5, kStartZoneMaxLevel, 85));
+    REQUIRE_FALSE(RaceFitsStartZone(5, kStartZoneMaxLevel + 1, 85));   // even its own race
+    REQUIRE_FALSE(RaceFitsStartZone(1, 25, 85));  // Jamini, a level 25 human priest, in Deathknell
+    REQUIRE_FALSE(RaceFitsStartZone(1, 60, 12));
+    REQUIRE_FALSE(RaceFitsStartZone(10, kStartZoneMaxLevel + 1, 85));
 }
 
 TEST_CASE("RaceForStartZone names a race that starts there", "[ClassicRaceStartZone]")

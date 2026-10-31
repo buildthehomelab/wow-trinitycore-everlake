@@ -1,6 +1,6 @@
 -- Trainers: class spells the 70532 client lists as trainer-taught that no trainer taught.
 -- Priest: Chastise, Dark Sacrifice and Contingency Plan ranks 2-5 (rank 1 comes from the talent, so each rank needs the one before).
--- Mage: Frost Blast ranks 1-3 (24/36/48). Levels and prices as AnoCore v10 and Wowhead Forever list them.
+-- Mage: Frost Blast ranks 1-3 (24/36/48). Levels and prices as the other Forever server and Wowhead Forever list them.
 DELETE FROM `trainer_spell` WHERE `SpellId` IN (1277332,1277333,1277334,1277335,1277325,1277326,1277327,1277328,1277634,1277638,1277639,1277640,1326053,1326054,1326055) AND `TrainerId` IN (1,8,1000328,1000331,1000376,1000377,1001226,1001228,1002128,1002129,1003044,1003045,1003046,1003047,1003048,1003049,1003600,1003706,1004090,1004091,1004092,1004566,1004567,1004568,1004606,1004607,1004608,1005141,1005142,1005143,1005144,1005145,1005146,1005484,1005489,1005497,1005498,1005880,1005882,1005883,1005885,1005994,1006014,1006018,1007311,1007312,1011397,1011401,1011406);
 INSERT INTO `trainer_spell` (`TrainerId`,`SpellId`,`MoneyCost`,`ReqSkillLine`,`ReqSkillRank`,`ReqAbility1`,`ReqAbility2`,`ReqAbility3`,`ReqLevel`,`VerifiedBuild`) VALUES
 (8,1277332,150,0,0,1277331,0,0,30,0),

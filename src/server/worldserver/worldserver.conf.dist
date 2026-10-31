@@ -3026,6 +3026,17 @@ Battleground.PremadeGroupWaitForMatch = 1800000
 Battleground.GiveXPForKills = 0
 
 #
+#    Battleground.AlteracValley.ReinforcementDefeat
+#        Description: Classic Alterac Valley: show both teams' reinforcements (600 each at the start;
+#                     -1 per player death, -75 per tower burned, -100 for the captain, +1 per owned
+#                     mine every 45 s) and end the match when a team reaches 0. Off: vanilla rules,
+#                     the counter stays hidden and only a general kill ends the match.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+
+Battleground.AlteracValley.ReinforcementDefeat = 1
+
+#
 #    Battleground.Random.ResetHour
 #        Description: Hour of the day when the global instance resets occur.
 #        Range:       0-23
@@ -3362,6 +3373,24 @@ Network.SkipBuildAuthKeyCheck = 0
 #        Default:     1500
 
 Network.EnterEncryptedModeDelay = 1500
+
+#
+#    Network.ConnectionsPerIp
+#        Description: Open game connections allowed from one address. A player uses two (realm and instance). Connections
+#                     from this PC (127.0.0.1) are never limited. Raise it when many players share one internet address
+#                     (LAN party, one household).
+#        Default:     16
+#                     0 - (No limit)
+
+Network.ConnectionsPerIp = 16
+
+#
+#    Network.AuthTimeout
+#        Description: Seconds a new game connection has to log in before it is closed.
+#        Default:     60
+#                     0 - (No limit)
+
+Network.AuthTimeout = 60
 
 #
 ###################################################################################################
@@ -3803,6 +3832,14 @@ AuctionHouseBot.Vanilla.Only = 0
 AuctionHouseBot.Vanilla.MaxReqLevel = 60
 AuctionHouseBot.Vanilla.MaxItemLevel = 100
 
+#    AuctionHouseBot.Vanilla.ValueCurve
+#       Description: Price bot listings (and the buyer's fair price) by item level squared x quality x class,
+#                    never below the vendor price. For client data whose loot-only goods carry a token vendor price.
+#       Default:     0 - (Disabled, vendor price)
+#                    1 - (Enabled)
+
+AuctionHouseBot.Vanilla.ValueCurve = 0
+
 #
 #    AuctionHouseBot.Alliance.Items.Amount.Ratio
 #       Description: Enable/Disable (disabled if 0) the part of AHBot that puts items up for auction on Alliance AH
@@ -3882,6 +3919,21 @@ AuctionHouseBot.Items.Loot = 1
 #                    1 - (Enabled)
 
 AuctionHouseBot.Items.Misc = 0
+
+#    AuctionHouseBot.Items.Crafted
+#       Description: Include items made by a profession recipe even when no loot or vendor list has them
+#                    (only matters with AuctionHouseBot.Items.Misc = 0)
+#       Default:     0 - (Disabled)
+#                    1 - (Enabled)
+
+AuctionHouseBot.Items.Crafted = 0
+
+#    AuctionHouseBot.Items.Crafted.MinStock
+#       Description: With AuctionHouseBot.Items.Crafted, keep every crafted item listed at least this many times. The
+#                    random fill only adds items when listings run out, so without it a crafted item can stay away for days.
+#       Default:     0 - (Disabled)
+
+AuctionHouseBot.Items.Crafted.MinStock = 0
 
 #
 #    AuctionHouseBot.Bind.*
@@ -4071,6 +4123,14 @@ AuctionHouseBot.Class.Quest = 1
 AuctionHouseBot.Class.Key = 1
 AuctionHouseBot.Class.Misc = 5
 AuctionHouseBot.Class.Glyph = 3
+
+#    AuctionHouseBot.Class.WeightByPoolSize
+#       Description: Also weight each class's share of a quality by how many different items it has, so a
+#                    class with a handful of items (green bags, arrows) is not listed dozens of times each.
+#       Default:     0 - (Disabled, share by AuctionHouseBot.Class.* only)
+#                    1 - (Enabled)
+
+AuctionHouseBot.Class.WeightByPoolSize = 0
 
 #
 ###################################################################################################
@@ -4821,6 +4881,35 @@ Classic.MountIndoorsRules = 1
 #                     0 - (Disabled, only accounts with an authenticator)
 
 Classic.SecuredBagSlotsForAll = 1
+
+#    Classic.ForeverCreatureHealth
+#        Description: Vanilla creatures take their base health from the curve fit to sniffed official Forever creatures
+#                     (creature_classic_classlevelstats.health_forever) instead of the VMaNGOS curve. One curve for all
+#                     classes: against VMaNGOS at level 60, warrior-class mobs have 43% more health and mage-class 104% more.
+#        Default:     0 - (Disabled, VMaNGOS curve)
+#                     1 - (Enabled, Forever curve)
+
+Classic.ForeverCreatureHealth = 0
+
+#    Classic.ForeverKillXp
+#        Description: Mobs below the player's level give kill XP from the mob's own base (5 * mob level + 45) instead of the
+#                     player's base, as reported from official Forever sniffs by the Azeroth project (not verified by us).
+#                     Lower mobs then give less (player 10, mob 8: 61 instead of 68). Equal and higher mobs are unchanged.
+#        Default:     0 - (Disabled, vanilla VMaNGOS formula)
+#                     1 - (Enabled, Forever sniff formula)
+
+Classic.ForeverKillXp = 0
+
+#    Classic.CreatureSpellLevelScaling
+#        Description: Vanilla creature spells flagged "scales with creature level" (Fireball 20793, Lightning Bolt 9532,
+#                     Shadow Bolt 9613...) carry the numbers of their spell level. As in vanilla, a creature's level scales
+#                     them by the creature melee damage of its level against the spell level (a level 3 Scarlet Initiate's
+#                     Fireball: 7-9 instead of 74-98).
+#        Default:     2 - (Vanilla both ways: creatures above the spell level also hit for more, up to 3.7x at level 63)
+#                     1 - (Only creatures below the spell level hit for less)
+#                     0 - (Disabled, every caster uses the spell-level numbers)
+
+Classic.CreatureSpellLevelScaling = 2
 
 #    Classic.Shop.Enabled
 #        Description: In-game Store: shop points, products from world.shop_* (.shop reload), the Gold Market, character

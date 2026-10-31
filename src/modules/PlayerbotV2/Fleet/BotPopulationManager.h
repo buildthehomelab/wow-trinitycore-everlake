@@ -409,6 +409,7 @@ private:
         uint16 bg_type = 0;
         uint32 started_ms = 0, deadline_ms = 0, last_log_ms = 0, last_poll_ms = 0, first_in_bg_ms = 0, peak_in_bg = 0;
         uint8 last_status = 0;
+        bool end_logged = false;       // the "[bgsoak] match over" line was written
         std::string result;            // the final line once Done
     } bg_soak_;
     struct BgStress { uint16 bg_type = 0; uint32 cycles_left = 0, cycle = 0, hold_ms = 60000, phase_end_ms = 0;

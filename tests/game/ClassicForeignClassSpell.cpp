@@ -45,3 +45,19 @@ TEST_CASE("ForeignClassSpell: a spell no class trainer teaches is nobody's forei
 {
     CHECK_FALSE(IsForeignClassSpell(0, Mask(kRogue)));
 }
+
+TEST_CASE("ForeignClassSpell: a priest set down from 60 to 14 keeps no level 50 rank", "[foreignclassspell]")
+{
+    using Playerbot::Api::IsSpellAboveLevel;
+    // Flash Heal rank 6 (10916) and Renew rank 8 (10928): sold at 50.
+    CHECK(IsSpellAboveLevel(50, 50, 14));
+    // Greater Heal rank 1 (2060): sold at 40.
+    CHECK(IsSpellAboveLevel(40, 40, 14));
+    // Renew rank 2 (6074): sold at 14, kept.
+    CHECK_FALSE(IsSpellAboveLevel(14, 14, 14));
+    // A book rank no trainer sells goes by its own level.
+    CHECK(IsSpellAboveLevel(0, 60, 14));
+    CHECK_FALSE(IsSpellAboveLevel(0, 12, 14));
+    // The trainer's level wins over the rank's own (a trainer selling a rank later than its spell level).
+    CHECK(IsSpellAboveLevel(20, 10, 14));
+}

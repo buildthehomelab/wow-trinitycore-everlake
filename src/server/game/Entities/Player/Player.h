@@ -2064,6 +2064,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         UF::TraitConfig const* GetClassicSpecGroupConfig(bool secondary) const;   // Classic 1.60 dual spec
         bool ActivateClassicSpecGroup(bool secondary);
         bool PurchaseClassicDualSpec();
+        bool UntrainClassicPet(int64 cost);
         static bool IsClassicDualSpecGossipOption(int32 gossipOptionId);
         TalentLearnResult LearnTalent(uint32 talentId, int32* spellOnCooldown);
         bool AddTalent(TalentEntry const* talent, uint8 spec, bool learning);

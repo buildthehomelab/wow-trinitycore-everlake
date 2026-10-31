@@ -94,6 +94,7 @@ constexpr float kDispelRange    = 30.0f;
 constexpr float kMeleeReach     = 8.0f;    // enemy-to-member distance that counts as "swinging at"
 constexpr int32 kEmergencyPct   = 35;      // HEAL_DOWNRANK_MIN_PCT / LOS exemption
 constexpr int32 kAlmostFullPct  = 90;      // AiPlayerbot.AlmostFullHealth
+constexpr int32 kPetHealPct     = 60;      // a group member's pet becomes a heal candidate under this (PickPatient pet case)
 constexpr int32 kHealGroupStayPct = 50;    // a triage healer leaves its subgroups for an emergency only while its own best patient is at or above this
 constexpr int32 kMediumPct      = 70;      // AiPlayerbot.MediumHealth (AoE heal trigger)
 constexpr int32 kLowManaPct     = 30;      // no top-up heals below this
@@ -145,7 +146,7 @@ inline int32 ManaPct(BotSnapshotView const& s)
 // rules, every one rolling Renew on every raider a pulse hit (57% overheal, the holy priest out of mana). The name is the older "raid" one.
 inline bool RaidHealing(BotSnapshotView const& s)
 {
-    return EfficiencyRulesApply(s.is_in_raid() || s.in_raid_group(), s.is_in_dungeon(), s.in_battleground(), IsVanillaRealm());
+    return EfficiencyRulesApply(s.raid_rules(), s.is_in_dungeon(), s.in_battleground(), IsVanillaRealm());
 }
 
 // Playerbot.Behavior.HealClaims (default on): the raid in-flight heal dedupe, the HoT claims and
@@ -295,9 +296,15 @@ inline Patient PatientFor(BotSnapshotView const& s, GroupSnapshotView const& g, 
     if (guid.IsEmpty() || guid == s.guid())
         return SelfPatient(s, g);
     if (auto const* members = g.members())
+    {
         for (GroupMemberSummary const& m : *members)
             if (m.guid == guid)
                 return MakePatient(s, m.guid, m.hp, m.max_hp, m.x, m.y, m.z, IsTank(s, m));
+        // A member's pet (PickPatient pet case).
+        for (GroupMemberSummary const& m : *members)
+            if (m.pet_alive && m.pet_guid == guid)
+                return MakePatient(s, m.pet_guid, m.pet_hp, m.pet_max_hp, m.pet_x, m.pet_y, m.pet_z, false);
+    }
     return {};
 }
 
@@ -675,6 +682,17 @@ inline Patient PickPatient(BotSnapshotView const& s, GroupSnapshotView const& g,
             if (raid && LifeTapSkip(m.cls == CLASS_WARLOCK, tank, mp.actual_pct, mp.incoming))
                 continue;
             consider(mp, focus == m.guid, HealGroupHas(own_groups, m.subgroup));
+        }
+        // Pets (hunter, warlock): healed like a non-tank member, but only once they are under kPetHealPct, so a pet never
+        // outbids a player above that line and the raid healers' mana rules (opening hold, stand-down) apply to it the same way.
+        // No line-of-sight test: pets are not in the healer's nearby-friends list, and a pet this low is worth the walk.
+        for (GroupMemberSummary const& m : *members)
+        {
+            if (!m.online || !m.pet_alive || m.pet_guid.IsEmpty() || m.pet_max_hp <= 0 || m.map_id != s.map_id()) continue;
+            if (Dist2(m.pet_x, m.pet_y, m.pet_z, bx, by, bz) > range * range) continue;
+            if (int64(m.pet_hp) * 100 / m.pet_max_hp >= kPetHealPct) continue;
+            consider(MakePatient(s, m.pet_guid, m.pet_hp, m.pet_max_hp, m.pet_x, m.pet_y, m.pet_z, false), false,
+                     HealGroupHas(own_groups, m.subgroup));
         }
     }
     if (!self_seen)
@@ -1394,6 +1412,23 @@ inline void DoAssignedDispel(ApPredicateContext const& ctx, BotIntentEmitter& e)
         Classic::NoteRaidSupport(Classic::RaidSupportKind::Dispel, ctx.bot.map_id());
         if (Classic::IsCurseDispelSpell(d.spell))
             Classic::NoteRaidSupport(Classic::RaidSupportKind::Decurse, ctx.bot.map_id());
+    }
+}
+
+// A member taken out of the fight by a debuff this bot can remove (Classic::PickControlDispel): before the heals.
+inline bool ShouldControlDispel(ApPredicateContext const& ctx)
+{
+    if (ctx.bot.is_casting())
+        return false;
+    return Classic::PickControlDispel(ctx.bot, ctx.group, { &DispelRecently, &ctx.bot }).spell != 0;
+}
+inline void DoControlDispel(ApPredicateContext const& ctx, BotIntentEmitter& e)
+{
+    Classic::CastPick const d = Classic::PickControlDispel(ctx.bot, ctx.group, { &DispelRecently, &ctx.bot });
+    if (d.spell && e.cast(d.spell, d.target))
+    {
+        WithHealTiming(ctx.bot, [&](HealTiming& t) { t.dispel_key = d.key; t.dispel_ms = ctx.bot.published_at_ms(); return 0; });
+        Classic::NoteRaidSupport(Classic::RaidSupportKind::Dispel, ctx.bot.map_id());
     }
 }
 

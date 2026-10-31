@@ -29,14 +29,25 @@ if(NOT BUILD_PLAYERBOT_V2)
   set(TESTS_MODULE_ONLY_SOURCES
     ClassicAddonHint.cpp
     ClassicBotConversation.cpp
+    ClassicCompanionLeash.cpp
+    ClassicHirePolicy.cpp
+    ClassicMeleeReach.cpp
+    ClassicFalseCombatEscape.cpp
     ClassicFollowDrop.cpp
     ClassicGroupControl.cpp
+    ClassicGroupFight.cpp
     ClassicGroupOrderText.cpp
+    ClassicCcDeny.cpp
+    ClassicOwnerPicks.cpp
+    ClassicAoeDeny.cpp
+    ClassicCompanionDelete.cpp
+    ClassicHumanLogin.cpp
     ClassicInstanceFullHold.cpp
     ClassicArmorSwapGate.cpp
     ClassicBotCustomizationRoll.cpp
     ClassicBotListedGroupPlan.cpp
     ClassicLfgRoleGap.cpp
+    ClassicDungeonFinderPlan.cpp
     ClassicRaidConsumables.cpp
     ClassicRaidDispel.cpp
     ClassicRaidLoadout.cpp

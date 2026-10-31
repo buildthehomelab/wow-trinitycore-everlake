@@ -84,3 +84,27 @@ TEST_CASE("IdleWatch: only the rules that walk toward a quest objective are obje
     CHECK_FALSE(IsObjectiveRule("idle:pursue_quest"));
     CHECK_FALSE(IsObjectiveRule(nullptr));
 }
+
+TEST_CASE("A walk that never gets closer to its goal is caught; a real route or a break is not", "[ClassicIdleWatch]")
+{
+    using namespace Playerbot::V2;
+    GoalProgress g;
+    // Back and forth in a room 1650 y from the goal, a step every second.
+    bool caught = false;
+    std::uint32_t t = 1000;
+    for (; t < 1000 + kGoalProgressMs + 2000; t += 1000)
+        caught |= GoalStalled(g, 7, 1650.f + float(t % 4000) / 200.f, t);
+    REQUIRE(caught);
+
+    // Closing 7 y a second: never caught.
+    GoalProgress h;
+    for (std::uint32_t u = 1000; u < 400000; u += 1000)
+        REQUIRE_FALSE(GoalStalled(h, 7, 3000.f - float(u) / 1000.f * 7.f, u));
+
+    // A long fight in the middle: the clock starts again when the walk resumes.
+    GoalProgress f;
+    REQUIRE_FALSE(GoalStalled(f, 7, 900.f, 1000u));
+    REQUIRE_FALSE(GoalStalled(f, 7, 900.f, 1000u + kGoalProgressMs + 5000u));
+    // A new goal starts from scratch.
+    REQUIRE_FALSE(GoalStalled(f, 8, 900.f, 1000u + 2u * kGoalProgressMs));
+}

@@ -22,6 +22,7 @@
 #include "DB2Stores.h"
 #include "Log.h"
 #include "NPCPackets.h"
+#include "Pet.h"
 #include "Player.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
@@ -30,6 +31,24 @@
 
 namespace Trainer
 {
+    // Classic 1.60 pet trainers teach the hunter's pet (Pet::GetTrainerTaughtPetSpell): such a spell is known, and meets a
+    // ReqAbility, when the current pet knows its pet spell or a higher rank of it.
+    static Pet* GetTrainablePet(Player const* player)
+    {
+        Pet* pet = player->GetPet();
+        return pet && pet->getPetType() == HUNTER_PET && pet->IsAlive() ? pet : nullptr;
+    }
+
+    static bool HasTrainerAbility(Player const* player, uint32 spellId)
+    {
+        if (uint32 petSpell = Pet::GetTrainerTaughtPetSpell(spellId))
+        {
+            Pet const* pet = GetTrainablePet(player);
+            return pet && pet->KnowsSpellOrHigherRank(petSpell);
+        }
+        return player->HasSpell(spellId);
+    }
+
     bool Spell::IsCastable() const
     {
         return sSpellMgr->AssertSpellInfo(SpellId, DIFFICULTY_NONE)->HasEffect(SPELL_EFFECT_LEARN_SPELL);
@@ -68,6 +87,9 @@ namespace Trainer
             trainerListSpell.ReqSkillLine = trainerSpell.ReqSkillLine;
             trainerListSpell.ReqSkillRank = trainerSpell.ReqSkillRank;
             std::copy(trainerSpell.ReqAbility.begin(), trainerSpell.ReqAbility.end(), trainerListSpell.ReqAbility.begin());
+            for (int32& reqAbility : trainerListSpell.ReqAbility)
+                if (reqAbility && Pet::GetTrainerTaughtPetSpell(reqAbility) && HasTrainerAbility(player, reqAbility))
+                    reqAbility = 0;
             trainerListSpell.Usable = AsUnderlyingType(GetSpellState(player, &trainerSpell));
             trainerListSpell.ReqLevel = trainerSpell.ReqLevel;
         }
@@ -117,6 +139,8 @@ namespace Trainer
         if (trainerSpell->IsCastable())
         {
             player->CastSpell(player, trainerSpell->SpellId, true);
+            if (Pet::GetTrainerTaughtPetSpell(trainerSpell->SpellId))
+                SendSpells(npc, player, player->GetSession()->GetSessionDbLocaleIndex());
         }
         else
         {
@@ -217,7 +241,7 @@ namespace Trainer
                     if (player->HasSpell(trainerSpell.SpellId))                              ++tally->known;
                     else if (!player->IsSpellFitByClassAndRace(trainerSpell.SpellId))        ++tally->class_race;
                     else if (std::any_of(trainerSpell.ReqAbility.begin(), trainerSpell.ReqAbility.end(),
-                                [player](int32 req) { return req && !player->HasSpell(req); })) ++tally->ability;
+                                [player](int32 req) { return req && !HasTrainerAbility(player, req); })) ++tally->ability;
                     else if (player->GetLevel() < trainerSpell.ReqLevel)                      ++tally->level;
                     else if (GetSpellState(player, &trainerSpell) == SpellState::Known)       ++tally->known;
                     else                                                                      ++tally->other;
@@ -254,7 +278,7 @@ namespace Trainer
                 player->GetBaseSkillValue(trainerSpell->ReqSkillLine), line && line->CategoryID == SKILL_CATEGORY_CLASS ? "class line" : "other line");
         }
         for (int32 req : trainerSpell->ReqAbility)
-            if (req && !player->HasSpell(req))
+            if (req && !HasTrainerAbility(player, req))
                 return Trinity::StringFormat("needs spell {} first", req);
         if (player->GetLevel() < trainerSpell->ReqLevel)
             return Trinity::StringFormat("needs level {}", trainerSpell->ReqLevel);
@@ -303,6 +327,29 @@ namespace Trainer
     {
         if (player->HasSpell(trainerSpell->SpellId))
             return SpellState::Known;
+
+        if (uint32 petSpell = Pet::GetTrainerTaughtPetSpell(trainerSpell->SpellId))
+        {
+            if (!player->IsSpellFitByClassAndRace(trainerSpell->SpellId))
+                return SpellState::Unavailable;
+
+            Pet const* pet = GetTrainablePet(player);
+            if (!pet)
+                return SpellState::Unavailable;
+
+            if (pet->KnowsSpellOrHigherRank(petSpell))
+                return SpellState::Known;
+
+            for (int32 reqAbility : trainerSpell->ReqAbility)
+                if (reqAbility && !HasTrainerAbility(player, reqAbility))
+                    return SpellState::Unavailable;
+
+            // the pet learns it at the trainer's level, like the hunter would
+            if (player->GetLevel() < trainerSpell->ReqLevel || pet->GetLevel() < trainerSpell->ReqLevel)
+                return SpellState::Unavailable;
+
+            return SpellState::Available;
+        }
 
         // check race/class requirement
         if (!player->IsSpellFitByClassAndRace(trainerSpell->SpellId))

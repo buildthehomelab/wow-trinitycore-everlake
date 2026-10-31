@@ -981,3 +981,59 @@ TEST_CASE("ScenarioDefs: a Molten Core boss with no creature row carries the lai
         CHECK(d->lair_z == 0.f);
     }
 }
+
+TEST_CASE("ScenarioDefs: the Deadmines cove beach and water are inside the deadmines_full box", "[scenariomonitor]")
+{
+    for (char const* name : { "deadmines_full", "deadmines_player" })
+    {
+        ScenarioDef const* d = FindScenario(name);
+        REQUIRE(d != nullptr);
+        ScenarioMonitor m(d->limits);
+        auto squad = Squad(-90.f, -707.f);
+        for (ScenarioSample& s : squad)
+            s.z = -0.04f;                               // 048360b9: the squad at the cove's water line, printed as z 0.0
+        squad[1].x = -59.4f; squad[1].y = -701.2f; squad[1].z = 0.138f;   // route chain [37], the beach past the Iron Clad Door
+        m.Feed(0, squad, true);
+        CHECK_FALSE(Has(m, ScenarioFailKind::OutOfBounds));
+        // Every boss staging spot is inside the box too.
+        for (auto const& c : d->checkpoints)
+        {
+            ScenarioSample s = Bot(9, "Spot", ScenarioRoleKind::Dps, c.stage_x, c.stage_y);
+            s.z = c.stage_z;
+            ScenarioMonitor one(d->limits);
+            one.Feed(0, { s }, true);
+            CHECK_FALSE(Has(one, ScenarioFailKind::OutOfBounds));
+        }
+        // Falling through the map is still out of bounds.
+        ScenarioMonitor fell(d->limits);
+        squad[2].z = -200.f;
+        fell.Feed(0, squad, true);
+        CHECK(Has(fell, ScenarioFailKind::OutOfBounds, "Mage"));
+    }
+}
+
+TEST_CASE("ScenarioMonitor: a non-healer idle more than 5 s in the group's fight fails group_idle, once per streak", "[scenariomonitor]")
+{
+    ScenarioMonitor m(Limits());
+    for (std::uint32_t t = 0; t <= 10000; t += 1000)
+    {
+        auto squad = Squad(-100.f, -500.f);
+        for (ScenarioSample& s : squad)
+            s.in_combat = true;
+        squad[3].group_idle_ms = t;          // the rogue has done nothing since the fight began
+        squad[1].group_idle_ms = t;          // a healer with nobody to heal is not idle
+        squad[2].group_idle_ms = t <= 5000 ? t : 0;   // the mage was idle 5 s, then cast
+        m.Feed(t, squad, true);
+    }
+    CHECK(Has(m, ScenarioFailKind::GroupIdle, "Rogue"));
+    CHECK_FALSE(Has(m, ScenarioFailKind::GroupIdle, "Healer"));
+    CHECK_FALSE(Has(m, ScenarioFailKind::GroupIdle, "Mage"));
+    std::size_t n = 0;
+    for (ScenarioFailure const& f : m.failures())
+        if (f.kind == ScenarioFailKind::GroupIdle)
+        {
+            ++n;
+            CHECK(f.at_ms == 6000);
+        }
+    CHECK(n == 1);
+}

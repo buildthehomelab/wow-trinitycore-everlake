@@ -658,6 +658,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "Battleground.QueueAnnouncer.PlayerOnly"sv, .DefaultValue = false, .Index = CONFIG_BATTLEGROUND_QUEUE_ANNOUNCER_PLAYERONLY },
         { .Name = "Battleground.StoreStatistics.Enable"sv, .DefaultValue = false, .Index = CONFIG_BATTLEGROUND_STORE_STATISTICS_ENABLE },
         { .Name = "Battleground.GiveXPForKills"sv, .DefaultValue = false, .Index = CONFIG_BG_XP_FOR_KILL },
+        { .Name = "Battleground.AlteracValley.ReinforcementDefeat"sv, .DefaultValue = true, .Index = CONFIG_BATTLEGROUND_AV_REINFORCEMENT_DEFEAT },
         { .Name = "Arena.QueueAnnouncer.Enable"sv, .DefaultValue = false, .Index = CONFIG_ARENA_QUEUE_ANNOUNCER_ENABLE },
         { .Name = "Arena.ArenaSeason.InProgress"sv, .DefaultValue = false, .Index = CONFIG_ARENA_SEASON_IN_PROGRESS },
         { .Name = "ArenaLog.ExtendedInfo"sv, .DefaultValue = false, .Index = CONFIG_ARENA_LOG_EXTENDED_INFO },
@@ -706,6 +707,8 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "Load.Locales"sv, .DefaultValue = true, .Index = CONFIG_LOAD_LOCALES },
         { .Name = "Classic.MountIndoorsRules"sv, .DefaultValue = true, .Index = CONFIG_CLASSIC_MOUNT_INDOORS_RULES },
         { .Name = "Classic.SecuredBagSlotsForAll"sv, .DefaultValue = true, .Index = CONFIG_CLASSIC_SECURED_BAG_SLOTS_FOR_ALL },
+        { .Name = "Classic.ForeverCreatureHealth"sv, .DefaultValue = false, .Index = CONFIG_CLASSIC_FOREVER_CREATURE_HEALTH },
+        { .Name = "Classic.ForeverKillXp"sv, .DefaultValue = false, .Index = CONFIG_CLASSIC_FOREVER_KILL_XP },
     } };
 
     static constexpr ConfigOptionLoadDefinitionArray<uint32, INT_CONFIG_VALUE_COUNT> ints =
@@ -907,6 +910,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "BlackMarket.MaxAuctions"sv, .DefaultValue = 12, .Index = CONFIG_BLACKMARKET_MAXAUCTIONS },
         { .Name = "BlackMarket.UpdatePeriod"sv, .DefaultValue = 24, .Index = CONFIG_BLACKMARKET_UPDATE_PERIOD },
         { .Name = "Pvp.FactionBalance.LevelCheckDiff"sv, .DefaultValue = 0, .Index = CONFIG_FACTION_BALANCE_LEVEL_CHECK_DIFF },
+        { .Name = "Classic.CreatureSpellLevelScaling"sv, .DefaultValue = 2, .Index = CONFIG_CLASSIC_CREATURE_SPELL_LEVEL_SCALING, .Max = 2 },
     } };
 
     static constexpr ConfigOptionLoadDefinitionArray<uint64, INT64_CONFIG_VALUE_COUNT> int64s =
@@ -1558,6 +1562,9 @@ bool World::SetInitialWorldSettings()
 
     TC_LOG_INFO("server.loading", "Loading Item set names...");                // must be after LoadItemPrototypes
     sObjectMgr->LoadItemTemplateAddon();
+
+    TC_LOG_INFO("server.loading", "Loading Classic item durability...");      // must be after LoadItemTemplates
+    sObjectMgr->LoadClassicItemDurability();
 
     TC_LOG_INFO("misc", "Loading Item Scripts...");                 // must be after LoadItemPrototypes
     sObjectMgr->LoadItemScriptNames();

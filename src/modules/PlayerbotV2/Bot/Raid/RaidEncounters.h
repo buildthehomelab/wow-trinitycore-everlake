@@ -172,7 +172,10 @@ inline bool SpareNow(Spare const& rule, float enemyHpPct, bool gateAlive) { retu
 // that does not carry the aura (the lowest-GUID one whose taunt is ready) taunts the enemy. A tank carrying the aura stops
 // attacking that enemy while a clean tank exists, so the swap is not undone. Paladins have no taunt in 1.12, so only
 // warriors and druids can take over.
-struct TankSwap { uint32_t enemy; uint32_t debuffAura; uint32_t stacks; };
+// <takerStacks>: the taker may carry up to this many stacks itself. An aura the enemy puts on everyone in sight (Firemaw's Flame Buffet) lands
+// on the clean tank as it walks out from cover, before it can taunt: with 0 it was never clean once in reach (bwl_firemaw 4f7b18e3 run 2:
+// 182 walk-outs, no swap).
+struct TankSwap { uint32_t enemy; uint32_t debuffAura; uint32_t stacks; uint32_t takerStacks = 0; };
 
 // While <enemy> is alive and fighting, matching bots stay at least <radius> yards from it (point-blank AoE such as Blast Wave).
 // Do not use Who::Tank / Anyone for melee-range bosses: only bots that do not have to stand next to the enemy.
@@ -181,6 +184,14 @@ struct AvoidEnemy { uint32_t enemy; float radius; Who who; float hpMax = 100.0f;
 // While a matching bot carries at least <stacks> stacks of <aura> (a debuff the enemy puts on whoever hits it: Golemagg's Magma Splash), it stays
 // <radius> yards from every <enemy> that is not hitting it, until the aura falls off. The bot the enemy is hitting (its tank) is never moved.
 struct AvoidOnStacks { uint32_t enemy; uint32_t aura; uint32_t stacks; float radius; Who who; };
+
+// A stacking aura that <enemy> puts on everyone in its line of sight, whatever the range (Firemaw's Flame Buffet: 100 y, refreshed on
+// every hit, so the stacks only fall off out of sight). A matching bot that is not the enemy's victim and carries at least <stacks>
+// stacks walks to the nearest reachable spot the enemy cannot see and stays there until the aura has fallen off, then fights again.
+// <stacks> 0: the bot waits out of sight the whole fight unless the enemy is on it (the off-tanks, clean for a TankSwap on the same aura).
+// Above 0 each bot adds its guid modulo 3, so the raid does not leave all at once. <seeTank>: the spot must also see the main tank within
+// 38 y (healers keep healing it from there); a bot with no such spot falls through to the next rule that matches it.
+struct BreakSight { uint32_t enemy; uint32_t aura; uint32_t stacks; Who who; bool seeTank = false; };
 
 // Line hazard for a breath that sweeps a straight corridor (Onyxia's Deep Breath). When <enemy> is casting <castSpell> (or carries
 // it as an aura), or is flying at >= 2.5x run speed (the breath pass itself), the corridor is latched for about 10 seconds: it
@@ -307,6 +318,7 @@ struct RaidRules
     std::vector<TankSwap> tankSwap;
     std::vector<AvoidEnemy> avoidEnemy;
     std::vector<AvoidOnStacks> avoidOnStacks;
+    std::vector<BreakSight> breakSight;
     std::vector<AvoidBreath> avoidBreath;
     std::vector<BreathSafe> breathSafe;
     std::vector<MeleeSoak> meleeSoak;

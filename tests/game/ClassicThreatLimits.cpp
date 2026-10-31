@@ -69,4 +69,13 @@ TEST_CASE("A hold past the hard limit releases after six seconds of a tank whose
     CHECK_FALSE(StalledTankHoldExpired(gap, 20000u, 5000.0f, 4000u));       // another 5 s gap
     CHECK_FALSE(StalledTankHoldExpired(gap, 23000u, 5000.0f, 4000u));
     CHECK(StalledTankHoldExpired(gap, 26000u, 5000.0f, 4000u));             // 6 s of steady polls
+
+    StalledTankClock wiped;
+    CHECK_FALSE(StalledTankHoldExpired(wiped, 10000u, 40000.0f, 4000u));
+    CHECK_FALSE(StalledTankHoldExpired(wiped, 11000u, 0.0f, 4000u));        // the threat is wiped while the hold goes on
+    CHECK_FALSE(StalledTankHoldExpired(wiped, 13000u, 1500.0f, 4000u));     // the tank rebuilds: a rise over the last poll, the clock restarts
+    CHECK_FALSE(StalledTankHoldExpired(wiped, 17000u, 3000.0f, 4000u));
+    CHECK_FALSE(StalledTankHoldExpired(wiped, 21000u, 4500.0f, 4000u));     // still building, far under the old 40000: held
+    CHECK_FALSE(StalledTankHoldExpired(wiped, 24000u, 4500.0f, 4000u));
+    CHECK(StalledTankHoldExpired(wiped, 27000u, 4500.0f, 4000u));            // 6 s at 4500: a real standstill is still released
 }

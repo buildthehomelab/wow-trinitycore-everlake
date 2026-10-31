@@ -17,6 +17,8 @@ Set-ClientLanguageConf $dir
 . "$PSScriptRoot\WorldUp.ps1"
 Repair-ConfDir $dir
 Sync-NetworkKeys $dir
+$dups = @(Test-ConfDuplicates $dir)
+if ($dups.Count) { $dups | ForEach-Object { Write-Warning $_ }; throw 'The server was not started: a setting is in two files of server\worldserver.conf.d (see above).' }
 . "$PSScriptRoot\ClientBuild.ps1"
 Sync-AlsoAcceptBuilds $root
 Sync-UntestedBuildRows $root

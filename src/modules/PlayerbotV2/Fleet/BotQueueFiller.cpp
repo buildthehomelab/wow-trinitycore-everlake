@@ -761,6 +761,8 @@ void BotQueueFiller::Fill(FillRequest const& req)
                     Field const* f = reuse_res->Fetch();
                     uint64 const g = f[0].GetUInt64();
                     uint8 const c = f[1].GetUInt8();
+                    // A scenario test character (Tier 3 test gear, the scorecard raids) never fills a battleground or a Group Finder slot.
+                    if (::Playerbot::Pool::IsScenarioBot(g)) continue;
                     cands.push_back({ g, c, spread ? ClassicRoleRollFor(g, c) : uint8(0), false });
                 } while (reuse_res->NextRow());
 
@@ -1413,12 +1415,13 @@ void BotQueueFiller::MakeRoomForRealPlayers(uint32 now_ms)
     }
 }
 
-uint32 BotQueueFiller::JitInFlight(uint32 bg_type_id, bool alliance, uint32 now_ms)
+uint32 BotQueueFiller::JitInFlight(uint32 bg_type_id, bool alliance)
 {
     auto const it = g_jit_in_flight.find((bg_type_id << 1) | (alliance ? 1u : 0u));
     if (it == g_jit_in_flight.end())
         return 0;
-    std::erase_if(it->second, [now_ms](JitBatch const& b) { return now_ms - b.at_ms >= JitInFlightMs; });
+    uint32 const now_ms = getMSTime();
+    std::erase_if(it->second, [now_ms](JitBatch const& b) { return getMSTimeDiff(b.at_ms, now_ms) >= JitInFlightMs; });
     uint32 total = 0;
     for (JitBatch const& b : it->second)
         total += b.count;

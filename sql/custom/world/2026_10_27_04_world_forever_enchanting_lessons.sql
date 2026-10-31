@@ -1,5 +1,5 @@
 -- WoW Forever enchanting lessons: A Pain in the Neck (96873, Horde, Pa'zula in Sen'jin Village) and An Enchanting Lesson
--- (91753, Alliance, Kitta Firewind in the Tower of Azora). Neither quest was in our world or in AnoCore (Discord: Pa'zula has no
+-- (91753, Alliance, Kitta Firewind in the Tower of Azora). Neither quest was in our world or in the other Forever server (Discord: Pa'zula has no
 -- quest for a new enchanter). Built with the Wowhead Forever page tool (2026_10_26_39) from the pages: texts, level, XP, money,
 -- reputation, giver and turn-in. Each asks for 3 Luminous Residue (247884), which comes from disenchanting the lesson item:
 -- Hexed Pendants (275724) from the Echo Isles trolls, Crude Wax Effigies (247883) from Kobold Geomancers (the pages' summaries).

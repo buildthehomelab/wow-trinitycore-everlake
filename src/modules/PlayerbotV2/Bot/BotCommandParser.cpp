@@ -5,6 +5,7 @@
 #include "BotRegistry.h"
 #include "ClassTables.h"
 #include "ClassicSpec.h"
+#include "SpecWords.h"
 #include "RecipeDifficulty.h"
 #include "../Threading/IntentQueue.h"
 #include "../Threading/SnapshotPublisher.h"
@@ -17,6 +18,8 @@
 #include "PlayerbotMovement.h"   // SehSafeCalculatePath (tile-race guard)
 #include "dtQueryFilterTC.h"     // /roadstats reads RoadStats counters
 #include "../Fleet/OwnerRegistry.h"
+#include "CcDeny.h"
+#include "OwnerPicks.h"
 #include "../Fleet/PlayerCraftOrders.h"
 #include "BotAddressResolver.h"
 #include "../Diagnostics/BotInspector.h"
@@ -63,7 +66,9 @@
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
 #include "GameObject.h"      // GAMEOBJECT_TYPE_GUILD_BANK for /gbank
+#include "MageCityPortal.h"
 #include "fmt/format.h"
+#include "Diagnostics/ScenarioHuman.h"   // Scenario::PlaysAsHuman: a player-led scenario's stand-in counts as the player
 #include <algorithm>
 #include <cmath>     // std::sqrt for /inrange distance calc
 #include <cctype>
@@ -1285,6 +1290,9 @@ std::string SpecLabel(uint32 spec)
 {
     if (spec == 0)
         return "no spec";
+    // The 70532 client data has no spec names (the DB2 lookup answered "spec 72"): the Classic specs by their own names.
+    if (char const* const classic = ::Playerbot::V2::SpecWords::Label(spec))
+        return classic;
     if (ChrSpecializationEntry const* e = sChrSpecializationStore.LookupEntry(spec))
     {
         char const* n = e->Name[sWorld->GetDefaultDbcLocale()];
@@ -1626,6 +1634,19 @@ bool OwnerWordOrder(Player* sender, Player* bot, std::string const& n)
     // Passive: the bot starts nothing (no autopilot pull, no assist on the owner's target) and defends itself and the group
     // until attack / pull (a 15 s window) or aggressive. A fight already under way is not dropped. The stance is the panel's
     // Aggressive / Passive toggle and stays on the bot until changed.
+    // "stance passive" / "stance aggressive": the add-on's own re-send of the stance its panel shows (when the group grows, after a
+    // loading screen), so new and re-created bots get it. It sets the stance and nothing else: an Attack / Pull under way or a Stay is
+    // kept, and nothing is said. The plain "passive" ended the order: in UBRS a bot joined at 22:05:34, chris said "attack" at 22:05:35,
+    // the re-send at 22:05:36 called the whole raid off, and the melee stood by him until he said it again.
+    if (n == "stance passive" || n == "stance aggressive")
+    {
+        bool const aggressive = n == "stance aggressive";
+        if (BotAI* ai = Services::Registry().ai(bid))
+            if (ai->set_owner_stance(aggressive ? BotAI::OwnerStance::Aggressive : BotAI::OwnerStance::Passive))
+                TC_LOG_INFO("playerbot.v2", "[owner_order] {} <- {}: stance {} (the add-on's re-send)", me, sender->GetName(),
+                            aggressive ? "aggressive" : "passive");
+        return true;
+    }
     if (n == "passive" || n == "defensive")   // "defensive" is the retired third stance: it now means passive
     {
         if (BotAI* ai = Services::Registry().ai(bid))
@@ -1765,9 +1786,57 @@ static std::string FormatAddressKind(ResolvedAddress const& a)
     return "?";
 }
 
+bool BotCommandParser::ApplyCcOrder(Player* sender, std::string const& line, char const* via)
+{
+    auto const order = CcDeny::ParseOrder(line);
+    if (!order || !sender || !sender->GetSession())
+        return false;
+    uint32 const account = sender->GetSession()->GetAccountId();
+    if (account == 0)
+        return false;
+    OwnerRegistry& owners = Services::Owners();
+    std::string const who = CcDeny::ClassPlural(order->cls);
+    std::string const what = CcDeny::Describe(order->kinds);
+    std::string answer;
+    if (order->cls == 0 && order->kinds == CcDeny::All)
+    {
+        // "off cc" / "on cc": every kind for every class, and the marked crowd control (the panel's icon) with it.
+        owners.SetCcEnabled(account, !order->deny);
+        if (order->deny)
+            owners.SetCcDeny(account, 0, CcDeny::All, true);
+        else
+            owners.ClearCcDeny(account);
+        answer = order->deny ? "Crowd control off for all your bots (say 'on cc' to turn it back on)."
+                             : "Crowd control on for all your bots.";
+    }
+    else
+    {
+        owners.SetCcDeny(account, order->cls, order->kinds, order->deny);
+        // A "yes" after "off cc" brings the marked crowd control back for what is allowed again.
+        if (!order->deny)
+            owners.SetCcEnabled(account, true);
+        if (order->cls == 0)
+            answer = order->deny ? fmt::format("None of your bots will use {} now.", what)
+                                 : fmt::format("Your bots may use {} again.", what);
+        else
+        {
+            std::string const left_out = CcDeny::Describe(owners.CcDenied(account, order->cls));
+            answer = order->deny ? fmt::format("Your {} will not use {} now (left out for them: {}).", who, what, left_out)
+                                 : fmt::format("Your {} may use {} again (left out for them: {}).", who, what, left_out);
+        }
+    }
+    TC_LOG_INFO("playerbot.v2", "[cc_order] {} ({}): {} {} for {}", sender->GetName(), via ? via : "?", order->deny ? "deny" : "allow",
+                what, who);
+    ChatHandler(sender->GetSession()).PSendSysMessage("%s", answer.c_str());
+    return true;
+}
+
 bool BotCommandParser::Dispatch(Player* sender, Player* bot, std::string const& msg, char const* via)
 {
     if (!sender || !bot) return false;
+    // A crowd-control order ("@warlock no fear", "off cc") is the owner's, not each bot's: stored once, answered once.
+    if (ApplyCcOrder(sender, msg, via))
+        return true;
     // Resolve squad-address prefix (all:/tank:/mage:/Areon:/...).
     // Single-recipient is the most common path — short-circuit so we
     // don't pay the snapshot lookups when the owner just `/w Areon come`.
@@ -1879,14 +1948,14 @@ bool BotCommandParser::ControlsForGroupOrder(Player const* sender, Player const*
     if (Services::Owners().GetOwner(bot_id).account_id != 0)
         return Services::Owners().IsOwner(bot_id, sender->GetSession()->GetAccountId(), sender->GetGUID().GetCounter());
     Group const* g = bot->GetGroup();
-    if (!g || g != sender->GetGroup() || (sender->GetSession() && sender->GetSession()->IsBot()))
+    if (!g || g != sender->GetGroup() || !Scenario::PlaysAsHuman(sender))
         return false;
     std::vector<GroupControl::Member<ObjectGuid>> members;
     for (GroupReference const& itr : g->GetMembers())
     {
         Player const* m = itr.GetSource();
         if (!m || m == bot) continue;
-        members.push_back({ m->GetGUID(), !(m->GetSession() && m->GetSession()->IsBot()) });
+        members.push_back({ m->GetGUID(), Scenario::PlaysAsHuman(m) });
     }
     return GroupControl::ResolveController(g->GetLeaderGUID(), members) == sender->GetGUID();
 }
@@ -3529,32 +3598,64 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
     }
     if (cmd == "setspec")
     {
-        // /setspec <spec_id>  — applies ChrSpecialization.db2 id; rejected
-        // when bot is in combat. Same args[0] parser shape as other id
-        // commands.
-        if (args.size() < 1)
+        // setspec <name|tank|heal|dps|spec_id>: "setspec holy", "setspec prot", "setspec tank" (the class's tank spec) or a
+        // ChrSpecialization id (Bot/SpecWords.h). Classic: pins the virtual spec, stores it with the role so a relog or a
+        // restart pins it again (ApplyCompanionRole at login), and re-buys the talents down that spec's build when out of
+        // combat, so one whisper respecs a bot or a summoned alt.
+        uint8 const cls = bot->GetClass();
+        ::Playerbot::V2::SpecWords::Word const word = ::Playerbot::V2::SpecWords::Parse(cls, parsed.tail);
+        uint32 spec = 0;
+        using SK = ::Playerbot::V2::SpecWords::Kind;
+        switch (word.kind)
         {
-            Push(bot, WhisperIntent{sender->GetName(), "Setspec: <spec_id>"});
+            case SK::Spec:   spec = word.spec; break;
+            case SK::Tank:   spec = TankSpecForClass(cls); break;
+            case SK::Healer: spec = HealerSpecForClass(cls); break;
+            case SK::Dps:
+            {
+                // The DPS spec it plays now, else the class's default one.
+                uint32 const now = ::Playerbot::Classic::EffectiveSpecId(bot);
+                spec = (now && !IsTankSpec(cls, uint16(now)) && !IsHealerSpec(cls, uint16(now))) ? now : DpsSpecForClass(cls);
+                break;
+            }
+            default: break;
+        }
+        if (word.kind == SK::None)
+        {
+            Push(bot, WhisperIntent{sender->GetName(),
+                "Setspec: a spec name of my class (holy, arms, prot, fire, frost...), tank, heal, dps or a spec id."});
+            return true;
+        }
+        if (!spec)
+        {
+            Push(bot, WhisperIntent{sender->GetName(), fmt::format("Setspec: my class has no {} spec.",
+                word.kind == SK::Tank ? "tank" : "healing")});
             return true;
         }
         // Classic 1.60: there is nothing to activate; pin the virtual spec.
-        if (::Playerbot::Classic::SetSpecOverride(bot, static_cast<uint32>(args[0])))
+        if (::Playerbot::Classic::SetSpecOverride(bot, spec))
         {
             // The spec chosen is the role: a role pin from before (a healer pin on a now tank spec) would disagree with it.
+            BotId const id = bot->GetGUID().GetCounter();
+            Role const r = IsTankSpec(cls, uint16(spec)) ? Role::Tank : IsHealerSpec(cls, uint16(spec)) ? Role::Healer : Role::Dps;
+            if (BotAI* ai = Services::Registry().ai(id))
+                if (ai->role_override() != Role::Unknown)
+                    ai->set_role_override(r);
+            PersistDeclaredRole(bot, r);
+            if (Services::Owners().GetOwner(id).account_id != 0)
+                Services::Owners().SetStoredSpec(id, spec);
+            std::string const name = SpecLabel(spec);
+            if (bot->IsInCombat())
             {
-                uint8 const cls = bot->GetClass();
-                uint16 const sid = uint16(args[0]);
-                Role const r = IsTankSpec(cls, sid) ? Role::Tank : IsHealerSpec(cls, sid) ? Role::Healer : Role::Dps;
-                if (BotAI* ai = Services::Registry().ai(bot->GetGUID().GetCounter()))
-                    if (ai->role_override() != Role::Unknown)
-                        ai->set_role_override(r);
-                PersistDeclaredRole(bot, r);
+                Push(bot, WhisperIntent{sender->GetName(),
+                    fmt::format("Setspec: playing as {}. In combat: whisper \"talents apply\" after the fight for the talents.", name)});
+                return true;
             }
-            Push(bot, WhisperIntent{sender->GetName(),
-                fmt::format("Setspec: playing as spec {} (Classic).", args[0])});
+            Push(bot, ApplyStarterTalentsIntent{});
+            Push(bot, WhisperIntent{sender->GetName(), fmt::format("Setspec: playing as {}, talents re-learned for it.", name)});
             return true;
         }
-        Push(bot, ActivateSpecIntent{static_cast<uint32>(args[0])});
+        Push(bot, ActivateSpecIntent{spec});
         // Auto-apply Blizzard's starter build for the new spec — without this,
         // the bot has no talent picks for the just-activated spec and the APL
         // thinks it doesn't know talented spells. Visitor processes in order:
@@ -3562,7 +3663,7 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         // active config.
         Push(bot, ApplyStarterTalentsIntent{});
         Push(bot, WhisperIntent{sender->GetName(),
-            fmt::format("Setspec: queued switch to spec {} + starter talents.", args[0])});
+            fmt::format("Setspec: queued switch to spec {} + starter talents.", spec)});
         return true;
     }
     if (cmd == "setspec_all" || cmd == "setspecall")
@@ -4404,6 +4505,7 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         ai->set_follow_distance(0.f);
         ai->set_verbose_logging(false);
         ai->set_aoe_preference(false);
+        ai->set_aoe_denied(false);
         Push(bot, WhisperIntent{sender->GetName(),
             "Clearprefs: focus, role, follow_distance, verbose, aoe reset."});
         return true;
@@ -4421,6 +4523,7 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
             ai->set_follow_distance(0.f);
             ai->set_verbose_logging(false);
             ai->set_aoe_preference(false);
+            ai->set_aoe_denied(false);
         });
         Push(bot, WhisperIntent{sender->GetName(),
             fmt::format("Clearprefs_all: reset on {} bot(s).", changed)});
@@ -4493,8 +4596,8 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
     }
     if (cmd == "aoe")
     {
-        // /aoe on   — bias rotation toward AoE
-        // /aoe off  — back to single-target priority
+        // /aoe on   — area spells allowed (and the retail rotations bias toward them)
+        // /aoe off  — no spell that hits more than one enemy (AoeDeny.h; the emitter drops it)
         // /aoe      — toggle (default)
         BotAI* ai = Services::Registry().ai(bot->GetGUID().GetCounter());
         if (!ai)
@@ -4505,10 +4608,11 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         bool desired;
         if (parsed.tail == "on" || parsed.tail == "1")  desired = true;
         else if (parsed.tail == "off" || parsed.tail == "0") desired = false;
-        else                                                  desired = !ai->aoe_preference();
+        else                                                  desired = ai->aoe_denied();
         ai->set_aoe_preference(desired);
+        ai->set_aoe_denied(!desired);
         Push(bot, WhisperIntent{sender->GetName(),
-            desired ? "Aoe: ON (rotation biases AoE)" : "Aoe: OFF (single-target)"});
+            desired ? "Aoe: ON (area spells allowed)" : "Aoe: OFF (no spells that hit more than one enemy)"});
         return true;
     }
     if (cmd == "setrole")
@@ -4559,8 +4663,9 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         {
             BotAI* ai = Services::Registry().ai(p->GetGUID().GetCounter());
             if (!ai) return;
-            const bool desired = (mode == -1) ? !ai->aoe_preference() : (mode == 1);
+            const bool desired = (mode == -1) ? ai->aoe_denied() : (mode == 1);
             ai->set_aoe_preference(desired);
+            ai->set_aoe_denied(!desired);
         });
         Push(bot, WhisperIntent{sender->GetName(),
             fmt::format("Aoe_all: applied to {} bot(s).", changed)});
@@ -7043,6 +7148,24 @@ done_dispel:
         Push(bot, WhisperIntent{sender->GetName(), "Teleport: queued."});
         return true;
     }
+    if (cmd == "pet" && OwnerPicks::ParseSwitch(parsed.tail))
+    {
+        // "pet off": the pet is dismissed and neither summoned nor revived until "pet on" (Bot/OwnerPicks.h).
+        bool const on = *OwnerPicks::ParseSwitch(parsed.tail);
+        BotAI* ai = Services::Registry().ai(bot->GetGUID().GetCounter());
+        if (!ai)
+            return true;
+        if (bot->GetClass() != CLASS_HUNTER && bot->GetClass() != CLASS_WARLOCK)
+        {
+            Push(bot, WhisperIntent{sender->GetName(), "Pet: hunter and warlock only."});
+            return true;
+        }
+        ai->owner_picks().pet_off = !on;
+        if (!on && bot->GetPet())
+            Push(bot, DismissPetIntent{});
+        Push(bot, WhisperIntent{sender->GetName(), on ? "Pet: on, I call it again when we rest." : "Pet: off, dismissed and kept away."});
+        return true;
+    }
     if (cmd == "pet")
     {
         const uint64 id = bot->GetGUID().GetCounter();
@@ -8625,24 +8748,41 @@ done_dispel:
         // contains `want`, that's our match. (Multi-language clients
         // would localise — we use the default DBC locale, matching the
         // existing spell-name lookup paths in this file.)
-        uint32 matched = 0;
+        // The six capital cities first, by spell id: the names below are in the server's language, so on a ruRU server the English
+        // city the add-on sends matched nothing (MageCityPortal.h).
+        auto const& known = snap->spellbook.known_spells;   // sorted
+        uint32 matched = ::Playerbot::V2::MageCity::CitySpell(want, cmd == "portal",
+            [&known](uint32 id) { return std::binary_search(known.begin(), known.end(), id); });
         std::string matched_name;
-        for (uint32 sid : snap->spellbook.known_spells)
+        if (matched)
         {
-            SpellInfo const* si = sSpellMgr->GetSpellInfo(sid, DIFFICULTY_NONE);
-            if (!si || !si->SpellName) continue;
-            std::string nm = si->SpellName->Str[sWorld->GetDefaultDbcLocale()];
-            std::string lo;
-            lo.reserve(nm.size());
-            for (char c : nm) lo.push_back(static_cast<char>(
-                std::tolower(static_cast<unsigned char>(c))));
-            if (lo.size() < prefix_len ||
-                lo.compare(0, prefix_len, prefix) != 0) continue;
-            if (lo.find(want, prefix_len) == std::string::npos) continue;
-            matched = sid;
-            matched_name = std::move(nm);
-            break;
+            SpellInfo const* si = sSpellMgr->GetSpellInfo(matched, DIFFICULTY_NONE);
+            matched_name = si && si->SpellName ? si->SpellName->Str[sWorld->GetDefaultDbcLocale()] : std::to_string(matched);
         }
+        else
+        {
+            for (uint32 sid : known)
+            {
+                SpellInfo const* si = sSpellMgr->GetSpellInfo(sid, DIFFICULTY_NONE);
+                if (!si || !si->SpellName) continue;
+                std::string nm = si->SpellName->Str[sWorld->GetDefaultDbcLocale()];
+                std::string lo;
+                lo.reserve(nm.size());
+                for (char c : nm) lo.push_back(static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(c))));
+                if (lo.size() < prefix_len ||
+                    lo.compare(0, prefix_len, prefix) != 0) continue;
+                if (lo.find(want, prefix_len) == std::string::npos) continue;
+                matched = sid;
+                matched_name = std::move(nm);
+                break;
+            }
+        }
+        if (matched == 0 && ::Playerbot::V2::MageCity::FindCity(want))
+        { Push(bot, WhisperIntent{sender->GetName(),
+            fmt::format("{}: I don't know the {} to {} (mages learn the teleports of their faction's cities at level 20, the portals at 40).",
+                cmd == "portal" ? "Portal" : "Teleport", cmd == "portal" ? "portal" : "teleport", parsed.tail)});
+          return true; }
         if (matched == 0)
         { Push(bot, WhisperIntent{sender->GetName(),
             fmt::format("{}: no '{}' spell known. (Known city portals/teleports require Mage city teleport / portal training.)",
@@ -8678,10 +8818,125 @@ done_dispel:
         Push(bot, CastSpellIntent{REBIRTH, target});
         return true;
     }
+    if (cmd == "prefer")
+    {
+        // The owner's spell picks (Bot/OwnerPicks.h): "prefer blessing might", "prefer aura fire", "prefer earth stoneskin",
+        // "prefer aspect monkey", "prefer demon voidwalker", "prefer <kind> auto", "prefer clear"; a bare "prefer" reports them.
+        // Memory only on BotAI; the snapshot carries them to the Classic upkeep picks and rotations.
+        BotAI* ai = Services::Registry().ai(bot->GetGUID().GetCounter());
+        if (!ai)
+        {
+            Push(bot, WhisperIntent{sender->GetName(), "Prefer: bot not registered."});
+            return true;
+        }
+        OwnerPicks::Picks& picks = ai->owner_picks();
+        if (parsed.tail.empty() || parsed.tail == "?")
+        {
+            std::string line;
+            for (uint8 i = 0; i < OwnerPicks::kSlotCount; ++i)
+                if (OwnerPicks::Choice const* c = OwnerPicks::FindChoice(picks.spell[i]))
+                    line += (line.empty() ? "" : ", ") + std::string(c->label);
+            if (picks.pet_off) line += line.empty() ? "pet off" : ", pet off";
+            if (picks.stealth_off) line += line.empty() ? "stealth off" : ", stealth off";
+            Push(bot, WhisperIntent{sender->GetName(), line.empty() ? std::string("Prefer: nothing picked, I follow my own plan.")
+                                                                    : "Prefer: " + line + "."});
+            return true;
+        }
+        std::optional<OwnerPicks::Order> const order = OwnerPicks::ParseOrder("prefer " + parsed.tail);
+        if (!order)
+        {
+            Push(bot, WhisperIntent{sender->GetName(),
+                "Prefer: blessing|aura|earth|fire|water|air|aspect|demon <name>|auto, or prefer clear."});
+            return true;
+        }
+        if (order->clear_all)
+        {
+            picks = {};
+            Push(bot, WhisperIntent{sender->GetName(), "Prefer: cleared, back to my own plan (pet and stealth on)."});
+            return true;
+        }
+        if (bot->GetClass() != OwnerPicks::SlotClass(order->slot))
+        {
+            Push(bot, WhisperIntent{sender->GetName(),
+                fmt::format("Prefer: I am no {}, a {} is not mine to pick.",
+                    order->slot == OwnerPicks::Aspect ? "hunter" : order->slot == OwnerPicks::Demon ? "warlock"
+                    : (order->slot == OwnerPicks::Blessing || order->slot == OwnerPicks::Aura) ? "paladin" : "shaman",
+                    OwnerPicks::SlotName(order->slot))});
+            return true;
+        }
+        if (order->spell == 0)
+        {
+            picks.spell[order->slot] = 0;
+            Push(bot, WhisperIntent{sender->GetName(), fmt::format("Prefer: {} back to my own plan.", OwnerPicks::SlotName(order->slot))});
+            return true;
+        }
+        OwnerPicks::Choice const* choice = OwnerPicks::FindChoice(order->spell);
+        auto const snap = Services::Snapshots().latest(bot->GetGUID().GetCounter());
+        if (!snap || !BotSnapshotView{*snap}.knows_spell(order->spell))
+        {
+            Push(bot, WhisperIntent{sender->GetName(), fmt::format("Prefer: I don't know {} yet.", choice ? choice->label : "that")});
+            return true;
+        }
+        picks.spell[order->slot] = order->spell;
+        Push(bot, WhisperIntent{sender->GetName(), fmt::format("Prefer: {} from now on{}.", choice ? choice->label : "that",
+            OwnerPicks::TravelAspect(order->spell) ? " (Hawk in a fight, it dazes the group)" : "")});
+        return true;
+    }
+    if (cmd == "stealth")
+    {
+        // "stealth off": the rogue opens without Stealth (and no Sap, MarkCc) until "stealth on"; Stealth up now is cancelled.
+        std::optional<bool> const on = OwnerPicks::ParseSwitch(parsed.tail);
+        BotAI* ai = Services::Registry().ai(bot->GetGUID().GetCounter());
+        if (!on || !ai)
+        {
+            Push(bot, WhisperIntent{sender->GetName(), "Stealth: on|off."});
+            return true;
+        }
+        if (bot->GetClass() != CLASS_ROGUE)
+        {
+            Push(bot, WhisperIntent{sender->GetName(), "Stealth: rogue only."});
+            return true;
+        }
+        ai->owner_picks().stealth_off = !*on;
+        if (!*on)
+            for (uint32 const rank : { 1784u, 1785u, 1786u, 1787u })
+                if (bot->HasAura(rank))
+                    Push(bot, CancelAuraIntent{rank});
+        Push(bot, WhisperIntent{sender->GetName(), *on ? "Stealth: on, I open from Stealth again." : "Stealth: off, no Stealth openers."});
+        return true;
+    }
+    if (cmd == "ritual")
+    {
+        // Warlock Ritual of Summoning (698) on a member of the bot's group: "ritual <name>". Two more members click the portal
+        // (or "use summoning" to bots in party chat, the "use" order).
+        if (bot->GetClass() != CLASS_WARLOCK)
+        {
+            Push(bot, WhisperIntent{sender->GetName(), "Ritual: warlock only."});
+            return true;
+        }
+        constexpr uint32 RITUAL_OF_SUMMONING = 698;
+        if (!bot->HasSpell(RITUAL_OF_SUMMONING))
+        {
+            Push(bot, WhisperIntent{sender->GetName(), "Ritual: I don't know Ritual of Summoning yet."});
+            return true;
+        }
+        Player* who = parsed.tail.empty() ? nullptr : ObjectAccessor::FindPlayerByName(parsed.tail);
+        Group const* grp = bot->GetGroup();
+        if (!who || !grp || !grp->IsMember(who->GetGUID()) || who == bot)
+        {
+            Push(bot, WhisperIntent{sender->GetName(), "Ritual: say 'ritual <name>' with the name of someone in our group."});
+            return true;
+        }
+        Push(bot, CastSpellIntent{RITUAL_OF_SUMMONING, who->GetGUID()});
+        Push(bot, WhisperIntent{sender->GetName(),
+            fmt::format("Ritual: summoning {}. Two more of us click the portal (say 'use summoning' in party chat).", who->GetName())});
+        return true;
+    }
     if (cmd == "soulstone")
     {
         // Warlock pre-rez — Soulstone (20707). Casts on selection (or
         // sender) to apply the stone; target self-rezzes on death.
+        // "soulstone <name>" puts it on that member of the bot's group.
         const BotId id = bot->GetGUID().GetCounter();
         auto snap = Services::Snapshots().latest(id);
         if (!snap) return true;
@@ -8696,6 +8951,15 @@ done_dispel:
           return true; }
         ObjectGuid target = sender->GetTarget();
         if (target.IsEmpty()) target = sender->GetGUID();
+        if (!parsed.tail.empty())
+        {
+            Player* who = ObjectAccessor::FindPlayerByName(parsed.tail);
+            Group const* grp = bot->GetGroup();
+            if (!who || !(who == bot || (grp && grp->IsMember(who->GetGUID()))))
+            { Push(bot, WhisperIntent{sender->GetName(), "Soulstone: say 'soulstone <name>' with the name of someone in our group."});
+              return true; }
+            target = who->GetGUID();
+        }
         Push(bot, CastSpellIntent{SOULSTONE, target});
         return true;
     }
@@ -8888,6 +9152,8 @@ done_dispel:
             "movement: follow, come/summon, stay/halt, mount, dismount, hearth, jump, dismiss"});
         Push(bot, WhisperIntent{sender->GetName(),
             "combat: attack, stop/passive, cast <spell_id>, heal, dispel, buff, reset"});
+        Push(bot, WhisperIntent{sender->GetName(),
+            "picks: prefer blessing|aura|earth|fire|water|air|aspect|demon <name>|auto, prefer clear, pet on|off, stealth on|off, ritual <name>, soulstone [name], portal <city>"});
         Push(bot, WhisperIntent{sender->GetName(),
             "loot/inv: sell [<bag> <slot> [<n>]], repair, use, bank, buy <entry> [<n>], buyfood, buypot, buybandage, buyall"});
         Push(bot, WhisperIntent{sender->GetName(),

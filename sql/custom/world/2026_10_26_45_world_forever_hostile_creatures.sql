@@ -1,5 +1,5 @@
 -- Creatures that were friendly to everyone (faction template 35) but are enemies on WoW Forever: Wowhead Forever shows them hostile
--- and the AnoCore v10 world gives them a hostile faction.
+-- and the other Forever server world gives them a hostile faction.
 -- Encroaching Soldier and Outraged Pillager (Dustwallow border, Theramore soldiers) are the kill targets of the Horde quest
 -- Wrongly Blamed, Justly Corrected (97250), which could not be finished. Highland Lurker (Wetlands spider) and Elder Wendigo
 -- (Dun Morogh) are plain enemies.

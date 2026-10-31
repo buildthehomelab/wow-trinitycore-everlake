@@ -37,6 +37,7 @@
 #include "PhasingHandler.h"
 #include "Player.h"
 #include "QuestDef.h"
+#include "Random.h"
 #include "SpellAuraEffects.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
@@ -619,43 +620,101 @@ class classic_spell_warl_immolate : public SpellScript
     }
 };
 
-// 1259705 - Read Ley Line, 1259686 - Skysight (Skyborne racials): the spell only triggers a 30 sec buff (Energized 1270842 /
-// Elemental Blessing 1259688). Next to its spell focus object (Ley Line 602735 / 613248, focus 2246 / Elemental Convergence
-// 616992, focus 2271) the official server casts the 15 min version first (Energized 1259691 / Elemental Blessing 1270893); the
-// 30 sec trigger still shows a SPELL_GO there but adds no aura (sniffs: Alliance Skyborne hunter at ley lines, Windshaper at
-// convergences, every cast away from one got only the 30 sec aura). Energized 1259691 also completes "Reading the Ley Lines" (92597).
+// 1259705 - Read Ley Line, 1259686 - Skysight (Skyborne racials), as the WoW Forever beta development notes of 2026-10-26 describe them:
+// the spell triggers a 15 sec buff (Energized 1270842: +50% Health and Mana regeneration / Elemental Blessing 1259688: +15% movement
+// speed). Next to its spell focus object (Ley Line 602735 / 613248, focus 2246 / Elemental Convergence 616992, focus 2271) it also
+// grants a 1 hour marker that stays through death (Attuned / Charged, the former 15 min buffs 1259691 / 1270893 renamed by the hotfixes
+// of 2026_10_27_05); while the caster has it, the buff is doubled (100% regeneration / 30% speed). Read Ley Line cannot be used while
+// Innervate is active (classic_spell_innervate_replaces_energized removes Energized when Innervate lands).
+// "Reading the Ley Lines" (92597) counts a Read Ley Line cast made while the caster has Leyline Convergence 1271952 (criteria 109629,
+// modifier tree 426346: has aura). Nothing in the client data or the sniffs applies that 10 sec aura, so a cast next to a ley line
+// applies it before the cast is counted (Spell::_cast updates CriteriaType::CastSpell after OnCast).
+enum SkyborneRacials
+{
+    SPELL_INNERVATE                 = 29166,
+    SPELL_INNERVATE_2               = 456195,
+    SPELL_ENERGIZED_READ_LEY_LINE   = 1270842
+};
+
 class classic_spell_skyborne_racial_focus : public SpellScript
 {
 public:
-    explicit classic_spell_skyborne_racial_focus(uint32 spellFocus, uint32 longBuffSpell) : _spellFocus(spellFocus), _longBuffSpell(longBuffSpell) { }
+    explicit classic_spell_skyborne_racial_focus(uint32 spellFocus, uint32 markerSpell, uint32 convergenceSpell, int32 markedAmount, bool blockedByInnervate)
+        : _spellFocus(spellFocus), _markerSpell(markerSpell), _convergenceSpell(convergenceSpell), _markedAmount(markedAmount),
+        _blockedByInnervate(blockedByInnervate) { }
 
 private:
     bool Validate(SpellInfo const* spellInfo) override
     {
-        return ValidateSpellInfo({ _longBuffSpell }) && ValidateSpellEffect({ { spellInfo->Id, EFFECT_0 } });
+        return ValidateSpellInfo({ _markerSpell }) && (!_convergenceSpell || ValidateSpellInfo({ _convergenceSpell }))
+            && ValidateSpellEffect({ { spellInfo->Id, EFFECT_0 } });
     }
 
-    void HandleTrigger(SpellEffIndex effIndex)
+    bool IsNearFocus() const
     {
         Unit* caster = GetCaster();
         GameObject* focus = nullptr;
         Trinity::GameObjectFocusCheck check(caster, _spellFocus);
         Trinity::GameObjectSearcher searcher(caster, focus, check);
         Cell::VisitGridObjects(caster, searcher, 50.0f); // focus radius of both objects is 25
-        if (!focus)
+        return focus != nullptr;
+    }
+
+    SpellCastResult CheckInnervate()
+    {
+        if (_blockedByInnervate && (GetCaster()->HasAura(SPELL_INNERVATE) || GetCaster()->HasAura(SPELL_INNERVATE_2)))
+            return SPELL_FAILED_AURA_BOUNCED;
+        return SPELL_CAST_OK;
+    }
+
+    void HandleCast()
+    {
+        if (_convergenceSpell && GetCaster()->IsPlayer() && IsNearFocus())
+            GetCaster()->CastSpell(GetCaster(), _convergenceSpell, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
+    }
+
+    void HandleTrigger(SpellEffIndex effIndex)
+    {
+        Unit* caster = GetCaster();
+        if (IsNearFocus())
+            caster->CastSpell(caster, _markerSpell, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
+
+        if (!caster->HasAura(_markerSpell))
             return;
 
         PreventHitDefaultEffect(effIndex);
-        caster->CastSpell(caster, _longBuffSpell, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
+        caster->CastSpell(caster, GetEffectInfo().TriggerSpell, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell())
+            .AddSpellMod(SPELLVALUE_BASE_POINT0, _markedAmount).AddSpellMod(SPELLVALUE_BASE_POINT1, _markedAmount));
     }
 
     void Register() override
     {
-        OnEffectLaunchTarget += SpellEffectFn(classic_spell_skyborne_racial_focus::HandleTrigger, EFFECT_0, SPELL_EFFECT_TRIGGER_SPELL);
+        OnCheckCast += SpellCheckCastFn(classic_spell_skyborne_racial_focus::CheckInnervate);
+        OnCast += SpellCastFn(classic_spell_skyborne_racial_focus::HandleCast);
+        // Launch, not launch target: the self-cast buff is triggered in the launch phase (NeedsToBeTriggeredByCaster is false) and
+        // lands a tick later, so preventing it at launch target let it refresh the doubled buff back to the base amount.
+        OnEffectLaunch += SpellEffectFn(classic_spell_skyborne_racial_focus::HandleTrigger, EFFECT_0, SPELL_EFFECT_TRIGGER_SPELL);
     }
 
     uint32 _spellFocus;
-    uint32 _longBuffSpell;
+    uint32 _markerSpell;
+    uint32 _convergenceSpell;
+    int32 _markedAmount;
+    bool _blockedByInnervate;
+};
+
+// 29166, 456195 - Innervate: replaces Read Ley Line's Energized 1270842 as the more powerful effect (WoW Forever beta notes 2026-10-26).
+class classic_spell_innervate_replaces_energized : public AuraScript
+{
+    void AfterApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetTarget()->RemoveAurasDueToSpell(SPELL_ENERGIZED_READ_LEY_LINE);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_spell_innervate_replaces_energized::AfterApply, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+    }
 };
 
 // 1319421 - Motivated (Executor's Motivator, undead quest Discipline 99134): a dummy aura on a Tirisfal Deathguard. The official
@@ -1331,10 +1390,294 @@ class classic_spell_warr_gore_drinker_enrage : public AuraScript
     }
 };
 
+/*######
+## classic_spell_undead_touch_of_the_grave
+######*/
+
+// 1260189 - Touch of the Grave (Undead racial, 1.60): "Your spells and attacks have a chance to drain Health from the target, up to
+// $s1% of your maximum Health." The client data procs a dummy aura (20%, 25 sec recovery) and has no trigger for the drain
+// 1260198, whose health leech base points are a placeholder 5: the drain is cast here for $s1% of the Undead's maximum health.
+class classic_spell_undead_touch_of_the_grave : public AuraScript
+{
+    static constexpr uint32 SPELL_TOUCH_OF_THE_GRAVE_DRAIN = 1260198;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_TOUCH_OF_THE_GRAVE_DRAIN });
+    }
+
+    bool CheckProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        Unit* target = eventInfo.GetActionTarget();
+        return target && target != GetTarget() && target->IsAlive() && GetTarget()->IsValidAttackTarget(target);
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        Unit* undead = GetTarget();
+        int32 drain = CalculatePct(int32(undead->GetMaxHealth()), aurEff->GetAmount());
+        if (drain > 0)
+            undead->CastSpell(eventInfo.GetActionTarget(), SPELL_TOUCH_OF_THE_GRAVE_DRAIN, CastSpellExtraArgs(aurEff)
+                .AddSpellMod(SPELLVALUE_BASE_POINT0, drain));
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_undead_touch_of_the_grave::CheckProc, EFFECT_0, SPELL_AURA_DUMMY);
+        OnEffectProc += AuraEffectProcFn(classic_spell_undead_touch_of_the_grave::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+/*######
+## Vanilla item, quest and holiday spells whose retail scripts never attach
+######*/
+
+// 8213 - Savory Deviate Delight (vanilla food): eating it turns you into a pirate or a ninja (VMaNGOS 8219 - 8222). The 1.60 client data
+// makes 8213 a transform aura without a creature, so the retail dummy handler never ran and the aura changed nothing. The costume
+// spell is cast instead of the empty transform.
+class classic_spell_item_savory_deviate_delight : public SpellScript
+{
+    static constexpr uint32 SPELL_FLIP_OUT_MALE   = 8219;
+    static constexpr uint32 SPELL_FLIP_OUT_FEMALE = 8220;
+    static constexpr uint32 SPELL_YAAARRRR_MALE   = 8221;
+    static constexpr uint32 SPELL_YAAARRRR_FEMALE = 8222;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_FLIP_OUT_MALE, SPELL_FLIP_OUT_FEMALE, SPELL_YAAARRRR_MALE, SPELL_YAAARRRR_FEMALE });
+    }
+
+    void HandleCostume(SpellEffIndex effIndex)
+    {
+        PreventHitDefaultEffect(effIndex);
+        Unit* target = GetHitUnit();
+        if (!target || target->GetTypeId() != TYPEID_PLAYER)
+            return;
+
+        bool male = target->GetNativeGender() == GENDER_MALE;
+        uint32 costume = urand(0, 1) ? (male ? SPELL_FLIP_OUT_MALE : SPELL_FLIP_OUT_FEMALE) : (male ? SPELL_YAAARRRR_MALE : SPELL_YAAARRRR_FEMALE);
+        target->CastSpell(target, costume, true);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_item_savory_deviate_delight::HandleCostume, EFFECT_0, SPELL_EFFECT_APPLY_AURA);
+    }
+};
+
+// 13180 - Gnomish Mind Control Cap (VMaNGOS EffectDummy): one use in six does nothing, one in six makes the target control the
+// wearer (not while shapeshifted), otherwise the wearer controls the target (13181). The retail script also needs Dullard 67809,
+// which the 1.60 client lacks, so it never attached and the cap did nothing.
+class classic_spell_item_mind_control_cap : public SpellScript
+{
+    static constexpr uint32 SPELL_GNOMISH_MIND_CONTROL_CAP = 13181;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_GNOMISH_MIND_CONTROL_CAP });
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!target)
+            return;
+
+        switch (urand(0, 5))
+        {
+            case 0:
+                break;
+            case 1:
+                if (caster->GetShapeshiftForm() == FORM_NONE)
+                    target->CastSpell(caster, SPELL_GNOMISH_MIND_CONTROL_CAP, true);
+                break;
+            default:
+                caster->CastSpell(target, SPELL_GNOMISH_MIND_CONTROL_CAP, true);
+                break;
+        }
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_item_mind_control_cap::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
+// 23448 - Transporter Arrival, Ultrasafe Transporter: Gadgetzan backfire (VMaNGOS EffectDummy): 1/6 polymorph (23444), 4/6 evil
+// twin (23445), 1/6 nothing. The retail script also needs the TBC "miss the target" spell 36902, so it never attached.
+class classic_spell_gen_gadgetzan_transporter_backfire : public SpellScript
+{
+    static constexpr uint32 SPELL_TRANSPORTER_MALFUNCTION_POLYMORPH = 23444;
+    static constexpr uint32 SPELL_TRANSPORTER_EVIL_TWIN             = 23445;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_TRANSPORTER_MALFUNCTION_POLYMORPH, SPELL_TRANSPORTER_EVIL_TWIN });
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        int32 r = irand(0, 119);
+        if (r < 20)
+            caster->CastSpell(caster, SPELL_TRANSPORTER_MALFUNCTION_POLYMORPH, true);
+        else if (r < 100)
+            caster->CastSpell(caster, SPELL_TRANSPORTER_EVIL_TWIN, true);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_gen_gadgetzan_transporter_backfire::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
+// 26218 - Mistletoe (Winter Veil, VMaNGOS): the kissed player gets Create Mistletoe or Create Holly (26206 / 26207). The retail script
+// also needs the WotLK Create Snowflakes 45036, so it never attached.
+class classic_spell_winter_veil_mistletoe : public SpellScript
+{
+    static constexpr uint32 SPELL_CREATE_MISTLETOE = 26206;
+    static constexpr uint32 SPELL_CREATE_HOLLY     = 26207;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_CREATE_MISTLETOE, SPELL_CREATE_HOLLY });
+    }
+
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        Unit* target = GetHitUnit();
+        if (!target || target->GetTypeId() != TYPEID_PLAYER)
+            return;
+
+        GetCaster()->CastSpell(target, urand(0, 1) ? SPELL_CREATE_MISTLETOE : SPELL_CREATE_HOLLY, true);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_winter_veil_mistletoe::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
+// 25860 - Reindeer Transformation (Fresh Holly / Preserved Holly, VMaNGOS): a mounted player gets a reindeer of his mount's speed
+// (25859 at 100%, 25858 at 60%). The retail script also needs the flying reindeer spells, so it never attached.
+class classic_spell_winter_veil_reindeer_transformation : public SpellScript
+{
+    static constexpr uint32 SPELL_REINDEER_100 = 25859;
+    static constexpr uint32 SPELL_REINDEER_60  = 25858;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_REINDEER_100, SPELL_REINDEER_60 });
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        if (!caster->HasAuraType(SPELL_AURA_MOUNTED))
+            return;
+
+        float speed = caster->GetSpeedRate(MOVE_RUN);
+        caster->RemoveAurasByType(SPELL_AURA_MOUNTED);
+        caster->CastSpell(caster, speed >= 2.0f ? SPELL_REINDEER_100 : SPELL_REINDEER_60, true);
+    }
+
+    void Register() override
+    {
+        OnEffectHit += SpellEffectFn(classic_spell_winter_veil_reindeer_transformation::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
+// 24194 - Uther's Tribute, 24195 - Grom's Tribute (VMaNGOS): the tribute item summons the race's offering at the tomb. Uther's
+// Tribute answers the Alliance races, Grom's the Horde races. The retail script also needs the Blood Elf and Draenei offerings, so
+// it never attached and the items did nothing.
+class classic_spell_quest_uther_grom_tribute : public SpellScript
+{
+    static uint32 TributeSpell(uint32 spellId, uint8 race)
+    {
+        if (spellId == 24194)
+        {
+            switch (race)
+            {
+                case RACE_HUMAN:    return 24105;
+                case RACE_GNOME:    return 24106;
+                case RACE_DWARF:    return 24107;
+                case RACE_NIGHTELF: return 24108;
+                default:            return 0;
+            }
+        }
+
+        switch (race)
+        {
+            case RACE_TROLL:         return 24101;
+            case RACE_TAUREN:        return 24102;
+            case RACE_UNDEAD_PLAYER: return 24103;
+            case RACE_ORC:           return 24104;
+            default:                 return 0;
+        }
+    }
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ 24101, 24102, 24103, 24104, 24105, 24106, 24107, 24108 });
+    }
+
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        Player* caster = GetCaster()->ToPlayer();
+        if (!caster)
+            return;
+
+        if (uint32 spellId = TributeSpell(GetSpellInfo()->Id, caster->GetRace()))
+            caster->CastSpell(caster, spellId, true);
+    }
+
+    void Register() override
+    {
+        OnEffectHit += SpellEffectFn(classic_spell_quest_uther_grom_tribute::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
+// 19505, 19731, 19734, 19736 - Devour Magic (felhunter): "If an effect is devoured, the Felhunter will be healed for ..." The heal is
+// the rank's Devour Magic Effect (19658, 19732, 19733, 19735, as the tooltips name them); the 1.60 data has no effect that casts it.
+// The retail script also needs the WotLK Glyph of Demon Training and the rank 1 effect 1, so no rank ever healed.
+class classic_spell_warl_devour_magic : public SpellScript
+{
+    static uint32 HealSpell(uint32 spellId)
+    {
+        switch (spellId)
+        {
+            case 19505: return 19658;
+            case 19731: return 19732;
+            case 19734: return 19733;
+            case 19736: return 19735;
+            default:    return 0;
+        }
+    }
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return HealSpell(spellInfo->Id) && ValidateSpellInfo({ HealSpell(spellInfo->Id) });
+    }
+
+    void HandleSuccessfulDispel(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        caster->CastSpell(caster, HealSpell(GetSpellInfo()->Id), true);
+    }
+
+    void Register() override
+    {
+        OnEffectSuccessfulDispel += SpellEffectFn(classic_spell_warl_devour_magic::HandleSuccessfulDispel, EFFECT_0, SPELL_EFFECT_DISPEL);
+    }
+};
+
 void AddSC_classic_spell_scripts()
 {
     RegisterSpellScript(classic_spell_warr_gore_drinker);
     RegisterSpellScript(classic_spell_warr_gore_drinker_enrage);
+    RegisterSpellScript(classic_spell_undead_touch_of_the_grave);
     RegisterSpellScript(classic_spell_tauren_cultivation);
     RegisterSpellScript(classic_spell_tauren_cultivate_herb);
     new classic_unit_tigers_fury();
@@ -1351,8 +1694,9 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_legacy_reagent_economy);
     RegisterSpellScript(classic_spell_profession_certification);
     RegisterSpellScript(classic_spell_executors_motivator);
-    RegisterSpellScriptWithArgs(classic_spell_skyborne_racial_focus, "classic_spell_skyborne_read_ley_line", 2246, 1259691);
-    RegisterSpellScriptWithArgs(classic_spell_skyborne_racial_focus, "classic_spell_skyborne_skysight", 2271, 1270893);
+    RegisterSpellScriptWithArgs(classic_spell_skyborne_racial_focus, "classic_spell_skyborne_read_ley_line", 2246, 1259691, 1271952, 100, true);
+    RegisterSpellScriptWithArgs(classic_spell_skyborne_racial_focus, "classic_spell_skyborne_skysight", 2271, 1270893, 0, 30, false);
+    RegisterSpellScript(classic_spell_innervate_replaces_energized);
     RegisterSpellScript(classic_spell_warl_immolate);
     RegisterSpellScript(classic_spell_hun_taming_rod);
     RegisterSpellScript(classic_spell_hun_tame_beast_channel);
@@ -1365,4 +1709,11 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_profession_book);
     RegisterSpellScript(classic_spell_ground_area_damage);
     RegisterSpellScript(classic_spell_heal_injured_druid);
+    RegisterSpellScript(classic_spell_item_savory_deviate_delight);
+    RegisterSpellScript(classic_spell_item_mind_control_cap);
+    RegisterSpellScript(classic_spell_gen_gadgetzan_transporter_backfire);
+    RegisterSpellScript(classic_spell_winter_veil_mistletoe);
+    RegisterSpellScript(classic_spell_winter_veil_reindeer_transformation);
+    RegisterSpellScript(classic_spell_quest_uther_grom_tribute);
+    RegisterSpellScript(classic_spell_warl_devour_magic);
 }

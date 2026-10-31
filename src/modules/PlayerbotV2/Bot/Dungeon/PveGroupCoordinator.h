@@ -145,7 +145,8 @@ private:
     // a caster with a crowd control spell crowd-controls it (cc_target, never for the skull; released when the mob's icon
     // turns skull or goes), a duty tank in a 5-man holds it (tank_target; raids: PlanRaidTanks). The bot's chat `rti`
     // orders extend the icon. Writes mark_symbol / mark_target / cc_* into `plan`. World thread.
-    void PlanMarkOrders(uint64 group_low, uint32 map_id, bool is_raid,
+    // `bosses`: the instance script's boss entries (DungeonAdvice::bosses), never crowd-controlled.
+    void PlanMarkOrders(uint64 group_low, uint32 map_id, bool is_raid, std::vector<uint32_t> const& bosses,
                         std::vector<Member> const& mem,
                         std::vector<std::shared_ptr<BotSnapshot const>> const& snaps,
                         std::unordered_map<uint64, PveOrder>& plan);
@@ -155,6 +156,10 @@ private:
     // Both reset when the pack is gone (PlanRaidTanks, Playerbot.Behavior.TankMarkers).
     std::unordered_map<uint64, std::unordered_map<uint64, uint8>> tank_mark_auto_;
     std::unordered_map<uint64, std::array<ObjectGuid, 8>> marks_set_;
+    // Per-(group, map) mob the pre-pull crowd control put the moon on (PlanPrePullCc). Kept apart from marks_set_, which a
+    // 5-man resets every pass (PlanRaidTanks' non-raid branch), and from the request, which expires on its own: the moon is
+    // taken off once the request is finished or gone.
+    std::unordered_map<uint64, ObjectGuid> prepull_moon_;
 
     std::unordered_map<uint64, PveOrder> orders_;
     std::unordered_map<uint64, PveOrder> next_orders_;

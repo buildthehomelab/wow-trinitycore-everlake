@@ -1,7 +1,7 @@
 -- Classic 1.60 (Forever): Forced Disarmament (98293, Alliance, elite, level 30, requires 22), Wetlands. From the Wowhead Forever page and list:
 -- starts at the object Dragonmaw Armaments (672330) at 58.8, 45.2, ends at Captain Stoutfist (2104) in Menethil Keep, 2450 XP and
 -- 100 Wildhammer Clan reputation. No objective on the page (take it from the armaments, hand it in).
--- The object is in no data we have (not in the 70532 GameObjects.db2, not in AnoCore): template INFERRED (a quest giver object
+-- The object is in no data we have (not in the 70532 GameObjects.db2, not in the other Forever server): template INFERRED (a quest giver object
 -- with the vanilla Weapon Crate model 335). Position from the map pin: zone 58.8, 45.2 -> (-3393.1, -2819.7), fitted on four
 -- spawned Wetlands NPCs (within 5 yd); it stands in the Dragonmaw Reclaimer camp. Height INFERRED from the Reclaimer next to it.
 DELETE FROM `gameobject_template` WHERE `entry`=672330;

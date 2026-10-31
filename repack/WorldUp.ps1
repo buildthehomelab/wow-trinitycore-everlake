@@ -18,6 +18,25 @@ function Repair-ConfDir([string]$ServerDir) {
     }
 }
 
+# The worldserver refuses to start when a setting is twice in one file of worldserver.conf.d (a setting in two different files is
+# fine, the later file wins). All it says is "duplicate key name" and the window closes. Returns one line per repeated setting
+# naming the file and the line numbers, so a player can delete the extra line.
+function Test-ConfDuplicates([string]$ServerDir) {
+    $out = @()
+    foreach ($cf in Get-ChildItem (Join-Path $ServerDir 'worldserver.conf.d') -Filter '*.conf' -File -ErrorAction SilentlyContinue | Sort-Object Name) {
+        $n = 0; $seen = @{}
+        foreach ($line in @(Get-Content $cf.FullName -ErrorAction SilentlyContinue)) {
+            $n++
+            if ($line -match '^\s*([^#;\[\s][^=\s]*)\s*=') {
+                $k = $Matches[1].ToLowerInvariant()
+                if ($seen.ContainsKey($k)) { $out += "The setting $($Matches[1]) is in $($cf.Name) on line $($seen[$k]) and again on line $n. Delete one of the two lines, then start the server again." }
+                else { $seen[$k] = $n }
+            }
+        }
+    }
+    $out
+}
+
 # The network limits the 0.1.25 server reads (connections per address and the login timeouts) are missing from the settings files of
 # installs made before them, and the server logs a "Missing name ..." line for each one on every connection. The defaults are used
 # anyway, so this changes nothing in how the server behaves: it writes the same values into the files, once, to end that log noise.

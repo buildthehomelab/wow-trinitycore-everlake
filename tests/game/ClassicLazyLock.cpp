@@ -25,8 +25,8 @@ using namespace Playerbot::Lazy;
 
 namespace
 {
-// A level 60 affliction / destruction warlock with everything known and ready except the racial, a fresh target in range, armor and
-// pet up.
+// A level 60 affliction / destruction warlock with everything known and ready except the racial, no on-use trinkets, a fresh target in
+// range, armor and pet up.
 Input Fresh()
 {
     Input in;
@@ -37,6 +37,8 @@ Input Fresh()
     in.has_pet = true;
     in.armor_up = true;
     in.ready &= ~Bit(Racial);
+    in.known &= ~(Bit(Trinket1) | Bit(Trinket2));
+    in.ready &= ~(Bit(Trinket1) | Bit(Trinket2));
     return in;
 }
 }
@@ -173,9 +175,10 @@ TEST_CASE("Low mana and healthy: Life Tap; low mana and hurt: no tap", "[Classic
     CHECK(Pick(in) != LifeTap);
 }
 
-TEST_CASE("Armor and pet come first when missing; the pet only out of combat", "[ClassicLazyLock]")
+TEST_CASE("Armor and pet only with no enemy selected; the pet only out of combat", "[ClassicLazyLock]")
 {
     Input in = Fresh();
+    in.has_target = false;
     in.armor_up = false;
     CHECK(Pick(in) == DemonArmor);
     in.armor_up = true;
@@ -185,6 +188,92 @@ TEST_CASE("Armor and pet come first when missing; the pet only out of combat", "
     CHECK(Pick(in) == SummonPet);
 }
 
+TEST_CASE("A press at an enemy never summons the pet or buffs, in or out of combat", "[ClassicLazyLock]")
+{
+    Input in = Fresh();
+    in.has_pet = false;
+    in.armor_up = false;
+    in.in_combat = false;
+    in.ready &= ~Bit(AmplifyCurse);
+    CHECK(Pick(in) == CurseOfAgony);
+    in.on_target = Bit(CurseOfAgony) | Bit(Corruption) | Bit(Immolate) | Bit(SiphonLife);
+    in.ready &= ~Bit(Conflagrate);
+    CHECK(Pick(in) == ShadowBolt);
+    in.in_combat = true;
+    CHECK(Pick(in) == ShadowBolt);
+}
+
+TEST_CASE("An enemy hitting the warlock in melee: Death Coil, then Fear", "[ClassicLazyLock]")
+{
+    Input in = Fresh();
+    in.target_close = true;
+    CHECK(Pick(in) == DeathCoil);
+    in.ready &= ~Bit(DeathCoil);
+    CHECK(Pick(in) == Fear);
+    in.target_feared = true;   // running: back to the rotation
+    CHECK(Pick(in) == AmplifyCurse);
+}
+
+TEST_CASE("Two or more in melee get Howl of Terror before Fear", "[ClassicLazyLock]")
+{
+    Input in = Fresh();
+    in.target_close = true;
+    in.attackers_close = 2;
+    in.ready &= ~Bit(DeathCoil);
+    CHECK(Pick(in) == HowlOfTerror);
+    in.ready &= ~Bit(HowlOfTerror);
+    CHECK(Pick(in) == Fear);
+}
+
+TEST_CASE("No Fear on a boss or on a mob in a dungeon; a player in a dungeon still", "[ClassicLazyLock]")
+{
+    Input in = Fresh();
+    in.target_close = true;
+    in.ready &= ~Bit(DeathCoil);
+    in.target_boss = true;
+    CHECK(Pick(in) != Fear);
+    in.target_boss = false;
+    in.fear_safe = false;
+    CHECK(Pick(in) != Fear);
+    CHECK(Pick(in) != HowlOfTerror);
+    in.target_player = true;
+    CHECK(Pick(in) == Fear);
+}
+
+TEST_CASE("A far enemy is not feared", "[ClassicLazyLock]")
+{
+    Input in = Fresh();
+    in.ready &= ~Bit(DeathCoil);
+    CHECK(Pick(in) == AmplifyCurse);
+}
+
+TEST_CASE("Both trinkets go whenever ready on a long fight, before the racial", "[ClassicLazyLock]")
+{
+    Input in = Fresh();
+    in.known |= Bit(Trinket1) | Bit(Trinket2);
+    in.ready |= Bit(Trinket1) | Bit(Trinket2) | Bit(Racial);
+    CHECK(Pick(in) == Trinket1);
+    in.ready &= ~Bit(Trinket1);
+    CHECK(Pick(in) == Trinket2);
+    in.ready &= ~Bit(Trinket2);
+    CHECK(Pick(in) == Racial);
+    in.ready |= Bit(Trinket1);
+    in.target_hp_pct = 40;   // nearly dead: save them
+    CHECK(Pick(in) != Trinket1);
+    in.target_player = true; // a player always gets them
+    CHECK(Pick(in) == Trinket1);
+}
+
+TEST_CASE("Trinkets, racial and Amplify Curse cost no global cooldown", "[ClassicLazyLock]")
+{
+    CHECK(OffGlobalCooldown(Trinket1));
+    CHECK(OffGlobalCooldown(Trinket2));
+    CHECK(OffGlobalCooldown(Racial));
+    CHECK(OffGlobalCooldown(AmplifyCurse));
+    CHECK_FALSE(OffGlobalCooldown(ShadowBolt));
+    CHECK_FALSE(OffGlobalCooldown(DeathCoil));
+}
+
 TEST_CASE("No target: upkeep only", "[ClassicLazyLock]")
 {
     Input in = Fresh();
@@ -192,6 +281,10 @@ TEST_CASE("No target: upkeep only", "[ClassicLazyLock]")
     CHECK(Pick(in) == None);
     in.armor_up = false;
     CHECK(Pick(in) == DemonArmor);
+    in.armor_up = true;
+    in.has_pet = false;
+    in.in_combat = false;
+    CHECK(Pick(in) == SummonPet);
 }
 
 TEST_CASE("A target out of range gets nothing", "[ClassicLazyLock]")
@@ -225,17 +318,17 @@ TEST_CASE("The global cooldown never turns into a wand shot", "[ClassicLazyLock]
     CHECK(Pick(in) == None);
 }
 
-TEST_CASE("A pet that cannot be summoned does not hold the rotation back", "[ClassicLazyLock]")
+TEST_CASE("A pet that cannot be summoned does not hold the upkeep back", "[ClassicLazyLock]")
 {
     Input in = Fresh();
+    in.has_target = false;
     in.has_pet = false;
     in.in_combat = false;
     in.soul_shards = 0;
     CHECK(Pick(in) == SummonPet);
     in.blocked = Bit(SummonPet);   // refused for want of a shard
-    CHECK(Pick(in) == AmplifyCurse);
-    in.known &= ~Bit(SummonPet);   // or never known
-    in.blocked = 0;
+    CHECK(Pick(in) == None);
+    in.has_target = true;          // an enemy selected fights as usual
     CHECK(Pick(in) == AmplifyCurse);
 }
 

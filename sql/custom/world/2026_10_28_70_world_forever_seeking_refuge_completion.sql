@@ -1,6 +1,6 @@
 -- Seeking Refuge 99144 (Discord, Beastmade 2026-10-28): Bareth Dawnstone walks his whole route but the quest never completes.
 -- Our quest template (sniff baseline) carries QUEST_FLAGS_COMPLETION_EVENT (0x2), so besides the escort objective the quest
--- also needs its completion event before it can complete. The AnoCore escort from 2026_10_26_38 only gives the objective
+-- also needs its completion event before it can complete. The other Forever server escort from 2026_10_26_38 only gives the objective
 -- credit (the other three escorts there have no such flag, so credit alone completes them), and the route is started on
 -- Bareth himself, so the escort end never fires the event either. At the end of the route the players within 40 yd now get
 -- the objective credit and then the completion event. Safe to run again.

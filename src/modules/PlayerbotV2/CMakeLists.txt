@@ -59,7 +59,10 @@ function(playerbot_v2_configure_sublib target_name)
     target_compile_options(${target_name} PRIVATE /W4 /we4717)
   else()
     target_compile_options(${target_name} PRIVATE -Wall -Wextra -Wpedantic)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    # -Winfinite-recursion exists from GCC 12 / Clang 4; GCC 11 stops on an unknown -Werror= option, so ask first
+    include(CheckCXXCompilerFlag)
+    check_cxx_compiler_flag(-Winfinite-recursion PLAYERBOT_V2_HAS_WINFINITE_RECURSION)
+    if(PLAYERBOT_V2_HAS_WINFINITE_RECURSION)
       target_compile_options(${target_name} PRIVATE -Werror=infinite-recursion)
     endif()
   endif()
@@ -176,6 +179,7 @@ add_library(playerbot-v2-core STATIC
   ${CMAKE_CURRENT_SOURCE_DIR}/PlayerbotV2.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/PlayerbotV2Scripts.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/LfgBotFill.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/DungeonFinder.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Services.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Commands/cs_playerbot_v2.cpp
 )

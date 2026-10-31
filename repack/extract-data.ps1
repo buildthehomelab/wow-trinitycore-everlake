@@ -1,4 +1,4 @@
-# Builds the game data from YOUR OWN WoW Forever client (build 70685): maps, vmaps and the pathfinding data (mmaps) for EVERY map.
+# Builds the game data from YOUR OWN WoW Forever client (build 70707): maps, vmaps and the pathfinding data (mmaps) for EVERY map.
 # The bots need the mmaps to walk; the server must not be started before this has finished.
 #   .\extract-data.ps1 -Client "C:\WoW Forever Client"
 # Safe to run again after an interruption: finished stages are skipped and the long stage (mmaps) continues where it stopped.

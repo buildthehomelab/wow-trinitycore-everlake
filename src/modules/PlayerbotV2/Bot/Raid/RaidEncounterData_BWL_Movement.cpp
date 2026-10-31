@@ -12,6 +12,16 @@ namespace Playerbot::Raid {
         // The tank holds the front; everyone else stays out of it.
         for (uint32_t drake : { 11983u, 14601u, 11981u })
             r.avoidFrontal.push_back({ drake, 24.0f, 55.0f, Who::NonTank });
+        // Firemaw's Flame Buffet 23341 (classic_boss_firemaw.cpp: cast on himself every 1.8-3 s) hits everyone he can see within 100 y for 150
+        // fire and adds a stack of +150 fire damage taken, 20 s, refreshed by every hit (70532 spell data, SpellAudit.tsv), so a stack only
+        // falls off out of his sight. bwl_firemaw 2026-10-20: nobody left his sight, 36 of 40 died to it 40-47 s in, at 1,400-2,000 a hit.
+        // DPS step out at 4-6 stacks and come back clean; healers at 6-8, to a spot that still sees the main tank when there is one; off-tanks
+        // wait out of sight, clean for the swap at 8 stacks (TankSwap, RaidEncounterData_BWL.cpp).
+        r.breakSight.push_back({ 11983, 23341, 0, Who::Tank });
+        r.breakSight.push_back({ 11983, 23341, 6, Who::Healer, /*seeTank*/ true });
+        r.breakSight.push_back({ 11983, 23341, 6, Who::Healer });
+        r.breakSight.push_back({ 11983, 23341, 4, Who::Melee });
+        r.breakSight.push_back({ 11983, 23341, 4, Who::Ranged });
         // Chromaggus: the breath comes out of the front.
         r.avoidFrontal.push_back({ 14020, 35.0f, 50.0f, Who::NonTank });
         // Vaelastrasz: his flame breath cleave chains through anyone near the front.

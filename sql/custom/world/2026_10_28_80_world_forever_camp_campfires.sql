@@ -3,8 +3,8 @@
 -- The Great Outdoors (Teldrassil 96606, Lyreena Duskblade; Mulgore 96605, Kaga Wildhoof) asks to sit by the campfire and gain
 -- Boosted Rest, which only a Basic Campfire (529161, spell focus 4) within 15 yards gives. The other four camps have the fire
 -- from the Forever sniff (Elwynn, Dun Morogh, Tirisfal 2026_10_01_03, Durotar 2026_10_03_00); these two camps came from the
--- AnoCore data (2026_10_26_31 adventurer, 2026_10_26_35 tent) without one, so the quest could not be finished and Camping 101:
--- Cooking was never offered (Discord report 2026-10-28). No sniff, AnoCore or Azeroth row has a fire at either camp.
+-- The other Forever server data (2026_10_26_31 adventurer, 2026_10_26_35 tent) without one, so the quest could not be finished and Camping 101:
+-- Cooking was never offered (Discord report 2026-10-28). No sniff, the other Forever server or Azeroth row has a fire at either camp.
 -- INFERRED: the place. In the sniffed camps the adventurer stands 4-5 yards from the fire, next to the tent; here the fire is
 -- 4.5 yards in front of the adventurer (both face east), on her or his own ground height, away from the tent's door.
 

@@ -64,6 +64,7 @@ enum class RaidLogKind : uint8
     TankHazard = 51,                           // [raid_hazard] tank variant (State_Idle)
     TankSpread = 64, TankAoeHold = 65,         // [raid_tank] (Combat/Apl/ApTankThreat.h)
     TankDance = 66,                            // [raid_tank] warrior Battle Stance dance (Apl_Classic_Warrior)
+    DemoSkip = 67,                             // [raid_tank] Demoralizing Shout / Roar not cast on a boss (ApTankThreat.h)
 };
 
 inline uint64 RaidLogKey(BotSnapshotView const& s, RaidLogKind k)
@@ -95,13 +96,18 @@ inline float ThreatOpeningLead(BotSnapshotView const& s, NearbyUnit const& u)
 
 // A tank-held mob the tank has not secured yet against THIS bot: the tank is
 // still under its opening lead, or this bot's threat (incl. pet) is already
-// at the configured ratio of the tank's.
+// at the configured ratio of the tank's. A raid group holds at the tank's own threat, as its damage hold does (State_InCombat
+// EvaluateThreatHold, kRaidThreatMaxRatio): at the configured 90 % the fury, held between 90 and 100 % of the tank on the support
+// scorecard's one boss, never cast Whirlwind in 244 druid runs 2 and 3 (all 81 "holds melee AoE Whirlwind ... not_tanked" lines of the
+// 244 support run fell between 90 and 100 % of the tank's threat): a melee AoE on a lone boss is one more hit on the bot's own target.
 inline bool TankNotSecured(BotSnapshotView const& s, NearbyUnit const& u)
 {
     if (!u.has_threat_list || !u.unit_in_combat) return false;
     if (s.big_raid() && !(u.is_dungeon_boss || u.is_boss_rank)) return false;
     if (u.tank_threat < ThreatOpeningLead(s, u)) return true;
-    return u.my_threat >= u.tank_threat * Services::Config().threat_max_ratio();
+    float const cfg_ratio = Services::Config().threat_max_ratio();
+    float const ratio = s.raid_rules() ? std::max(cfg_ratio, 1.0f) : cfg_ratio;
+    return u.my_threat >= u.tank_threat * ratio;
 }
 
 enum class AoeHazardKind : uint8 { None, CrowdControlled, Unpulled, NotTanked, SchoolAvoided };

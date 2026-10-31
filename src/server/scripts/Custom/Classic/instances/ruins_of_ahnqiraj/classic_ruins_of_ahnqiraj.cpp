@@ -84,11 +84,12 @@ enum ClassicAQ20Tornado : uint32
     SPELL_AQ20_TORNADO_AURA          = 10092
 };
 
-// Obsidian destroyer
+// Obsidian destroyer (VMaNGOS 46417908, sniffed: its Drain Mana is 25676, Moam's is 25754)
 enum ClassicAQ20ObsidianDestroyer : uint32
 {
+    SPELL_AQ20_OD_RESET_MANA         = 23777,   // Zero Mana/Full Health DND
     SPELL_AQ20_OD_PURGE              = 25756,
-    SPELL_AQ20_OD_DRAINMANA          = 25754
+    SPELL_AQ20_OD_DRAINMANA          = 25676
 };
 
 // Hive'Zara soldier
@@ -152,10 +153,10 @@ enum ClassicAQ20SwarmguardNeedler : uint32
 // Spell scripts
 enum ClassicAQ20SpellScripts : uint32
 {
-    SPELL_AQ20_DRAIN_MANA_MOAM             = 25676,
-    SPELL_AQ20_DRAIN_MANA_MOAM_EFFECT      = 25671,
-    SPELL_AQ20_DRAIN_MANA_DESTROYER        = 25754,
-    SPELL_AQ20_DRAIN_MANA_DESTROYER_EFFECT = 25755
+    SPELL_AQ20_DRAIN_MANA_MOAM             = 25754,
+    SPELL_AQ20_DRAIN_MANA_MOAM_EFFECT      = 25671,   // 500 mana
+    SPELL_AQ20_DRAIN_MANA_DESTROYER        = 25676,
+    SPELL_AQ20_DRAIN_MANA_DESTROYER_EFFECT = 25755    // 250 mana
 };
 
 // VMaNGOS CreatureGroup::GetOriginalLeaderGuid().GetEntry()
@@ -478,29 +479,36 @@ struct classic_mob_obsidian_destroyer : public ScriptedAI
 {
     classic_mob_obsidian_destroyer(Creature* creature) : ScriptedAI(creature) { }
 
-    bool m_bIsInCombat = false;
+    // VMaNGOS 46417908 turned this into EventAI: mana reset (23777) on spawn, on reaching home and on aggro,
+    // Drain Mana every 6 to 7 seconds, Purge checked every second at full mana, Drop Obsidian on death.
     uint32 m_uiDrainMana_Timer = 0;
+    uint32 m_uiPurge_Timer = 0;
 
     void Reset() override
     {
-        m_uiDrainMana_Timer = 7000;
-        me->SetPower(POWER_MANA, 0);
+        m_uiDrainMana_Timer = urand(6000, 7000);
+        m_uiPurge_Timer = 0;
+    }
 
-        m_bIsInCombat = false;
+    void JustAppeared() override
+    {
+        ScriptedAI::JustAppeared();
+        DoCastSelf(SPELL_AQ20_OD_RESET_MANA, true);
+    }
+
+    void JustReachedHome() override
+    {
+        DoCastSelf(SPELL_AQ20_OD_RESET_MANA, true);
     }
 
     void JustEngagedWith(Unit* /*who*/) override
     {
-        DoZoneInCombat();
-        if (!m_bIsInCombat)
-        {
-            me->SetPower(POWER_MANA, 0);
-            m_bIsInCombat = true;
-        }
+        DoCastSelf(SPELL_AQ20_OD_RESET_MANA, true);
     }
 
     void JustDied(Unit* /*killer*/) override
     {
+        // VMaNGOS casts Drop Obsidian (27627, summons 181068); summoned directly as before
         ClassicAQ20SummonObsidianChunk(me, GO_AQ20_SMALL_OBSIDIAN_CHUNK);
     }
 
@@ -509,13 +517,19 @@ struct classic_mob_obsidian_destroyer : public ScriptedAI
         if (!UpdateVictim())
             return;
 
-        if (me->GetPower(POWER_MANA) >= me->GetMaxPower(POWER_MANA) && m_bIsInCombat)
-            DoCastSelf(SPELL_AQ20_OD_PURGE, true);
+        if (m_uiPurge_Timer < uiDiff)
+        {
+            if (me->GetPower(POWER_MANA) >= me->GetMaxPower(POWER_MANA))
+                DoCastSelf(SPELL_AQ20_OD_PURGE);
+            m_uiPurge_Timer = 1000;
+        }
+        else
+            m_uiPurge_Timer -= uiDiff;
 
         if (m_uiDrainMana_Timer < uiDiff)
         {
             DoCastSelf(SPELL_AQ20_OD_DRAINMANA);
-            m_uiDrainMana_Timer = 7000;
+            m_uiDrainMana_Timer = urand(6000, 7000);
         }
         else
             m_uiDrainMana_Timer -= uiDiff;

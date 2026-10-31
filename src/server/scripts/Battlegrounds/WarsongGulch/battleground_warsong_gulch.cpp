@@ -23,6 +23,7 @@
 #include "GameObject.h"
 #include "GameObjectAI.h"
 #include "GameTime.h"
+#include "Log.h"
 #include "Map.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
@@ -755,6 +756,11 @@ struct battleground_classic_warsong_gulch : BattlegroundScript
     {
         if (gameObject->GetEntry() >= ClassicWarsongGulch::GO_DOOR_FIRST && gameObject->GetEntry() <= ClassicWarsongGulch::GO_DOOR_LAST)
             _doors.insert(gameObject->GetGUID());
+        // A rune enters the map at the start and again when its respawn time has run down (Map::ProcessRespawns).
+        if (gameObject->HasStringId("bg_buff_object"))
+            TC_LOG_INFO("bg.buffs", "[bg_buff] WSG instance {} rune {} ({}) spawn {} in the world at ({:.1f}, {:.1f}, {:.1f})",
+                battleground->GetInstanceID(), gameObject->GetEntry(), gameObject->GetGOInfo()->name, gameObject->GetSpawnId(),
+                gameObject->GetPositionX(), gameObject->GetPositionY(), gameObject->GetPositionZ());
     }
 
     void OnUpdate(uint32 diff) override
@@ -777,6 +783,10 @@ struct battleground_classic_warsong_gulch : BattlegroundScript
                     if (player->IsAlive())
                         if (GameObject* buff = player->FindNearestGameObjectWithOptions(BuffPickupRadius, { .StringId = "bg_buff_object" }))
                         {
+                            TC_LOG_INFO("bg.buffs", "[bg_buff] WSG instance {} {} takes rune {} ({}) spawn {} at {:.1f} y (dz {:.1f}), respawn in {} s",
+                                battleground->GetInstanceID(), player->GetName(), buff->GetEntry(), buff->GetGOInfo()->name, buff->GetSpawnId(),
+                                player->GetExactDist(buff), player->GetPositionZ() - buff->GetPositionZ(),
+                                buff->GetGameObjectData() ? buff->GetGameObjectData()->spawntimesecs : 0);
                             buff->ActivateObject(GameObjectActions::Disturb, 0, player);
                             buff->DespawnOrUnsummon();
                         }
@@ -1113,8 +1123,10 @@ private:
         battleground->EndBattleground(winner);
     }
 
-    static constexpr uint32 PVP_STAT_FLAG_CAPTURES = 928;
-    static constexpr uint32 PVP_STAT_FLAG_RETURNS = 929;
+    // PVPStat ids of map 489 in the 1.60 client (928 / 929 are the 2106 remake's): a stat the map does not list is dropped, which left
+    // the Flag Captures / Flag Returns columns empty
+    static constexpr uint32 PVP_STAT_FLAG_CAPTURES = 42;
+    static constexpr uint32 PVP_STAT_FLAG_RETURNS = 44;
 
     std::array<ClassicWarsongGulch::WsgFlagState, PVP_TEAMS_COUNT> _flagStates = { { ClassicWarsongGulch::WsgFlagState::OnBase, ClassicWarsongGulch::WsgFlagState::OnBase } };
     std::array<ObjectGuid, PVP_TEAMS_COUNT> _flagKeepers;

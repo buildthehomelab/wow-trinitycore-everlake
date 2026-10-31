@@ -74,7 +74,7 @@ public:
     bool cast_rank(uint32 spell_id, ObjectGuid target);
 
     bool cast_at(uint32 spell_id, float x, float y, float z)
-    { return emit(GroundTargetSpellIntent{spell_id, x, y, z}); }
+    { return !owner_denied(spell_id) && emit(GroundTargetSpellIntent{spell_id, x, y, z}); }
 
     // start_attack() drops the emit silently if the same target was just
     // refused by Player::Attack within the last 30 s — see
@@ -454,6 +454,12 @@ private:
     bool push(Intent i);
     // Raid school rule gate for cast()/cast_rank(); see set_school_source.
     bool school_blocked(uint32 spell_id, ObjectGuid target);
+    // The owner's crowd-control orders ("@warlock no fear", "off cc"; CcDeny.h): a spell of a kind the snapshot's cc_deny holds is
+    // not sent, by cast() / cast_rank() / cast_at() / pet_cast() alike, so the rotation falls through to its next rule.
+    bool cc_denied(uint32 spell_id) const;
+    // The owner's "aoe off" (AoeDeny.h, snapshot aoe_denied): a spell that hits more than one enemy is not sent either.
+    bool aoe_denied(uint32 spell_id) const;
+    bool owner_denied(uint32 spell_id) const { return cc_denied(spell_id) || aoe_denied(spell_id); }
     void note_school_cast(uint32 spell_id, ObjectGuid target);
     // Avoided part of the pet's damage schools on `target` (0 = no hold).
     uint8 pet_hold_mask(ObjectGuid target) const;

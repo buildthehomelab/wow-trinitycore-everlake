@@ -56,7 +56,12 @@ enum ClassicMageTalentSpells
     SPELL_MAGE_ICE_LANCE                    = 400640,
     SPELL_MAGE_COMBUSTION                   = 11129,
     SPELL_MAGE_COMBUSTION_BUFF              = 28682,    // +10% Fire critical chance per stack
-    SPELL_MAGE_ARCANE_CONCENTRATION         = 11213     // effect 0: proc trigger of Clearcasting 12536, the amount is the chance
+    SPELL_MAGE_ARCANE_CONCENTRATION         = 11213,    // effect 0: proc trigger of Clearcasting 12536, the amount is the chance
+    SPELL_MAGE_FIRE_POWER                   = 11124,    // effect 0: dummy, % per Fire effect of the mage on the target (70532)
+    SPELL_MAGE_FROST_WARDING                = 11189,    // 70630 effect 2: % more absorb for Ice Barrier and Frost Ward
+    SPELL_MAGE_FRIGID_POWER                 = 1326891,  // 70630: Frost damage buff that Ice Barrier grants for its duration
+    SPELL_MAGE_WINTERS_CHILL_TALENT         = 11180,    // effect 1: proc chance
+    SPELL_MAGE_WINTERS_CHILL                = 12579     // 70630 effect 1: % spell power for the caster's next Cone of Cold, per stack
 };
 
 enum ClassicShamanTalentSpells
@@ -99,6 +104,16 @@ static void TryGrantFingersOfFrost(Unit* mage)
     mage->CastSpell(mage, SPELL_MAGE_FINGERS_OF_FROST_IGNORE, true);
     mage->CastSpell(mage, SPELL_MAGE_FINGERS_OF_FROST_STACKS, CastSpellExtraArgs(TRIGGERED_FULL_MASK)
         .AddSpellMod(SPELLVALUE_AURA_STACK, std::max(1, charges->GetAmountAsInt())));
+}
+
+// 11180 - Winter's Chill (client 70630): the talent's effect 1 % chance to put Winter's Chill 12579 on the target
+static void TryApplyWintersChill(Unit* mage, Unit* target)
+{
+    AuraEffect const* chance = mage->GetAuraEffect(SPELL_MAGE_WINTERS_CHILL_TALENT, EFFECT_1);
+    if (!chance || !target || !roll_chance(float(chance->GetAmount())))
+        return;
+
+    mage->CastSpell(target, SPELL_MAGE_WINTERS_CHILL, true);
 }
 
 /*######
@@ -414,6 +429,10 @@ class classic_spell_mage_ice_lance : public SpellScript
         Unit* caster = GetCaster();
         if (_fingersOfFrost || GetHitUnit()->HasAuraState(AURA_STATE_FROZEN, GetSpellInfo(), caster))
             SetHitDamage(CalculatePct(GetHitDamage(), GetEffectInfo(EFFECT_1).CalcValue(caster)));
+
+        // client 70630: a Fingers of Frost empowered Ice Lance can apply Winter's Chill
+        if (_fingersOfFrost)
+            TryApplyWintersChill(caster, GetHitUnit());
     }
 
     void Register() override
@@ -562,6 +581,189 @@ class classic_spell_mage_arcane_concentration : public AuraScript
     void Register() override
     {
         DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_mage_arcane_concentration::CheckProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
+// 11071 - Frostbite (70532): "Gives your Chill effects a $s1% chance to Freeze the target for $12494d." The client spell is a proc trigger
+// (Frostbite 12494) with no class mask and the talent chance as the effect amount. The row limits it to the mage's Chill spells (family
+// flag 0x100000) that hit; the chance is rolled from the amount.
+class classic_spell_mage_frostbite : public AuraScript
+{
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        return roll_chance(float(aurEff->GetAmount()));
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_mage_frostbite::CheckProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
+// 11124 - Fire Power (70532): "Increases the damage done by your Fire spells by $s1% per your Fire effects on the target, up to a maximum
+// increase of ${$s1*4}%. Effects which mix multiple schools of magic do not qualify." The talent is a dummy. Fire effects: the mage's
+// auras on the target whose school is Fire alone. Bound to the mage's Fire damage spells, direct damage and periodic damage.
+namespace ClassicFirePower
+{
+    static constexpr uint32 MAX_EFFECTS = 4;
+
+    static float GetBonusPct(Unit const* caster, Unit const* victim)
+    {
+        if (!caster || !victim)
+            return 0.0f;
+
+        AuraEffect const* talent = caster->GetAuraEffect(SPELL_MAGE_FIRE_POWER, EFFECT_0);
+        if (!talent || talent->GetAmount() <= 0.0)
+            return 0.0f;
+
+        uint32 effects = 0;
+        for (auto const& applied : victim->GetAppliedAuras())
+        {
+            Aura const* aura = applied.second->GetBase();
+            if (aura->GetCasterGUID() != caster->GetGUID())
+                continue;
+
+            if (aura->GetSpellInfo()->GetSchoolMask() == SPELL_SCHOOL_MASK_FIRE)
+                ++effects;
+        }
+
+        return float(talent->GetAmount()) * float(std::min(effects, MAX_EFFECTS));
+    }
+}
+
+class classic_spell_mage_fire_power : public SpellScript
+{
+    void HandleCalcDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod)
+    {
+        if (float const bonus = ClassicFirePower::GetBonusPct(GetCaster(), victim); bonus > 0.0f)
+            AddPct(pctMod, bonus);
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_mage_fire_power::HandleCalcDamage);
+    }
+};
+
+class classic_spell_mage_fire_power_aura : public AuraScript
+{
+    void HandleCalcDamage(AuraEffect const* aurEff, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod)
+    {
+        if (aurEff->GetAuraType() != SPELL_AURA_PERIODIC_DAMAGE)
+            return;
+
+        if (float const bonus = ClassicFirePower::GetBonusPct(GetCaster(), victim); bonus > 0.0f)
+            AddPct(pctMod, bonus);
+    }
+
+    void Register() override
+    {
+        DoEffectCalcDamageAndHealing += AuraEffectCalcDamageFn(classic_spell_mage_fire_power_aura::HandleCalcDamage, EFFECT_ALL, SPELL_AURA_ANY);
+    }
+};
+
+// Client 70630, Frost Ward (6143, 8461, 8462, 10177, 28609) and Ice Barrier (11426, 13031-13033): "Absorbs
+// ${$s1+($SPFR*0.1)*($11189s3/100+1)} damage". The core adds 10% of Frost spell damage (classic_spell_value bonus_coeff) and Frost Warding
+// effect 2 already raises the base points (a percent modifier); here it raises the spell damage part too. Frost Ward effect 1 is a dummy
+// in 70630 (it was the reflect aura): "$w2% chance to negate Frost damage", the warded spell is absorbed whole and the ward keeps its amount.
+// Ice Barrier also grants Frigid Power 1326891 for its duration.
+class classic_spell_mage_frost_ward_absorb : public AuraScript
+{
+    void CalcAbsorb(AuraEffect const* /*aurEff*/, Unit* /*victim*/, int32& /*absorb*/, int32& flatMod, float& /*pctMod*/)
+    {
+        Unit* caster = GetCaster();
+        if (!caster || flatMod <= 0)
+            return;
+
+        if (AuraEffect const* warding = caster->GetAuraEffect(SPELL_MAGE_FROST_WARDING, EFFECT_2))
+            if (warding->GetAuraType() == SPELL_AURA_ADD_PCT_MODIFIER && warding->GetAmount() > 0)
+                flatMod = int32(std::round(float(flatMod) * (1.0f + float(warding->GetAmount()) / 100.0f)));
+    }
+
+    void Absorb(AuraEffect* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
+    {
+        AuraEffect const* negate = GetEffect(EFFECT_1);
+        if (!negate || negate->GetAuraType() != SPELL_AURA_DUMMY || negate->GetAmount() <= 0)
+            return;
+
+        if (!dmgInfo.GetSpellInfo() || !roll_chance(float(negate->GetAmount())))
+            return;
+
+        absorbAmount = dmgInfo.GetDamage();
+        PreventDefaultAction();
+    }
+
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (!GetSpellInfo()->HasAura(SPELL_AURA_ADD_PCT_MODIFIER))   // Ice Barrier of 70630 (its Frost damage effects), not Frost Ward
+            return;
+
+        Unit* target = GetTarget();
+        if (sSpellMgr->GetSpellInfo(SPELL_MAGE_FRIGID_POWER, DIFFICULTY_NONE))
+            target->CastSpell(target, SPELL_MAGE_FRIGID_POWER, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringAura(GetEffect(EFFECT_0)));
+    }
+
+    void Register() override
+    {
+        DoEffectCalcDamageAndHealing += AuraEffectCalcAbsorbFn(classic_spell_mage_frost_ward_absorb::CalcAbsorb, EFFECT_0);
+        OnEffectAbsorb += AuraEffectAbsorbFn(classic_spell_mage_frost_ward_absorb::Absorb, EFFECT_0);
+        AfterEffectApply += AuraEffectApplyFn(classic_spell_mage_frost_ward_absorb::HandleApply, EFFECT_0, SPELL_AURA_SCHOOL_ABSORB, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 11180 - Winter's Chill, client 70630: "Gives your Frostbolt, Frost Blast, and Fingers of Frost empowered Ice Lance spells a $m2% chance to
+// apply Winter's Chill, increasing the target's damage taken from your next Cone of Cold by $12579s1% and it gains an additional $s3% of
+// your spell damage, stacking up to $s1 times." The row limits the proc to Frostbolt and Frost Blast (family flag 0x20); the empowered
+// Ice Lance rolls in classic_spell_mage_ice_lance. 70630 gives the talent one proc charge, which would end the passive talent on its first
+// proc: it keeps none.
+class classic_spell_mage_winters_chill : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_MAGE_WINTERS_CHILL });
+    }
+
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetAura()->SetCharges(0);
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        TryApplyWintersChill(GetTarget(), eventInfo.GetActionTarget());
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_spell_mage_winters_chill::HandleApply, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL, AURA_EFFECT_HANDLE_REAL);
+        OnEffectProc += AuraEffectProcFn(classic_spell_mage_winters_chill::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
+// Cone of Cold (120, 8492, 10159, 10160, 10161) with Winter's Chill 12579 of client 70630 on the target: the debuff's effect 0 (damage
+// taken from the caster's Cone of Cold, per stack) is the core's; its effect 1 adds that % of the caster's Frost spell damage, and the
+// Cone of Cold spends the debuff. A 70532 debuff (no effect 1) stays as it was.
+class classic_spell_mage_cone_of_cold_winters_chill : public SpellScript
+{
+    void HandleCalcDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*damage*/, int32& flatMod, float& /*pctMod*/)
+    {
+        Unit* caster = GetCaster();
+        if (AuraEffect const* bonus = victim->GetAuraEffect(SPELL_MAGE_WINTERS_CHILL, EFFECT_1, caster->GetGUID()))
+            flatMod += int32(float(caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FROST)) * float(bonus->GetAmount()) / 100.0f);
+    }
+
+    void SpendWintersChill()
+    {
+        Unit* target = GetHitUnit();
+        if (target && target->GetAuraEffect(SPELL_MAGE_WINTERS_CHILL, EFFECT_1, GetCaster()->GetGUID()))
+            target->RemoveAurasDueToSpell(SPELL_MAGE_WINTERS_CHILL, GetCaster()->GetGUID());
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_mage_cone_of_cold_winters_chill::HandleCalcDamage);
+        AfterHit += SpellHitFn(classic_spell_mage_cone_of_cold_winters_chill::SpendWintersChill);
     }
 };
 
@@ -1281,6 +1483,11 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_master_of_elements);
     RegisterSpellScript(classic_spell_mage_magic_absorption);
     RegisterSpellScript(classic_spell_mage_arcane_concentration);
+    RegisterSpellScript(classic_spell_mage_frostbite);
+    RegisterSpellAndAuraScriptPair(classic_spell_mage_fire_power, classic_spell_mage_fire_power_aura);
+    RegisterSpellScript(classic_spell_mage_frost_ward_absorb);
+    RegisterSpellScript(classic_spell_mage_winters_chill);
+    RegisterSpellScript(classic_spell_mage_cone_of_cold_winters_chill);
 
     // Shaman
     RegisterSpellScript(classic_spell_sha_flurry);

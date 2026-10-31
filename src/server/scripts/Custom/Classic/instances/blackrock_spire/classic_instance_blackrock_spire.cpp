@@ -59,7 +59,7 @@ namespace
         AREATRIGGER_ENTER_UBRS      = 2046,
         EVENT_EMBERSEER_START       = 4884,                     // spell 16533, sent by the Blackrock Altar ritual
         EVENT_SPIDER_EGGS_LOOTED    = 4799,                     // Spire Spider Egg chests 175588 / 175606 (Data6), fired when looted
-        NPC_SPIRE_SPIDERLING        = 10229,
+        NPC_SPIRE_SPIDERLING        = 10375,                    // VMaNGOS spell 16453 Summon Spire Spiderling (egg trap 175590); 10229 has no template
         SPIDER_EGG_SPIDERLINGS      = 3,
         DATA_EMBERSEER_START        = 1,                        // SmartAI 9816 "on data set 1 1": growth phase
         SPELL_ENCAGED_EMBERSEER     = 15282,                    // creature_template_addon aura, removed 5 s into the growth

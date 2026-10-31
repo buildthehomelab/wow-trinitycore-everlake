@@ -50,4 +50,9 @@ TEST_CASE("ConjureGate: a conjure is made out of combat and only with the mana t
     CHECK_FALSE(MayConjure(false, false, 69, 70));     // NO_POWER: the live warlock at low mana
     CHECK_FALSE(MayConjure(true, true, 900, 70));      // in combat
     CHECK_FALSE(MayConjure(false, true, 900, 70));     // the moment after combat
+    // A mage drinks before it conjures (UBRS 2026-10-29: a Mana Ruby at 4 % mana between two pulls).
+    CHECK(MageConjureWaitsForMana(4));
+    CHECK(MageConjureWaitsForMana(kMageConjureMinManaPct - 1));
+    CHECK_FALSE(MageConjureWaitsForMana(kMageConjureMinManaPct));
+    CHECK_FALSE(MageConjureWaitsForMana(100));
 }

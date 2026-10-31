@@ -83,6 +83,10 @@ namespace Playerbot::Raid {
         // Flamegor has no tank debuff in his script (boss_flamegor.cpp:71-121): only Wing Buffet / Shadow Flame / Frenzy. Tank facing cannot be
         // a stand rule: no justified coordinates (the dragons are pulled to wherever the tank stands).
         r.tankSwap.push_back({ 14601, 23340, 1 });                                // Ebonroc: Shadow of Ebonroc (boss_ebonroc.cpp:24,106)
+        // Firemaw: the tank takes a Flame Buffet stack every 1.8-3 s and cannot step out of his sight; at 8 (1,350 a hit) a clean off-tank,
+        // waiting out of sight (BreakSight, RaidEncounterData_BWL_Movement.cpp), takes him, and the old tank goes out of sight to drop them.
+        // The taker may carry 3 itself: it takes one or two on the walk out from cover, before its taunt is in reach.
+        r.tankSwap.push_back({ 11983, 23341, 8, 3 });
         // Wing Buffet halves the victim's threat (boss_firemaw.cpp:71-77) on all three: the tank that lost the drake taunts it back.
         r.retaunt.push_back(11983);
         r.retaunt.push_back(14601);

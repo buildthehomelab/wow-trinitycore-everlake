@@ -85,3 +85,38 @@ TEST_CASE("The first candidate the data knows is taken", "[ClassicRaidLoadout]")
     CHECK(FirstKnown("A|D", knows).empty());
     CHECK(FirstKnown("", knows).empty());
 }
+
+TEST_CASE("Enchants follow the bot's gear level", "[ClassicRaidLoadout]")
+{
+    CHECK(TierForAverageItemLevel(0) == EnchantTier::Cheap);
+    CHECK(TierForAverageItemLevel(kStandardEnchantIlvl - 1) == EnchantTier::Cheap);
+    CHECK(TierForAverageItemLevel(kStandardEnchantIlvl) == EnchantTier::Standard);
+    CHECK(TierForAverageItemLevel(83) == EnchantTier::Standard);   // Blackwing Lair
+    CHECK(TierForAverageItemLevel(88) == EnchantTier::Naxx);       // Ahn'Qiraj 40, tier 2.5
+
+    CHECK(TierOfEnchant("Might of the Scourge") == EnchantTier::Naxx);
+    CHECK(TierOfEnchant("Fortitude of the Scourge") == EnchantTier::Naxx);
+    CHECK(TierOfEnchant("Power of the Scourge") == EnchantTier::Naxx);
+    CHECK(TierOfEnchant("Enchant Weapon - Crusader") == EnchantTier::Standard);
+    CHECK(TierOfEnchant("Zandalar Signet of Might") == EnchantTier::Standard);
+    CHECK(TierOfEnchant("Arcanum of Rapidity") == EnchantTier::Standard);
+    CHECK(TierOfEnchant("Enchant Bracer - Strength") == EnchantTier::Cheap);
+
+    // A shoulder wish in greens gets nothing, in BWL gear the Zandalar signet, in tier 2.5 the Scourge enchant.
+    auto shoulders = [](EnchantTier t)
+    {
+        for (EnchantWish const& w : WishesFor(Role::Melee, false, 0))
+            if (w.slot == SLOT_SHOULDERS)
+                return FirstKnown(w.names, [&](std::string_view n) { return EnchantAllowed(n, t); });
+        return std::string_view{};
+    };
+    CHECK(shoulders(EnchantTier::Cheap).empty());
+    CHECK(shoulders(EnchantTier::Standard) == "Zandalar Signet of Might");
+    CHECK(shoulders(EnchantTier::Naxx) == "Might of the Scourge");
+
+    // Every role's cheap tier still has bracers.
+    for (Role r : { Role::Tank, Role::Healer, Role::Caster, Role::Melee, Role::Hunter })
+        for (EnchantWish const& w : WishesFor(r, false, 2))
+            if (w.slot == SLOT_WRISTS && r != Role::Healer)
+                CHECK_FALSE(FirstKnown(w.names, [](std::string_view n) { return EnchantAllowed(n, EnchantTier::Cheap); }).empty());
+}

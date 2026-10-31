@@ -633,12 +633,17 @@ void DoBash(ApPredicateContext const& ctx, BotIntentEmitter& e) { Interrupt::Cas
 constexpr int32 kDemoRoarRage = 20;
 bool ShouldDemoRoar(ApPredicateContext const& ctx)
 {
-    return HasLiveTarget(ctx) && InBear(ctx) && ctx.bot.in_combat() && Rage(ctx) >= kDemoRoarRage
+    if (!HasLiveTarget(ctx) || !InBear(ctx) || !ctx.bot.in_combat())
+        return false;
+    bool const ok = Rage(ctx) >= kDemoRoarRage
         && Ready(ctx, DEMORALIZING_ROAR)
         && TankThreat::DemoRefreshWorth(ctx.bot, 10.0f)
         && MeleeAoeSafe(ctx.bot, ctx.group.is_raid() || ctx.bot.is_in_raid(), 10.0f, /*tank*/ true, "Demoralizing Roar")
         // No damage (a sheep survives it), but it aggroes every mob it lands on.
         && AoeSafeAroundSelf(ctx.bot, 10.0f, /*damaging*/ false, /*tank*/ true, "Demoralizing Roar");
+    if (!ok)
+        TankThreat::NoteDemoSkip(ctx.bot, "Demoralizing Roar", Rage(ctx), Ready(ctx, DEMORALIZING_ROAR));
+    return ok;
 }
 void DoDemoRoar(ApPredicateContext const&, BotIntentEmitter& e) { e.cast(DEMORALIZING_ROAR); }
 
@@ -786,11 +791,26 @@ bool ShouldHealingTouch(ApPredicateContext const& ctx)
     return CasterReady(ctx, HEALING_TOUCH) && LowestFriendOrSelf(ctx).hp_pct <= 65;
 }
 
+// Regrowth on a patient the triage hands over at 66-75 %, above the Healing Touch line: the druid stood idle there (245 support
+// scorecard: 8-20 casts in 120 s, no Regrowth at all, ending on 26-96 % mana; 143 of its 195 patients were at 70-89 %). One per
+// patient while its own Regrowth HoT runs, from 40 % mana up, the rank sized to the deficit (ClassicHeal::EmitHeal / PlanHeal),
+// so it is not a top-rank spam.
+bool ShouldRegrowthTopUp(ApPredicateContext const& ctx)
+{
+    if (!CasterReady(ctx, REGROWTH) || ManaPct(ctx) < ClassicHeal::kSaveManaPct) return false;
+    HealTarget const t = LowestFriendOrSelf(ctx);
+    return t.hp_pct <= 75 && !TargetHasMyAura(ctx, REGROWTH, t.guid);
+}
+void DoRegrowthTopUp(ApPredicateContext const& ctx, BotIntentEmitter& e)
+{
+    ClassicHeal::EmitHeal(ctx.bot, ctx.group, e, REGROWTH, ClassicHeal::PickPatient(ctx));
+}
+
 bool ShouldRejuvenation(ApPredicateContext const& ctx)
 {
     if (!CasterReady(ctx, REJUVENATION)) return false;
     HealTarget const t = LowestFriendOrSelf(ctx);
-    return t.hp_pct <= 85 && ClassicHeal::CanPayMana(ctx.bot, ctx.bot.resolve_rank(REJUVENATION)) && !TargetHasMyAura(ctx, REJUVENATION, t.guid) && ClassicHeal::HotAllowed(ctx.bot, ctx.group, t.guid)
+    return t.hp_pct <= 90 && ClassicHeal::CanPayMana(ctx.bot, ctx.bot.resolve_rank(REJUVENATION)) && !TargetHasMyAura(ctx, REJUVENATION, t.guid) && ClassicHeal::HotAllowed(ctx.bot, ctx.group, t.guid)
         && ClassicHeal::HotWorthIt(ctx.bot, ctx.group, t.guid)
         && !ClassicHeal::HotClaimedByOther(ctx.bot, ctx.group, t.guid, REJUVENATION);
 }
@@ -904,6 +924,7 @@ ApRule const kHealerRules[] = {
     { ShouldTranquility,          DoTranquility,       "classic_resto:tranquility" },
     { ShouldHealingTouch,         DoHealingTouch,      "classic_resto:healing_touch" },
     { ShouldDispel,               DoDispel,            "classic_resto:dispel" },
+    { ShouldRegrowthTopUp,        DoRegrowthTopUp,     "classic_resto:regrowth_top_up" },
     { ShouldRejuvenation,         DoRejuvenation,      "classic_resto:rejuvenation" },
     { ShouldHealerSchoolNuke,     DoHealerSchoolNuke,  "classic_resto:school_nuke" },
     { ShouldHealerMoonfire,       DoMoonfire,          "classic_resto:moonfire" },

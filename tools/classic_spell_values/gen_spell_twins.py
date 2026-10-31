@@ -10,9 +10,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import vanilla_spells as v
 import compare_spells as cs
-from gen_spell_info import CAST_TOL, TIME_TOL, RANGE_TOL, MELEE_RANGE, esc
+from gen_spell_info import CAST_TOL, TIME_TOL, RANGE_TOL, MELEE_RANGE, KEEP_CLIENT_DURATION, KEEP_CLIENT_CAST, KEEP_CLIENT_COOLDOWN, \
+    KEEP_CLIENT_RANGE, KEEP_CLIENT_COST, KEEP_CLIENT_VALUE, esc
 
 FIRST_SCALED = 1000000     # ClassicSpellValue::FirstScaledSpellId: from here on the spells are not legacy ones
+# Drain Life 403677-403689: the 70532 spell is a 15 s drain that is not channeled, not a twin of the vanilla channel
+NOT_TWINS = {403677, 403685, 403686, 403687, 403688, 403689}
 
 
 def main():
@@ -34,7 +37,7 @@ def main():
     sig_a = lambda r: tuple((int(r['e%d_effect' % i]), int(r['e%d_aura' % i]), int(r['e%d_misc' % i])) for i in (1, 2, 3))
     twins, ambiguous, unmatched = {}, [], []
     for t in sorted(audit):
-        if t in best or t >= FIRST_SCALED:
+        if t in best or t >= FIRST_SCALED or t in NOT_TWINS:
             continue
         r = audit[t]
         n = r['name'].lower()
@@ -59,11 +62,11 @@ def main():
         rng = dbc['range'].get(int(num(f, 'rangeIndex')), 0.0)
         norm = lambda d: 0 if d is None or d <= 0 else d
         o = {}
-        if abs(cast - int(c['cast_ms'])) > CAST_TOL: o['cast_ms'] = cast
-        if abs(rec - int(c['recovery_ms'])) > TIME_TOL: o['recovery_ms'] = rec
-        if abs(cat - int(c['category_recovery_ms'])) > TIME_TOL: o['category_recovery_ms'] = cat
-        if dur is not None and norm(dur) != norm(int(c['duration_ms'])): o['duration_ms'] = dur
-        if rng > MELEE_RANGE and abs(rng - float(c['range_max'])) > RANGE_TOL: o['range_max'] = rng
+        if t not in KEEP_CLIENT_CAST and abs(cast - int(c['cast_ms'])) > CAST_TOL: o['cast_ms'] = cast
+        if t not in KEEP_CLIENT_COOLDOWN and abs(rec - int(c['recovery_ms'])) > TIME_TOL: o['recovery_ms'] = rec
+        if t not in KEEP_CLIENT_COOLDOWN and abs(cat - int(c['category_recovery_ms'])) > TIME_TOL: o['category_recovery_ms'] = cat
+        if dur is not None and t not in KEEP_CLIENT_DURATION and norm(dur) != norm(int(c['duration_ms'])): o['duration_ms'] = dur
+        if t not in KEEP_CLIENT_RANGE and rng > MELEE_RANGE and abs(rng - float(c['range_max'])) > RANGE_TOL: o['range_max'] = rng
         rows.append((t, vid, name, o, int(num(f, 'manaCost')), int(num(f, 'manaCostPercentage'))))
     cols = ('cast_ms', 'recovery_ms', 'category_recovery_ms', 'duration_ms', 'range_max')
     fmt = lambda x: 'NULL' if x is None else (repr(float(x)) if isinstance(x, float) else str(x))
@@ -82,11 +85,14 @@ def main():
     s.append('DELETE FROM `classic_spell_cost` WHERE `spell_id` IN (SELECT `spell_id` FROM `classic_spell_twin`);')
     for i in range(0, len(rows), 500):
         s.append('INSERT INTO `classic_spell_cost` (`spell_id`,`mana_cost`,`mana_cost_pct`,`spell_name`) VALUES')
-        s.append(',\n'.join("(%d,%d,%d,'%s')" % (t, m, p, esc(n)) for t, _, n, _, m, p in rows[i:i + 500]) + ';')
+        s.append(',\n'.join("(%d,%d,%d,'%s')" % (t, m, p, esc(n)) for t, _, n, _, m, p in rows[i:i + 500] if t not in KEEP_CLIENT_COST) + ';')
     s.append('DELETE FROM `classic_spell_value` WHERE `spell_id` IN (SELECT `spell_id` FROM `classic_spell_twin`);')
     s.append('INSERT INTO `classic_spell_value` (`spell_id`,`effect_index`,`effect`,`apply_aura`,`base_points`,`die_sides`,`points_per_level`,`misc_value`,`points_per_combo`,`bonus_coeff`,`spell_name`)\n'
              'SELECT w.`spell_id`, x.`effect_index`, x.`effect`, x.`apply_aura`, x.`base_points`, x.`die_sides`, x.`points_per_level`, x.`misc_value`, x.`points_per_combo`, x.`bonus_coeff`, x.`spell_name`\n'
              'FROM `classic_spell_twin` w JOIN `classic_spell_value` x ON x.`spell_id` = w.`vanilla_spell_id`;')
+    keep = [(t, i) for t, i in sorted(KEEP_CLIENT_VALUE) if t in twins]
+    if keep:
+        s.append('DELETE FROM `classic_spell_value` WHERE (`spell_id`, `effect_index`) IN (%s);' % ', '.join('(%d, %d)' % k for k in keep))
     sys.stdout.write('\n'.join(s) + '\n')
     if a.report:
         with open(a.report, 'w') as fh:

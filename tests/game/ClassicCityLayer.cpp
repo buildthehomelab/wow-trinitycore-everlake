@@ -118,3 +118,12 @@ TEST_CASE("No module source shadows a CityLayer function with a wrapper of the s
     }
     CHECK(checked > 0);
 }
+
+TEST_CASE("A same-level step over a pit of liquid is a pit, a slope or a dry drop is not", "[ClassicCityLayer]")
+{
+    using namespace Playerbot::V2::Fleet;
+    CHECK(IntoLiquidPit(501.7f, 501.7f, 483.2f, true));           // Ironforge: the walkway over the Great Forge's lava
+    CHECK_FALSE(IntoLiquidPit(501.7f, 501.7f, 483.2f, false));    // the same drop on dry ground is AcrossDrop's call
+    CHECK_FALSE(IntoLiquidPit(501.7f, 501.7f, 498.0f, true));     // a puddle down a few steps
+    CHECK_FALSE(IntoLiquidPit(501.7f, 483.2f, 483.2f, true));     // the goal itself was asked down there
+}

@@ -11,7 +11,7 @@ INSERT INTO `conditions` (`SourceTypeOrReferenceId`, `SourceGroup`, `SourceEntry
 (15, 41301, 2, 0, 0, 12, 0, 12, 0, 0, '', 0, 0, 0, '', 'Innkeeper Trick or Treat - only during Hallow''s End'),
 (15, 41301, 2, 0, 0, 1, 0, 24755, 0, 0, '', 1, 0, 0, '', 'Innkeeper Trick or Treat - not while Tricked or Treated');
 
--- 2. The eight innkeepers from the AnoCore world dump came without a gossip menu, so a right click opened an empty window: no
+-- 2. The eight innkeepers from the other Forever server world dump came without a gossip menu, so a right click opened an empty window: no
 --    Trick or Treat, but also no "Make this inn my home" or shop. They get the generic vanilla innkeeper menu 342 (six vanilla
 --    innkeepers use it; Trick or Treat is already gated there). Berdun Cliffbrew (240482) and Adarien (252691) sell nothing, so
 --    the two shop options of 342 are hidden on them.

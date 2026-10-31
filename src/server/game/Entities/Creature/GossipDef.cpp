@@ -317,6 +317,17 @@ void PlayerMenu::SendPointOfInterest(uint32 id) const
 
     packet.Flags = pointOfInterest->Flags;
     packet.Pos = pointOfInterest->Pos;
+
+    // vanilla points have no height (the vanilla packet had none); the client places the map pin by its 3D position,
+    // so give it the ground there, searched from the player's own floor (Undercity lies under Tirisfal)
+    if (packet.Pos.Pos.GetPositionZ() == 0.0f)
+    {
+        if (Player const* player = _session->GetPlayer())
+        {
+            float z = player->GetMapHeight(packet.Pos.Pos.GetPositionX(), packet.Pos.Pos.GetPositionY(), player->GetPositionZ() + 30.0f, true, 100.0f);
+            packet.Pos.Pos.m_positionZ = z > INVALID_HEIGHT ? z : player->GetPositionZ();
+        }
+    }
     packet.Icon = pointOfInterest->Icon;
     packet.Importance = pointOfInterest->Importance;
     packet.WMOGroupID = pointOfInterest->WMOGroupID;

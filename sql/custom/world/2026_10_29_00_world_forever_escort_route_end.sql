@@ -1,5 +1,5 @@
 -- Escorts that walk their whole route but never give the escort credit (Discord, Beastmade 2026-10-29: Pal'juh, Lost in the
--- Shadows 99123). The AnoCore escorts (2026_10_26_38) give the credit on SMART_EVENT_WAYPOINT_ENDED with point 0, but in this
+-- Shadows 99123). The other Forever server escorts (2026_10_26_38) give the credit on SMART_EVENT_WAYPOINT_ENDED with point 0, but in this
 -- core point 0 means "only when the route ends on node 0" ("any node" is 0xFFFFFFFF), and the routes run from node 1, so the
 -- event never fired. The route start's quest (WP_START action_param4) gives nothing either, since the route is started on the
 -- escort itself, not on the player, and the quests want the escort's kill credit. Now the credit (and for Seeking Refuge

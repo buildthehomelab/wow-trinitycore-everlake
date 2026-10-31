@@ -40,6 +40,7 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "WorldSession.h"
+#include "Diagnostics/ScenarioHuman.h"   // Scenario::PlaysAsHuman: a player-led scenario's stand-in counts as the player
 
 #include <mutex>
 #include <unordered_map>
@@ -213,6 +214,12 @@ void PveGroupCoordinator::Update(uint32 now_ms)
         }
         if (!ref)
             continue;
+        // The raid plan (tank roster, off tank, mob assignment, curses, fear) is for a raid group on a raid map (20 and 40 players) or in
+        // the open world (a world boss). A raid group in a dungeon plays it as a dungeon: UBRS is a 10-man, and its raid plan held both
+        // tanks on an assigned mob while six Incarcerators sat loose on the casters for 18 s (UBRS 2026-10-28 22:16; the owner: "UBRS is
+        // a 10-man, I wouldn't classify that as a raid ... anything above 20-man, you should start falling into your raid tactics").
+        const bool raid_rules = gs->is_raid && ((ref->instance_ctx.is_in_raid && (ref->instance_ctx.max_players == 0 ||
+                                    ref->instance_ctx.max_players >= BotSnapshotView::kRaidTacticsMinPlayers)) || !ref->instance_ctx.is_in_instance);
         DungeonAdvice const advice =
             Services::Dungeons().GetAdvice(BotSnapshotView(*ref));
 
@@ -281,7 +288,7 @@ void PveGroupCoordinator::Update(uint32 now_ms)
             if (!started)
                 started = now_ms;
             // A raid waits as long as configured (up to eight seconds: the tank takes a while to run in); a party keeps its six.
-            uint32 const wait_ms = gs->is_raid ? Services::Config().raid_dps_wait_timeout_ms()
+            uint32 const wait_ms = raid_rules ? Services::Config().raid_dps_wait_timeout_ms()
                                                : std::min<uint32>(Services::Config().raid_dps_wait_timeout_ms(), kPartyDpsWaitTimeoutMs);
             if (wait_ms && now_ms - started >= wait_ms && !(mark_release_until_.count(bkey) && now_ms < mark_release_until_[bkey]))
             {
@@ -356,7 +363,7 @@ void PveGroupCoordinator::Update(uint32 now_ms)
         // while they live and still tank; during a fight the roster only
         // grows (a new add gets a tank, nobody drops a mob mid-pull), out of
         // combat it shrinks back to three. Humans who tank are always on it.
-        if (gs->is_raid)
+        if (raid_rules)
         {
             std::vector<ObjectGuid> engaged;
             for (auto const& sn : snaps)
@@ -426,7 +433,7 @@ void PveGroupCoordinator::Update(uint32 now_ms)
         // advice unconditionally, so list-presence is "always" — and a
         // party tank-swap emergency is already handled by the legacy
         // taunt-swap rule without a standing off-tank designation.
-        const bool wants_off_tank = gs->is_raid;
+        const bool wants_off_tank = raid_rules;
         // Main tank: the raid-frame Main Tank flag first, else the first live tank (humans first).
         uint64 main_tank = 0, off_tank = 0;
         for (auto const& e : mem)
@@ -647,15 +654,36 @@ void PveGroupCoordinator::Update(uint32 now_ms)
                     if (e.guid_low == caster_low) return true;
                 return false;
             };
+            // Every member's view, not only the freshest one: the reference snapshot changes from plan to plan, and a member that
+            // does not see the current focus (out of its range, behind a wall) made the stickiness drop it (zf_antusul RC10: the
+            // focus changed 11 times in 90 s between the Witch Doctors and Shadowcasters of one fight, 112 -> 108 among two
+            // Shadowcasters both alive, while Shadowhunters hexed the tank and the casters were eaten). A mob any member sees dead
+            // or held by the group's crowd control is not a candidate, whatever an older view says.
+            std::vector<ObjectGuid> ruled_out;
+            for (auto const& sp : snaps)
+                for (auto const& u : sp->combat.nearby_enemies)
+                    if (u.hp <= 0 || cc_by_group(u))
+                        ruled_out.push_back(u.guid);
+            auto out = [&](ObjectGuid g) { return std::find(ruled_out.begin(), ruled_out.end(), g) != ruled_out.end(); };
+            // The freshest view first, so a new pick is the one it always was; the others only keep the old focus or fill a gap.
+            std::vector<BotSnapshot const*> views{ ref.get() };
+            for (auto const& sp : snaps)
+                if (sp != ref)
+                    views.push_back(sp.get());
             for (uint32 want : advice.high_priority_kill_entries)
             {
-                for (auto const& u : ref->combat.nearby_enemies)
+                bool kept = false;
+                for (BotSnapshot const* sp : views)
                 {
-                    if (u.hp <= 0 || u.entry != want) continue;
-                    if (cc_by_group(u)) continue;
-                    if (u.victim.IsEmpty()) continue;   // unpulled — leave it
-                    if (kill_focus.IsEmpty()) kill_focus = u.guid;
-                    if (u.guid == prev_focus) { kill_focus = prev_focus; break; }
+                    for (auto const& u : sp->combat.nearby_enemies)
+                    {
+                        if (u.hp <= 0 || u.entry != want || out(u.guid)) continue;
+                        if (u.victim.IsEmpty()) continue;   // unpulled — leave it
+                        if (kill_focus.IsEmpty()) kill_focus = u.guid;
+                        if (u.guid == prev_focus) { kill_focus = prev_focus; kept = true; break; }
+                    }
+                    if (kept)
+                        break;
                 }
                 if (!kill_focus.IsEmpty())
                     break;   // highest-priority entry with a live mob wins
@@ -710,7 +738,7 @@ void PveGroupCoordinator::Update(uint32 now_ms)
             PlanPrePullCc(bkey, b.group_low, b.map_id, now_ms, mem, snaps, plan);
 
         // -- Raid symbols on bots: kill / tank / crowd-control by icon (after the generic kill focus, before the curses) --
-        PlanMarkOrders(b.group_low, b.map_id, wants_off_tank, mem, snaps, plan);
+        PlanMarkOrders(b.group_low, b.map_id, wants_off_tank, advice.bosses, mem, snaps, plan);
 
         // -- Classic raid prep: warlock curses, fear, resistance potions -----
         // After PlanRaidTanks: the curses fall back to its kill focus.
@@ -1214,16 +1242,16 @@ static bool GroupCcSwitchOn(Group const* grp)
     if (!grp)
         return true;
     Player const* human = ObjectAccessor::FindConnectedPlayer(grp->GetLeaderGUID());
-    if (!human || !human->GetSession() || human->GetSession()->IsBot())
+    if (!human || !human->GetSession() || !Scenario::PlaysAsHuman(human))
     {
         human = nullptr;
         for (GroupReference const& r : grp->GetMembers())
-            if (Player const* m = r.GetSource(); m && m->GetSession() && !m->GetSession()->IsBot()) { human = m; break; }
+            if (Player const* m = r.GetSource(); m && m->GetSession() && Scenario::PlaysAsHuman(m)) { human = m; break; }
     }
     return !human || !human->GetSession() || Services::Owners().CcEnabled(human->GetSession()->GetAccountId());
 }
 
-void PveGroupCoordinator::PlanMarkOrders(uint64 group_low, uint32 map_id, bool is_raid,
+void PveGroupCoordinator::PlanMarkOrders(uint64 group_low, uint32 map_id, bool is_raid, std::vector<uint32_t> const& bosses,
                                           std::vector<Member> const& mem,
                                           std::vector<std::shared_ptr<BotSnapshot const>> const& snaps,
                                           std::unordered_map<uint64, PveOrder>& plan)
@@ -1299,6 +1327,13 @@ void PveGroupCoordinator::PlanMarkOrders(uint64 group_low, uint32 map_id, bool i
         Raid::RaidRules const* rr = Raid::RulesForMap(map_id);
         return rr && std::any_of(rr->noControl.begin(), rr->noControl.end(), [&](Raid::NoControl const& n) { return n.enemy == entry; });
     };
+    // A boss is never held. The core flags few of them (Classic::IsBossUnit reads the classification, and most classic dungeon
+    // bosses are plain elites), so the instance script's boss list counts too: in Shadowfang Keep the mage sheeped Rethilgore,
+    // an elite on the core, nine times in 40 s while the tank fell to 9% and the priest ran out of mana (RC4 sfk_rethilgore).
+    auto is_boss = [&](NearbyUnit const& u) -> bool
+    {
+        return Classic::IsBossUnit(u) || std::find(bosses.begin(), bosses.end(), u.entry) != bosses.end();
+    };
     std::vector<ObjectGuid> cc_taken;
     bool moon_is_tank_mark = false;
     for (auto const& [tank_low, marker] : Services::Owners().TankMarks(group_low))
@@ -1368,7 +1403,7 @@ void PveGroupCoordinator::PlanMarkOrders(uint64 group_low, uint32 map_id, bool i
             for (uint8 sym : order)
             {
                 NearbyUnit const* u = mob_of(sym);
-                if (!u || Classic::IsBossUnit(*u) || never_controlled(u->entry)) continue;
+                if (!u || is_boss(*u) || never_controlled(u->entry)) continue;
                 if (u->guid == icon[7] || u->guid == icon[6]) continue;   // marked skull / cross: killed, never crowd-controlled
                 if (u->max_hp > 0 && u->hp * 2 < u->max_hp) continue;     // under half health: being killed, not held again
                 if (tank_hits(u->guid)) continue;                          // the tank is on it: killed, not held again
@@ -1418,7 +1453,7 @@ void PveGroupCoordinator::PlanMarkOrders(uint64 group_low, uint32 map_id, bool i
                         if (sn->position.map_id != map_id) continue;
                         for (auto const& u : sn->combat.nearby_enemies)
                             if (u.hp > 0 && !u.is_player && !u.untargetable && u.unit_in_combat && !u.victim.IsEmpty() &&
-                                !Classic::IsBossUnit(u) && seen.insert(u.guid.GetCounter()).second)
+                                !is_boss(u) && seen.insert(u.guid.GetCounter()).second)
                                 if (NearbyUnit const* full = unit_any(u.guid))
                                     pack.push_back(full);
                     }
@@ -1586,7 +1621,9 @@ void PveGroupCoordinator::PlanPrePullCc(uint64 bkey, uint64 group_low, uint32 ma
                                         std::unordered_map<uint64, PveOrder>& plan)
 {
     PrePullCc::Request pcc;
-    if (!PrePullCc::Get(group_low, now_ms, pcc))
+    bool const have_pcc = PrePullCc::Get(group_low, now_ms, pcc);
+    auto moon_it = prepull_moon_.find(bkey);
+    if (!have_pcc && moon_it == prepull_moon_.end())
         return;
     Group* mk_grp = nullptr;
     for (auto const& e : mem)
@@ -1595,8 +1632,25 @@ void PveGroupCoordinator::PlanPrePullCc(uint64 bkey, uint64 group_low, uint32 ma
     if (!mk_grp)
         return;
     constexpr uint8 kMoon = 4;
-    std::array<ObjectGuid, 8>& ours = marks_set_[bkey];
     ObjectGuid const by = mk_grp->GetLeaderGUID();
+    // The moon this code put on a mob comes off when the request is finished or gone (it expires after kLifeMs, also inside the
+    // tank's own Get), unless somebody has moved it since. It used to be tracked in marks_set_, which a 5-man clears every pass, so
+    // it was never taken off: hot_faldrim RC3, the mage never got in range to sheep the marked rat, the tank pulled on without it,
+    // and the rat kept the moon. The tank's pull skips a mob with an icon and its pack stop still yielded to it, so the group stood
+    // there for the rest of the run.
+    auto clear_moon = [&]
+    {
+        if (moon_it == prepull_moon_.end())
+            return;
+        if (mk_grp->GetTargetIcon(kMoon) == moon_it->second)
+            mk_grp->SetTargetIcon(kMoon, ObjectGuid::Empty, by);
+        prepull_moon_.erase(moon_it);
+        moon_it = prepull_moon_.end();
+    };
+    if (!have_pcc || (moon_it != prepull_moon_.end() && moon_it->second != pcc.mob))
+        clear_moon();
+    if (!have_pcc)
+        return;
     auto unit_of = [&](ObjectGuid g) -> NearbyUnit const*
     {
         for (auto const& sn : snaps)
@@ -1616,11 +1670,7 @@ void PveGroupCoordinator::PlanPrePullCc(uint64 bkey, uint64 group_low, uint32 ma
     bool const finished = pcc.done_ms && uint32(now_ms - pcc.done_ms) > PrePullCc::kAfterDoneMs;
     if (!caster_ok || !mob_ok || finished)
     {
-        if (ours[kMoon] == pcc.mob)
-        {
-            mk_grp->SetTargetIcon(kMoon, ObjectGuid::Empty, by);
-            ours[kMoon] = ObjectGuid::Empty;
-        }
+        clear_moon();
         PrePullCc::Erase(group_low);
         return;
     }
@@ -1630,7 +1680,7 @@ void PveGroupCoordinator::PlanPrePullCc(uint64 bkey, uint64 group_low, uint32 ma
         bool other_icon = false;
         for (uint8 m2 = 0; m2 < 8 && !other_icon; ++m2)
             other_icon = m2 != kMoon && mk_grp->GetTargetIcon(m2) == pcc.mob;
-        bool const moon_taken = !cur.IsEmpty() && cur != ours[kMoon] && unit_of(cur) && unit_of(cur)->hp > 0;
+        bool const moon_taken = !cur.IsEmpty() && cur != marks_set_[bkey][kMoon] && unit_of(cur) && unit_of(cur)->hp > 0;
         if (other_icon || moon_taken)
         {
             if (pcc.state != PrePullCc::State::Refused)
@@ -1644,7 +1694,8 @@ void PveGroupCoordinator::PlanPrePullCc(uint64 bkey, uint64 group_low, uint32 ma
         else
         {
             mk_grp->SetTargetIcon(kMoon, pcc.mob, by);
-            ours[kMoon] = pcc.mob;
+            prepull_moon_[bkey] = pcc.mob;
+            moon_it = prepull_moon_.find(bkey);
             PrePullCc::SetState(group_low, PrePullCc::State::Marked);
             TC_LOG_INFO("playerbot.v2", "[raid_pull] group={} map={} marks {} ({}) with the moon for {}'s crowd control",
                 group_low, map_id, cu->entry, pcc.mob.GetCounter(), caster->src->name);

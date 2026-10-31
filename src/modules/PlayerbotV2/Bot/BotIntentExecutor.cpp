@@ -28,6 +28,7 @@
 #include <unordered_map>
 #include "Channel.h"
 #include "ChannelMgr.h"
+#include "DB2Stores.h"
 #include "Creature.h"
 #include "Guild.h"
 #include "GuildMgr.h"
@@ -70,6 +71,21 @@ Result SayInZoneChannel(Player* bot, uint8 channel_id, std::string const& text)
         bot->UpdateLocalChannels(bot->GetZoneId());
         ch = find(channel_id);
     }
+    // LookingForGroup is not an auto-join channel: the bot joins it the way a player types /join, on its first line there.
+    if (!ch)
+        if (ChatChannelsEntry const* entry = sChatChannelsStore.LookupEntry(channel_id))
+            if (entry->GetFlags().HasFlag(ChatChannelFlags::LookingForGroup))
+                if (ChannelMgr* mgr = ChannelMgr::ForTeam(bot->GetTeam()))
+                {
+                    AreaTableEntry const* zone = sAreaTableStore.LookupEntry(bot->GetZoneId());
+                    Channel* lfg = entry->GetFlags().HasFlag(ChatChannelFlags::ZoneBased) ? (zone ? mgr->GetSystemChannel(channel_id, zone) : nullptr)
+                                                                                         : mgr->GetSystemChannel(channel_id);
+                    if (lfg)
+                    {
+                        lfg->JoinChannel(bot);
+                        ch = find(channel_id);
+                    }
+                }
     // Trade exists only in cities; ike3 posted the line to General instead.
     if (!ch && channel_id != 1)
         ch = find(1);
@@ -924,7 +940,7 @@ size_t V2::Module::DrainIntents()
                     if (BotAI* botai = reg.ai(id))
                     {
                         if (r == Result::OutOfRange)
-                            botai->note_cast_out_of_range();
+                            botai->note_cast_out_of_range(GameTime::GetGameTimeMS());
                         else if (r == Result::Ok)
                             botai->reset_cast_oor();
                     }

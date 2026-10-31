@@ -16,6 +16,7 @@
  */
 
 #include "Player.h"
+#include "ClassicWeaponImbue.h"
 #include "CombatEnchantProc.h"
 #include "DeathRecap.h"
 #include "AreaTrigger.h"
@@ -2522,7 +2523,9 @@ void Player::InitTalentForLevel()
         ResetTalentSpecialization();
 
     int32 talentTiers = DB2Manager::GetNumTalentsAtLevel(level, Classes(GetClass()));
-    if (level < 15)
+    // Classic 1.60: the first talent point comes at level 10, not at 15 as on retail; resetting below 15 wiped the
+    // points spent at 10-14 on every level gain and spec swap
+    if (level < MIN_SPECIALIZATION_LEVEL)
     {
         // Remove all talent points
         ResetTalents(true);
@@ -9408,16 +9411,7 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
         // enchantment's own spell, which Forever points at a dummy aura (Windfury Weapon 439431) with no script.
         if (e_slot == TEMP_ENCHANTMENT_SLOT)
         {
-            uint32 windfuryAttack = 0;
-            switch (enchant_id)
-            {
-                case 283:  windfuryAttack = 8233;  break;   // Windfury Weapon rank 1 (spell 8232)
-                case 284:  windfuryAttack = 8236;  break;   // rank 2 (8235)
-                case 525:  windfuryAttack = 10484; break;   // rank 3 (10486)
-                case 1669: windfuryAttack = 16361; break;   // rank 4 (16362)
-                default: break;
-            }
-            if (windfuryAttack)
+            if (uint32 windfuryAttack = ClassicWeaponImbue::WindfuryAttackForEnchant(enchant_id))
             {
                 if (canTrigger && !GetLastExtraAttackSpell())
                     CombatEnchantProc::Dispatch(20.0f, [](float procChance) { return roll_chance(procChance); }, [&]
@@ -9426,6 +9420,15 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
                     });
                 continue;
             }
+        }
+
+        // Flametongue Weapon: every hit with the imbued weapon casts the rank's Flametongue Weapon Proc on the target, which deals the
+        // Fire damage by this weapon's speed. Same reason as Windfury: every rank's enchantment points at a dummy aura (436519).
+        if (uint32 flametongueProc = ClassicWeaponImbue::FlametongueProcForEnchant(enchant_id))
+        {
+            if (canTrigger && damageInfo.GetVictim()->IsAlive())
+                CastSpell(damageInfo.GetVictim(), flametongueProc, CastSpellExtraArgs(item));
+            continue;
         }
 
         for (uint8 s = 0; s < MAX_ITEM_ENCHANTMENT_EFFECTS; ++s)
@@ -10012,10 +10015,12 @@ uint8 Player::FindEquipSlot(Item const* item, uint8 slot, bool swap) const
                 slots = { ACCOUNT_BANK_SLOT_BAG_START + 0, ACCOUNT_BANK_SLOT_BAG_START + 1, ACCOUNT_BANK_SLOT_BAG_START + 2, ACCOUNT_BANK_SLOT_BAG_START + 3, ACCOUNT_BANK_SLOT_BAG_START + 4, NULL_SLOT };
             else if (item->GetTemplate()->GetId() == ITEM_CHARACTER_BANK_TAB_BAG)
                 slots = { BANK_SLOT_BAG_START + 0, BANK_SLOT_BAG_START + 1, BANK_SLOT_BAG_START + 2, BANK_SLOT_BAG_START + 3, BANK_SLOT_BAG_START + 4, BANK_SLOT_BAG_START + 5 };
-            else if (item->GetTemplate()->GetClass() != ITEM_CLASS_CONTAINER || item->GetTemplate()->GetSubClass() != ITEM_SUBCLASS_REAGENT_CONTAINER)
-                slots = { INVENTORY_SLOT_BAG_START + 0, INVENTORY_SLOT_BAG_START + 1, INVENTORY_SLOT_BAG_START + 2, INVENTORY_SLOT_BAG_START + 3, NULL_SLOT, NULL_SLOT };
-            else
+            else if (item->GetTemplate()->GetClass() == ITEM_CLASS_CONTAINER && item->GetTemplate()->GetSubClass() == ITEM_SUBCLASS_REAGENT_CONTAINER)
                 slots[0] = REAGENT_BAG_SLOT_START;
+            else if (item->GetTemplate()->FitsReagentBagSlot())  // Classic 1.60 profession and soul bags: any bag slot or the reagent one
+                slots = { INVENTORY_SLOT_BAG_START + 0, INVENTORY_SLOT_BAG_START + 1, INVENTORY_SLOT_BAG_START + 2, INVENTORY_SLOT_BAG_START + 3, REAGENT_BAG_SLOT_START, NULL_SLOT };
+            else
+                slots = { INVENTORY_SLOT_BAG_START + 0, INVENTORY_SLOT_BAG_START + 1, INVENTORY_SLOT_BAG_START + 2, INVENTORY_SLOT_BAG_START + 3, NULL_SLOT, NULL_SLOT };
             break;
         case INVTYPE_PROFESSION_TOOL:
         case INVTYPE_PROFESSION_GEAR:
@@ -11210,9 +11215,10 @@ InventoryResult Player::CanStoreItem(uint8 bag, uint8 slot, ItemPosCountVec &des
         if (Optional<InventoryResult> res2 = tryHandleInvStoreResult(res))
             return *res2;
 
+        // Classic 1.60: a profession or soul bag may sit in the reagent bag slot too (ITEM_FLAG5_CLASSIC_FITS_REAGENT_BAG_SLOT)
         if (pProto->GetBagFamily())
         {
-            for (uint32 i = INVENTORY_SLOT_BAG_START; i < INVENTORY_SLOT_BAG_END; i++)
+            for (uint32 i = INVENTORY_SLOT_BAG_START; i < REAGENT_BAG_SLOT_END; i++)
             {
                 res = CanStoreItem_InBag(i, dest, pProto, count, true, false, pItem, bag, slot);
                 if (Optional<InventoryResult> res2 = tryHandleBagStoreResult(res))
@@ -11241,7 +11247,7 @@ InventoryResult Player::CanStoreItem(uint8 bag, uint8 slot, ItemPosCountVec &des
     // search free slot - special bag case
     if (pProto->GetBagFamily())
     {
-        for (uint32 i = INVENTORY_SLOT_BAG_START; i < INVENTORY_SLOT_BAG_END; i++)
+        for (uint32 i = INVENTORY_SLOT_BAG_START; i < REAGENT_BAG_SLOT_END; i++)
         {
             res = CanStoreItem_InBag(i, dest, pProto, count, false, false, pItem, bag, slot);
             if (Optional<InventoryResult> res2 = tryHandleBagStoreResult(res))
@@ -14871,6 +14877,14 @@ void Player::PrepareGossipMenu(WorldObject* source, uint32 menuId, bool showQues
             }
         }
 
+        // Classic 1.60 pet untrain: hunters with their pet out
+        if (Pet::IsPetUntrainGossipOption(gossipMenuItem.GossipOptionID))
+        {
+            Pet* pet = GetPet();
+            if (GetClass() != CLASS_HUNTER || !pet || pet->getPetType() != HUNTER_PET || !pet->IsAlive())
+                canTalk = false;
+        }
+
         // Classic 1.60 dual spec purchase: class trainers of the player's class, from level 10, until bought
         if (IsClassicDualSpecGossipOption(gossipMenuItem.GossipOptionID))
         {
@@ -14985,6 +14999,11 @@ void Player::OnGossipSelect(WorldObject* source, int32 gossipOptionId, uint32 me
                 Creature* creature = source->ToCreature();
                 if (!creature || !creature->CanResetTalents(this) || !PurchaseClassicDualSpec())
                     return;                                 // not charged
+            }
+            else if (Pet::IsPetUntrainGossipOption(item->GossipOptionID))
+            {
+                PlayerTalkClass->SendCloseGossip();
+                UntrainClassicPet(cost);
             }
             break;
         case GossipOptionNpc::Vendor:
@@ -15884,7 +15903,7 @@ void Player::CompleteQuest(uint32 quest_id)
 
         if (Quest const* qInfo = sObjectMgr->GetQuestTemplate(quest_id))
             if (qInfo->HasFlag(QUEST_FLAGS_TRACKING_EVENT))
-                RewardQuest(qInfo, LootItemType::Item, 0, this, false);
+                RewardQuest(qInfo, LootItemType::Item, 0, nullptr, false);   // no quest giver: keep the open gossip menu
     }
 
     if (sWorld->getBoolConfig(CONFIG_QUEST_ENABLE_QUEST_TRACKER)) // check if Quest Tracker is enabled
@@ -16208,7 +16227,7 @@ void Player::RewardQuest(Quest const* quest, LootItemType rewardType, uint32 rew
         if (uint32 questMailSender = quest->GetRewMailSenderEntry())
             MailDraft(mail_template_id).SendMailTo(trans, this, questMailSender, MAIL_CHECK_MASK_HAS_BODY, quest->GetRewMailDelaySecs());
         else
-            MailDraft(mail_template_id).SendMailTo(trans, this, questGiver, MAIL_CHECK_MASK_HAS_BODY, quest->GetRewMailDelaySecs());
+            MailDraft(mail_template_id).SendMailTo(trans, this, questGiver ? questGiver : this, MAIL_CHECK_MASK_HAS_BODY, quest->GetRewMailDelaySecs());
         CharacterDatabase.CommitTransaction(trans);
     }
 
@@ -17754,7 +17773,7 @@ void Player::UpdateQuestObjectiveProgress(QuestObjectiveType objectiveType, int3
             continue;
 
         if (!QuestObjective::CanAlwaysBeProgressedInRaid(objectiveType))
-            if (GetGroup() && GetGroup()->isRaidGroup() && !quest->IsAllowedInRaid(GetMap()->GetDifficultyID()))
+            if (GetGroup() && GetGroup()->IsRaidForQuests() && !quest->IsAllowedInRaid(GetMap()->GetDifficultyID()))
                 continue;
 
         uint16 logSlot = objectiveItr.second.QuestStatusItr->second.Slot;
@@ -17952,7 +17971,7 @@ bool Player::HasQuestForItem(uint32 itemid) const
 
         Quest const* qInfo = ASSERT_NOTNULL(sObjectMgr->GetQuestTemplate(questStatus.first));
         // hide quest if player is in raid-group and quest is no raid quest
-        if (GetGroup() && GetGroup()->isRaidGroup() && !qInfo->IsAllowedInRaid(GetMap()->GetDifficultyID()))
+        if (GetGroup() && GetGroup()->IsRaidForQuests() && !qInfo->IsAllowedInRaid(GetMap()->GetDifficultyID()))
             if (!InBattleground())
                 continue;
 
@@ -17991,7 +18010,7 @@ QuestObjective const* Player::GetQuestObjectiveForItem(uint32 itemId, bool onlyI
                 continue;
 
             // hide quest if player is in raid-group and quest is no raid quest
-            if (GetGroup() && GetGroup()->isRaidGroup() && !qInfo->IsAllowedInRaid(GetMap()->GetDifficultyID()))
+            if (GetGroup() && GetGroup()->IsRaidForQuests() && !qInfo->IsAllowedInRaid(GetMap()->GetDifficultyID()))
                 if (!InBattleground()) //there are two ways.. we can make every bg-quest a raidquest, or add this code here.. i don't know if this can be exploited by other quests, but i think all other quests depend on a specific area.. but keep this in mind, if something strange happens later
                     continue;
 
@@ -18022,7 +18041,7 @@ bool Player::HasQuestForCurrency(uint32 currencyId) const
             return false;
 
         // hide quest if player is in raid-group and quest is no raid quest
-        if (GetGroup() && GetGroup()->isRaidGroup() && !qInfo->IsAllowedInRaid(GetMap()->GetDifficultyID()))
+        if (GetGroup() && GetGroup()->IsRaidForQuests() && !qInfo->IsAllowedInRaid(GetMap()->GetDifficultyID()))
             if (!InBattleground()) //there are two ways.. we can make every bg-quest a raidquest, or add this code here.. i don't know if this can be exploited by other quests, but i think all other quests depend on a specific area.. but keep this in mind, if something strange happens later
                 return false;
 
@@ -24597,14 +24616,16 @@ bool Player::BuyCurrencyFromVendorSlot(ObjectGuid vendorGuid, uint32 vendorSlot,
         return false;
     }
 
-    if (count % crItem->maxcount)
+    // a currency row without a stack size sells one at a time (and must not divide by zero)
+    uint32 const stackSize = std::max<uint32>(crItem->maxcount, 1);
+    if (count % stackSize)
     {
         SendEquipError(EQUIP_ERR_CANT_BUY_QUANTITY, nullptr, nullptr);
         return false;
     }
 
     uint64 price = 0;
-    uint32 stacks = count / crItem->maxcount;
+    uint32 stacks = count / stackSize;
     ItemExtendedCostEntry const* iece;
     if (crItem->ExtendedCost)
     {
@@ -24617,15 +24638,15 @@ bool Player::BuyCurrencyFromVendorSlot(ObjectGuid vendorGuid, uint32 vendorSlot,
 
         if (iece->Money)
         {
-            uint64 maxStacks = MAX_MONEY_AMOUNT / crItem->maxcount;
-            if (uint64(stacks) > maxStacks)
+            // the price is worked out in 64 bits: a 32-bit product wraps for a large count and sold currency for next to nothing
+            price = uint64(iece->Money) * count;
+            if (price > MAX_MONEY_AMOUNT)
             {
                 TC_LOG_ERROR("entities.player.cheat", "Player::BuyCurrencyFromVendorSlot: Player '{}' ({}) tried to buy currency (ItemID: {}, Count: {}), causing money overflow",
                     GetName(), GetGUID(), currency, count);
-                count = uint32(maxStacks * crItem->maxcount);
-                stacks = maxStacks;
+                SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, creature, currency, 0);
+                return false;
             }
-            price = uint64(iece->Money * count); //it should not exceed MAX_MONEY_AMOUNT
             if (!HasEnoughMoney(price))
             {
                 SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, creature, currency, 0);
@@ -24635,7 +24656,8 @@ bool Player::BuyCurrencyFromVendorSlot(ObjectGuid vendorGuid, uint32 vendorSlot,
 
         for (uint8 i = 0; i < MAX_ITEM_EXT_COST_ITEMS; ++i)
         {
-            if (iece->ItemID[i] && !HasItemCount(iece->ItemID[i], (iece->ItemCount[i] * stacks)))
+            // the needed count must not wrap round for a large purchase
+            if (iece->ItemID[i] && (uint64(iece->ItemCount[i]) * stacks > std::numeric_limits<uint32>::max() || !HasItemCount(iece->ItemID[i], (iece->ItemCount[i] * stacks))))
             {
                 SendEquipError(EQUIP_ERR_VENDOR_MISSING_TURNINS, nullptr, nullptr);
                 return false;
@@ -24660,7 +24682,7 @@ bool Player::BuyCurrencyFromVendorSlot(ObjectGuid vendorGuid, uint32 vendorSlot,
                 SendEquipError(EQUIP_ERR_VENDOR_MISSING_TURNINS, nullptr, nullptr); // Find correct error
                 return false;
             }
-            else if (!HasCurrency(iece->CurrencyID[i], (iece->CurrencyCount[i] * stacks)))
+            else if (uint64(iece->CurrencyCount[i]) * stacks > std::numeric_limits<uint32>::max() || !HasCurrency(iece->CurrencyID[i], (iece->CurrencyCount[i] * stacks)))
             {
                 SendEquipError(EQUIP_ERR_VENDOR_MISSING_TURNINS, nullptr, nullptr); // Find correct error
                 return false;
@@ -24908,7 +24930,8 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
                 GetName(), GetGUID().ToString(), pProto->GetId(), count);
             count = uint32(maxCount);
         }
-        price = uint64(buyPricePerItem * count); //it should not exceed MAX_MONEY_AMOUNT
+        // whole numbers: part of a stack (arrows) rounds up instead of down to free, and full stacks cost exactly the stack price
+        price = (basePrice * count + pProto->GetBuyCount() - 1) / pProto->GetBuyCount();
 
         // reputation discount
         price = uint64(floor(price * GetReputationPriceDiscount(creature)));
@@ -24919,6 +24942,7 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
             price -= CalculatePct(price, priceMod);
 
         price = ApplyClassicLegacyPriceMod(price, 0);   // Legacy perk Bartering
+        price = std::max(uint64(1), price);              // discounts never make a priced item free
 
         if (!HasEnoughMoney(price))
         {
@@ -26476,6 +26500,10 @@ void Player::LearnSkillRewardedSpells(uint32 skillId, uint32 skillValue, Races r
         {
             case SkillLineAbilityAcquireMethod::AutomaticSkillRank:
             case SkillLineAbilityAcquireMethod::AutomaticCharLevel:
+                // Classic 1.60: an automatic ability may wait for a condition too (warrior Victorious/Offensive State wait for
+                // Victory Rush/Overpower, which teach them through spell_learn_spell)
+                if (!sConditionMgr->IsObjectMeetingNotGroupedConditions(CONDITION_SOURCE_TYPE_SKILL_LINE_ABILITY, ability->ID, this))
+                    continue;
                 break;
             case SkillLineAbilityAcquireMethod::LearnedOrAutomaticCharLevel:
                 // Treat as AutomaticCharLevel when conditions are met, otherwise treat it as Learned (trainer or quest)
@@ -26972,7 +27000,7 @@ bool Player::HasQuestForGO(int32 GOId) const
             continue;
 
         // hide quest if player is in raid-group and quest is no raid quest
-        if (GetGroup() && GetGroup()->isRaidGroup() && !qInfo->IsAllowedInRaid(GetMap()->GetDifficultyID()))
+        if (GetGroup() && GetGroup()->IsRaidForQuests() && !qInfo->IsAllowedInRaid(GetMap()->GetDifficultyID()))
             if (!InBattleground()) //there are two ways.. we can make every bg-quest a raidquest, or add this code here.. i don't know if this can be exploited by other quests, but i think all other quests depend on a specific area.. but keep this in mind, if something strange happens later
                 continue;
 
@@ -29329,6 +29357,23 @@ bool Player::IsClassicDualSpecGossipOption(int32 gossipOptionId)
     return gossipOptionId >= 95000000 && gossipOptionId < 96000000;
 }
 
+// Classic 1.60 pet trainers: "I wish to untrain my pet." removes the spells pet trainers taught the current pet, which gives back
+// its training points. The gossip box asks first and shows the price; nothing is charged when there is nothing to untrain.
+bool Player::UntrainClassicPet(int64 cost)
+{
+    Pet* pet = GetPet();
+    if (!pet || pet->getPetType() != HUNTER_PET || !pet->IsAlive() || !HasEnoughMoney(cost))
+        return false;
+
+    if (!pet->UntrainTrainerSpells())
+        return false;                                       // nothing taught: not charged
+
+    ModifyMoney(-cost);
+    pet->SavePetToDB(PET_SAVE_AS_CURRENT);
+    pet->CastSpell(pet, 14867 /*SPELL_UNTALENT_VISUAL_EFFECT*/, true);
+    return true;
+}
+
 bool Player::PurchaseClassicDualSpec()
 {
     if (GetClassicSpecGroupConfig(true))
@@ -30697,7 +30742,8 @@ void Player::ApplyTraitEntry(int32 traitNodeEntryId, int32 rank, int32 grantedRa
         if (apply)
             LearnSpell(traitDefinition->SpellID, true, 0, false, PlayerSpellTrait{ .DefinitionId = traitNodeEntry->TraitDefinitionID, .Rank = rank + grantedRanks });
         else
-            RemoveSpell(traitDefinition->SpellID);
+            RemoveSpell(traitDefinition->SpellID, true); // disabled, not removed: higher ranks bought from the trainer come back
+                                                         // when the talent is taken again (LearnSpell re-learns disabled ranks)
     }
 }
 
@@ -32828,8 +32874,41 @@ int32 TraitMgr::PlayerDataAccessor::GetLevel() const
 
 int32 TraitMgr::PlayerDataAccessor::GetClassicTalentedStartLevel() const
 {
-    // Classic 1.60 Legacy perk Talented 1225474: talent points every level starting at this level instead of 10
-    return _player->GetClassicLegacyPerkAmount(1225474, EFFECT_0);
+    // Classic 1.60 Legacy perk Talented 1225474: talent points every level starting at this level instead of 10.
+    // Read from the Legacy trait config, not the aura: the aura amount stayed at the rank 1 value (9), so with Talented 5/5 the
+    // client offered 6 points at level 10, the server granted 2 and Apply Changes failed (found by krakenunbound,
+    // advocaite/TrinityCore #150). Every entry granting the perk counts: the 5 rank node's curve gives 9..5 by rank, the
+    // single rank nodes give a fixed 9, 8, 7, 6 or 5 (TraitDefinitionEffectPoints, Set); the lowest start level wins.
+    static constexpr uint32 TalentedSpellId = 1225474;
+    int32 startLevel = 0;
+    for (auto const& [configId, config] : _player->m_activePlayerData->TraitConfigs)
+    {
+        for (UF::TraitEntry const& entry : config.value.Entries)
+        {
+            int32 rank = entry.Rank + entry.GrantedRanks;
+            if (rank <= 0)
+                continue;
+
+            TraitNodeEntryEntry const* nodeEntry = sTraitNodeEntryStore.LookupEntry(entry.TraitNodeEntryID);
+            TraitDefinitionEntry const* definition = nodeEntry ? sTraitDefinitionStore.LookupEntry(nodeEntry->TraitDefinitionID) : nullptr;
+            if (!definition || uint32(definition->SpellID) != TalentedSpellId)
+                continue;
+
+            std::vector<TraitDefinitionEffectPointsEntry const*> const* points = GetTraitDefinitionEffectPointModifiers(definition->ID);
+            if (!points)
+                continue;
+
+            auto pointsForLevel = std::ranges::find(*points, 0, &TraitDefinitionEffectPointsEntry::EffectIndex);
+            if (pointsForLevel == points->end() || (*pointsForLevel)->GetOperationType() != TraitPointsOperationType::Set)
+                continue;
+
+            int32 level = int32(sDB2Manager.GetCurveValueAt((*pointsForLevel)->CurveID, float(rank)));
+            if (level > 0 && (!startLevel || level < startLevel))
+                startLevel = level;
+        }
+    }
+
+    return startLevel ? startLevel : _player->GetClassicLegacyPerkAmount(TalentedSpellId, EFFECT_0);
 }
 
 bool TraitMgr::PlayerDataAccessor::IsQuestRewarded(int32 questId) const

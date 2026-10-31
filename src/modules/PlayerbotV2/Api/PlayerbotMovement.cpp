@@ -149,6 +149,22 @@ bool SnapToGround(Player* p, float x, float y, float& z)
 
     float const original = z;
 
+    // Every step below can end on the terrain grid far under a floating floor: Map::GetHeight bounds only its vmap probe, and with no
+    // model under (x, y) it returns the grid's height however far below (Hall of Thanes: the floor at z 500, the grid at 0). Where the
+    // navmesh has a walkable surface at the asked level, that surface is the ground: hot_faldrim (0.1.26 RC8) sent the tank's advance
+    // steps to z 0, Detour found no polygon there, and the group stood 50-60 s twice while the tank refused the same step.
+    auto const far_below = [&](float found)
+    {
+        constexpr float kMaxDownwardSnapY = 40.0f;   // GroundZ's search depth
+        if (found >= original - kMaxDownwardSnapY)
+            return false;
+        Position np;
+        if (!NearestNavPoint(p, x, y, original, 3.0f, 6.0f, np))
+            return false;
+        z = np.GetPositionZ();
+        return true;
+    };
+
     // Step 1: UpdateAllowedPositionZ — same vmap/mmap composite TC uses
     // in Player::SetPosition. Wrap in try/catch because BIH::subdivide
     // throws "invalid node overlap" during dynamic GO churn (BG flags,
@@ -173,7 +189,10 @@ bool SnapToGround(Player* p, float x, float y, float& z)
     // find any ground/water. Detect that and fall through to the explicit
     // probes; otherwise we're done.
     if (std::fabs(z - original) > 0.05f)
+    {
+        far_below(z);
         return true;
+    }
 
     // Step 2: GetWaterOrGroundLevel — swim-aware lookup with the player's
     // collision height accounted for. Best for shoreline / waterfall cases
@@ -183,7 +202,8 @@ bool SnapToGround(Player* p, float x, float y, float& z)
                                                &ground, /*swim*/ false);
     if (wog > INVALID_HEIGHT)
     {
-        z = wog;
+        if (!far_below(wog))
+            z = wog;
         return true;
     }
 
@@ -208,7 +228,8 @@ bool SnapToGround(Player* p, float x, float y, float& z)
         constexpr float kMaxUpwardSnapY = 30.0f;
         if (topdown <= original + kMaxUpwardSnapY)
         {
-            z = topdown;
+            if (!far_below(topdown))
+                z = topdown;
             return true;
         }
         // Outdoor terrain far above a dungeon — keep the caller's z.
@@ -248,7 +269,10 @@ float GroundZ(Player* p, float x, float y, float zHint, char const* where, bool*
     {
         g = INVALID_HEIGHT;   // BIH churn race (see SnapToGround)
     }
-    if (g <= INVALID_HEIGHT)
+    // Map::GetHeight bounds only its vmap probe by the search distance: when that finds nothing it hands back the terrain grid's height
+    // however far below it lies. Over a floating hall that is no ground at all (Hall of Thanes, the floor at z 500 and the grid at 0:
+    // a stand point beside the boss came back at z 0, and the mage sent there left the hall and the run).
+    if (g <= INVALID_HEIGHT || g < zHint - kGroundProbeDown)
         return zHint;
     if (ok)
         *ok = true;
@@ -287,7 +311,7 @@ bool ProbeGround(Player* p, float x, float y, float zHint, float& out)
     {
         g = INVALID_HEIGHT;   // BIH churn race (see SnapToGround)
     }
-    if (g <= INVALID_HEIGHT)
+    if (g <= INVALID_HEIGHT || g < zHint - kProbeDown)   // the terrain grid far below the window (see GroundZ)
         return false;
     out = g;
     return true;
@@ -632,6 +656,10 @@ bool SettleToGround(Player* p, float minGap, float maxGap)
 void PostTeleportSnap(Player* p)
 {
     if (!p || !p->IsInWorld())
+        return;
+    // A teleport is still pending (delayed or waiting for its ack): the position here is the one being left, so the probe would judge
+    // and snap the wrong place (WSG 2026-10-24: a bot's refused BG port logged an "off-mesh landing" on its Redridge spawn spot).
+    if (p->IsBeingTeleported())
         return;
     Map* m = p->GetMap();
     if (!m)

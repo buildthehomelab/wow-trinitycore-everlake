@@ -1,4 +1,4 @@
--- Loot: Frozen Runes from the Naxxramas bosses that drop them on Wowhead (classic era drop counts; AnoCore drops them too).
+-- Loot: Frozen Runes from the Naxxramas bosses that drop them on Wowhead (classic era drop counts; the other Forever server drops them too).
 -- Heigan the Unclean: 353 of 3154 kills
 -- Grand Widow Faerlina: 101 of 4061 kills
 -- Anub'Rekhan: 216 of 4519 kills

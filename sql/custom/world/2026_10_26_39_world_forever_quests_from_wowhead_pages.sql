@@ -1,4 +1,4 @@
--- WoW Forever quests that are in neither our world nor AnoCore, built from the Wowhead Forever quest pages
+-- WoW Forever quests that are in neither our world nor the other Forever server, built from the Wowhead Forever quest pages
 -- (infobox, objective list with item/npc ids, texts, rewards, g_quests data) and the 70532 client.
 -- Only quests whose giver, turn-in, targets and items already exist in our world and that pass the usability audit.
 -- XP difficulty from QuestXP at the quest level; rep rewards as exact overrides; money in quest_classic_money.

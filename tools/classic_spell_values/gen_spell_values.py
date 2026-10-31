@@ -6,6 +6,7 @@
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import vanilla_spells as v
+from gen_spell_info import KEEP_CLIENT_COST, KEEP_CLIENT_VALUE
 
 # SpellEffects whose value is a number worth taking across
 EFFECTS = (2, 8, 9, 10, 17, 30, 31, 58, 62, 67, 121)   # SCHOOL_DAMAGE, POWER_DRAIN, HEALTH_LEECH, HEAL, WEAPON_DAMAGE_NOSCHOOL, ENERGIZE,
@@ -81,6 +82,8 @@ def value_rows(ix, best):
             continue
         b, f, n = best[e]
         for i in (1, 2, 3):
+            if (e, i - 1) in KEEP_CLIENT_VALUE:
+                continue
             ef = int(f[ix['effect%d' % i]])
             a = int(f[ix['effectApplyAuraName%d' % i]])
             bp = int(f[ix['effectBasePoints%d' % i]])
@@ -127,7 +130,7 @@ def gen_costs(ix, best):
         b, f, n = best[e]
         cost = int(f[ix['manaCost']])
         pct = int(f[ix['manaCostPercentage']])
-        if cost or pct:
+        if (cost or pct) and e not in KEEP_CLIENT_COST:
             rows.append((e, cost, pct, esc(n)))
     out = ["-- Classic 1.60: vanilla (1.12) mana cost of the legacy spells (VMaNGOS spell_template manaCost / manaCostPercentage, latest row of build <= 5875).",
            "-- SpellInfo::CalcPowerCost uses it instead of the client's SpellPower row; talent and aura cost modifiers still apply. Safe to run again.",

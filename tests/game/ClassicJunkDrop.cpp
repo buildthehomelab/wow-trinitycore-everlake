@@ -41,3 +41,18 @@ TEST_CASE("JunkDrop: a grey only displaces a cheaper grey", "[junkdrop]")
     CHECK(PickJunkToDrop(bags, true, 10) == kNoJunk);
     CHECK(PickJunkToDrop(bags, true, 5) == kNoJunk);
 }
+
+TEST_CASE("JunkDrop: room for food and drink takes a grey first, then a spare supply", "[junkdrop]")
+{
+    // deadmines_full on 0.1.23: the priest's bags were full and she never got water.
+    std::vector<JunkCandidate> bags{ {900, false, false, false}, {40, false, false, true}, {12, true, false, false}, {5, true, true, false} };
+    CHECK(PickRoomForSupply(bags) == 2);   // the grey, not the cheaper grey quest item
+    bags[2].poor = false;
+    CHECK(PickRoomForSupply(bags) == 1);   // no grey left: the spare potion stack
+}
+
+TEST_CASE("JunkDrop: gear and the player's items are never destroyed for supplies", "[junkdrop]")
+{
+    std::vector<JunkCandidate> bags{ {900, false, false, false}, {3, false, false, false}, {1, true, true, false} };
+    CHECK(PickRoomForSupply(bags) == kNoJunk);
+}

@@ -96,7 +96,6 @@ enum ClassicBwlInstanceMisc : uint32
     CLASSIC_BWL_SPELL_NATURE_IMMUNITY       = 7941,
     CLASSIC_BWL_SPELL_FROST_IMMUNITY        = 7940,
     CLASSIC_BWL_SPELL_FIRE_IMMUNITY         = 7942,
-    CLASSIC_BWL_SPELL_ARCANE_IMMUNITY       = 33020, // VMaNGOS spell_mod (custom spell)
     CLASSIC_BWL_SPELL_MIND_EXHAUSTION       = 23958,
     CLASSIC_BWL_SPELL_WARMING_FLAMES        = 23040,
     CLASSIC_BWL_SPELL_DESTROY_EGG           = 19873,
@@ -1327,7 +1326,8 @@ struct classic_npc_corrupted_whelp : public ScriptedAI
             case CLASSIC_BWL_NPC_CORRUPTED_GREEN_WHELP:  ClassicBwlAddPermanentAura(me, CLASSIC_BWL_SPELL_NATURE_IMMUNITY); break;
             case CLASSIC_BWL_NPC_CORRUPTED_BLUE_WHELP:   ClassicBwlAddPermanentAura(me, CLASSIC_BWL_SPELL_FROST_IMMUNITY); break;
             case CLASSIC_BWL_NPC_CORRUPTED_RED_WHELP:    ClassicBwlAddPermanentAura(me, CLASSIC_BWL_SPELL_FIRE_IMMUNITY); break;
-            case CLASSIC_BWL_NPC_CORRUPTED_BRONZE_WHELP: ClassicBwlAddPermanentAura(me, CLASSIC_BWL_SPELL_ARCANE_IMMUNITY); break; // TODO(classic): 33020 is a VMaNGOS custom spell
+            // VMaNGOS gives the bronze whelp its custom spell 33020; 70532 has no arcane immunity aura, so the school immunity is set directly.
+            case CLASSIC_BWL_NPC_CORRUPTED_BRONZE_WHELP: me->ApplySpellImmune(0, IMMUNITY_SCHOOL, SPELL_SCHOOL_MASK_ARCANE, true); break;
             default: break;
         }
     }

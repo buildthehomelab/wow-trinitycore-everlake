@@ -1368,7 +1368,7 @@ std::vector<SourcedGearPick> const& SourcedTierGear(uint8 cls, uint16 spec, Owne
 }
 
 // The hybrids' tier sets (Cenarion / Stormrage / Dreamwalker, Lawbringer / Judgement / Redemption, Prophecy / Transcendence / Faith, Earthfury /
-// Ten Storms / Earthshatter) are built for the healer. A damage spec of those classes (balance and cat druid, retribution paladin, shadow priest,
+// Ten Storms / Earthshatterer) are built for the healer. A damage spec of those classes (balance and cat druid, retribution paladin, shadow priest,
 // elemental and enhancement shaman) wears the picks of its own role under the tier's item level ceiling instead: damage_parity 147 gave a balance
 // druid 168 spell power at Tier 3 against 268 at Tier 1.
 bool TierSetIsHealerSet(uint8 cls, uint16 spec)

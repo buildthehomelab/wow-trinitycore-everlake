@@ -272,3 +272,140 @@ TEST_CASE("AV: every recorded node has a route to Snowfall (the Horde half is no
     int const base = g->Nearest(-1392.f, -318.f, 89.f, d);
     CHECK(g->NextToward(snow, base, 0) >= 0);
 }
+
+TEST_CASE("AV: a bot between two recorded nodes is not sent back and forth", "[battleground][av]")
+{
+    using namespace Playerbot::BgRoutes;
+    float nx = 0.f, ny = 0.f, nz = 0.f;
+    // Bot-only AV 254: Horde bots on the way to the Stonehearth waiting spot (28,-303) turned round between (-418.6,-342.5,18.7) and
+    // (-398.0,-372.6,31.4), a node recorded 14 y above the ground the bots stand on at (-400,-367,17). Under it the route sent them back.
+    for (int v = 0; v < Graph::kVariants; ++v)
+    {
+        REQUIRE(NextWaypoint(1, -400.f, -367.f, 17.f, 28.1f, -302.6f, 15.1f, 28.0f, nx, ny, nz, v));
+        CHECK(!(std::fabs(nx - -418.6f) < 1.f && std::fabs(ny - -342.5f) < 1.f));
+        CHECK(nx > -405.f);   // onwards, never back west
+    }
+    // The Alliance cave slope (AV 253/254: 417 turns near (488,-427) on the way to Dun Baldar): both sides of the node go the same way.
+    float ax = 0.f, ay = 0.f, az = 0.f;
+    REQUIRE(NextWaypoint(1, 491.f, -427.f, 37.f, 648.f, -61.f, 42.f, 28.0f, nx, ny, nz, 0));
+    REQUIRE(NextWaypoint(1, 485.f, -428.f, 37.f, 648.f, -61.f, 42.f, 28.0f, ax, ay, az, 0));
+    CHECK(nx == ax);
+    CHECK(ny == ay);
+    // The Frostwolf graveyard (256 turns at (-1055,-373)): the nearest node is on the one-way path into the graveyard, away from the goal.
+    REQUIRE(NextWaypoint(1, -1055.f, -373.f, 51.f, 28.1f, -302.6f, 15.1f, 28.0f, nx, ny, nz, 0));
+    CHECK(nx > -1055.f);
+    // AV 255: Horde bots on the one-way Iceblood graveyard path at (-567,-391,52) were sent 35 y across to (-536.6,-373.8), the first
+    // node of the tower-crossroad path, which no walk connects from there ([wedge] cat=Navmesh). They stay on the recorded path.
+    for (int v = 0; v < Graph::kVariants; ++v)
+    {
+        REQUIRE(NextWaypoint(1, -567.f, -391.f, 52.f, 28.1f, -302.6f, 15.1f, 28.0f, nx, ny, nz, v));
+        CHECK(!(std::fabs(nx - -536.6f) < 1.f && std::fabs(ny - -373.8f) < 1.f));
+    }
+
+    // A walk along the route (8 y steps toward the waypoint) reaches the waiting spot from the Iceblood Tower crossroad in every
+    // variant without turning round.
+    for (int v = 0; v < Graph::kVariants; ++v)
+    {
+        float bx = -579.7f, by = -315.0f, bz = 46.3f;
+        bool reached = false;
+        for (int i = 0; i < 400 && !reached; ++i)
+        {
+            if (!NextWaypoint(1, bx, by, bz, 28.1f, -302.6f, 15.1f, 28.0f, nx, ny, nz, v)) { nx = 28.1f; ny = -302.6f; nz = 15.1f; }
+            float const dx = nx - bx, dy = ny - by, d = std::sqrt(dx * dx + dy * dy);
+            if (d < 0.5f) break;
+            float const st = std::min(8.0f, d);
+            bx += dx / d * st; by += dy / d * st; bz += (nz - bz) * st / d;
+            reached = (28.1f - bx) * (28.1f - bx) + (-302.6f - by) * (-302.6f - by) < 25.f * 25.f;
+        }
+        CHECK(reached);
+    }
+}
+
+TEST_CASE("AV: the node squad waits on the near side of its target", "[battleground][av]")
+{
+    using namespace Playerbot::BgRoutes;
+    float x = 0.f, y = 0.f, z = 0.f;
+    // AV 257: the Horde gathered for Stonehearth Bunker (-152.4,-441.8) at Balinda's spot (28,-303), past the bunker. From the Horde
+    // base the spot is now 100 yd short of the bunker, on the road in from Iceblood, west of it.
+    REQUIRE(ApproachPoint(1, -890.f, -575.f, 70.24f, -152.4f, -441.8f, 40.4f, 100.f, x, y, z));
+    CHECK(x < -152.4f - 50.f);
+    CHECK((x + 152.4f) * (x + 152.4f) + (y + 441.8f) * (y + 441.8f) >= 100.f * 100.f);
+    // The Alliance on Iceblood Tower (-572.3,-262.5): the same spot as Galvangar's waiting spot (-492,-187).
+    REQUIRE(ApproachPoint(1, 873.98f, -491.79f, 96.54f, -572.3f, -262.5f, 88.6f, 100.f, x, y, z));
+    CHECK(std::fabs(x - -492.2f) < 2.f);
+    CHECK(std::fabs(y - -187.1f) < 2.f);
+}
+
+TEST_CASE("AV: the general squad waits below the enemy keep, on the way in", "[battleground][av]")
+{
+    using namespace Playerbot::BgRoutes;
+    float x = 0.f, y = 0.f, z = 0.f;
+    // Alliance on Drek'Thar (-1370.9,-220.2): below Frostwolf Keep, about 200 yd short, outside his room.
+    REQUIRE(ApproachPoint(1, 873.98f, -491.79f, 96.54f, -1370.9f, -220.2f, 98.5f, 200.f, x, y, z));
+    CHECK(std::fabs(x - -1210.2f) < 2.f);
+    CHECK(std::fabs(y - -366.5f) < 2.f);
+    // Horde on Vanndar (722.4,-11.0): in Dun Baldar below the bridge to the inner keep.
+    REQUIRE(ApproachPoint(1, -890.f, -575.f, 70.24f, 722.4f, -11.0f, 50.7f, 200.f, x, y, z));
+    CHECK(std::fabs(x - 625.3f) < 2.f);
+    CHECK(std::fabs(y - -191.9f) < 2.f);
+}
+
+TEST_CASE("AV: the Horde reaches its captain waiting spot from Iceblood without passing Balinda", "[battleground][av]")
+{
+    using namespace Playerbot::BgRoutes;
+    // AlteracValleyScript's Horde captain staging (-171.3,-266.6,9.1), 115 yd west of Balinda (-57.8,-286.6) on the river road.
+    for (int v = 0; v < Graph::kVariants; ++v)
+    {
+        float bx = -612.5f, by = -397.0f, bz = 60.9f, nx = 0.f, ny = 0.f, nz = 0.f;
+        bool reached = false;
+        for (int i = 0; i < 400 && !reached; ++i)
+        {
+            if (!NextWaypoint(1, bx, by, bz, -171.3f, -266.6f, 9.1f, 28.0f, nx, ny, nz, v)) { nx = -171.3f; ny = -266.6f; nz = 9.1f; }
+            float const dx = nx - bx, dy = ny - by, d = std::sqrt(dx * dx + dy * dy);
+            if (d < 0.5f) break;
+            float const st = std::min(8.0f, d);
+            bx += dx / d * st; by += dy / d * st; bz += (nz - bz) * st / d;
+            CHECK(bx < -120.f);   // never east of the spot, into Stonehearth Outpost
+            reached = (-171.3f - bx) * (-171.3f - bx) + (-266.6f - by) * (-266.6f - by) < 10.f * 10.f;
+        }
+        CHECK(reached);
+    }
+}
+
+TEST_CASE("AV: the general push walks round a living enemy captain's garrison", "[battleground][av]")
+{
+    using namespace Playerbot::BgRoutes;
+    // AV 263: from Snowfall the plain route to Drek'Thar runs through Iceblood Garrison, past Galvangar (-545.2,-165.4).
+    auto walk = [](int variant, float& closest)
+    {
+        float bx = -202.5f, by = -113.0f, bz = 78.0f, nx = 0.f, ny = 0.f, nz = 0.f;
+        closest = 1e9f;
+        for (int i = 0; i < 600; ++i)
+        {
+            if (!NextWaypoint(1, bx, by, bz, -1370.9f, -220.2f, 98.5f, 28.0f, nx, ny, nz, variant)) { nx = -1370.9f; ny = -220.2f; nz = 98.5f; }
+            float const dx = nx - bx, dy = ny - by, d = std::sqrt(dx * dx + dy * dy);
+            if (d < 0.5f) break;
+            float const st = std::min(8.0f, d);
+            bx += dx / d * st; by += dy / d * st; bz += (nz - bz) * st / d;
+            closest = std::min(closest, std::hypot(bx - -545.2f, by - -165.4f));
+        }
+        return std::hypot(bx - -1370.9f, by - -220.2f) < 25.f;
+    };
+    float plain = 0.f, round = 0.f;
+    REQUIRE(walk(0, plain));
+    CHECK(plain < kCaptainAvoidRadius);
+    REQUIRE(walk(kAvoidGalvangar * Graph::kVariants, round));
+    CHECK(round > 2.f * kCaptainAvoidRadius);
+}
+
+TEST_CASE("AV route: no waypoint when the recorded graph has no way to the goal", "[battleground][route]")
+{
+    using namespace Playerbot::BgRoutes;
+    // Snowfall to (-612,-397,37): the node nearest that goal, (-571,-397,53), lies on a path Snowfall has no way onto. The start node
+    // came back as the waypoint 20-28 yd from it and the bot turned between it and the plain move for good.
+    float nx = 0.f, ny = 0.f, nz = 0.f;
+    CHECK(!NextWaypoint(1, -229.f, -131.f, 78.f, -612.f, -397.f, 37.f, 28.f, nx, ny, nz, 0));
+    CHECK(!NextWaypoint(1, -222.f, -126.f, 78.f, -612.f, -397.f, 37.f, 28.f, nx, ny, nz, 0));
+    // with the banner's height the goal is Iceblood Graveyard's own node, and the route runs
+    CHECK(NextWaypoint(1, -229.f, -131.f, 78.f, -612.f, -396.f, 61.f, 28.f, nx, ny, nz, 0));
+}

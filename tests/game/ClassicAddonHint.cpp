@@ -69,3 +69,16 @@ TEST_CASE("AddonHint: the greeting text", "[addonhint]")
 {
     CHECK(kAddonHelloText == "hello");
 }
+
+TEST_CASE("AddonHint: only .bot lines count as add-on commands", "[addonhint]")
+{
+    CHECK(IsAddonBotCommand(".bot add mage dps"));
+    CHECK(IsAddonBotCommand(".bot add warrior tank"));
+    CHECK_FALSE(IsAddonBotCommand(".bot"));
+    CHECK_FALSE(IsAddonBotCommand(".bot "));
+    CHECK_FALSE(IsAddonBotCommand(".bot    "));
+    CHECK_FALSE(IsAddonBotCommand(".gm on"));
+    CHECK_FALSE(IsAddonBotCommand(".botadd mage"));
+    CHECK_FALSE(IsAddonBotCommand("hello"));
+    CHECK_FALSE(IsAddonBotCommand(""));
+}

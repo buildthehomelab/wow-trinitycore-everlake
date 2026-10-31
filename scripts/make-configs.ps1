@@ -101,6 +101,8 @@ Set-Options "$server\worldserver.conf.dist" "$server\worldserver.conf" ([ordered
         'AuctionHouseBot.Items.Amount.Purple' = '250'
         'AuctionHouseBot.Vanilla.ValueCurve'  = '1'
         'AuctionHouseBot.Items.Vendor'        = '1'
+        'AuctionHouseBot.Items.Crafted'       = '1'
+        'AuctionHouseBot.Items.Crafted.MinStock' = '1'
         # Buyer: bots buy player listings at fair prices, with a natural delay and a daily budget
         # Master buyer switch: without it the per-house buyer keys are ignored and nothing is ever bought
         'AuctionHouseBot.Buyer.Enabled'            = '1'

@@ -30,3 +30,25 @@ TEST_CASE("An enemy only blocks sitting down when it is engaged with the bot's s
     CHECK(MemberFightBlocksRecovery(40.0f * 40.0f));
     CHECK_FALSE(MemberFightBlocksRecovery(50.0f * 50.0f));
 }
+
+TEST_CASE("RecoverRules: a player's bot sits only when the group has stopped, and not straight back down", "[ClassicRecoverRules]")
+{
+    using namespace Playerbot::Classic;
+    LedRestInputs in;
+    CHECK(LedMaySitDown(in));                          // never stood up, the player has not moved
+    in.since_anchor_moved_ms = 500;                     // the player walks on: no sitting
+    CHECK_FALSE(LedMaySitDown(in));
+    in.since_anchor_moved_ms = kLedAnchorStillMs;       // he has stood 3 s: the group has stopped
+    CHECK(LedMaySitDown(in));
+    in.since_stood_ms = 4000;                           // the follow got it up 4 s ago (UBRS RC5: Harmony re-drank every stop)
+    CHECK_FALSE(LedMaySitDown(in));
+    in.since_stood_ms = kLedResitMs;
+    CHECK(LedMaySitDown(in));
+    in.resting = true;                                  // already eating / drinking: stays down
+    in.since_anchor_moved_ms = 0;
+    in.since_stood_ms = 0;
+    CHECK(LedMaySitDown(in));
+    // Only the bots that need it: a drink well under the old 90 % dungeon-healer mark, food only when properly hurt.
+    CHECK(kLedDrinkBelowManaPct <= 60);
+    CHECK(kLedEatBelowHpPct <= 60);
+}

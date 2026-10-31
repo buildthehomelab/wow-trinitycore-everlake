@@ -50,6 +50,10 @@ TEST_CASE("GroupOrder: owner words need the config switch", "[grouporder]")
     CHECK(ClassifyGroupOrder("summon", true) == "summon");
     CHECK(ClassifyGroupOrder("drop quest Foo", true) == "drop quest foo");
     CHECK_FALSE(ClassifyGroupOrder("drop quest Foo", false));
+    // The panel's stance re-send (stance only, an attack under way is kept).
+    CHECK(ClassifyGroupOrder("stance passive", true) == "stance passive");
+    CHECK(ClassifyGroupOrder("Stance Aggressive", true) == "stance aggressive");
+    CHECK_FALSE(ClassifyGroupOrder("stance passive", false));
 }
 TEST_CASE("GroupOrder: a line addressed to a group bot by name is its order without the ';'", "[grouporder]")
 {
