@@ -48,6 +48,8 @@ enum DemonHunterSpells
     SPELL_DH_BLADE_WARD                            = 442715,
     SPELL_DH_BLUR                                  = 212800,
     SPELL_DH_BLUR_TRIGGER                          = 198589,
+    SPELL_DH_BURN_IT_OUT_TALENT                    = 1266316,
+    SPELL_DH_BURN_IT_OUT_DISPEL                    = 1266618,
     SPELL_DH_BURNING_ALIVE                         = 207739,
     SPELL_DH_BURNING_ALIVE_TARGET_SELECTOR         = 207760,
     SPELL_DH_BURNING_HATRED                        = 320374,
@@ -249,6 +251,8 @@ enum DemonHunterSpells
     SPELL_DH_SIGIL_OF_SPITE_AOE                    = 389860,
     SPELL_DH_SOULMONGER_ABSORB                     = 391234,
     SPELL_DH_SOUL_BARRIER                          = 227225,
+    SPELL_DH_SOUL_CLEANSE_TALENT                   = 1266496,
+    SPELL_DH_SOUL_CLEANSE_DISPEL                   = 1266617,
     SPELL_DH_SOUL_CLEAVE                           = 228477,
     SPELL_DH_SOUL_CLEAVE_DMG                       = 228478,
     SPELL_DH_SOUL_FRAGMENT_COUNTER                 = 203981,
@@ -437,6 +441,33 @@ class spell_dh_blade_dance_damage : public SpellScript
     void Register() override
     {
         OnHit += SpellHitFn(spell_dh_blade_dance_damage::HandleHitTarget);
+    }
+};
+
+// 1266316 - Burn It Out (attached to 258920 - Immolation Aura and 1241937 - Soul Immolation)
+class spell_dh_burn_it_out : public SpellScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_DH_BURN_IT_OUT_TALENT, SPELL_DH_BURN_IT_OUT_DISPEL });
+    }
+
+    bool Load() override
+    {
+        return GetCaster()->HasAura(SPELL_DH_BURN_IT_OUT_TALENT);
+    }
+
+    void HandleBurnItOut() const
+    {
+        GetCaster()->CastSpell(GetCaster(), SPELL_DH_BURN_IT_OUT_DISPEL, CastSpellExtraArgsInit{
+            .TriggerFlags = TRIGGERED_IGNORE_CAST_IN_PROGRESS | TRIGGERED_DONT_REPORT_CAST_ERROR,
+            .TriggeringSpell = GetSpell()
+        });
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_dh_burn_it_out::HandleBurnItOut);
     }
 };
 
@@ -2830,6 +2861,33 @@ class spell_dh_soul_carver_aura : public AuraScript
     }
 };
 
+// 1266496 - Soul Cleanse (attached to 258920 - Immolation Aura and 1241937 - Soul Immolation)
+class spell_dh_soul_cleanse : public SpellScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_DH_SOUL_CLEANSE_TALENT, SPELL_DH_SOUL_CLEANSE_DISPEL });
+    }
+
+    bool Load() override
+    {
+        return GetCaster()->HasAura(SPELL_DH_SOUL_CLEANSE_TALENT);
+    }
+
+    void HandleSoulCleanse() const
+    {
+        GetCaster()->CastSpell(GetCaster(), SPELL_DH_SOUL_CLEANSE_DISPEL, CastSpellExtraArgsInit{
+            .TriggerFlags = TRIGGERED_IGNORE_CAST_IN_PROGRESS | TRIGGERED_DONT_REPORT_CAST_ERROR,
+            .TriggeringSpell = GetSpell()
+        });
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_dh_soul_cleanse::HandleSoulCleanse);
+    }
+};
+
 // 210788 - Soul Fragments
 class spell_dh_soul_fragments_damage_taken_tracker : public AuraScript
 {
@@ -3362,6 +3420,7 @@ void AddSC_demon_hunter_spell_scripts()
     RegisterSpellScript(spell_dh_army_unto_oneself);
     RegisterSpellScript(spell_dh_blade_dance);
     RegisterSpellScript(spell_dh_blade_dance_damage);
+    RegisterSpellScript(spell_dh_burn_it_out);
     RegisterSpellScript(spell_dh_burning_hatred);
     RegisterSpellScript(spell_dh_calcified_spikes);
     RegisterSpellScript(spell_dh_calcified_spikes_periodic);
@@ -3457,6 +3516,7 @@ void AddSC_demon_hunter_spell_scripts()
     RegisterSpellScriptWithArgs(spell_dh_elysian_decree, "spell_dh_sigil_of_spite", SPELL_DH_SIGIL_OF_SPITE);
     RegisterSpellScript(spell_dh_soulmonger);
     RegisterSpellAndAuraScriptPair(spell_dh_soul_carver, spell_dh_soul_carver_aura);
+    RegisterSpellScript(spell_dh_soul_cleanse);
     RegisterSpellScript(spell_dh_soul_fragments_damage_taken_tracker);
     RegisterSpellScript(spell_dh_soul_furnace);
     RegisterSpellScript(spell_dh_soul_furnace_conduit);
