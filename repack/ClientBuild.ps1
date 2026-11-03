@@ -134,23 +134,27 @@ function Sync-UntestedBuildRows([string]$Root) {
         "Untested client build(s) $(($rows | ForEach-Object { $_.Build }) -join ', ') allowed (played at your own risk)."
     } catch { Write-Warning "Could not allow the untested client build(s): $($_.Exception.Message)" }
 }
-# The realm is on the first build of client-builds.txt (the newest auth update sets it); bnetserver also lets in the other listed
-# builds (Realm.AlsoAcceptBuilds), so a player whose client Battle.net has not patched yet can still log in. Run before bnetserver
-# starts; writes bnetserver.conf only when the line differs.
+# The realm is on the first build of client-builds.txt (the newest auth update sets it); bnetserver and worldserver also let in the
+# other listed builds (Realm.AlsoAcceptBuilds), so a player whose client Battle.net has patched (or not yet) can still log in.
+# worldserver needs the line too: it builds the realm entry a client asks for before character create, and without its build in the
+# list that entry is empty and Finish does nothing (seen with 70755 on 3 November 2026). Run before the servers start; writes each
+# conf only when the line differs.
 function Sync-AlsoAcceptBuilds([string]$Root) {
-    try {
-        $conf = Join-Path $Root 'server\bnetserver.conf'
-        if (-not (Test-Path $conf)) { return }
-        $realm = Get-RealmBuild $Root
-        if (-not $realm) { return }
-        $also = @(Get-AcceptedBuilds $Root | Where-Object { $_ -ne $realm })
-        $want = 'Realm.AlsoAcceptBuilds = "' + ($also -join ',') + '"'
-        $lines = @(Get-Content $conf)
-        $hit = $false
-        $out = @(foreach ($l in $lines) { if ($l -match '^\s*Realm\.AlsoAcceptBuilds\s*=') { $hit = $true; $want } else { $l } })
-        if (-not $hit) { $out += $want }
-        if (($out -join "`n") -ne ($lines -join "`n")) { Set-Content $conf $out -Encoding ascii }
-    } catch { Write-Warning "Could not set Realm.AlsoAcceptBuilds in bnetserver.conf: $($_.Exception.Message)" }
+    $realm = Get-RealmBuild $Root
+    if (-not $realm) { return }
+    $also = @(Get-AcceptedBuilds $Root | Where-Object { $_ -ne $realm })
+    $want = 'Realm.AlsoAcceptBuilds = "' + ($also -join ',') + '"'
+    foreach ($name in 'bnetserver.conf', 'worldserver.conf') {
+        try {
+            $conf = Join-Path $Root "server\$name"
+            if (-not (Test-Path $conf)) { continue }
+            $lines = @(Get-Content $conf)
+            $hit = $false
+            $out = @(foreach ($l in $lines) { if ($l -match '^\s*Realm\.AlsoAcceptBuilds\s*=') { $hit = $true; $want } else { $l } })
+            if (-not $hit) { $out += $want }
+            if (($out -join "`n") -ne ($lines -join "`n")) { Set-Content $conf $out -Encoding ascii }
+        } catch { Write-Warning "Could not set Realm.AlsoAcceptBuilds in $($name): $($_.Exception.Message)" }
+    }
 }
 # The installed product of $ClientDir to use: the one with the first accepted build that has its game folder, or $null.
 function Select-ClientProduct([string]$Root, [string]$ClientDir) {
@@ -170,23 +174,11 @@ function Get-ClientRank([string]$Root, [string]$ClientDir) {
 # A folder whose name says it is a copy (F:\wow-70532-backup, "World of Warcraft - Copy", ...). Such a folder is only used when
 # nothing else fits or the player chose it.
 function Test-BackupPath([string]$Dir) { [bool]($Dir -match '(?i)(^|[^a-z])(backups?|bak|old|copy|kopie|sicherung)([^a-z]|$)') }
-# The client folders (with .build.info) Battle.net has installed: its install list (%ProgramData%\Battle.net\Agent\product.db, a
-# protobuf file whose install paths are length-prefixed strings) and the World of Warcraft uninstall entries in the registry.
+# The client folders (with .build.info) Battle.net has installed, from the World of Warcraft uninstall entries in the registry.
+# Battle.net's own files (ProgramData\Battle.net\Agent\product.db) are not read by a script: antivirus programs treat a
+# PowerShell script that reads Battle.net data as a password stealer. The launcher finds the client itself and passes it in.
 function Get-BattleNetClients {
     $paths = New-Object System.Collections.Generic.List[string]
-    try {
-        $b = [IO.File]::ReadAllBytes((Join-Path $env:ProgramData 'Battle.net\Agent\product.db'))
-        for ($i = 1; $i -lt $b.Length - 2; $i++) {
-            $c = $b[$i]
-            if (-not ((($c -ge 65 -and $c -le 90) -or ($c -ge 97 -and $c -le 122)) -and $b[$i + 1] -eq 58 -and ($b[$i + 2] -eq 47 -or $b[$i + 2] -eq 92))) { continue }
-            $len = [int]$b[$i - 1]
-            if ($len -ge 128) { continue }
-            if ($i -ge 2 -and $b[$i - 2] -ge 128) { $len = ($b[$i - 2] -band 127) + ($len -shl 7) }   # two-byte length
-            if ($len -lt 3 -or $i + $len -gt $b.Length) { continue }
-            $paths.Add([Text.Encoding]::UTF8.GetString($b, $i, $len))
-            $i += $len - 1
-        }
-    } catch { }
     foreach ($k in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*') {
         try {
             foreach ($e in @(Get-ItemProperty $k -ErrorAction SilentlyContinue)) {

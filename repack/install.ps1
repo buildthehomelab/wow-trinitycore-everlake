@@ -7,25 +7,9 @@
 param([string]$Client, [switch]$SkipMaps, [switch]$NoStart, [switch]$Elevated, [switch]$Gui)   # -Gui: started by the launcher window (already administrator): no questions, no pauses
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-# A zip downloaded from the internet marks every file it holds as "from the internet" (the Zone.Identifier stream). Windows Smart
-# App Control then blocks scripts and programs of the package that are started later (Create-Account.ps1, console-send.ps1,
-# mysql\bin\mysql.exe): TihonSky's first start failed this way. The mark is taken off every file of the main folder first.
-# Unblock-File only changes the player's own files and needs no administrator rights; a file it can't change is skipped with a
-# warning, and the install goes on.
-if ($MyInvocation.InvocationName -ne '.') {
-    $unblockFailed = 0; $unblockFirst = $null
-    try {
-        Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-            $file = $_.FullName
-            try { Unblock-File -LiteralPath $file -ErrorAction Stop }
-            catch { $unblockFailed++; if (-not $unblockFirst) { $unblockFirst = $file + ': ' + $_.Exception.Message } }
-        }
-    } catch { $unblockFailed++; if (-not $unblockFirst) { $unblockFirst = $_.Exception.Message } }
-    if ($unblockFailed) {
-        Write-Warning ("Could not remove the internet mark from " + $unblockFailed + " file(s) in " + $root + " (first: " + $unblockFirst +
-            "). If Windows blocks a script or mysql.exe later, right-click the downloaded zip, Properties, tick Unblock, and unpack it again.")
-    }
-}
+# The "from the internet" mark (Zone.Identifier) is taken off the package by the launcher, or by repack\unblock.ps1 that
+# Install.cmd runs first. It is not done here: a script that strips that mark from a whole folder tree is what antivirus
+# heuristics look for (Kaspersky named install.ps1 UDS:Trojan-PSW.PowerShell.Stealer.gen in 0.1.28).
 . "$PSScriptRoot\ClientBuild.ps1"   # the build the realm accepts is read from the shipped auth updates, never typed here
 
 # Looks for WoW Forever client folders (a folder with .build.info next to _forever_ (Wow.exe) or _classic_beta_ (WowB.exe)). Returns candidates
