@@ -609,9 +609,14 @@ inline Patient PickPatient(BotSnapshotView const& s, GroupSnapshotView const& g,
     HealClaims const claims = raid ? CopyHealClaims(s.published_at_ms()) : HealClaims{};
     bool const opening_hold = raid && (TankOpeningOnBoss(s) || HealerNearTankThreat(s));
     int32 const stand_down_pct = raid ? HealerStandDownPatientPct(s, g) : kHealerNoStandDown;
+    // The owner's "focus heal <names>": only those players and the healer itself are patients (the emitter refuses the rest).
+    std::vector<ObjectGuid> const& heal_only = s.raw().heal_only;
+    auto const focus_heal_skips = [&](ObjectGuid guid)
+    { return !heal_only.empty() && guid != s.guid() && std::find(heal_only.begin(), heal_only.end(), guid) == heal_only.end(); };
     auto consider = [&](Patient const& raw, bool assigned, bool own = false)
     {
         if (!raw.valid || raw.max_hp <= 0) return;
+        if (focus_heal_skips(raw.guid)) return;
         Patient p = raw;
         if (opening_hold && !raw.tank && raw.actual_pct >= kHealOpeningHoldPct) return;
         if (raw.actual_pct >= stand_down_pct) return;

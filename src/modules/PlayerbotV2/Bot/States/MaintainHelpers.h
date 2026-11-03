@@ -169,6 +169,15 @@ bool MeleeSpreadSpot(BotSnapshotView const& s, GroupSnapshotView const& g, Nearb
 // neighbours of the mob it is after).
 bool RaidPointInUnpulledReach(BotSnapshotView const& s, float x, float y, float z, bool exempt_victim_pack = true);
 
+// (x, y, z) lies inside an unpulled (idle) mob's aggro reach + margin, whatever the bot's own position (the world-thread planners
+// that pick a spot for the whole group: PveGroupCoordinator::PlanSightPull). Instances only. Definition in State_Idle.cpp.
+bool PointInUnpulledPackReach(BotSnapshotView const& s, float x, float y, float z);
+
+// Line-of-sight pull (PveOrder::sight_pull, PveGroupCoordinator::PlanSightPull): a bot of the group farther than a few yards from the
+// spot walks there (a cast in progress goes out first). True when the walk owns the tick. In combat (State_InCombat SightPullTick)
+// and out of it (idle:sight_pull, a member not yet hit). Definition in State_InCombat.cpp.
+bool SightPullGather(BotSnapshotView const& s, BotAI& ai, BotIntentEmitter& emit, bool in_combat_state);
+
 // A spot on the victim's level that sees it and is in reach for the role (the melee ring, or 25-10 y out for a ranged bot);
 // pack_safe also keeps it out of unpulled packs' reach (RaidPointInUnpulledReach). Emits the run there and returns the spot and
 // its distance from the victim. Definition in State_InCombat.cpp (used by [idle_reposition] and the opener's blocked approach).

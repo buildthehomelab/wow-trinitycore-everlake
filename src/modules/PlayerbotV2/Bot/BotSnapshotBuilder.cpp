@@ -65,6 +65,7 @@
 #include "Vehicle.h"
 #include "MotionMaster.h"
 #include "ChaseMovementGenerator.h"   // GetNoPathStreak: the bot's chase cannot path to its target
+#include "Bot/CcDeny.h"
 #include "Diagnostics/ScenarioHuman.h"   // Scenario::PlaysAsHuman: a player-led scenario's stand-in counts as the player
 #include "MovementDefines.h"
 #include "DBCEnums.h"
@@ -2386,6 +2387,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         snap->tactic_save_mana = bot_ai->tactic_save_mana();
         snap->owner_picks = bot_ai->owner_picks();
         snap->aoe_denied = bot_ai->aoe_denied();
+        snap->heal_only = bot_ai->heal_only();
     }
     snap->social_events.has_duel_request = p->duel && p->duel->State == DUEL_STATE_CHALLENGED &&
                                   p->duel->Initiator != p;
@@ -3386,8 +3388,14 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         }
         else
             cc_account = Services::Owners().GetOwner(snap->bot_id).account_id;
-        if (cc_account)
+        // A grouped bot in a dungeon or raid that nobody commands (a scenario squad, a bot-led group) keeps the owner default: Fear off in
+        // dungeons and raids (chris 10-28). It had no deny at all: smlibrary_loksey 0.1.28j, the hunter cast Scare Beast on a Tracking
+        // Hound 18 times in 41 s, none held, and the tank died to the hound (21 casts and the same death in smlibrary_loksey36 0.1.28i).
+        if (cc_account || (!snap->group.group_guid.IsEmpty() && snap->instance_ctx.is_in_dungeon))
             snap->cc_deny = Services::Owners().CcDenied(cc_account, snap->identity.cls);
+        // A scenario squad told "yes fear" (ScenarioDef::yes_fear): Fear and Scare Beast allowed, as after an owner's order.
+        if (!cc_account && ::Playerbot::Scenario::HasYesFear(snap->bot_id))
+            snap->cc_deny = uint16(snap->cc_deny & ~uint16(::Playerbot::CcDeny::Fear));
     }
 
     // ---- Spellbook (sorted, binary-searchable in BotSnapshotView::knows_spell) ----

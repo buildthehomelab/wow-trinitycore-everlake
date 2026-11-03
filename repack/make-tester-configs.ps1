@@ -17,11 +17,12 @@ if ($Preset -eq 'auto') {
     $Preset = if ($gb -ge 30) { 'large' } elseif ($gb -ge 16) { 'medium' } else { 'small' }
     "Detected $gb GB RAM -> preset $Preset"
 }
-# ~5 MB RAM per world bot; budgets leave room for Windows, the client and MySQL
+# Bot numbers (Bots.* lines, the same as the launcher's Bots button and Fleet/BotSize.h in the bot module). They go into the
+# player's own file zz-9-local.conf, never into playerbot.conf: one place for them. About 5 MB of RAM per active bot.
 $p = @{
-    small  = @{ Max = 120; PerPlayer = 60;  City = 60;  Zone = 25; Pool = 300;  Rss = 3500 }
-    medium = @{ Max = 250; PerPlayer = 150; City = 120; Zone = 40; Pool = 700;  Rss = 6000 }
-    large  = @{ Max = 450; PerPlayer = 300; City = 250; Zone = 70; Pool = 1500; Rss = 9000 }
+    small  = @{ Size = 'Low';    Reserve = 600;  Cap = 120; Zone = '15-25'; City = 50 }
+    medium = @{ Size = 'Normal'; Reserve = 1500; Cap = 250; Zone = '30-45'; City = 80 }
+    large  = @{ Size = 'High';   Reserve = 3000; Cap = 500; Zone = '50-70'; City = 120 }
 }[$Preset]
 
 function Set-Options($dist, $out, $options) {
@@ -104,13 +105,29 @@ if (Test-Path $pbDist) {
         'Playerbot.Bg.AutoSeed.Matches' = '0'; 'Playerbot.Bg.AutoJoin' = '0'
         'PlayerbotV2.Guilds.Enabled' = '0'; 'PlayerbotV2.SessionRhythm.Enabled' = '0'
         'Playerbot.World.Enable' = '1'; 'Playerbot.World.FriendlyPct' = '100'; 'Playerbot.World.GlobalFill' = '0'; 'Playerbot.World.TownPct' = '100'
-        'Playerbot.World.MaxBots' = "$($p.Max)"; 'Playerbot.World.BotsPerPlayer' = "$($p.PerPlayer)"
-        'Playerbot.World.CityBots' = "$($p.City)"; 'Playerbot.World.ZoneBots' = "$($p.Zone)"
-        'Playerbot.World.ActivityRadius' = '600'; 'Playerbot.World.SpawnRingMin' = '110'; 'Playerbot.World.SpawnRingMax' = '200'
-        'Playerbot.World.PoolMax' = "$($p.Pool)"; 'Playerbot.World.TickMs' = '500'
+        'Playerbot.World.ActivityRadius' = '600'; 'Playerbot.World.SpawnRingMin' = '150'; 'Playerbot.World.SpawnRingMax' = '350'; 'Playerbot.World.AreaCapOutdoors' = '8'
+        'Playerbot.World.TickMs' = '500'
         'Playerbot.World.SpawnPerTick' = '6'; 'Playerbot.World.CitySpawnPerTick' = '12'
-        'Playerbot.World.ZoneGraceSec' = '300'; 'Playerbot.World.RssBudgetMb' = "$($p.Rss)"; 'Playerbot.World.FillerHubOnly' = '1'
+        'Playerbot.World.FillerHubOnly' = '1'
     })
+}
+# The player's own file: written once from templates\zz-9-local.conf with the RAM pick, then it is theirs (never overwritten).
+# An older own file without Bots.* lines gets the four bot lines under its [worldserver] line, so the bot count is never lost.
+$mine = "$server\worldserver.conf.d\zz-9-local.conf"
+$botLines = @("# Bots ($($p.Size)): the launcher's Bots button changes these four",
+    "Bots.Reserve = $($p.Reserve)", "Bots.ActiveCap = $($p.Cap)", "Bots.PerZone = $($p.Zone)", "Bots.InCity = $($p.City)")
+if (-not (Test-Path $mine)) {
+    $tpl = Get-Content (Join-Path $PSScriptRoot 'templates\zz-9-local.conf')
+    $out = foreach ($l in $tpl) { if ($l -eq '#BOTS#') { $botLines } else { $l } }
+    Set-Content -Path $mine -Value $out -Encoding ascii
+    "Wrote server\worldserver.conf.d\zz-9-local.conf (your own settings, bots $($p.Size))."
+} elseif (-not (Select-String -Path $mine -Pattern '^\s*Bots\.' -Quiet)) {
+    $old = Get-Content $mine; $out = @(); $done = $false
+    foreach ($l in $old) { $out += $l; if (-not $done -and $l -match '^\s*\[\s*worldserver\s*\]\s*$') { $out += $botLines; $done = $true } }
+    if (-not $done) { $out = @('[worldserver]') + $botLines + $old }
+    Copy-Item $mine "$mine.bak" -Force
+    Set-Content -Path $mine -Value $out -Encoding ascii
+    "Added the bot lines ($($p.Size)) to your zz-9-local.conf (old copy: zz-9-local.conf.bak)."
 }
 if ($kept.Count) { "Kept your existing $($kept -join ', ') (not changed). Put your own settings in server\worldserver.conf.d\zz-9-local.conf (menu S); updates never touch it." }
 if ($overwrite) { "Wrote server\worldserver.conf, bnetserver.conf and playerbot.conf (preset $Preset). Restart the server to apply." }

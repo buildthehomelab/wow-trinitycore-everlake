@@ -10742,6 +10742,21 @@ uint32 API::learn_class_quest_spells_free()
     for (uint32 spellId : kHunterPetSpells)
         learn(spellId, nullptr);
 
+    // Tranquilizing Shot 19801 is a book (a Molten Core drop) that no trainer and no quest teaches, and every raiding hunter of the
+    // tier has read it: without it a bot hunter cannot shoot off a boss's Frenzy (Chromaggus, Magmadar, Flamegor; bwl_chromaggus on
+    // d90ef3de69 logged 0 shots). A bot hunter gets it at 60 as it gets its trainer spells.
+    constexpr uint32 kTranquilizingShot = 19801;
+    if (level >= 60 && !p_->HasSpell(kTranquilizingShot) && sSpellMgr->GetSpellInfo(kTranquilizingShot, DIFFICULTY_NONE))
+    {
+        p_->LearnSpell(kTranquilizingShot, false);
+        if (p_->HasSpell(kTranquilizingShot))
+        {
+            ++learned;
+            TC_LOG_INFO("playerbot.api", "[API::class_quest_spells] {} (L{}) reads the Tranquilizing Shot book (19801)", p_->GetName(),
+                uint32(level));
+        }
+    }
+
     return learned;
 }
 

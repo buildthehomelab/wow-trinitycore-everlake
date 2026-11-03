@@ -571,6 +571,16 @@ void DispatchInGroup(BotAI& ai,
 
     if (leader_member->map_id != snapshot.map_id()) return;
 
+    // A player on a flight is not followed on the ground: the bots by him board it with him and the others are brought to him when
+    // he lands (Fleet/OwnerCatchUp.h, the module's world tick). Chasing him mounted under the route ran them through every camp below it.
+    if (leader_member->in_flight && !leader_member->is_bot && Services::Config().behavior_fly_with_owner())
+    {
+        if (snapshot.raw().movement.is_moving && !snapshot.raw().movement.is_in_taxi)
+            emit.stop_movement(/*clear_generators=*/true);   // the follow generator would re-aim at him
+        ai.set_last_rule_fired("ingroup:owner_in_flight");
+        return;
+    }
+
     // Bot's current world position — needed for both anchor sanity checks
     // and the follow-recall distance test further below. Computed once and
     // reused so the anchor-on-tank fallback can compare distances.

@@ -486,9 +486,11 @@ uint32 DesiredTotem(BotSnapshotView const& s, GroupSnapshotView const& g, Elemen
                 && !SubgroupHasTank(s, g))
                 return TRANQUIL_AIR_TOTEM;
             // Windfury Totem doesn't stack with the shaman's own Windfury
-            // Weapon, so it is for the other melee of the party.
+            // Weapon, so it is for the other melee of the party. Grace of Air
+            // (agility) also helps a hunter, so a hunter in reach counts for it.
             bool const melee_near = PartyMemberNear(s, g, melee_mate);
-            if (!self_melee && !melee_near)
+            if (!self_melee && !melee_near
+                && !PartyMemberNear(s, g, [](GroupMemberSummary const& m) { return m.cls == CLASS_HUNTER; }))
                 return 0;
             return TotemAt(s, { melee_near ? WINDFURY_TOTEM : 0u, GRACE_OF_AIR_TOTEM }, resist == Resist::Nature && index > 0 ? index - 1 : index);
         }
@@ -799,6 +801,13 @@ uint32 PickTotem(BotSnapshotView const& s, GroupSnapshotView const& g)
         return 0;
     float bx, by, bz; s.position(bx, by, bz);
     bool const mana_ok = ManaPct(s) >= 25;
+    // Two passes: first the reactive totems and the elements with no totem of
+    // ours in reach, then the swaps of a standing totem for the planned one.
+    // One element wanting a swap every few seconds (water: the Healing Stream
+    // a moving healer drops, put back to Mana Spring by the plan) used to
+    // hold the rotation on that element, so the air and fire totems after it
+    // never went down: only Healing Stream was ever seen.
+    for (int pass = 0; pass < 2; ++pass)
     for (Element e : { EARTH, WATER, AIR, FIRE })
     {
         uint32 const want = DesiredTotem(s, g, e);
@@ -807,6 +816,7 @@ uint32 PickTotem(BotSnapshotView const& s, GroupSnapshotView const& g)
                            || want == MANA_TIDE_TOTEM;
         if (!mana_ok && !reactive) continue;
         LiveTotem const cur = CurrentTotem(s, e);
+        bool const near_me = cur.totem && Dist2(cur.totem->x, cur.totem->y, cur.totem->z, bx, by, bz) <= 25.f * 25.f;
         if (cur.spell == want && cur.totem)
         {
             // In place: keep it unless the fight moved away from it.
@@ -816,9 +826,16 @@ uint32 PickTotem(BotSnapshotView const& s, GroupSnapshotView const& g)
                 if (!v || Dist2(v->x, v->y, v->z, cur.totem->x, cur.totem->y, cur.totem->z) <= 18.f * 18.f)
                     continue;
             }
-            else if (Dist2(cur.totem->x, cur.totem->y, cur.totem->z, bx, by, bz) <= 25.f * 25.f)
+            else if (near_me)
                 continue;
         }
+        // Our own Healing Stream in reach stands in for the planned Mana
+        // Spring until it runs out: the heal-on-the-move step dropped it for a
+        // hurt party, and swapping it straight back only wastes the casts.
+        if (e == WATER && want == MANA_SPRING_TOTEM && cur.spell == HEALING_STREAM_TOTEM && near_me)
+            continue;
+        if (pass == 0 && !reactive && near_me && !(e == FIRE && cur.spell == want))
+            continue;   // a swap: second pass
         return want;
     }
     return 0;
@@ -2056,6 +2073,34 @@ uint32 PickResistPotion(BotSnapshotView const& s)
     if (CombatConsumableUsedRecently(s))
         return 0;
     return item;
+}
+
+uint32 PickCureItem(BotSnapshotView const& s)
+{
+    if (!s.in_combat() || !s.is_alive() || !s.is_in_instance())
+        return 0;
+    Raid::RaidRules const* rules = Raid::RulesForMap(s.map_id());
+    if (!rules || rules->cureItem.empty())
+        return 0;
+    for (Raid::CureItem const& c : rules->cureItem)
+    {
+        if (!s.has_aura(c.aura))
+            continue;
+        // Stunned (Bronze stuns its own carrier every 5 s) or mid-cast: the use waits for the next tick the bot can act on.
+        if (s.is_stunned() || s.is_casting() || !ConsumablesAllowed(s))
+            return 0;
+        if (s.item_count(c.item) == 0)
+        {
+            if (LogPaced(s, c.aura))
+                TC_LOG_INFO("playerbot.v2", "[raid_cure] {} map={} carries aura {} and has no item {} to cure it", s.name(), s.map_id(), c.aura, c.item);
+            continue;
+        }
+        ConsumableInfo const& info = Classify(c.item);
+        if (info.spell && s.cd_remaining(info.spell).count() > 0)
+            continue;
+        return c.item;
+    }
+    return 0;
 }
 
 uint8 PickResistGearSchool(BotSnapshotView const& s)

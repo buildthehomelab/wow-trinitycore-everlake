@@ -36,7 +36,16 @@ struct ScenarioMember
 };
 
 // Parity: the damage_parity family (DamageParity.h) - one bot, a target dummy, measurements; done when its legs have run.
-enum class ScenarioGoalKind : std::uint8_t { KillCreature, Parity };
+// FollowRoute: the stand-in walks ScenarioDef::route like a player and the squad must be with him at every point (Fleet/OwnerCatchUp.h).
+enum class ScenarioGoalKind : std::uint8_t { KillCreature, Parity, FollowRoute };
+
+// A point of a FollowRoute walk. The stand-in walks to it; where no walking route leads there he is set down on it, as a player who takes
+// a jump the navmesh does not have, and the squad has to come after him.
+struct ScenarioRoutePoint
+{
+    char const* label;
+    float x, y, z;
+};
 
 struct ScenarioCheckpoint
 {
@@ -111,6 +120,13 @@ struct ScenarioDef
     // unattackable): when the attack is due the main tank uses the nearest one within 200 y, and the attack waits for the boss to become
     // attackable (up to 30 s). 0 = none.
     std::uint32_t start_object = 0;
+    // FollowRoute: the points the stand-in walks, in order (on `map`, starting from x, y, z).
+    std::vector<ScenarioRoutePoint> route;
+    // Orders an owner gives that a bot-only squad has nobody to give. yes_fear: the squad was told "yes fear" (Fear and Scare Beast allowed
+    // in the dungeon; Scenario::MarkYesFear). focus_heal_tank: the healer was told "focus heal <tank>" (BotAI::heal_only); it heals the tank
+    // and itself only. Both are taken back when the run ends, since the squad characters are reused.
+    bool yes_fear = false;
+    bool focus_heal_tank = false;
 };
 
 // The party every dungeon scenario uses: the shape of the owner's own (tank, healer, mage, rogue) plus a hunter for the fifth. The same
@@ -159,6 +175,8 @@ inline constexpr DungeonRow kDungeons[] = {
     { "rfk_aggem",            "Razorfen Kraul: level 31 party to Aggem Thorncurse",        47,   1942.27f,   1544.23f,    83.3055f,  75.f, 31,  4424, "Aggem Thorncurse",   20 },
     { "gnomeregan_electrocutioner", "Gnomeregan: level 32 party to Electrocutioner 6000", 90, -329.098f, -3.20722f, -152.851f, 170.f, 32, 6235, "Electrocutioner 6000", 30 },
     { "smlibrary_loksey",     "Scarlet Monastery Library: level 33 party to Houndmaster Loksey", 189, 253.672f, -206.624f, 18.6773f, 270.f, 33, 3974, "Houndmaster Loksey", 20 },
+    // The same run at level 36, the Library's own level: a failure at 33 that passes here is the low end of the level range, not a bot bug.
+    { "smlibrary_loksey36",   "Scarlet Monastery Library: level 36 party to Houndmaster Loksey", 189, 253.672f, -206.624f, 18.6773f, 270.f, 36, 3974, "Houndmaster Loksey", 20 },
     { "smarmory_herod",       "Scarlet Monastery Armory: level 36 party to Herod",         189,  1608.1f,   -318.919f,   18.6714f, 270.f, 36,  3975, "Herod",              25 },
     { "smcathedral_mograine", "Scarlet Monastery Cathedral: level 38 party to Mograine",   189,   853.179f, 1319.18f,    18.6714f,  90.f, 38,  3976, "Scarlet Commander Mograine", 25 },
     { "rfd_glutton",          "Razorfen Downs: level 40 party to Glutton",                 129,  2593.68f,   1111.23f,    50.9518f, 270.f, 40,  8567, "Glutton",            25 },
@@ -466,8 +484,13 @@ inline constexpr RaidBossRow kBwlBosses[] = {
       11981, "Flamegor",            20 }, ScnItem::OnyxiaScaleCloak),
     // Chromaggus stays unattackable behind his side door until the lever opens it (classic_boss_chromaggus.cpp UpdateAI): 4f7b18e3 failed with
     // "the boss is not attackable" at the order. The main tank pulls the lever as a raid leader would.
+    // He casts Frenzy 23128 every 15 s (classic_boss_chromaggus.cpp; Enrage dispel type 9, which Tranquilizing Shot 19801 removes): a kill
+    // must have seen a shot, and every run reports how many (0.1.28g: two runs of 4 and 6 minutes logged no [raid_tranq] line at all).
+    // His two breaths are rolled per instance (2 of 5; Time Lapse, the off-tank swap check of 0018, is in 8 of the 20 pairs). A forced
+    // extra Time Lapse was tried (8d2fd499aa) and is not used: cast at his 60 s breath it pushed his own breath to right after it, when
+    // the raid had come out of hiding, and 26 raiders died to one Incinerate. The swap is checked in the runs whose roll has it.
     StartsWith({ "bwl_chromaggus", "Blackwing Lair: 40 level 60 raiders to Chromaggus (Brood Afflictions dispelled, Time Lapse tank swap)",
-      14020, "Chromaggus",          25 }, 179148),
+      14020, "Chromaggus",          25, 0, 1 }, 179148),
 };
 
 // Zul'Gurub, 20 raiders. Venoxis' four cobras and Hakkar's Sons stand for the fight; Thekal's Zath and Lor'Khan (the three must die together)
@@ -739,6 +762,38 @@ inline ScenarioDef MakeScorecardScenario()
     return d;
 }
 
+// ---- brm_follow: a player's group through Blackrock Mountain on foot (chris 2026-10-30) ----
+// The rogue leads like a player from the Blackrock Spire door at the top down to the Blackrock Depths door at the bottom, and back up. The
+// way down has drops the bots leap (follow_drop); the way up is where a player takes the chains and the jumps, which bots cannot: where
+// the rogue finds no walking route he is set down on the point, and the bots that cannot follow are brought to him (CatchUpToOwner). The
+// report says per point how long the squad took to gather and who walked and who was brought. Points are the instance portals' trigger
+// centres (hotfixes area_trigger 1466 / 1468): on the floor, and a bot standing in one does not zone (the client sends the trigger).
+inline ScenarioDef MakeBrmFollowScenario()
+{
+    ScenarioDef d{};
+    d.name = "brm_follow";
+    d.summary = "Blackrock Mountain on foot: level 60 party led like a player from the Spire door down to the Depths door and back up";
+    d.level = 60;
+    d.squad = StandardParty();
+    d.map = 0;
+    d.x = -7518.19f; d.y = -1239.13f; d.z = 285.743f;
+    d.o = 0.f;
+    d.goal = ScenarioGoalKind::FollowRoute;
+    d.goal_name = "";
+    d.timeout_ms = 20u * 60u * 1000u;
+    d.limits.expected_map = 0;
+    d.limits.bounds = { true, d.x - 700.f, d.x + 700.f, d.y - 700.f, d.y + 700.f, 0.f, 500.f };
+    // The gather check at each point (FollowRoute) is the test: a bot left on the other level while the rogue goes on is what it is
+    // about, so the tank-distance and stand-still rules are widened past the time the gather allows.
+    d.limits.stray_yards = 500.f;
+    d.limits.idle_ms = 120000;
+    d.stand_in = "Scnrogue";
+    d.player_lead = true;
+    d.route = { { "the Blackrock Depths door", -7176.63f, -937.667f, 168.706f },
+                { "the Blackrock Spire door", -7518.19f, -1239.13f, 285.743f } };
+    return d;
+}
+
 inline std::vector<ScenarioDef> const& ScenarioCatalogue()
 {
     static std::vector<ScenarioDef> const defs = []
@@ -761,6 +816,7 @@ inline std::vector<ScenarioDef> const& ScenarioCatalogue()
             std::string const base = r.name;
             bool const led = base == "rfc_oggleflint" || base == "wc_cobrahn" || base == "sfk_rethilgore" || base == "deadmines_rhahkzor";
             ScenarioDef l = d;
+            std::size_t const plain_at = v.size();
             v.push_back(std::move(d));
             if (led)
             {
@@ -778,6 +834,22 @@ inline std::vector<ScenarioDef> const& ScenarioCatalogue()
                 if (base == "rfc_oggleflint")
                     l.timeout_ms = 40u * 60u * 1000u;
                 v.push_back(std::move(l));
+            }
+            // The Library at 36 with an owner's two orders a bot-only squad never gets (test items 4 and 19 of the dungeon list): the
+            // healer told "focus heal" on the tank, and the squad told "yes fear" (the Tracking Hounds are beasts: the hunter's Scare Beast
+            // and the warrior's Intimidating Shout are allowed). The plain run shows the default, these show the orders working.
+            if (base == "smlibrary_loksey36")
+            {
+                ScenarioDef f = v[plain_at];
+                f.name = "smlibrary_loksey36_focusheal";
+                f.summary = "Scarlet Monastery Library: level 36 party to Loksey, the healer told 'focus heal' on the tank";
+                f.focus_heal_tank = true;
+                v.push_back(std::move(f));
+                ScenarioDef y = v[plain_at];
+                y.name = "smlibrary_loksey36_yesfear";
+                y.summary = "Scarlet Monastery Library: level 36 party to Loksey, the squad told 'yes fear'";
+                y.yes_fear = true;
+                v.push_back(std::move(y));
             }
         }
         // Deadmines, entrance to Edwin VanCleef: Rhahk'Zor, Sneed, Gilnid, the door and cannon, Mr. Smite, Greenskin, VanCleef. The
@@ -812,6 +884,7 @@ inline std::vector<ScenarioDef> const& ScenarioCatalogue()
         v.push_back(MakeOnyScenario());
         v.push_back(MakeOnyDodgeScenario());
         v.push_back(MakeBwlRazorgoreScenario());
+        v.push_back(MakeBrmFollowScenario());
         for (ScenarioDef& d : MakeOtherRaidScenarios())
             v.push_back(std::move(d));
         // The names are built once and kept: ScenarioDef carries char const*.

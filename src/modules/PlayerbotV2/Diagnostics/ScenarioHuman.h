@@ -69,4 +69,44 @@ inline bool PlaysAsHuman(Player const* p)
     return IsScenarioHuman(p->GetGUID().GetCounter());
 }
 
+// A squad told "yes fear" (ScenarioDef::yes_fear): its members may cast Fear / Scare Beast in a dungeon, as an owner's bots may after that
+// order. A scenario squad has no owner account, so the snapshot builder's owner default (Fear off, 0022) would hold it otherwise.
+inline std::array<std::atomic<std::uint64_t>, 8>& YesFearSlots()
+{
+    static std::array<std::atomic<std::uint64_t>, 8> slots{};
+    return slots;
+}
+
+inline void MarkYesFear(std::uint64_t guid_low, bool on)
+{
+    for (auto& s : YesFearSlots())
+    {
+        std::uint64_t cur = s.load(std::memory_order_relaxed);
+        if (cur == guid_low)
+        {
+            if (!on)
+                s.store(0, std::memory_order_relaxed);
+            return;
+        }
+    }
+    if (!on)
+        return;
+    for (auto& s : YesFearSlots())
+    {
+        std::uint64_t expected = 0;
+        if (s.compare_exchange_strong(expected, guid_low, std::memory_order_relaxed))
+            return;
+    }
+}
+
+inline bool HasYesFear(std::uint64_t guid_low)
+{
+    if (guid_low == 0)
+        return false;
+    for (auto const& s : YesFearSlots())
+        if (s.load(std::memory_order_relaxed) == guid_low)
+            return true;
+    return false;
+}
+
 } // namespace Playerbot::Scenario

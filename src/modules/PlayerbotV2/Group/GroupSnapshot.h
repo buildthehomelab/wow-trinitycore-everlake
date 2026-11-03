@@ -45,6 +45,7 @@ struct GroupMemberSummary
     // such a tank to have a mob picked up walks into the mob pile (Deadmines: Terrify on the tank, Shredder on the priest).
     bool                   is_controlled = false;
     bool                   is_mounted = false;
+    bool                   in_flight = false;   // on a taxi flight (Player::IsInFlight)
     // V2-managed bot vs real player (Lifecycle::is_bot at build time).
     // Drives human-aware behavior: dungeon-complete auto-leave must not
     // hearth the bots out while a HUMAN group member is still inside the

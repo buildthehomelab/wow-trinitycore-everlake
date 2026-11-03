@@ -143,6 +143,7 @@ from the bot.
 | `pull rti` | yes | yes | Opens on the mob carrying the bot's own rti symbol (Ike3Commands). |
 | `max dps` / `save mana` / `normal` | yes | no | Burn mode (cooldowns on every fight), healers keep to efficient heals, clear both. Ike3Commands. |
 | `focus <name\|clear>`, `target <entry>`, `mark <icon>`, `interrupt`, `cc` | yes | no | Finer combat control. |
+| `focus heal <name>, <name>` / `focus heal me` / `focus heal off` | yes | no | A healer heals only those group members and itself until `focus heal off` (relog clears it). Bare `focus heal` says who it is on. |
 | `aoe on\|off` (bare `aoe` toggles), `aoe_all on\|off` | yes | no | Off: the bot casts no spell that hits more than one enemy (area and cone spells, damaging ground areas such as Blizzard or Consecration, chained spells such as Chain Lightning, Multi-Shot or Cleave, Magma and Fire Nova Totem) until on. `aoe_all` sets every bot of the group. Memory only; `clearprefs` turns it on again. |
 
 ### Questions and housekeeping (OwnerCommands)
@@ -309,6 +310,8 @@ World bots are ambient characters with no owner (`Playerbot.World.Enable = 1` sp
   invite is declined with a short whisper unless the bot is free to group; a duel from a stranger is accepted about
   one time in three when the levels are within 5 and nothing is fighting, otherwise declined with a whisper.
   Invites: `Playerbot.Interact.AutoAcceptInvites` (`none`, `friends_or_higher`, `guild_or_higher`, `anyone`).
+- **No invites to passers-by** (`InvitePassingPlayers` 0): a world bot never sends a group invite to a real player who
+  walks past; it only invites other bots. A player invites the bot himself (or whispers `invite` to it). 1 = the old way (invites players within 30 yards).
 - Companion banter (`PartyBanter`): a short lowercase line now and then on ready check, wipe, rez, death, boss
   kill; never in a group over 15 or with `Playerbot.Chatter.Enabled = 0`.
 - Hostile-faction world bots can be placed near you (`Playerbot.World.FriendlyPct` and the per-zone `*FriendlyPct` keys, all 100 = none by default); lower them to
@@ -356,7 +359,7 @@ Defaults are those of `conf/playerbot.conf.dist`. Behaviour switches are read wh
 `WarriorStanceDance`, `PurgeDuty`, `RangedSlow`, `SoloFlee`, `DruidHealForm`, `PullDiscipline`. Gear:
 `Playerbot.Gear.MaxTier` (1), `Playerbot.Gear.RaidIlvlCap` (0).
 
-**Social and world (default)**: `BotWhisperable` 1, `WorldBotSayReply` 1, `PoliteWorldBots` 1, `PartyBanter` 1,
+**Social and world (default)**: `BotWhisperable` 1, `WorldBotSayReply` 1, `PoliteWorldBots` 1, `InvitePassingPlayers` 0, `PartyBanter` 1,
 `SocialEmotes` 1, `Fidget` 1, `Playerbot.Chatter.Enabled` 1, `Playerbot.Interact.AutoAcceptInvites` friends_or_higher,
 `Playerbot.Interact.AutoLeaderHandover` 1, `Playerbot.World.Enable` 0 (`MaxBots` 100, `BotsPerPlayer` 25,
 `ActivityRadius` 300, `FriendlyPct` 100), `Playerbot.Population.TotalTarget` 0.

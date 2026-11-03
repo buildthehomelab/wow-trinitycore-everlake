@@ -58,6 +58,7 @@ enum class RaidLogKind : uint8
     ThreatHold = 1, AoeHold = 2, PullHeld = 4, PullSkip = 5,
     OpenerHold = 6,                            // [raid_pull] non-tank opener on an unpulled mob (PrologueRules)
     PullBackOpener = 7,                        // [pull_back] no ranged opener for this tank (PrologueRules)
+    SightPull = 8,                             // [sight_pull] a bot's gather / wait at the line-of-sight pull spot (State_InCombat)
     Escape = 16, CancelHeal = 17, Rez = 18,   // [raid_escape], overheal cancel, rez spread
     Interrupt = 32, Tranq = 33, FearHold = 34, // [raid_interrupt], [raid_tranq], [raid_threat] fear hold
     Hazard = 48, Los = 49, Cone = 50,          // [raid_hazard], [raid_los], [raid_cone] (State_Idle)

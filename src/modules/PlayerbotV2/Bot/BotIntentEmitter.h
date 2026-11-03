@@ -460,6 +460,9 @@ private:
     // The owner's "aoe off" (AoeDeny.h, snapshot aoe_denied): a spell that hits more than one enemy is not sent either.
     bool aoe_denied(uint32 spell_id) const;
     bool owner_denied(uint32 spell_id) const { return cc_denied(spell_id) || aoe_denied(spell_id); }
+    // The owner's "focus heal <names>" (snapshot heal_only): a heal, heal over time or absorb on anyone else is not sent. A cast
+    // with no target or on the bot itself always goes.
+    bool heal_denied(uint32 spell_id, ObjectGuid target) const;
     void note_school_cast(uint32 spell_id, ObjectGuid target);
     // Avoided part of the pet's damage schools on `target` (0 = no hold).
     uint8 pet_hold_mask(ObjectGuid target) const;

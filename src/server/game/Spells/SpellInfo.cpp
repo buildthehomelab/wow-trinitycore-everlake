@@ -2881,6 +2881,7 @@ void SpellInfo::_LoadAuraState()
             case 1064: // Dazed
                 return AURA_STATE_DAZED;
             case 32216: // Victorious
+            case 402975: // Victorious, Classic 1.60: Victory Rush 402927 needs caster aura state 10 (32216 isn't in the 70707 client)
                 return AURA_STATE_VICTORIOUS;
             case 71465: // Divine Surge
             case 50241: // Evasive Charges

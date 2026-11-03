@@ -717,6 +717,117 @@ class classic_spell_innervate_replaces_energized : public AuraScript
     }
 };
 
+// 1301404 - Al'Aketh Spiritcaller nature damage (Zephras Isle, Shrine of Akir): the client data gives the aura no duration (index 21,
+// infinite) and nothing on our server takes it off, so players kept it through teleports and logouts. It now ends when the
+// Spiritcaller is gone, dead or no longer fighting the player.
+class classic_spell_alaketh_spiritcaller_dot : public AuraScript
+{
+    void HandleTick(AuraEffect const* /*aurEff*/)
+    {
+        Unit* caster = GetCaster();
+        if (caster && caster->IsAlive() && caster->IsInCombatWith(GetTarget()))
+            return;
+
+        PreventDefaultAction();
+        Remove();
+    }
+
+    void Register() override
+    {
+        OnEffectPeriodic += AuraEffectPeriodicFn(classic_spell_alaketh_spiritcaller_dot::HandleTick, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE);
+    }
+};
+
+// 1296017 - Decipher (mage, trainer level 6): Classic 1.60 gives the mage the deciphering skill (SkillLine 3012) with it, and the
+// skill teaches the four Decipher spells of the untranslated scrolls (1309973, 1309965, 1310029, 1310030, SkillLineAbility
+// AcquireMethod AutomaticSkillRank, ItemSalvage 255, 261, 262, 263). The spell's effect 359 is unknown to the server and trainers only
+// learn it, so the skill is started on cast and, for mages who already know Decipher, at login.
+namespace ClassicScrollDeciphering
+{
+    static constexpr uint32 SPELL_DECIPHER = 1296017;
+    static constexpr uint16 SKILL_SCROLL_DECIPHERING = 3012;
+
+    static void LearnSkill(Player* player)
+    {
+        if (player->HasSkill(SKILL_SCROLL_DECIPHERING) || !player->HasSpell(SPELL_DECIPHER))
+            return;
+
+        if (SkillRaceClassInfoEntry const* rcInfo = sDB2Manager.GetSkillRaceClassInfo(SKILL_SCROLL_DECIPHERING, player->GetRace(), player->GetClass()))
+            player->LearnDefaultSkill(rcInfo);
+    }
+
+    // The four Decipher spells (SALVAGE_ITEM on ItemSalvage 255/261/262/263) are hidden: the spellbook only shows Comprehend Scroll
+    // (1296017), and pressing it did nothing (tested in game 11-02). So pressing it now deciphers the first untranslated scroll in the
+    // bags that the mage's Comprehension skill and level allow, with that scroll's own Decipher spell. Skill ranks from ItemSalvage.
+    struct ScrollBand
+    {
+        uint32 SpellId;
+        uint16 MinSkill;
+        uint32 Items[5];
+    };
+
+    static constexpr ScrollBand Bands[] =
+    {
+        { 1309973,   1, { 211780, 211785, 211786, 211787, 0 } },
+        { 1309965,  15, { 211784, 211853, 211854, 211855, 0 } },
+        { 1310029,  50, { 213543, 213544, 213545, 213546, 213547 } },
+        { 1310030, 175, { 281015, 281016, 281017, 281018, 0 } },
+    };
+
+    static bool DecipherFirstScroll(Player* player)
+    {
+        uint16 skill = player->GetSkillValue(SKILL_SCROLL_DECIPHERING);
+        for (ScrollBand const& band : Bands)
+        {
+            if (skill < band.MinSkill)
+                continue;
+
+            for (uint32 itemId : band.Items)
+            {
+                if (!itemId)
+                    continue;
+
+                Item* scroll = player->GetItemByEntry(itemId);
+                if (!scroll || player->CanUseItem(scroll) != EQUIP_ERR_OK)
+                    continue;
+
+                player->CastSpell(scroll, band.SpellId, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
+class classic_spell_mage_decipher : public SpellScript
+{
+    void HandleLearnSkill(SpellEffIndex /*effIndex*/)
+    {
+        if (Player* player = GetCaster()->ToPlayer())
+        {
+            ClassicScrollDeciphering::LearnSkill(player);
+            if (player->HasSkill(ClassicScrollDeciphering::SKILL_SCROLL_DECIPHERING))
+                ClassicScrollDeciphering::DecipherFirstScroll(player);
+        }
+    }
+
+    void Register() override
+    {
+        OnEffectHit += SpellEffectFn(classic_spell_mage_decipher::HandleLearnSkill, EFFECT_0, SPELL_EFFECT_359);
+    }
+};
+
+class classic_player_scroll_deciphering : public PlayerScript
+{
+public:
+    classic_player_scroll_deciphering() : PlayerScript("classic_player_scroll_deciphering") { }
+
+    void OnLogin(Player* player, bool /*firstLogin*/) override
+    {
+        ClassicScrollDeciphering::LearnSkill(player);
+    }
+};
+
 // 1319421 - Motivated (Executor's Motivator, undead quest Discipline 99134): a dummy aura on a Tirisfal Deathguard. The official
 // server credits the objective (Deathguard Cyrus 1746, 5 needed) for any of them, with an empty victim GUID (sniff of 2026-10-06:
 // QUEST_UPDATE_ADD_CREDIT 99134 / 1746, 1..5 of 5; Motivated was seen on 1496, 1652, 1735, 1738, 1742-1746, 2210, 5725, 272101).
@@ -1716,4 +1827,7 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_winter_veil_reindeer_transformation);
     RegisterSpellScript(classic_spell_quest_uther_grom_tribute);
     RegisterSpellScript(classic_spell_warl_devour_magic);
+    RegisterSpellScript(classic_spell_alaketh_spiritcaller_dot);
+    RegisterSpellScript(classic_spell_mage_decipher);
+    new classic_player_scroll_deciphering();
 }

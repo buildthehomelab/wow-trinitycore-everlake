@@ -24,6 +24,7 @@
 #include "WakeSelect.h"
 #include "StrandedWatch.h"
 #include "DayRhythm.h"
+#include "BotSize.h"
 #include "SoakAnchors.h"
 #include "BotPool.h"
 #include "../Travel/TownNpcIndex.h"
@@ -309,6 +310,58 @@ void WorldBotSpawner::LoadConfig()
     c.moving_spawn_factor = uint32(std::clamp<int64>(sConfigMgr->GetIntDefault("Playerbot.World.Moving.SpawnFactor", 2, true), 1, 8));
     c.moving_despawn_behind = std::clamp(sConfigMgr->GetFloatDefault("Playerbot.World.Moving.DespawnBehindYards", 450.0f, true), 0.0f, 5000.0f);
     c.variable_ttl_h   = uint32(std::clamp<int64>(sConfigMgr->GetIntDefault("Playerbot.World.VariableTtlHours", 24, true), 1, 24 * 90));
+
+    // Plain bot numbers (Fleet/BotSize.h): any Bots.* line replaces the old six keys.
+    {
+        namespace F = ::Playerbot::V2::Fleet;
+        F::PlainInput in;
+        if (std::string const t = sConfigMgr->GetStringDefault("Bots.Size", "", true); !t.empty())
+            in.size = F::ParseBotSize(t);
+        auto num = [](char const* key) -> std::optional<uint32>
+        {
+            int32 const v = sConfigMgr->GetIntDefault(key, -1, true);
+            return v >= 0 ? std::optional<uint32>(uint32(v)) : std::nullopt;
+        };
+        in.reserve = num("Bots.Reserve");
+        in.active_cap = num("Bots.ActiveCap");
+        in.in_city = num("Bots.InCity");
+        if (std::string const t = sConfigMgr->GetStringDefault("Bots.PerZone", "", true); !t.empty())
+            in.per_zone = t;
+        if (std::optional<F::PlainBots> const b = F::ResolvePlainBots(in))
+        {
+            c.plain = true;
+            c.max_bots = b->active_cap;
+            c.pool_max = b->reserve;
+            c.city_bots = b->in_city;
+            c.zone_lo = b->zone_lo;
+            c.zone_hi = b->zone_hi;
+            c.zone_bots = b->zone_hi;
+            c.bots_per_player = b->zone_hi;                        // fallback and the per-player reserve of the global filler
+            c.rss_budget_mb = uint32(PhysicalRamMb() * 45u / 100u);   // memory stop: automatic
+            // Leaving: a zone nobody is in loses its bots after LeaveZoneSec; after a dungeon, battleground or logout the spot is
+            // kept as a ghost so the total is LeaveWorldSec (chris 11-01: "the bots should log out fast").
+            uint32 const leave_zone = uint32(std::clamp<int32>(sConfigMgr->GetIntDefault("Bots.LeaveZoneSec", 20, true), 0, 3600));
+            uint32 const leave_world = uint32(std::clamp<int32>(sConfigMgr->GetIntDefault("Bots.LeaveWorldSec", 60, true), 0, 3600));
+            c.leave_zone_ms = leave_zone * 1000u;
+            c.zone_grace_ms = (leave_world > leave_zone ? leave_world - leave_zone : 0u) * 1000u;
+            std::string old;
+            for (char const* key : { "Playerbot.World.MaxBots", "Playerbot.World.BotsPerPlayer", "Playerbot.World.CityBots",
+                                     "Playerbot.World.ZoneBots", "Playerbot.World.PoolMax", "Playerbot.World.RssBudgetMb",
+                                     "Playerbot.World.ZoneGraceSec" })
+                for (std::string const& k : sConfigMgr->GetKeysByString(key))
+                    if (k == key) old += (old.empty() ? "" : ", ") + k;
+            c.plain_summary = Trinity::StringFormat("Bots: {} - reserve {}, at most {} active, {}-{} per zone, {} in a city; bots leave {} s after a zone empties, "
+                                                    "{} s after a dungeon/BG/logout{}{}",
+                in.size ? F::BotSizeName(*in.size) : "own numbers", c.pool_max, c.max_bots, c.zone_lo, c.zone_hi, c.city_bots, leave_zone, leave_world,
+                old.empty() ? "" : ". Not used any more (Bots.* lines win): ", old);
+        }
+    }
+    if (c.plain && c.plain_summary != plain_logged_)
+    {
+        plain_logged_ = c.plain_summary;
+        TC_LOG_INFO("server.loading", "{}", c.plain_summary);
+        TC_LOG_INFO("playerbot.v2", "[world] {}", c.plain_summary);
+    }
     cfg_ = c;
 }
 
@@ -622,8 +675,74 @@ void WorldBotSpawner::TrackMotion(uint32 now_ms, std::vector<Anchor>& anchors)
         it = seen.count(it->first) ? std::next(it) : motion_.erase(it);
 }
 
+// Plain bot numbers: what one place wants before the cap is shared (city number, the zone's rolled number, the start-zone cap,
+// then the hour of the day).
+uint32 WorldBotSpawner::PlaceWantFor(Anchor const& a)
+{
+    namespace F = ::Playerbot::V2::Fleet;
+    bool const town = ::Playerbot::V2::World::IsVanillaCapitalZone(a.zone);
+    uint32 want = cfg_.city_bots;
+    if (!town)
+    {
+        uint64 const key = F::PlaceKey(a.map, a.zone);
+        auto it = zone_roll_.find(key);
+        if (it == zone_roll_.end())
+            it = zone_roll_.emplace(key, F::ZoneRoll(cfg_.zone_lo, cfg_.zone_hi, urand(0, 0x7FFFFFFF))).first;
+        want = it->second;
+    }
+    bool const start_zone = !town && cfg_.start_zone_bots && ::Playerbot::V2::World::IsStartZone(a.zone);
+    if (start_zone)
+        return std::min(want, cfg_.start_zone_bots);
+    if (!cfg_.day_rhythm)
+        return want;
+    return ::Playerbot::V2::Fleet::RhythmTarget(want, TimeBreakdown(GameTime::GetGameTime()).tm_hour, cfg_.max_bots);
+}
+
+void WorldBotSpawner::PlanPlaces(uint32 now_ms, std::vector<Anchor> const& anchors, std::vector<Anchor> const& keep_anchors)
+{
+    namespace F = ::Playerbot::V2::Fleet;
+    place_target_.clear();
+    place_players_.clear();
+    if (!cfg_.plain)
+        return;
+    // A place with a player (or a ghost of one who just went into a dungeon) is occupied now.
+    for (Anchor const& a : keep_anchors)
+        place_seen_ms_[F::PlaceKey(a.map, a.zone)] = now_ms ? now_ms : 1u;
+    // A zone empty for longer than LeaveZoneSec forgets its roll: the next visit picks a new number.
+    for (auto it = place_seen_ms_.begin(); it != place_seen_ms_.end();)
+    {
+        if (getMSTimeDiff(it->second, now_ms) > std::max<uint32>(cfg_.leave_zone_ms, 1000u))
+        {
+            zone_roll_.erase(it->first);
+            it = place_seen_ms_.erase(it);
+        }
+        else
+            ++it;
+    }
+    std::vector<F::PlaceWant> places;
+    for (Anchor const& a : anchors)
+    {
+        uint64 const key = F::PlaceKey(a.map, a.zone);
+        if (place_players_[key]++ == 0)
+            places.push_back({ key, PlaceWantFor(a), 1 });
+    }
+    std::vector<uint32> const got = F::ShareCap(places, cfg_.max_bots);
+    for (std::size_t i = 0; i < places.size(); ++i)
+        place_target_[places[i].key] = got[i];
+}
+
 uint32 WorldBotSpawner::TargetFor(Anchor const& a) const
 {
+    if (cfg_.plain)
+    {
+        // The place's share of the cap, split between the players in it (they share its bots).
+        uint64 const key = ::Playerbot::V2::Fleet::PlaceKey(a.map, a.zone);
+        auto const t = place_target_.find(key);
+        auto const n = place_players_.find(key);
+        if (t == place_target_.end()) return 0;
+        return ::Playerbot::V2::Fleet::PerPlayer(t->second, n == place_players_.end() ? 1u : n->second);
+    }
+
     // A capital is packed (CityBots), a leveling zone gets an ordinary density spread over ActivityRadius (ZoneBots).
     bool const town = ::Playerbot::V2::World::IsVanillaCapitalZone(a.zone);
     uint32 const t = town ? cfg_.city_bots : cfg_.zone_bots;
@@ -1298,8 +1417,13 @@ void WorldBotSpawner::DriveDespawn(uint32 now_ms, std::vector<Anchor> const& anc
                 }
             trail = trail && !counted;
         }
+        // Plain bot numbers: a zone nobody has been in for LeaveZoneSec loses its bots, unless one stands inside a player's spawn ring
+        // (a bot just over a zone line next to him stays; chris 11-01: "why would you hold 50 bots still active there?").
+        bool emptied = false;
+        if (cfg_.plain && cfg_.leave_zone_ms && !p->IsInFlight() && nearest > cfg_.ring_max)
+            emptied = !place_seen_ms_.contains(::Playerbot::V2::Fleet::PlaceKey(p->GetMapId(), bot_zone));
         // A misfit goes as an orphan does: a level 25 human priest in Deathknell takes the new player's mobs (PC 26 Oct).
-        bool const orphan = nearest > cfg_.despawn_radius || misfit || trail;
+        bool const orphan = nearest > cfg_.despawn_radius || misfit || trail || emptied;
         // A bot behind the player (past ActivityRadius, inside DespawnRadius) can be recycled early when the world cap is full and a
         // player's bubble still lacks bots; otherwise only orphans go.
         if (!orphan && nearest <= cfg_.activity_radius)
@@ -1310,7 +1434,7 @@ void WorldBotSpawner::DriveDespawn(uint32 now_ms, std::vector<Anchor> const& anc
         if (Map* m = p->GetMap(); m && (m->IsDungeon() || m->IsBattlegroundOrArena())) return;
         if (p->InBattlegroundQueue() || p->InBattleground()) return;
         if (owner_.IsKickProtected(id, now_ms)) return;
-        if (auto pit = placed_.find(uint64(id)); pit != placed_.end()
+        if (auto pit = placed_.find(uint64(id)); !emptied && pit != placed_.end()   // an emptied zone does not wait for the placing grace
             && getMSTimeDiff(pit->second.placed_ms, now_ms) < cfg_.placed_grace_ms)
             return;
         // Bots of the world-wide filler are only recycled once their setup is done (not mid-pipeline).
@@ -3377,6 +3501,7 @@ void WorldBotSpawner::OnWorldTick(uint32 now_ms)
     std::vector<Anchor> keep_anchors = anchors;   // despawn looks at ghosts too; spawning and placing do not
     for (Ghost const& g : ghosts_)
         keep_anchors.push_back(g.a);
+    PlanPlaces(now_ms, anchors, keep_anchors);
 
     {
         std::vector<WorldLeash::Anchor> pub;

@@ -839,6 +839,31 @@ void HandleLfgReq(uint32 client_seq, WorldSession* sess)
 }
 
 // ----------------------------------------------------------------------------
+// ASSIGN_REQ — the marker assignments of the caller's group for the Assign
+// panel. It used to ask with a whispered "assign list", and in a dungeon fight
+// the client hands those whispers over as secret strings that no chat filter
+// can read, so "ASSIGN|END|0" showed up in chat. Returns:
+//   ASSIGN_RESP|<count>|<marker 0..7>,<name>,<tank|cc|kill>|...
+// ----------------------------------------------------------------------------
+void HandleAssignReq(uint32 client_seq, WorldSession* sess)
+{
+    Player* me = sess ? sess->GetPlayer() : nullptr;
+    Group* grp = me ? me->GetGroup() : nullptr;
+    if (!grp || !Services::Initialized())
+    {
+        SendFields(sess, client_seq, "ASSIGN_RESP", {"0"});
+        return;
+    }
+    std::vector<BotCommandParser::AssignRow> const rows = BotCommandParser::AssignList(grp);
+    std::vector<std::string> out;
+    out.reserve(rows.size() + 1);
+    out.push_back(std::to_string(rows.size()));
+    for (BotCommandParser::AssignRow const& r : rows)
+        out.push_back(Escape(fmt::format("{},{},{}", r.marker, r.name, r.role)));
+    SendFields(sess, client_seq, "ASSIGN_RESP", out);
+}
+
+// ----------------------------------------------------------------------------
 // CMD — translate "<addr>|<verb>|<args...>" into a synthetic whisper sent
 // from the owner to each addressed bot, then run BotCommandParser::Dispatch.
 // That reuses the entire verb-handling pipeline (authority, squad addressing,
@@ -1523,6 +1548,10 @@ void DispatchAssembled(WorldSession* sess, uint32 seq,
     {
         HandleLfgReq(seq, sess);
     }
+    else if (mtype == "ASSIGN_REQ")
+    {
+        HandleAssignReq(seq, sess);
+    }
     else if (mtype == "STATS_REQ")
     {
         HandleStatsReq(seq, sess);
@@ -1623,7 +1652,8 @@ bool OnAddonWhisper(Player* sender, Player* /*receiver*/,
             && mtype != "LOGOUT_REQ"
             && mtype != "SELF"
             && mtype != "PING"
-            && mtype != "LFG_REQ")
+            && mtype != "LFG_REQ"
+            && mtype != "ASSIGN_REQ")
             return false;
     }
 

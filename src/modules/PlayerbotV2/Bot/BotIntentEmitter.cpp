@@ -9,6 +9,7 @@
 #include "Log.h"
 #include "SharedDefines.h"
 #include "SpellInfo.h"
+#include <algorithm>
 #include "SpellMgr.h"
 #include "Threading/IntentQueue.h"
 #include "../Services.h"
@@ -216,6 +217,26 @@ bool BotIntentEmitter::aoe_denied(uint32 spell_id) const
             chain = uint32(eff.ChainTargets);
     uint32 const first = sSpellMgr->GetFirstSpellInChain(spell_id);
     return AoeDeny::IsAoe(si->IsPositive(), si->IsAffectingArea(), chain, first ? first : spell_id);
+}
+
+bool BotIntentEmitter::heal_denied(uint32 spell_id, ObjectGuid target) const
+{
+    if (!school_snap_ || school_snap_->heal_only.empty() || !spell_id || target.IsEmpty() || target == school_snap_->guid)
+        return false;
+    auto const& only = school_snap_->heal_only;
+    if (std::find(only.begin(), only.end(), target) != only.end())
+        return false;
+    SpellInfo const* si = sSpellMgr->GetSpellInfo(spell_id, DIFFICULTY_NONE);
+    if (!si || !si->IsPositive())
+        return false;
+    for (SpellEffectInfo const& eff : si->GetEffects())
+    {
+        if (eff.IsEffect(SPELL_EFFECT_HEAL) || eff.IsEffect(SPELL_EFFECT_HEAL_PCT))
+            return true;
+        if (eff.IsAura(SPELL_AURA_PERIODIC_HEAL) || eff.IsAura(SPELL_AURA_SCHOOL_ABSORB))
+            return true;
+    }
+    return false;
 }
 
 bool BotIntentEmitter::pet_cast(uint32 spell_id, ObjectGuid target)
@@ -540,8 +561,9 @@ bool BotIntentEmitter::cast(uint32 spell_id, ObjectGuid target)
     // Raid school rule: an avoided school at a hinted enemy is not sent.
     if (school_blocked(spell_id, target))
         return false;
-    // The owner said no to this kind of crowd control ("@warlock no fear"), or to area spells ("aoe off").
-    if (owner_denied(spell_id))
+    // The owner said no to this kind of crowd control ("@warlock no fear"), or to area spells ("aoe off"), or keeps this healer on
+    // named players ("focus heal").
+    if (owner_denied(spell_id) || heal_denied(spell_id, target))
         return false;
     if (ai_)
     {
@@ -573,7 +595,7 @@ bool BotIntentEmitter::cast_rank(uint32 spell_id, ObjectGuid target)
     if (ai_ && ai_->mana_break_active(GameTime::GetGameTimeMS()) && HasCastTime(spell_id))
         return false;
     // Same raid school gate, crowd-control orders and per-spell emit dedup as cast(); ranks have their own ids.
-    if (school_blocked(spell_id, target) || owner_denied(spell_id))
+    if (school_blocked(spell_id, target) || owner_denied(spell_id) || heal_denied(spell_id, target))
         return false;
     if (ai_)
     {

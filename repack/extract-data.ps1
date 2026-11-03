@@ -8,11 +8,18 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $server = Join-Path $root 'server'
 $data = Join-Path $server 'data'
-if (-not (Test-Path "$Client\.build.info")) { throw "$Client does not look like a WoW folder (.build.info missing)" }
+if (-not (Test-Path -LiteralPath (Join-Path $Client '.build.info'))) { throw "$Client does not look like a WoW folder (.build.info missing)" }
 $tool = Join-Path $PSScriptRoot 'extract_client_data.ps1'
 if (-not (Test-Path $tool)) { $tool = Join-Path $root 'tools\extract_client_data.ps1' }
 if (-not (Test-Path $tool)) { throw 'extract_client_data.ps1 is missing from the package.' }
-if (Test-Path (Join-Path $data '.extract-complete')) { 'The game data is already complete. Nothing to do.'; return }
+. (Join-Path $PSScriptRoot 'ClientBuild.ps1')
+if (Test-Path (Join-Path $data '.extract-complete')) {
+    # a marker left by an extraction that did not really finish (start-zone tiles missing) is removed, and the data is built again
+    $gone = @(Get-MissingStartZoneData $data)
+    if (-not $gone.Count) { 'The game data is already complete. Nothing to do.'; return }
+    Write-Warning ("The game data was marked complete, but the server can't start without these files: " + ($gone -join ', ') + '. Building the game data again.')
+    Remove-Item (Join-Path $data '.extract-complete') -Force
+}
 
 $freeGb = [math]::Round((Get-PSDrive ($server.Substring(0, 1))).Free / 1GB)
 Write-Host ''
@@ -25,12 +32,11 @@ Write-Host ''
 
 # the client's own language (a French client has no enUS data); .build.info lists it in the Tags column
 $locale = 'enUS'
-$bi = Get-Content (Join-Path $Client '.build.info') -Raw -ErrorAction SilentlyContinue
+$bi = Get-Content -LiteralPath (Join-Path $Client '.build.info') -Raw -ErrorAction SilentlyContinue
 if ($bi -match '\b(enUS|enGB|deDE|esES|esMX|frFR|itIT|koKR|ptBR|ruRU|zhCN|zhTW)\b') { $locale = $Matches[1]; if ($locale -eq 'enGB') { $locale = 'enUS' } }
 Write-Host "Client language: $locale"
 # extractors and generator live in server\; the tool writes dbc, maps, vmaps, mmaps ... next to them
 # only from a client build the server accepts (Battle.net can have the beta and the Forever release side by side)
-. (Join-Path $PSScriptRoot 'ClientBuild.ps1')
 $wrong = Test-ClientFolder $root $Client
 if ($wrong) { throw $wrong }
 & $tool -ClientPath $Client -OutputPath $server -Resume -Locale $locale -Builds (Get-AcceptedBuilds $root)
@@ -50,6 +56,12 @@ foreach ($m in '.extract-maps.done', '.extract-vmaps.done', '.extract-mmaps.done
 # the client build the DB2 tables came from; refresh-db2.ps1 extracts them again when Battle.net patches the client
 $use = Select-ClientProduct $root $Client
 if ($use) { Set-Content (Join-Path $data 'dbc\.client-build') "$($use.Build)" -Encoding ascii }
+# the marker is written only when the files worldserver checks first are really there; without it the next Install.cmd or start
+# builds the data again (the stage markers are already removed, so every stage runs)
+$gone = @(Get-MissingStartZoneData $data)
+if ($gone.Count) {
+    throw ("The game data is not complete: " + ($gone -join ', ') + ' missing in ' + $data + '. The map tools did not finish (see the lines above; an antivirus or a full disk are the usual causes). Run Install.cmd again to build the data again.')
+}
 Set-Content (Join-Path $data '.extract-complete') (Get-Date -Format s)
 $global:LASTEXITCODE = 0
 "Done. The game data is in $data."

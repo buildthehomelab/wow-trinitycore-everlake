@@ -65,7 +65,15 @@ $lines = @()
 if (Test-Path $wtf) { $lines = @(Get-Content $wtf) } elseif (Test-Path $base) { $lines = @(Get-Content $base) }
 $want = 'SET portal "' + $Portal + '"'
 if ($lines | Where-Object { $_ -like 'SET portal *' }) { $lines = @($lines | ForEach-Object { if ($_ -like 'SET portal *') { $want } else { $_ } }) } else { $lines += $want }
-if (-not ($lines | Where-Object { $_ -like 'SET textLocale *' })) { $lines += 'SET textLocale "enUS"' }
+# no language set: one Battle.net installed for this game (.build.info Tags "frFR text?"), English when it is there. A French
+# client has no English data, so a forced enUS stopped it from starting.
+if (-not ($lines | Where-Object { $_ -like 'SET textLocale *' })) {
+    $have = @()
+    $bi = Join-Path (Split-Path $gameDir -Parent) '.build.info'
+    if (Test-Path $bi) { $have = @([regex]::Matches((Get-Content $bi -Raw), '\b([a-z]{2}[A-Z]{2}) text\?') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique) }
+    $loc = if (-not $have -or $have -contains 'enUS') { 'enUS' } else { $have[0] }
+    $lines += "SET textLocale `"$loc`""
+}
 
 Write-Host "Game folder: $gameDir"
 Write-Host "Portal:      $Portal   (region group $RegionGroup)"

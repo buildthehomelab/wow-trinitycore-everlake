@@ -6,6 +6,8 @@
 #include "CharacterCache.h"
 #include "Chat.h"
 #include "Creature.h"
+#include "GossipDef.h"
+#include "Log.h"
 #include "ObjectGuid.h"
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -26,6 +28,35 @@ constexpr uint32 kActionContracts = 5;      // the player's hired bots, in chat
 constexpr uint32 kActionOptIn     = 6;      // `.bot hire on|off` from the gossip (Hire.Mode = 2)
 constexpr uint32 kActionRole      = 10;     // + grade * 10 + role (1..3): the class menu
 constexpr uint32 kActionHire      = 1000;   // + grade * 100 + role * 20 + class
+
+// The gossip text: npc_text 3959, "Greetings, $r." (BroadcastText 6498). Not DEFAULT_GOSSIP_MESSAGE: its npc_text 16777215 points at
+// BroadcastText 50429, a retail text the Classic client does not have, and the client then opens no gossip window at all (Goldshire,
+// 2026-11-01: right-click on Brannock Ironhale opened nothing although his NPC flags and script were right).
+constexpr uint32 kBrokerText      = 3959;
+
+// The menu the client is shown: gossip menu 6110000 (the first broker entry), options 61100000 + their place in the menu. Every menu the
+// Classic client opens carries a gossip menu id and positive option ids; a script menu left at menu 0 gets ids 0, -1, -2 ... from
+// GossipMenu::AddMenuItem, the one difference left after right-click on Brannock Ironhale still opened nothing with a text the
+// client has (Goldshire, 2026-11-01, dev build with npc_text 3959). The script builds the options; the menu itself must also be in the
+// database (gossip_menu 6110000 -> npc_text 3959, creature_template_gossip for every broker), because the server hides the gossip NPC
+// flag from a player when Player::CanSeeGossipOn finds no menu, and the client then shows no talk cursor and never sends the hello.
+// The hello is logged (playerbot.v2, INFO) so Server.log shows whether a click reached the broker at all.
+constexpr uint32 kBrokerMenu      = 6110000;
+constexpr int32  kBrokerOptionId  = 61100000;
+
+void StartMenu(Player* player)
+{
+    ClearGossipMenuFor(player);
+    InitGossipMenuFor(player, kBrokerMenu);
+}
+
+void AddOption(Player* player, std::string text, uint32 action, std::string confirm = {}, uint64 money = 0)
+{
+    GossipMenu& menu = player->PlayerTalkClass->GetGossipMenu();
+    int32 const id = kBrokerOptionId + int32(menu.GetMenuItemCount());
+    menu.AddMenuItem(id, -1, GossipOptionNpc::None, std::move(text), 0, GossipOptionFlags::None, {}, 0, 0, false, money, std::move(confirm), {}, {},
+                     GOSSIP_SENDER_MAIN, action);
+}
 
 struct ClassInfo { uint8 cls; char const* name; bool tank, healer, dps; };
 constexpr ClassInfo kClasses[] = {
@@ -124,28 +155,28 @@ struct npc_fb_hire_broker : public ScriptedAI
 
     void MainMenu(Player* player)
     {
-        ClearGossipMenuFor(player);
+        StartMenu(player);
         Hire::Broker const broker = BrokerKind();
         for (Hire::Grade g : { Hire::Grade::Sellsword, Hire::Grade::Veteran, Hire::Grade::Legend })
         {
-            if (!Hire::BrokerSells(broker, g))
+            if (!Hire::BrokerSells(HireMgr::ConfigRules(), broker, g))
                 continue;
             if (uint64 const price = HireMgr::PriceHere(player, g))
-                AddGossipItemFor(player, GossipOptionNpc::None, GradeOffer(g, price), GOSSIP_SENDER_MAIN, kActionGrade + uint32(g) - 1);
+                AddOption(player, GradeOffer(g, price), kActionGrade + uint32(g) - 1);
             else
-                AddGossipItemFor(player, GossipOptionNpc::None,
-                                 Trinity::StringFormat("({} only sign on with level {} heroes.)", g == Hire::Grade::Legend ? "Legends" : "Veterans",
-                                                       uint32(Playerbot::MaxPlayerLevel())),
-                                 GOSSIP_SENDER_MAIN, 0);
+                AddOption(player, Trinity::StringFormat("({} only sign on with level {} heroes.)", g == Hire::Grade::Legend ? "Legends" : "Veterans",
+                                                        uint32(Playerbot::MaxPlayerLevel())), 0);
         }
-        AddGossipItemFor(player, GossipOptionNpc::None, "Who works for me?", GOSSIP_SENDER_MAIN, kActionContracts);
+        AddOption(player, "Who works for me?", kActionContracts);
         if (HireMgr::ConfigMode() == Hire::Mode::PlayerChoice)
-            AddGossipItemFor(player, GossipOptionNpc::None,
-                             HireMgr::Instance().OptedIn(player->GetSession()->GetAccountId())
-                                 ? "I'd rather gather my own company again. (Bots are free again.)"
-                                 : "From now on I only fight beside those I pay. (Hired bots only.)",
-                             GOSSIP_SENDER_MAIN, kActionOptIn);
-        SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me->GetGUID());
+            AddOption(player,
+                      HireMgr::Instance().OptedIn(player->GetSession()->GetAccountId())
+                          ? "I'd rather gather my own company again. (Bots are free again.)"
+                          : "From now on I only fight beside those I pay. (Hired bots only.)",
+                      kActionOptIn);
+        TC_LOG_INFO("playerbot.v2", "[hire] {} talks to broker {} ({}): menu {} with {} options", player->GetName(), me->GetName(), me->GetEntry(),
+                    kBrokerMenu, player->PlayerTalkClass->GetGossipMenu().GetMenuItemCount());
+        SendGossipMenuFor(player, kBrokerText, me->GetGUID());
     }
 
     bool OnGossipHello(Player* player) override
@@ -157,7 +188,7 @@ struct npc_fb_hire_broker : public ScriptedAI
     bool OnGossipSelect(Player* player, uint32 /*menuId*/, uint32 gossipListId) override
     {
         uint32 const action = GetGossipActionFor(player, gossipListId);
-        ClearGossipMenuFor(player);
+        StartMenu(player);
         Hire::Broker const broker = BrokerKind();
 
         if (action == kActionContracts)
@@ -178,12 +209,11 @@ struct npc_fb_hire_broker : public ScriptedAI
         if (action >= kActionGrade && action < kActionGrade + 3)
         {
             Hire::Grade const grade = Hire::Grade(action - kActionGrade + 1);
-            if (!Hire::BrokerSells(broker, grade))
+            if (!Hire::BrokerSells(HireMgr::ConfigRules(), broker, grade))
                 return MainMenuAgain(player);
             for (uint32 r = 1; r <= 3; ++r)
-                AddGossipItemFor(player, GossipOptionNpc::None, Trinity::StringFormat("A {}.", RoleWord(RoleOfIndex(r))), GOSSIP_SENDER_MAIN,
-                                 kActionRole + uint32(grade) * 10 + r);
-            SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me->GetGUID());
+                AddOption(player, Trinity::StringFormat("A {}.", RoleWord(RoleOfIndex(r))), kActionRole + uint32(grade) * 10 + r);
+            SendGossipMenuFor(player, kBrokerText, me->GetGUID());
             return true;
         }
         if (action >= kActionRole + 10 && action < kActionRole + 40)
@@ -192,14 +222,13 @@ struct npc_fb_hire_broker : public ScriptedAI
             uint32 const roleIndex = (action - kActionRole) % 10;
             Playerbot::Role const role = RoleOfIndex(roleIndex);
             uint64 const price = HireMgr::PriceHere(player, grade);
-            if (!Hire::BrokerSells(broker, grade) || !price || roleIndex < 1 || roleIndex > 3)
+            if (!Hire::BrokerSells(HireMgr::ConfigRules(), broker, grade) || !price || roleIndex < 1 || roleIndex > 3)
                 return MainMenuAgain(player);
             for (ClassInfo const& c : kClasses)
                 if (Plays(c, role) && CanHaveCompanionClass(player, c.cls))
-                    AddGossipItemFor(player, GossipOptionNpc::None, c.name, GOSSIP_SENDER_MAIN,
-                                     kActionHire + uint32(grade) * 100 + roleIndex * 20 + c.cls,
-                                     Trinity::StringFormat("Hire a {} {} ({})?", c.name, Hire::GradeName(grade), RoleWord(role)), price, false);
-            SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me->GetGUID());
+                    AddOption(player, c.name, kActionHire + uint32(grade) * 100 + roleIndex * 20 + c.cls,
+                              Trinity::StringFormat("Hire a {} {} ({})?", c.name, Hire::GradeName(grade), RoleWord(role)), price);
+            SendGossipMenuFor(player, kBrokerText, me->GetGUID());
             return true;
         }
         if (action >= kActionHire + 100 && action < kActionHire + 400)
@@ -209,7 +238,7 @@ struct npc_fb_hire_broker : public ScriptedAI
             Playerbot::Role const role = RoleOfIndex((rest % 100) / 20);
             ClassInfo const* c = FindClass(uint8(rest % 20));
             CloseGossipMenuFor(player);
-            if (!c || !Hire::BrokerSells(broker, grade) || !Plays(*c, role))
+            if (!c || !Hire::BrokerSells(HireMgr::ConfigRules(), broker, grade) || !Plays(*c, role))
                 return true;
             std::string msg;
             bool const ok = HireCompanionForOwner(player, c->cls, role, grade, c->name, msg);

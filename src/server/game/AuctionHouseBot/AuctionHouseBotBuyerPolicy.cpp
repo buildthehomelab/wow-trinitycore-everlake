@@ -84,7 +84,10 @@ namespace
 
 void LoadConfig()
 {
-    _stacks = sConfigMgr->GetBoolDefault("AuctionHouseBot.Buyer.Stacks", false);
+    // AuctionHouseBot.Buyer.Commodities is the name the shipped settings use (zz-0-playerbot-defaults.conf).
+    // AuctionHouseBot.Buyer.Stacks is the older name and only counts when Commodities is not set.
+    _stacks = sConfigMgr->GetBoolDefault("AuctionHouseBot.Buyer.Commodities",
+        sConfigMgr->GetBoolDefault("AuctionHouseBot.Buyer.Stacks", false, true), true);
     _maxPriceMultiplier = sConfigMgr->GetFloatDefault("AuctionHouseBot.Buyer.MaxPriceMultiplier", 0.0f);
     _minDelay = sConfigMgr->GetIntDefault("AuctionHouseBot.Buyer.MinDelay", 0);
     _maxDelay = std::max(_minDelay, uint32(sConfigMgr->GetIntDefault("AuctionHouseBot.Buyer.MaxDelay", 0)));
@@ -92,6 +95,9 @@ void LoadConfig()
     _maxBuysPerHour = sConfigMgr->GetIntDefault("AuctionHouseBot.Buyer.MaxBuysPerHour", 0);
     _fair = sConfigMgr->GetBoolDefault("AuctionHouseBot.Buyer.FairPricing", false);
     _fairMinChance = std::clamp(sConfigMgr->GetFloatDefault("AuctionHouseBot.Buyer.FairMinChance", 35.0f), 0.0f, 100.0f);
+
+    TC_LOG_INFO("ahbot", "AHBot buyer: stackable items {}, fair pricing {}, price cap x{:.2f}, delay {}-{} s, max {} per hour, budget {}g a day",
+        _stacks ? "on" : "off", _fair ? "on" : "off", _maxPriceMultiplier, _minDelay, _maxDelay, _maxBuysPerHour, _dailyBudget / GOLD);
 }
 
 bool StacksEnabled()

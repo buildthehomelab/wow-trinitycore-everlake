@@ -227,9 +227,12 @@ local function Debug(msg)
     if debugOn then Print(msg) end
 end
 
--- A dot command is handled by the server when it arrives as a normal say message. From a timer or an event (Quick party adds
--- its second and later bots a moment apart) the client blocks SendChatMessage ("the client blocked UNKNOWN()"), so there the
--- line goes to the server as an addon message to yourself under the order prefix instead (Cmd.Queue below).
+-- A dot command (".bot add mage") is run by the server from any chat line the player sends, before the line is delivered. It
+-- never goes to /say: client 70707 blocks SendChatMessage to SAY from add-on code, also straight from a click ("Interface action
+-- failed because of an AddOn" and "the client blocked SendChatMessage() for ForeverBots (blocked) during: no step marked" three
+-- times when a bot was added from the /fb window, 2026-10-31). In a group it goes as an add-on message on the group channel
+-- (Cmd.Queue below, the route the order buttons and Quick party already use); without a group, from a click, as a whisper to
+-- yourself (Cmd.Say), which the client does not block. From a timer or an event it always goes through Cmd.Queue.
 local helloDotSent = false
 local inAuto = false
 local Cmd = {}
@@ -244,9 +247,9 @@ local function ServerCommand(text)
     end
     if not helloDotSent then
         helloDotSent = true
-        SendChatMessage(".bot addon", "SAY")
+        Cmd.Say(".bot addon")
     end
-    SendChatMessage(text, "SAY")
+    Cmd.Say(text)
 end
 
 -- Stance toggle of the panel: ForeverBotsDB.stance is "passive" or "aggressive" (nil = never picked: passive, the server's start
@@ -345,6 +348,29 @@ function Cmd.Queue(text)
     if not Cmd.pumping then
         Cmd.pumping = true
         Cmd.Pump()
+    end
+end
+
+-- A dot command from a click (ServerCommand). Grouped: the add-on message on the group channel, no chat at all. Alone: a whisper
+-- to yourself; the server runs the command and never delivers the whisper, so nothing shows in chat. A whisper the client
+-- refuses raises ADDON_ACTION_BLOCKED during the step "dot command", and the guard below prints the line to type.
+function Cmd.Say(text)
+    if prefixOk and Cmd.ns.SelfChannel and Cmd.ns.SelfChannel() ~= "WHISPER" then
+        Cmd.Queue(text)
+        return
+    end
+    local me = SafeName("player")
+    if not me then
+        Print(L["could not send \"%s\"%s: type it in chat."]:format(text, ""))
+        return
+    end
+    local step = currentStep
+    Step("dot command")
+    Cmd.lastSaid = text
+    local ok, err = pcall(SendChatMessage, text, "WHISPER", nil, me)
+    Step(step)
+    if not ok then
+        Print(L["could not send \"%s\"%s: type it in chat."]:format(text, " (" .. tostring(err) .. ")"))
     end
 end
 
@@ -543,7 +569,35 @@ local function RequestList()
     -- (it was the "Interface action failed because of an AddOn" seen when bots join the instance group)
     local okI, inInstance, kind = pcall(IsInInstance)
     if okI and inInstance and (kind == "pvp" or kind == "arena") then return end
+    -- Not in a fight: the client refuses addon sends there, and a whispered answer arrives as a secret string that no chat filter
+    -- can read, so "ASSIGN|END|0" showed in chat (test4 tank run, 2026-10-30). Asked again when the fight ends.
+    if InCombatLockdown and InCombatLockdown() then Cmd.listAfterCombat = true; return end
     if InGroupQuiet() then
+        -- The hidden request first (add-on whisper or hidden system line, whichever this client takes): nothing reaches chat.
+        local Net = Cmd.ns.Net
+        if Net and (Net.mode == "addon" or Net.mode == "sys") then
+            Net.Request("ASSIGN_REQ", {}, function(fields)
+                if not fields then return end   -- an older server: the next roster change asks again
+                local list = {}
+                for i = 2, #fields do
+                    local marker, name, role = strmatch(fields[i], "^(%d),([^,]+),(%a+)$")
+                    if marker then list[#list + 1] = { marker = tonumber(marker), name = name, role = role } end
+                end
+                Cmd.ApplyAssignments(list)
+            end)
+            return
+        end
+        -- The hidden route is not known for this group yet. The login ping goes out before the first bot joins, as a whisper to
+        -- yourself, and clients from 70658 on never pass that to the server, so it ended "none" and the list fell through to the
+        -- whispered "assign list" below: on 70707 the bot's answer is a secret string no chat filter can read, and "ASSIGN|END|0"
+        -- showed in chat each time a bot joined (test item 1, 2026-10-31). Now the ping goes on the group channel; ask again.
+        if Net and Net.EnsureMode and not Net.ModeKnown() then
+            Net.EnsureMode(function() RequestList() end)
+            return
+        end
+        -- The whispered request is left for a client whose chat filter can read the answer (no secret strings): on one that has
+        -- them the answer lines would show in chat, so without the hidden route the list is not asked for.
+        if issecretvalue ~= nil then return end
         local asker = ListAsker()
         if asker and prefixOk then
             -- from a timer: an addon whisper (the server reads the FBOTS prefix like a whisper), never SendChatMessage
@@ -558,6 +612,13 @@ end
 
 local function RequestListSoon()
     if C_Timer and C_Timer.After then C_Timer.After(0.5, RequestList) else RequestList() end
+end
+do
+    local f = CreateFrame("Frame")
+    f:RegisterEvent("PLAYER_REGEN_ENABLED")
+    f:SetScript("OnEvent", function()
+        if Cmd.listAfterCombat then Cmd.listAfterCombat = false; RequestListSoon() end
+    end)
 end
 
 local function AssignTarget(marker, button)   -- marker 1..8; right-click clears the icon
@@ -591,29 +652,36 @@ local function ParseAssignLine(msg)
         return
     end
     if strmatch(msg, "^ASSIGN|END|") then
-        assignments, pending = pending, {}
-        RefreshList()
-        if lastAssign then
-            local found
-            for _, a in ipairs(assignments) do
-                if a.marker + 1 == lastAssign.marker and strlower(a.name) == strlower(lastAssign.name) then found = a end
-            end
-            if found then
-                SetStatus("|cff00ff00" .. L["Confirmed: %s: %s on %s"]:format(found.name, L[found.role], MarkerName(ICON_WORDS[found.marker + 1])) .. "|r")
-                Print(L["confirmed: %s: %s on %s"]:format(found.name, L[found.role], MarkerName(ICON_WORDS[found.marker + 1])))
-                lastAssign = nil
-            elseif (GetTime and GetTime() or 0) - lastAssign.at > 4 then
-                SetStatus("|cffff4040" .. L["The server did not confirm %s on %s."]:format(lastAssign.name, MarkerName(ICON_WORDS[lastAssign.marker])) .. "|r")
-                Print(L["the server did not confirm %s on %s (is it your bot, in your group?)."]:format(lastAssign.name, MarkerName(ICON_WORDS[lastAssign.marker])))
-                lastAssign = nil
-            end
+        Cmd.ApplyAssignments(pending)
+        pending = {}
+    end
+end
+
+-- The finished list, from the hidden ASSIGN_REQ answer or the whispered "ASSIGN|...|END" lines.
+-- (Cmd fields, not locals: this file's main chunk is at Lua's 200-local limit.)
+function Cmd.ApplyAssignments(list)
+    assignments = list
+    RefreshList()
+    if lastAssign then
+        local found
+        for _, a in ipairs(assignments) do
+            if a.marker + 1 == lastAssign.marker and strlower(a.name) == strlower(lastAssign.name) then found = a end
         end
-        if printNextList then
-            printNextList = false
-            if #assignments == 0 then Print(L["no assignments."]) end
-            for _, a in ipairs(assignments) do
-                Print(MarkerName(ICON_WORDS[a.marker + 1]) .. ": " .. a.name .. " (" .. L[a.role] .. ")")
-            end
+        if found then
+            SetStatus("|cff00ff00" .. L["Confirmed: %s: %s on %s"]:format(found.name, L[found.role], MarkerName(ICON_WORDS[found.marker + 1])) .. "|r")
+            Print(L["confirmed: %s: %s on %s"]:format(found.name, L[found.role], MarkerName(ICON_WORDS[found.marker + 1])))
+            lastAssign = nil
+        elseif (GetTime and GetTime() or 0) - lastAssign.at > 4 then
+            SetStatus("|cffff4040" .. L["The server did not confirm %s on %s."]:format(lastAssign.name, MarkerName(ICON_WORDS[lastAssign.marker])) .. "|r")
+            Print(L["the server did not confirm %s on %s (is it your bot, in your group?)."]:format(lastAssign.name, MarkerName(ICON_WORDS[lastAssign.marker])))
+            lastAssign = nil
+        end
+    end
+    if printNextList then
+        printNextList = false
+        if #assignments == 0 then Print(L["no assignments."]) end
+        for _, a in ipairs(assignments) do
+            Print(MarkerName(ICON_WORDS[a.marker + 1]) .. ": " .. a.name .. " (" .. L[a.role] .. ")")
         end
     end
 end
@@ -3239,6 +3307,11 @@ do
                     Print("the client blocked SetBinding() for ForeverBots during: " .. step .. ". " .. BindingReport() .. ". Please report this line.")
                 end
                 if C_Timer and C_Timer.After then C_Timer.After(0, Report) else Report() end
+                return
+            end
+            if step == "dot command" and Cmd.lastSaid then
+                -- the whisper to yourself that carries a dot command was refused: say what to type instead of only that it failed
+                Print(L["could not send \"%s\"%s: type it in chat."]:format(Cmd.lastSaid, " (" .. func .. "() blocked)"))
                 return
             end
             Print("the client blocked " .. func .. "() for ForeverBots (blocked) during: " .. step)

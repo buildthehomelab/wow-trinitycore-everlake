@@ -99,7 +99,7 @@ if (-not (Test-Path "$stage\server\legacy.dll")) {
     Copy-Item $pick.FullName "$stage\server\legacy.dll" -Force
     "Added legacy.dll from $($pick.FullName)"
 }
-robocopy "$src\repack" "$stage\repack" /E /XF Install.cmd WoW-Forever-Bots.cmd Play-WoWForever.cmd Bug-Report.cmd Host-For-Others.cmd build-package.ps1 package-data.ps1 package-source.ps1 README-TESTER.md SOURCE.txt NOTICE.txt UPDATER.md update.log clean-release.ps1 *.log *.bak* *.orig *~ /XD feedback-repo /NFL /NDL /NJH /NJS | Out-Null
+robocopy "$src\repack" "$stage\repack" /E /XF Install.cmd WoW-Forever-Bots.cmd Play-WoWForever.cmd Bug-Report.cmd Host-For-Others.cmd Check-Config.cmd build-package.ps1 package-data.ps1 package-source.ps1 build-launcher.ps1 README-TESTER.md SOURCE.txt NOTICE.txt UPDATER.md update.log clean-release.ps1 *.log *.bak* *.orig *~ /XD feedback-repo launcher /NFL /NDL /NJH /NJS | Out-Null
 # the ForeverBots addon is REQUIRED (whispering bots only works through it); always ship the copy from this commit
 robocopy "$src\src\modules\PlayerbotV2\Addon\ForeverBots" "$stage\addons\ForeverBots" /E /NFL /NDL /NJH /NJS | Out-Null
 if (-not (Test-Path "$stage\addons\ForeverBots\ForeverBots.toc")) { throw 'ForeverBots addon missing from the package' }
@@ -118,6 +118,7 @@ if ($LASTEXITCODE -ge 8) { throw 'copying the sql folder failed' }
 New-Item -ItemType Directory -Force "$stage\server\worldserver.conf.d" | Out-Null
 Copy-Item "$src\repack\templates\realm.conf" "$stage\server\worldserver.conf.d\zz-1-wow-forever-realm.conf" -Force
 Copy-Item "$src\src\modules\PlayerbotV2\conf\zz-0-playerbot-defaults.conf" "$stage\server\worldserver.conf.d\zz-0-playerbot-defaults.conf" -Force   # managed bot defaults (auction bot on); the robocopy of server-bot leaves out every *.conf
+Remove-Item "$stage\server\worldserver.conf.d\*.dist" -Force -ErrorAction SilentlyContinue   # playerbot.conf.dist on the build PC is a reference copy; players get settings from zz-0 and zz-1 only
 # only the two managed overrides ship: a local one (a packet log, a debug log level) never reaches players
 $extra = Get-ChildItem "$stage\server\worldserver.conf.d" -File | Where-Object { $_.Name -notin 'zz-0-playerbot-defaults.conf', 'zz-1-wow-forever-realm.conf' }
 if ($extra) { throw ('Unexpected files in worldserver.conf.d: ' + (($extra | ForEach-Object Name) -join ', ')) }
@@ -128,6 +129,7 @@ Copy-Item "$src\repack\WoW-Forever-Bots.cmd" "$stage\WoW-Forever-Bots.cmd" -Forc
 Copy-Item "$src\repack\Play-WoWForever.cmd" "$stage\Play-WoWForever.cmd" -Force
 Copy-Item "$src\repack\Bug-Report.cmd" "$stage\Bug-Report.cmd" -Force
 Copy-Item "$src\repack\Host-For-Others.cmd" "$stage\Host-For-Others.cmd" -Force
+Copy-Item "$src\repack\Check-Config.cmd" "$stage\Check-Config.cmd" -Force   # settings files check: file and line of a duplicate setting or a broken line
 & "$src\repack\build-launcher.ps1" -Out "$stage\WoWForeverLauncher.exe"   # the launcher window, compiled with the .NET Framework compiler that ships with Windows
 foreach ($f in 'README-TESTER.md:README.md', 'SOURCE.txt:SOURCE.txt', 'NOTICE.txt:NOTICE.txt') {
     $a, $b = $f -split ':'; Copy-Item "$src\repack\$a" "$stage\$b" -Force
@@ -184,6 +186,13 @@ if ($hits.Count) { throw ("Packed files still carry the build-tool words:`n  " +
 foreach ($need in 'server\worldserver.exe', 'server\bnetserver.exe', 'server\legacy.dll', 'server\worldserver.conf.d\zz-0-playerbot-defaults.conf', 'server\worldserver.conf.d\zz-1-wow-forever-realm.conf', 'Install.cmd', 'addons\ForeverBots\ForeverBots.toc', 'addons\ForeverDots\ForeverDots.toc') {
     if (-not (Test-Path (Join-Path $stage $need))) { throw "Package file missing: $need" }
 }
+# Every file of the full package with its size: before the install the launcher compares the folder with this list and asks the
+# player to unpack the whole zip again when something is missing or cut short (Setup.PackageProblem; Bebib1 10-31 had no world.sql).
+# Written last, after every change to the staged files; the update zip carries it too (only a not yet installed folder is checked).
+$listFile = Join-Path $stage 'repack\package-files.txt'
+$listLines = [string[]]@(Get-ChildItem $stage -Recurse -File -Force | Where-Object { $_.FullName -ne $listFile } | Sort-Object FullName |
+    ForEach-Object { "$($_.Length)`t$($_.FullName.Substring($stage.Length + 1))" })
+[IO.File]::WriteAllLines($listFile, $listLines)   # UTF-8 without a BOM (a BOM would hide the first line from the launcher)
 New-Zip $stage "$out\WoW-Forever-Bots-$Version.zip"
 # the add-on alone, for players who only need the client part (friends of a host, or a build without the repack): the zip holds the folder ForeverBots
 $addonTmp = Join-Path $out '_addon'; Remove-Item $addonTmp -Recurse -Force -ErrorAction SilentlyContinue

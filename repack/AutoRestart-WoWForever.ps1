@@ -8,6 +8,7 @@ $log = Join-Path $PSScriptRoot 'autorestart.log'
 $server = Join-Path $root 'server'
 . "$PSScriptRoot\mysql-helpers.ps1"
 . "$PSScriptRoot\WorldUp.ps1"
+. "$PSScriptRoot\ConfigCheck.ps1"
 . "$PSScriptRoot\ClientLanguage.ps1"
 . "$PSScriptRoot\ClientBuild.ps1"
 . "$PSScriptRoot\BotChat.ps1"
@@ -25,6 +26,10 @@ while (-not (Test-Path $flag)) {
         Log 'Starting worldserver...'
         Repair-ConfDir $server | ForEach-Object { Log $_ }
         Sync-NetworkKeys $server
+        Sync-HireSettings $server | ForEach-Object { Log $_ }
+        $cfg = Test-ServerConfig $server
+        $cfg.Lines | ForEach-Object { Log $_ }
+        if (-not $cfg.Ok) { Log 'Not starting: a settings file has a problem the server stops on (PROBLEM above: file and line number). Fix it and start again.'; break }
         Set-ClientLanguageConf $server
         Start-BotChat $root | ForEach-Object { Log $_ }
         Sync-UntestedBuildRows $root | ForEach-Object { Log $_ }

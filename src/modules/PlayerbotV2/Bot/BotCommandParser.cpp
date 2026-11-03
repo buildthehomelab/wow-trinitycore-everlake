@@ -981,21 +981,8 @@ bool OrderAssign(Player* sender, Player* bot, std::string const& normalized)
     if (w[1] == "list")
     {
         if (!speaker) return true;
-        struct Row { uint8 marker; std::string name; char const* role; };
-        std::vector<Row> rows;
-        for (auto const& [tank_low, marker] : Services::Owners().TankMarks(glow))
-            if (Player* t = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(tank_low)))
-                rows.push_back({ uint8(marker & 7), t->GetName(), "tank" });
-        for (GroupReference const& itr : grp->GetMembers())
-        {
-            Player* m = itr.GetSource();
-            if (!m || !Services::Registry().has(m->GetGUID().GetCounter())) continue;
-            OwnerRegistry::RtiOrder const o = Services::Owners().RtiOrderOf(m->GetGUID().GetCounter());
-            for (uint8 s : o.kill) rows.push_back({ uint8(s & 7), m->GetName(), "kill" });
-            for (uint8 s : o.cc)   rows.push_back({ uint8(s & 7), m->GetName(), "cc" });
-        }
-        std::stable_sort(rows.begin(), rows.end(), [](Row const& a, Row const& b) { return a.marker > b.marker; });
-        for (Row const& r : rows)
+        std::vector<BotCommandParser::AssignRow> const rows = BotCommandParser::AssignList(grp);
+        for (BotCommandParser::AssignRow const& r : rows)
             say(fmt::format("ASSIGN|{}|{}|{}", r.marker, r.name, r.role));
         say(fmt::format("ASSIGN|END|{}", rows.size()));
         return true;
@@ -1875,6 +1862,25 @@ bool BotCommandParser::Dispatch(Player* sender, Player* bot, std::string const& 
         fmt::format("Squad ({}): {} / {} bot(s) processed.",
                     FormatAddressKind(addr), succeeded, addr.bots.size())});
     return succeeded > 0;
+}
+
+std::vector<BotCommandParser::AssignRow> BotCommandParser::AssignList(Group* grp)
+{
+    std::vector<AssignRow> rows;
+    if (!grp) return rows;
+    for (auto const& [tank_low, marker] : Services::Owners().TankMarks(grp->GetGUID().GetCounter()))
+        if (Player* t = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(tank_low)))
+            rows.push_back({ uint8(marker & 7), t->GetName(), "tank" });
+    for (GroupReference const& itr : grp->GetMembers())
+    {
+        Player* m = itr.GetSource();
+        if (!m || !Services::Registry().has(m->GetGUID().GetCounter())) continue;
+        OwnerRegistry::RtiOrder const o = Services::Owners().RtiOrderOf(m->GetGUID().GetCounter());
+        for (uint8 s : o.kill) rows.push_back({ uint8(s & 7), m->GetName(), "kill" });
+        for (uint8 s : o.cc)   rows.push_back({ uint8(s & 7), m->GetName(), "cc" });
+    }
+    std::stable_sort(rows.begin(), rows.end(), [](AssignRow const& a, AssignRow const& b) { return a.marker > b.marker; });
+    return rows;
 }
 
 Role BotCommandParser::BotRole(Player* bot_player)
@@ -4072,6 +4078,77 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         Push(bot, WhisperIntent{sender->GetName(),
             fmt::format("Clearloot_all: dropped {} corpses across {} bot(s).",
                         total, visited)});
+        return true;
+    }
+    // "focus heal <name>[, <name>...]" / "focus heal me" / "focus heal off": a healer looks after only these group members (and
+    // itself) until "focus heal off". Memory only. Names are matched in the bot's group.
+    if (cmd == "focus" && (parsed.tail == "heal" || parsed.tail.rfind("heal ", 0) == 0))
+    {
+        BotAI* ai = Services::Registry().ai(bot->GetGUID().GetCounter());
+        if (!ai)
+        {
+            Push(bot, WhisperIntent{sender->GetName(), "Focus heal: bot not registered."});
+            return true;
+        }
+        std::string rest = parsed.tail.size() > 4 ? parsed.tail.substr(5) : std::string();
+        std::replace(rest.begin(), rest.end(), ',', ' ');
+        std::vector<std::string> names;
+        { std::istringstream is(rest); std::string t; while (is >> t) names.push_back(t); }
+        if (names.empty())
+        {
+            std::vector<ObjectGuid> const cur = ai->heal_only();
+            std::string list;
+            for (ObjectGuid const& g : cur)
+                if (Player* p = ObjectAccessor::FindConnectedPlayer(g))
+                    list += (list.empty() ? "" : ", ") + p->GetName();
+            Push(bot, WhisperIntent{sender->GetName(), cur.empty()
+                ? "Focus heal: I heal everyone (focus heal <name>, <name> | focus heal off)."
+                : fmt::format("Focus heal: I heal only {} and myself.", list.empty() ? std::string("players who are offline") : list)});
+            return true;
+        }
+        if (names.size() == 1 && (names[0] == "off" || names[0] == "clear" || names[0] == "all"))
+        {
+            ai->set_heal_only({});
+            TC_LOG_INFO("playerbot.v2", "[owner_order] {} focus heal off (from {})", bot->GetName(), sender->GetName());
+            Push(bot, WhisperIntent{sender->GetName(), "Focus heal: off, I heal everyone again."});
+            return true;
+        }
+        Group* grp = bot->GetGroup();
+        std::vector<ObjectGuid> picked;
+        std::string ok, missing;
+        for (std::string const& n : names)
+        {
+            Player* m = nullptr;
+            if (n == "me")
+                m = sender;
+            else if (grp)
+                for (GroupReference const& itr : grp->GetMembers())
+                {
+                    Player* gm = itr.GetSource();
+                    if (!gm) continue;
+                    std::string gn = gm->GetName();
+                    std::transform(gn.begin(), gn.end(), gn.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+                    if (gn == n) { m = gm; break; }
+                }
+            if (!m || (grp && !grp->IsMember(m->GetGUID())))
+            {
+                missing += (missing.empty() ? "" : ", ") + n;
+                continue;
+            }
+            if (std::find(picked.begin(), picked.end(), m->GetGUID()) != picked.end()) continue;
+            picked.push_back(m->GetGUID());
+            ok += (ok.empty() ? "" : ", ") + m->GetName();
+        }
+        if (picked.empty())
+        {
+            Push(bot, WhisperIntent{sender->GetName(), fmt::format("Focus heal: {} not in my group; nothing changed.", missing)});
+            return true;
+        }
+        ai->set_heal_only(std::move(picked));
+        TC_LOG_INFO("playerbot.v2", "[owner_order] {} focus heal on {} (from {})", bot->GetName(), ok, sender->GetName());
+        Push(bot, WhisperIntent{sender->GetName(), missing.empty()
+            ? fmt::format("Focus heal: I heal only {} and myself.", ok)
+            : fmt::format("Focus heal: I heal only {} and myself ({} not in my group).", ok, missing)});
         return true;
     }
     if (cmd == "focus")

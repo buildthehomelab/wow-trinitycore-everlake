@@ -1048,6 +1048,57 @@ static bool DungeonRealCombat(BotSnapshotView const& s)
 
 // (ClassOocHeal lives in Bot/ClassTables.cpp — shared with whisper helpers.)
 
+// A dungeon healer outside the fight whose member in combat stands out of its sight walks to a spot that sees the member instead of
+// casting into the wall. smlibrary_loksey 0.1.28m: the group waited on the entrance landing, a ledge the hall floor reaches only round
+// the east end of a solid block; the tank pulled from the floor below, the priest at 100% mana cast five heals that failed
+// LINE_OF_SIGHT in 10 s from the landing, came round the block only as the tank fell from 79% to 32% under a Hammer of Justice,
+// and the tank died. The spot keeps out of idle packs' reach; with the member under half health it may not (the heal outweighs the
+// pack, as in the combat opener's healer step). A walk that is under way is kept for 2 s rather than re-aimed every tick.
+static bool DungeonHealerSightStep(BotSnapshotView const& s, BotAI& ai, GroupMemberSummary const& m, BotIntentEmitter& emit, uint32 now_ms)
+{
+    NearbyUnit const* nu = nullptr;
+    for (NearbyUnit const& f : s.raw().combat.nearby_friends)
+        if (f.guid == m.guid) { nu = &f; break; }
+    if (!nu)
+        return false;
+    bool const failed_recently = ai.last_cast_oor_ms() != 0 && now_ms - ai.last_cast_oor_ms() <= 3000u;
+    if (nu->in_los && !failed_recently)
+        return false;
+
+    static std::mutex mtx;
+    static std::unordered_map<uint64, uint32> walking;   // bot -> when its last sight walk was sent
+    uint64 const key = s.guid().GetCounter();
+    {
+        std::lock_guard lock(mtx);
+        if (walking.size() > 1024)
+            walking.clear();
+        auto it = walking.find(key);
+        if (it != walking.end() && now_ms - it->second < 2000u && s.raw().movement.is_moving)
+        {
+            ai.set_last_rule_fired("idle:dungeon_healer_sight");
+            return true;
+        }
+    }
+    bool const hurt = m.max_hp > 0 && m.hp * 2 < m.max_hp;
+    float ox = 0.f, oy = 0.f, oz = 0.f, orad = 0.f;
+    bool moved = SightSpotMove(s, *nu, /*melee*/ false, /*pack_safe*/ true, emit, ox, oy, oz, orad);
+    if (!moved && hurt)
+        moved = SightSpotMove(s, *nu, /*melee*/ false, /*pack_safe*/ false, emit, ox, oy, oz, orad);
+    if (!moved)
+        return false;
+    {
+        std::lock_guard lock(mtx);
+        walking[key] = now_ms ? now_ms : 1u;
+    }
+    ai.reset_cast_oor();
+    if (ai.tank_diag_due(now_ms))
+        TC_LOG_INFO("playerbot.v2", "[healer_sight] {} cannot see {} ({}{}): walks to ({:.1f},{:.1f},{:.1f}), {:.0f}y from it",
+            s.name(), m.guid.ToString(), nu->in_los ? "a heal failed on range or sight" : "out of sight",
+            hurt ? ", under half health" : "", ox, oy, oz, orad);
+    ai.set_last_rule_fired("idle:dungeon_healer_sight");
+    return true;
+}
+
 // Out-of-combat group topup. Picks the most-wounded group member on our map
 // and casts the spec's basic heal if we're a healer. 80% threshold avoids
 // burning mana on near-full members; the next pull will fill them from a
@@ -2358,6 +2409,13 @@ bool RaidPointInUnpulledReach(BotSnapshotView const& s, float x, float y, float 
         TC_LOG_INFO("playerbot.v2", "[move_refused] {} will not step to ({:.0f},{:.0f}): {:.0f} y from idle entry {} (aggro reach {:.0f} y + margin)",
                     s.name(), x, y, pd, pack->entry, pr);
     return refused;
+}
+
+// Shared (declared in MaintainHelpers.h).
+bool PointInUnpulledPackReach(BotSnapshotView const& s, float x, float y, float z)
+{
+    if (!s.is_in_instance() || s.in_battleground()) return false;
+    return UnpulledPackReaching(s, nullptr, x, y, z, 0.0f, /*need_los=*/false, nullptr, s.published_at_ms()) != nullptr;
 }
 
 // The bot's live spline already ends within 3y (planar) of (x,y): a re-emit
@@ -3808,6 +3866,40 @@ static void LosLostClear(ObjectGuid guid)
     g_los_lost_since.erase(guid.GetCounter());
 }
 
+// How long this tank has been walking to the pull spot of the same pack (the 5-man / raid pack stop, [raid_pull] "walks to a pull spot")
+// without the pull: since the first walk for that pack, a gap of kPullSpotGapMs between two walks (another rule took the tick) not
+// breaking it. b3ca0b4b67 overnight: rfc_oggleflint walked to a spot on the pit's edge it never reached for over a minute, and
+// uldaman_revelosh swapped between the pull spot (where the pack was out of sight, so no pack stop) and the boss 5 y away for 60 s,
+// with the group idle behind it both times.
+static std::mutex g_pull_spot_mu;
+struct PullSpotWalk { uint64 pack = 0; uint32 since = 0; uint32 last = 0; };
+static std::unordered_map<uint64, PullSpotWalk> g_pull_spot_walk;
+constexpr uint32 kPullSpotGapMs = 10000u;
+// A listed boss the bot can fight now: alive, and a valid attack target for it. A boss that stands immune or unselectable until an
+// event the bots do not run is not the next pull: with it in the boss scans the tank walked up to it and "pulled" it every 30 s
+// while the attack never took (the snapshot has no such enemy). eea74327b3 uldaman_revelosh: Baelog (6906, the Lost Dwarves) at
+// 23 y in sight, 120 s group_stalled; b3ca0b4b67 st_mijan: Weaver (5720), whom the Classic troll-guard event frees, 120 s stalled.
+// Left out of the scans, the owed-boss waiver (8 s at its waypoint, unsighted) moves the route on, and a boss that turns
+// attackable is back in the scans and owed again.
+static bool BossFightable(Player const* origin, Creature const* c)
+{
+    return c && c->IsAlive() && origin->IsValidAttackTarget(c);
+}
+static uint32 PullSpotWalkFor(ObjectGuid tank, uint64 pack, uint32 now_ms)
+{
+    std::lock_guard<std::mutex> lk(g_pull_spot_mu);
+    PullSpotWalk& w = g_pull_spot_walk[tank.GetCounter()];
+    if (w.pack != pack || now_ms - w.last > kPullSpotGapMs)
+        w = { pack, now_ms ? now_ms : 1u, now_ms };
+    w.last = now_ms;
+    return now_ms - w.since;
+}
+static void PullSpotWalkClear(ObjectGuid tank)
+{
+    std::lock_guard<std::mutex> lk(g_pull_spot_mu);
+    g_pull_spot_walk.erase(tank.GetCounter());
+}
+
 bool RaidCastLosStep(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g,
                      BotIntentEmitter& emit)
 {
@@ -4535,7 +4627,7 @@ bool DungeonCombatPositioning(BotSnapshotView const& s, BotAI& ai,
                 float range;
                 bool operator()(Creature* c) const
                 {
-                    if (!c || !c->IsAlive()) return false;
+                    if (!BossFightable(origin, c)) return false;
                     for (uint32_t e : entries)
                         if (c->GetEntry() == e)
                             return origin->IsWithinDistInMap(c, range);
@@ -4952,7 +5044,7 @@ bool DungeonCombatPositioning(BotSnapshotView const& s, BotAI& ai,
                     float range;
                     bool operator()(Creature* c) const
                     {
-                        if (!c || !c->IsAlive()) return false;
+                        if (!BossFightable(origin, c)) return false;
                         for (uint32_t e : entries)
                             if (c->GetEntry() == e)
                                 return origin->IsWithinDistInMap(c, range);
@@ -7891,6 +7983,38 @@ bool DungeonDispatch(BotSnapshotView const& s, BotAI& ai,
                         : "idle:dungeon_auto_cc_script");
                     return true;
                 }
+                // The tank asked this caster to hold the moon mob before its pull (PrePullCc) and the mob is out of the spell's reach
+                // or sight from here: step in to a spot in reach, never into an idle pack's aggro reach. The cast above only fires "in
+                // reach from here", so the tank's 8 s wait ran out with nobody walking in (smlibrary_loksey 0.1.28b: "the held mob 13
+                // was not held after 8105 ms", five mobs came at once).
+                PrePullCc::Request pr;
+                if (!moon.IsEmpty() && PrePullCc::Get(s.group_guid().GetCounter(), now_ms, pr) && !pr.done_ms && pr.mob == moon &&
+                    pr.caster_low == s.guid().GetCounter())
+                    for (auto const& u : s.raw().combat.nearby_enemies)
+                    {
+                        if (u.guid != moon) continue;
+                        if (u.hp <= 0 || u.is_cc_locked || u.unit_in_combat) break;
+                        MarkCc::Option const* o = MarkCc::PickOption(s, s.cls(), MarkCc::TypeOf(u), /*ooc*/ true);
+                        if (!o || o->self_cast || o->root) break;
+                        float mx, my, mz; s.position(mx, my, mz);
+                        const float dx = mx - u.x, dy = my - u.y, dz = mz - u.z;
+                        const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+                        const float want = o->range - 4.0f;
+                        if (d <= want + 1.0f || want < 8.0f) break;   // in reach already (its sight is the core's to judge on the cast)
+                        const float k = want / d;
+                        const float sx = u.x + dx * k, sy = u.y + dy * k, sz = u.z + dz * k;
+                        if (RaidPointInUnpulledReach(s, sx, sy, sz, false) || DungeonStepRefused(s, ai, sx, sy, sz, now_ms))
+                            break;
+                        if (emit.move_already_emitted(sx, sy, sz) || emit.move_to(sx, sy, sz, /*run=*/true))
+                        {
+                            if (ai.last_rule_fired() == nullptr || std::string_view(ai.last_rule_fired()) != "idle:dungeon_precc_step")
+                                TC_LOG_INFO("playerbot.v2", "[raid_pull] {} steps in to hold entry {} ({}) for the pull: {:.0f}y away, spell reach {:.0f}y -> ({:.1f},{:.1f},{:.1f})",
+                                    s.name(), u.entry, u.guid.GetCounter(), d, o->range, sx, sy, sz);
+                            ai.set_last_rule_fired("idle:dungeon_precc_step");
+                            return true;
+                        }
+                        break;
+                    }
             }
         }
 
@@ -9043,7 +9167,7 @@ bool DungeonDispatch(BotSnapshotView const& s, BotAI& ai,
                     float range;
                     bool operator()(Creature* c) const
                     {
-                        if (!c || !c->IsAlive()) return false;
+                        if (!BossFightable(origin, c)) return false;
                         for (uint32_t e : entries)
                             if (c->GetEntry() == e)
                                 return origin->IsWithinDistInMap(c, range);
@@ -9325,12 +9449,36 @@ bool DungeonDispatch(BotSnapshotView const& s, BotAI& ai,
                         }
                     }
                     constexpr float kTankPullRange = 30.0f;   // idle:tank_pull_next
+                    constexpr uint32 kPullSpotGiveUpMs = 12000u;   // the pull spot walk for one pack, then the pull from where the tank stands
                     const float edge = pk_reach + kPackAggroMargin;
                     static uint32 s_pack_yield_dbg_ms = 0;
                     const bool dbg = now_ms - s_pack_yield_dbg_ms > 3000u;
                     if (dbg) s_pack_yield_dbg_ms = now_ms;
                     auto pull_from_here = [&](char const* why) -> bool
                     {
+                        // A 5-man tank opens a pack beyond its pull range with the pull-and-return (BotAI::PullBackPlan): the
+                        // ranged opener, then the run back to this edge spot, where the group holds. A plain attack here walked
+                        // the warrior the whole way into the pack (smlibrary_loksey 0.1.27: a Gallant pack opened from 43 y,
+                        // "no walkable pull spot", the tank 42 y from the healer, the fight on the next packs' doorstep and the
+                        // priest dry within 50 s).
+                        PullSpotWalkClear(s.guid());
+                        if (five_man_pack_stop && pk_d > kTankPullRange && Services::Config().behavior_pull_back() &&
+                            !ai.pull_back_active() && g.exists())
+                        {
+                            BotAI::PullBackPlan plan;
+                            plan.map = s.map_id();
+                            plan.target = pk->guid;
+                            plan.tx = pk->x; plan.ty = pk->y; plan.tz = pk->z;
+                            plan.rx = rpx; plan.ry = rpy; plan.rz = rpz;
+                            plan.started_ms = now_ms ? now_ms : 1u;
+                            ai.start_pull_back(plan);
+                            ai.note_engage(pk->guid, now_ms);
+                            TC_LOG_INFO("playerbot.v2",
+                                "[raid_pull] {} pulls entry {} ({}) back from {:.0f}y (aggro reach ~{:.0f}y): {}; return point ({:.1f},{:.1f},{:.1f})",
+                                s.name(), pk->entry, pk->guid.GetCounter(), pk_d, pk_reach, why, rpx, rpy, rpz);
+                            ai.set_last_rule_fired("idle:dungeon_tank_pull_back");
+                            return true;
+                        }
                         if (!emit.start_attack(pk->guid)) return false;
                         ai.note_engage(pk->guid, now_ms);
                         TC_LOG_INFO("playerbot.v2",
@@ -9352,6 +9500,10 @@ bool DungeonDispatch(BotSnapshotView const& s, BotAI& ai,
                         if (pull_from_here("on the edge of a reach wider than the pull range"))
                             return true;
                     }
+                    else if (uint32 const walked_ms = PullSpotWalkFor(s.guid(), pk->guid.GetCounter(), now_ms);
+                             walked_ms > kPullSpotGiveUpMs &&
+                             pull_from_here(fmt::format("the walk to its pull spot has not led to the pull in {} s", walked_ms / 1000u).c_str()))
+                        return true;
                     else if (Player* self_ps = ObjectAccessor::FindConnectedPlayer(s.raw().guid))
                     {
                         // Pull spot: just outside the reach + margin (so the
@@ -9581,7 +9733,7 @@ bool DungeonDispatch(BotSnapshotView const& s, BotAI& ai,
                             float range;
                             bool operator()(Creature* c) const
                             {
-                                if (!c || !c->IsAlive()) return false;
+                                if (!BossFightable(origin, c)) return false;
                                 for (uint32_t e : entries)
                                     if (c->GetEntry() == e)
                                         return origin->IsWithinDistInMap(c, range);
@@ -10811,7 +10963,7 @@ bool DungeonDispatch(BotSnapshotView const& s, BotAI& ai,
                                 : origin(o), entries(e), range(r) {}
                             bool operator()(Creature* c) const
                             {
-                                if (!c || !c->IsAlive()) return false;
+                                if (!BossFightable(origin, c)) return false;
                                 bool match = false;
                                 for (uint32_t e : entries)
                                     if (c->GetEntry() == e) { match = true; break; }
@@ -11692,6 +11844,30 @@ bool DungeonDispatch(BotSnapshotView const& s, BotAI& ai,
                                 }
                             }
                         }
+                        // The mob the mage holds comes from the target's own group: the mobs linked to it by the 10 y assistance
+                        // reach, not the 18 y ring. smlibrary_loksey36 d90ef3de69: the ring took in a second group 15 y off, the
+                        // biggest mob of it got the moon, the Polymorph pulled that group as well, and the priest ran dry (5 mobs on
+                        // the tank, healer_oom at 391 s).
+                        std::vector<char> own_group(idle_mobs.size(), 0);
+                        {
+                            auto linked = [&](NearbyUnit const& a, NearbyUnit const& b)
+                            {
+                                const float px = a.x - b.x, py = a.y - b.y, pz = a.z - b.z;
+                                return px * px + py * py + pz * pz <= kPackLinkY * kPackLinkY;
+                            };
+                            for (size_t i = 0; i < idle_mobs.size(); ++i)
+                                own_group[i] = idle_mobs[i] == best || linked(*idle_mobs[i], *best);
+                            for (bool grown = true; grown;)
+                            {
+                                grown = false;
+                                for (size_t i = 0; i < idle_mobs.size(); ++i)
+                                {
+                                    if (own_group[i]) continue;
+                                    for (size_t j = 0; j < idle_mobs.size() && !own_group[i]; ++j)
+                                        if (own_group[j] && linked(*idle_mobs[i], *idle_mobs[j])) { own_group[i] = 1; grown = true; }
+                                }
+                            }
+                        }
                         for (size_t pi = 0; pi < idle_mobs.size(); ++pi)
                         {
                             if (!in_pack[pi]) continue;
@@ -11699,6 +11875,7 @@ bool DungeonDispatch(BotSnapshotView const& s, BotAI& ai,
                             if (u.is_cc_locked) { ++pack_held; continue; }
                             ++pack_n;
                             if (&u == best) continue;
+                            if (!own_group[pi]) continue;
                             uint8 const ct = MarkCc::TypeOf(u);
                             if (ct && (sheep_mask & (1u << ct)) && !IsKnownBossUnit(s.map_id(), u) && int64_t(u.max_hp) >= cc_mob_hp) { cc_mob = &u; cc_mob_hp = int64_t(u.max_hp); }
                         }
@@ -12013,6 +12190,33 @@ bool DungeonDispatch(BotSnapshotView const& s, BotAI& ai,
                 }
             // A follower under an owner Hold / Stay keeps its spot: the regroup below is the cohesion walk toward the tank (MC Garr
             // 2026-10-10: healers walked 28 y at the Firesworn on idle:dungeon_regroup_follow_tank under the scenario Hold).
+            // The bot main tank is out at a pull back's opener or on its way back: the others wait at its return point, where the pack is
+            // coming, instead of walking on after it toward the pack (eea74327b3 dmnorth_moldar: the group followed the tank down the ramp
+            // to 20 y of a Gordok pack during the pull, the priest was first in the Brutes' way and died at 317 s).
+            if (PveOrder const& tpo = s.raw().pve_order;
+                ai.effective_role(s) != Role::Tank && !ai.holding_position(now_ms) && tpo.active && tpo.tank_pulling_back)
+            {
+                float wx, wy, wz; s.position(wx, wy, wz);
+                const float rdx = tpo.tank_pull_x - wx, rdy = tpo.tank_pull_y - wy;
+                if (rdx * rdx + rdy * rdy > 6.0f * 6.0f)
+                {
+                    if (emit.move_to(tpo.tank_pull_x, tpo.tank_pull_y, tpo.tank_pull_z, /*run*/ true))
+                    {
+                        if (RaidLogDue(RaidLogKey(s, RaidLogKind::Los) ^ 0x7062776bu, now_ms, 4000u))
+                            TC_LOG_INFO("playerbot.v2", "[pull_back] {} waits for the tank's pull at its return point ({:.1f},{:.1f}), {:.0f} y away",
+                                        s.name(), tpo.tank_pull_x, tpo.tank_pull_y, std::sqrt(rdx * rdx + rdy * rdy));
+                        ai.set_last_rule_fired("idle:dungeon_pull_back_wait");
+                        return true;
+                    }
+                }
+                else
+                {
+                    if (s.is_moving())
+                        emit.stop_movement();
+                    ai.set_last_rule_fired("idle:dungeon_pull_back_wait");
+                    return true;
+                }
+            }
             if (ai.effective_role(s) != Role::Tank && !ai.holding_position(now_ms))
             {
                 // A raid healer regroups on its heal_focus tank (rule 5c's
@@ -12256,6 +12460,8 @@ bool DungeonDispatch(BotSnapshotView const& s, BotAI& ai,
                                 heal_tgt = &m;
                                 break;
                             }
+                    if (heal_tgt && DungeonHealerSightStep(s, ai, *heal_tgt, emit, now_ms))
+                        return true;
                     if (heal_tgt)
                     {
                         emit.cast(hspell, heal_tgt->guid);
@@ -17369,6 +17575,9 @@ bool AutoactDispatch(BotSnapshotView const& s, BotAI& ai,
                 if (u.victim != ObjectGuid::Empty) continue;
                 // A real player's camp or quest mob is his (Playerbot.World.ShareMobs): the bot grinds elsewhere.
                 if (V2::ShareMobs::LeaveMob(s, u)) continue;
+                // Elites and rares are the players' (Playerbot.World.ShareMobs): passing grinders killed Chol'aruk under Thorn Hill (a quest
+                // boss, 10 min respawn) before the player who needed him got there (KailON, 0.1.27). A bot still fights one that attacks it.
+                if (V2::ShareMobs::LeaveElite(s, u)) continue;
                 if (party_follower) continue;   // in a small party the leader pulls (Playerbot.World.Parties, idle:party_assist)
                 if (recent_active && u.guid == recent) continue;
                 const float dx = u.x - bx;

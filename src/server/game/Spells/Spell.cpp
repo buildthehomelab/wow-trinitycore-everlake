@@ -24,6 +24,7 @@
 #include "BattlePetMgr.h"
 #include "CellImpl.h"
 #include "CharmInfo.h"
+#include "ClassicAutoShot.h"
 #include "ClassicOpcodes.h"
 #include "CollectionMgr.h"
 #include "CombatLogPackets.h"
@@ -5939,6 +5940,10 @@ SpellCastResult Spell::CheckCast(bool strict, int32* param1 /*= nullptr*/, int32
             }
 
             if ((IsAutoRepeat() || m_spellInfo->CategoryId == 76) && !m_caster->ToUnit()->isAttackReady(RANGED_ATTACK))
+                return SPELL_FAILED_DONT_REPORT;
+
+            // Classic 1.60: Auto Shot waits for its half-second wind-up like it waits for the swing timer (queued, shot on a later update)
+            if (m_spellInfo->Id == ClassicAutoShot::SpellId && !m_caster->ToUnit()->IsClassicAutoShotWindupDone())
                 return SPELL_FAILED_DONT_REPORT;
         }
     }

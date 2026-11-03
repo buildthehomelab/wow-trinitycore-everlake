@@ -418,6 +418,11 @@ public:
     bool behavior_ranged_slow()         const { return bhv_ranged_slow_; }
     bool behavior_ike3_commands()       const { return bhv_ike3_commands_; }
     bool behavior_owner_commands()      const { return bhv_owner_commands_; }
+    // A player's bots board his flight with him, and the ones that could not are brought to him when he lands (Fleet/OwnerCatchUp.h).
+    bool behavior_fly_with_owner()      const { return bhv_fly_with_owner_; }
+    // A bot with no way closer to its player while he is well away is set down beside him (Fleet/OwnerCatchUp.h).
+    bool behavior_catch_up_to_owner()   const { return bhv_catch_up_to_owner_; }
+    bool behavior_follow_owner_steps()  const { return bhv_follow_owner_steps_; }
     // Yards from the group's leader: a Passive bot defends a mob only within this of the leader (or of the member it is on), and an
     // Aggressive one attacks a hostile only within the aggressive radius of the leader. 0 switches the Passive leash off.
     float behavior_passive_leash_yd()   const { return bhv_passive_leash_yd_; }
@@ -433,6 +438,9 @@ public:
     bool behavior_party_banter()        const { return bhv_party_banter_; }
     bool behavior_social_emotes()       const { return bhv_social_emotes_; }
     bool behavior_polite_world_bots()   const { return bhv_polite_world_bots_; }
+    // Playerbot.Behavior.InvitePassingPlayers: 1 = a world bot may send a group invite to a real player who walks past (old way);
+    // 0 (default) = only to other bots. A player still gets an invite by whispering "invite" to the bot.
+    bool behavior_invite_passing_players() const { return bhv_invite_passing_players_; }
     // Playerbot.World.GateDuels.*: pairs of world bots duelling outside the capitals' gates (Fleet/GateDuels.h)
     bool   gate_duels_enable()          const { return gate_duels_enable_; }
     // Playerbot.World.Questing: 1 = world bots pick up and do quests on their own; 0 (default) = they grind mobs and roam, and quest only
@@ -678,6 +686,9 @@ private:
     bool   bhv_ranged_slow_          = true;
     bool   bhv_ike3_commands_        = true;
     bool   bhv_owner_commands_       = true;
+    bool   bhv_fly_with_owner_       = true;
+    bool   bhv_catch_up_to_owner_    = true;
+    bool   bhv_follow_owner_steps_   = true;
     float  bhv_passive_leash_yd_     = 25.0f;
     float  bhv_aggressive_radius_yd_ = 10.0f;
     bool   bhv_fidget_               = true;
@@ -690,6 +701,7 @@ private:
     bool   bhv_party_banter_         = true;
     bool   bhv_social_emotes_        = true;
     bool   bhv_polite_world_bots_    = true;
+    bool   bhv_invite_passing_players_ = false;
     bool   world_questing_           = false;
     bool   kindness_enable_          = true;
     uint32 kindness_buff_cd_ms_      = 900000u;

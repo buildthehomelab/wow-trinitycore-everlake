@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace Playerbot::V2::Fleet::Hire {
 
@@ -25,8 +26,9 @@ enum class Mode : uint8_t { Off = 0, Everyone = 1, PlayerChoice = 2 };
 // What a broker NPC sells, from its creature entry (kBrokerEntryFirst.. in blocks of 100).
 enum class Broker : uint8_t { None = 0, Inn = 1, Capital = 2, BlackMarket = 3 };
 
-constexpr uint32_t kBrokerEntryFirst = 9110000;   // 9110000-9110099 inn, 9110100-9110199 capital, 9110200-9110299 black market
-constexpr uint32_t kBrokerEntryLast  = 9110299;
+// (an entry travels in 23 bits to the client: nothing above 8388607 can be a creature the client lets you talk to)
+constexpr uint32_t kBrokerEntryFirst = 6110000;   // 6110000-6110099 inn, 6110100-6110199 capital, 6110200-6110299 black market
+constexpr uint32_t kBrokerEntryLast  = 6110299;
 constexpr uint64_t kMinPriceCopper   = 100;       // 1 silver
 constexpr uint32_t kPartyPlaces      = 4;         // the places beside the player in a 5-man
 constexpr uint32_t kRaidPlaces       = 39;        // ... in a 40-man
@@ -39,6 +41,8 @@ constexpr Broker BrokerOfEntry(uint32_t entry)
     return Broker(1 + (entry - kBrokerEntryFirst) / 100);
 }
 
+// The grades each kind of broker sells by default: an inn Sellswords, a capital Sellswords and Veterans, the black market Legends.
+// A server owner changes this with Playerbot.Hire.<Inn|Capital|BlackMarket>.Sells (Rules below).
 constexpr bool BrokerSells(Broker b, Grade g)
 {
     switch (b)
@@ -76,6 +80,68 @@ struct Prices
     };
     uint32_t upkeep_pct = 25;  // of the price paid, per day the bot is called; 0 = no upkeep
 };
+
+// The server owner's rules for each grade and broker (Playerbot.Hire.<Grade>.Gear / .HealthPct, Playerbot.Hire.<Broker>.Sells). The
+// defaults are the built-in rules above, so a server without these lines plays as before.
+struct Rules
+{
+    // Gear mode (Gear::Owned::GearMode value: 0 match, 1 best, 2 t1, 3 t2, 4 t3, 5 bis) each grade wears.
+    int gear_mode[kGradeCount] = { -1, 0, 1, 5 };
+    // A hired bot's health in percent of what its class, level and gear give it (100 = normal).
+    uint32_t health_pct[kGradeCount] = { 100, 100, 100, 100 };
+    // Bit (1 << grade) for each grade a kind of broker sells, by Broker value.
+    uint8_t sells[4] = { 0, 1u << 1, (1u << 1) | (1u << 2), 1u << 3 };
+};
+
+constexpr uint32_t kMinHealthPct = 25;
+constexpr uint32_t kMaxHealthPct = 1000;
+
+constexpr bool BrokerSells(Rules const& r, Broker b, Grade g)
+{
+    if (b == Broker::None || uint8_t(b) > 3 || g == Grade::None || uint8_t(g) >= kGradeCount)
+        return false;
+    return (r.sells[uint8_t(b)] >> uint8_t(g)) & 1u;
+}
+
+constexpr uint32_t HealthPctFor(Rules const& r, Grade g)
+{
+    if (g == Grade::None || uint8_t(g) >= kGradeCount)
+        return 100;
+    return std::clamp(r.health_pct[uint8_t(g)], kMinHealthPct, kMaxHealthPct);
+}
+
+// The extra (or, under 100%, missing) health of a bot whose class, level and gear give it `normal` health, at `pct` percent.
+constexpr int64_t HealthBonusFor(uint64_t normal, uint32_t pct)
+{
+    pct = std::clamp(pct, kMinHealthPct, kMaxHealthPct);
+    return int64_t(normal) * (int64_t(pct) - 100) / 100;
+}
+
+// A list of grade names ("sellsword, veteran"; commas or spaces, any case) as Rules::sells bits. "none" or an empty list = nothing.
+// Unknown words are skipped.
+inline uint8_t ParseGradeList(std::string_view list)
+{
+    uint8_t mask = 0;
+    size_t i = 0;
+    while (i <= list.size())
+    {
+        size_t j = list.find_first_of(", ", i);
+        if (j == std::string_view::npos)
+            j = list.size();
+        std::string w(list.substr(i, j - i));
+        for (char& c : w)
+            if (c >= 'A' && c <= 'Z')
+                c = char(c - 'A' + 'a');
+        if (w == "sellsword" || w == "sellswords")
+            mask |= 1u << uint8_t(Grade::Sellsword);
+        else if (w == "veteran" || w == "veterans")
+            mask |= 1u << uint8_t(Grade::Veteran);
+        else if (w == "legend" || w == "legends")
+            mask |= 1u << uint8_t(Grade::Legend);
+        i = j + 1;
+    }
+    return mask;
+}
 
 // The price of one bot of grade `g` for a hirer of `level`; `raid` = the bot fills a raid place (a raid group, or an instance for
 // more than 5). 0 = not for sale.
@@ -121,6 +187,14 @@ constexpr int GearModeFor(Grade g, bool owner_must_hire)
     if (g == Grade::Veteran) return 1;
     if (g == Grade::Sellsword || owner_must_hire) return 0;
     return -1;
+}
+
+// The same with the server owner's gear for each grade (Playerbot.Hire.<Grade>.Gear).
+constexpr int GearModeFor(Rules const& r, Grade g, bool owner_must_hire)
+{
+    if (g != Grade::None && uint8_t(g) < kGradeCount && r.gear_mode[uint8_t(g)] >= 0)
+        return r.gear_mode[uint8_t(g)];
+    return owner_must_hire ? 0 : -1;
 }
 
 constexpr char const* GradeName(Grade g)

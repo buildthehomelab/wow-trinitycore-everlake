@@ -245,6 +245,21 @@ bool SnapToGround(Player* p, float x, float y, float& z)
 
 // ---- GroundZ ----------------------------------------------------------------
 
+// A height Map::GetHeight took from the terrain grid (no model under the probe) that lies well below the caller's z, on a dungeon map.
+// Under a dungeon's buildings the grid is filler, not ground: where the probe falls through a gap in the floor model it hands back the
+// grid however near it lies. SM Library (map 189, the hall floor at z 18.5 over a grid at 0): move targets at the edge of the entrance
+// hall's open middle came back at z 0 ("[ground] Scnmage move_to z hint=18.6 ground=0.0", smlibrary_loksey 0.1.28h), and in 0.1.28g
+// the tank and the priest stood at z 0.0 under the floor for ten minutes while the navmesh there lies at z 19-21. A gap of a few yards
+// is a step or a stair; more is not a floor the caller asked about.
+static bool GridFillerBelow(Map* m, Player* p, float x, float y, float zHint, float g)
+{
+    constexpr float kGridFillerGap = 6.0f;
+    if (!m->IsDungeon() || g >= zHint - kGridFillerGap)
+        return false;
+    float const grid = m->GetGridHeight(p->GetPhaseShift(), x, y);
+    return grid > INVALID_HEIGHT && std::fabs(g - grid) < 0.05f;
+}
+
 float GroundZ(Player* p, float x, float y, float zHint, char const* where, bool* ok)
 {
     if (ok)
@@ -272,7 +287,7 @@ float GroundZ(Player* p, float x, float y, float zHint, char const* where, bool*
     // Map::GetHeight bounds only its vmap probe by the search distance: when that finds nothing it hands back the terrain grid's height
     // however far below it lies. Over a floating hall that is no ground at all (Hall of Thanes, the floor at z 500 and the grid at 0:
     // a stand point beside the boss came back at z 0, and the mage sent there left the hall and the run).
-    if (g <= INVALID_HEIGHT || g < zHint - kGroundProbeDown)
+    if (g <= INVALID_HEIGHT || g < zHint - kGroundProbeDown || GridFillerBelow(m, p, x, y, zHint, g))
         return zHint;
     if (ok)
         *ok = true;
@@ -311,7 +326,7 @@ bool ProbeGround(Player* p, float x, float y, float zHint, float& out)
     {
         g = INVALID_HEIGHT;   // BIH churn race (see SnapToGround)
     }
-    if (g <= INVALID_HEIGHT || g < zHint - kProbeDown)   // the terrain grid far below the window (see GroundZ)
+    if (g <= INVALID_HEIGHT || g < zHint - kProbeDown || GridFillerBelow(m, p, x, y, zHint, g))   // the terrain grid far below (see GroundZ)
         return false;
     out = g;
     return true;

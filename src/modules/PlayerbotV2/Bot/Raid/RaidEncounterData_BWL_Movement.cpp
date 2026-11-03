@@ -22,7 +22,16 @@ namespace Playerbot::Raid {
         r.breakSight.push_back({ 11983, 23341, 6, Who::Healer });
         r.breakSight.push_back({ 11983, 23341, 4, Who::Melee });
         r.breakSight.push_back({ 11983, 23341, 4, Who::Ranged });
-        // Chromaggus: the breath comes out of the front.
+        // Chromaggus: his two breaths are not cones. The client data (70532 SpellEffect: Incinerate 23308, Time Lapse 23310, Corrosive
+        // Acid 23313, Ignite Flesh 23315, Frost Burn 23187) targets every enemy around the caster within radius index 12 (100 y), and the
+        // area test keeps line of sight, so only a wall saves a raider. bwl_chromaggus 0.1.28c: Frost Burn and Ignite Flesh killed 14
+        // non-tanks in one second at 5-33 y, 62 s in, and the raid wiped at 74%. classic_boss_chromaggus.cpp casts breath one 30 s into
+        // the fight and breath two at 60 s, each again every 60 s: a breath every 30 s. Everyone but his victim goes out of his sight 5 s
+        // before each one is due and stays until 3 s after (the cast is 2 s), and at once whenever he is casting one; then walks back
+        // to where it stood. The off-tanks hide too: only his victim and the main tank take the breath (bwl_chromaggus 0.1.28f: an
+        // off-tank standing by the main tank died of Ignite Flesh 10 s after him).
+        r.hideBeforeBreath.push_back({ 14020, { 23308, 23310, 23313, 23315, 23187 }, 30000, 30000, 5000, 3000, Who::Anyone });
+        // The cone below only keeps the raid off his face between breaths.
         r.avoidFrontal.push_back({ 14020, 35.0f, 50.0f, Who::NonTank });
         // Vaelastrasz: his flame breath cleave chains through anyone near the front.
         r.avoidFrontal.push_back({ 13020, 20.0f, 60.0f, Who::NonTank });

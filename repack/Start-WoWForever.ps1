@@ -17,6 +17,12 @@ Set-ClientLanguageConf $dir
 . "$PSScriptRoot\WorldUp.ps1"
 Repair-ConfDir $dir
 Sync-NetworkKeys $dir
+Sync-HireSettings $dir
+. "$PSScriptRoot\ConfigCheck.ps1"
+# the same setting twice in one file (or a broken line) makes the server close at once with the reason only in its own window
+$cfg = Test-ServerConfig $dir
+$cfg.Lines
+if (-not $cfg.Ok -and -not (Get-Process worldserver -ErrorAction SilentlyContinue)) { throw 'A settings file has a problem the server stops on (see PROBLEM above: file and line number). Fix that line, save, and start again. Check-Config.cmd in the main folder runs this check on its own.' }
 $dups = @(Test-ConfDuplicates $dir)
 if ($dups.Count) { $dups | ForEach-Object { Write-Warning $_ }; throw 'The server was not started: a setting is in two files of server\worldserver.conf.d (see above).' }
 . "$PSScriptRoot\ClientBuild.ps1"

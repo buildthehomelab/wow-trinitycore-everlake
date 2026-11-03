@@ -1299,6 +1299,7 @@ bool GrindRoamGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&
         if (!u.guid.IsCreature() || u.no_xp_kill || u.is_pacified || u.untargetable) continue;
         if (u.level > lvl + 4u || u.hp_pct() < 50 || u.victim != ObjectGuid::Empty) continue;
         if (V2::ShareMobs::LeaveMob(s, u)) continue;   // a real player's: not ours to fight
+        if (V2::ShareMobs::LeaveElite(s, u)) continue;   // elites and rares are left to players
         return false;   // something to fight in reach: the engage rule takes it
     }
     return true;

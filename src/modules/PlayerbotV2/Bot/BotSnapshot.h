@@ -775,6 +775,32 @@ struct PveOrder
         return dx * dx + dy * dy > stay_near_r * stay_near_r;
     }
 
+    // The bot main tank runs a pull back (BotAI::PullBackPlan) and is out at its opener or on its way back: the pack is coming to
+    // (tank_pull_x, tank_pull_y, tank_pull_z), its return point. The others wait there and leave the pack alone until it arrives.
+    bool       tank_pulling_back = false;
+    float      tank_pull_x = 0.0f;
+    float      tank_pull_y = 0.0f;
+    float      tank_pull_z = 0.0f;
+
+    // Line-of-sight pull (PveGroupCoordinator::PlanSightPull, dungeons): mobs of the pull stand off and shoot or cast from where
+    // they stood (a Scarlet Beastmaster, an Adept) instead of following the tank back. The group gathers at (sight_x, sight_y,
+    // sight_z), a spot by the tank's return point out of those mobs' sight, so they have to walk in; nobody walks out to them.
+    // sight_mobs: the mobs still standing off (one leaves the list once it is within reach of the spot).
+    static constexpr size_t kMaxSightMobs = 4;
+    bool       sight_pull = false;
+    float      sight_x = 0.0f;
+    float      sight_y = 0.0f;
+    float      sight_z = 0.0f;
+    std::array<ObjectGuid, kMaxSightMobs> sight_mobs{};
+
+    bool sight_pull_mob(ObjectGuid g) const
+    {
+        if (!sight_pull || g.IsEmpty()) return false;
+        for (ObjectGuid const& m : sight_mobs)
+            if (m == g) return true;
+        return false;
+    }
+
     void reset() { *this = PveOrder{}; }
 };
 
@@ -2722,6 +2748,9 @@ struct BotSnapshot
     // The owner's "aoe off" (BotAI::aoe_denied, AoeDeny.h), mirrored by the builder: the emitter drops a spell that hits more than
     // one enemy.
     bool aoe_denied = false;
+    // The owner's "focus heal <name>, <name>" (BotAI::heal_only), mirrored by the builder: when not empty the bot heals only these
+    // players and itself. PickPatient keeps to them; the emitter drops any other friendly heal (the tank shield / Renew rules too).
+    std::vector<ObjectGuid> heal_only;
     // (duel + quest-share + trade + summon migrated into social_events above)
     // LFG queue / role-check / proposal / vote-kick state — REFACTOR_2
     // sub-struct rollout. See LfgState above for per-field semantics.

@@ -2524,11 +2524,31 @@ void Player::InitTalentForLevel()
 
     int32 talentTiers = DB2Manager::GetNumTalentsAtLevel(level, Classes(GetClass()));
     // Classic 1.60: the first talent point comes at level 10, not at 15 as on retail; resetting below 15 wiped the
-    // points spent at 10-14 on every level gain and spec swap
-    if (level < MIN_SPECIALIZATION_LEVEL)
+    // points spent at 10-14 on every level gain and spec swap. The Legacy perk Talented gives points from an earlier level
+    // (5 to 9), and those points must survive a level gain below 10 too.
+    int32 firstTalentLevel = MIN_SPECIALIZATION_LEVEL;
+    if (int32 talentedStartLevel = TraitMgr::PlayerDataAccessor(this).GetClassicTalentedStartLevel(); talentedStartLevel > 0 && talentedStartLevel < firstTalentLevel)
+        firstTalentLevel = talentedStartLevel;
+
+    if (level < firstTalentLevel)
     {
-        // Remove all talent points
-        ResetTalents(true);
+        // Remove all talent points, when any are spent. ResetTalents also dismisses the pet and tells the client its talents were
+        // reset, and without this check that ran on every level gain below the first talent level: a warlock's Imp vanished at
+        // each of levels 2-9 (Azeldof, 2026-11-02).
+        bool anySpent = false;
+        for (uint8 spec = 0; spec < MAX_SPECIALIZATIONS && !anySpent; ++spec)
+            for (auto const& [talentId, state] : *GetTalentMap(spec))
+                if (state != PLAYERSPELL_REMOVED)
+                    anySpent = true;
+
+        if (!anySpent)
+            if (UF::TraitConfig const* activeConfig = GetTraitConfig(m_activePlayerData->ActiveCombatTraitConfigID))
+                for (UF::TraitEntry const& entry : activeConfig->Entries)
+                    if (entry.Rank > 0)
+                        anySpent = true;
+
+        if (anySpent)
+            ResetTalents(true);
     }
     else
     {
@@ -3322,8 +3342,18 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
 
             // Runeforging special case
             if ((_spell_idx->second->GetAcquireMethod() == SkillLineAbilityAcquireMethod::AutomaticCharLevel && !HasSkill(_spell_idx->second->SkillLine)) || ((_spell_idx->second->SkillLine == SKILL_RUNEFORGING) && _spell_idx->second->TrivialSkillLineRankHigh == 0))
+            {
                 if (SkillRaceClassInfoEntry const* rcInfo = sDB2Manager.GetSkillRaceClassInfo(_spell_idx->second->SkillLine, GetRace(), GetClass()))
                     LearnDefaultSkill(rcInfo);
+            }
+            // Classic 1.60: a weapon spell taught by a weapon master (Two-Handed Maces 199, Two-Handed Axes 197 for a shaman) opens its
+            // weapon skill when the race and class may have it. These spells carry no skill effect and those skills are not given at
+            // creation, so the spell was in the spellbook but the weapon could not be equipped ("you don't know how to use it").
+            else if (IsWeaponSkill(_spell_idx->second->SkillLine) && !HasSkill(_spell_idx->second->SkillLine))
+            {
+                if (SkillRaceClassInfoEntry const* rcInfo = sDB2Manager.GetSkillRaceClassInfo(_spell_idx->second->SkillLine, GetRace(), GetClass()))
+                    LearnDefaultSkill(rcInfo);
+            }
         }
     }
 
@@ -7373,8 +7403,8 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, HonorGainS
         // apply honor multiplier from aura (not stacking-get highest)
         AddPct(honor_f, GetMaxPositiveAuraModifierByMiscMask(SPELL_AURA_MOD_HONOR_GAIN_PCT_FROM_SOURCE, 1 << AsUnderlyingType(source)));
         AddPct(honor_f, GetMaxPositiveAuraModifier(SPELL_AURA_MOD_HONOR_GAIN_PCT));
-        // Classic 1.60 Legacy perk For Great Honor 1225501: currency gain aura on Honor (1792); honor is not credited as that currency here
-        AddPct(honor_f, GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_CURRENCY_GAIN, 1792));
+        // Classic 1.60 Legacy perk For Great Honor 1225501 (currency gain aura on Honor 1792) is applied by
+        // ModifyCurrency when the honor is credited below, for kills and battleground honor alike.
         honor_f += _restMgr->GetRestBonusFor(REST_TYPE_HONOR, honor_f);
     }
 
@@ -7395,6 +7425,12 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, HonorGainS
     SendDirectMessage(data.Write());
 
     AddHonorXP(honor);
+
+    // Classic 1.60: honor is the Honor currency (1792). The PvP quartermasters (Lady Palanseer 12792, Brave Stonehide
+    // 12793, Sergeant Thunderhorn 14581) price their goods in it through ItemExtendedCost (11575-11706: 1792 plus marks),
+    // so honor that only fed the retail honor level bar could never be spent.
+    if (honor > 0 && sCurrencyTypesStore.HasRecord(CURRENCY_HONOR_CLASSIC))
+        ModifyCurrency(CURRENCY_HONOR_CLASSIC, honor, CurrencyGainSource::PvPHonorReward);
 
     if (InBattleground() && honor > 0)
     {
@@ -29812,6 +29848,7 @@ void Player::_LoadTraits(PreparedQueryResult configsResult, PreparedQueryResult 
         } while (entriesResult->NextRow());
     }
 
+    std::vector<WorldPackets::Traits::TraitConfig> loadedConfigs;
     if (configsResult)
     {
         //                    0     1                    2                  3                4            5              6            7      8
@@ -29863,20 +29900,34 @@ void Player::_LoadTraits(PreparedQueryResult configsResult, PreparedQueryResult 
                 }
             }
 
-            if (TraitMgr::ValidateConfig(traitConfig, this, false, true) != TraitMgr::LearnResult::Ok)
-            {
-                traitConfig.Entries.clear();
-                traitConfig.SubTrees.clear();
-                for (UF::TraitEntry const& grantedEntry : TraitMgr::GetGrantedTraitEntriesForConfig(traitConfig, this))
-                    traitConfig.Entries.emplace_back(grantedEntry);
-
-                // rebuild subtrees
-                TraitMgr::ValidateConfig(traitConfig, this, false, true);
-            }
-
-            AddTraitConfig(traitConfig);
+            loadedConfigs.push_back(std::move(traitConfig));
 
         } while (configsResult->NextRow());
+    }
+
+    // Classic 1.60: the Legacy perk Talented (a Generic config) adds talent points before level 10, and the combat config is
+    // checked against those points. Configs came in id order, so the combat config was checked before the Legacy config was
+    // added: the extra points were missing, the check failed and every talent spent with them was wiped on each login.
+    // Add the other configs first, then the combat ones.
+    std::ranges::stable_partition(loadedConfigs, [](WorldPackets::Traits::TraitConfig const& traitConfig)
+    {
+        return traitConfig.Type != TraitConfigType::Combat;
+    });
+
+    for (WorldPackets::Traits::TraitConfig& traitConfig : loadedConfigs)
+    {
+        if (TraitMgr::ValidateConfig(traitConfig, this, false, true) != TraitMgr::LearnResult::Ok)
+        {
+            traitConfig.Entries.clear();
+            traitConfig.SubTrees.clear();
+            for (UF::TraitEntry const& grantedEntry : TraitMgr::GetGrantedTraitEntriesForConfig(traitConfig, this))
+                traitConfig.Entries.emplace_back(grantedEntry);
+
+            // rebuild subtrees
+            TraitMgr::ValidateConfig(traitConfig, this, false, true);
+        }
+
+        AddTraitConfig(traitConfig);
     }
 
     // Remove orphaned trait entries from database

@@ -296,6 +296,9 @@ void ConfigReader::apply_from_loaded_config()
     bhv_ranged_slow_          = c.GetBoolDefault("Playerbot.Behavior.RangedSlow", true, true);
     bhv_ike3_commands_        = c.GetBoolDefault("Playerbot.Behavior.Ike3Commands", true, true);
     bhv_owner_commands_       = c.GetBoolDefault("Playerbot.Behavior.OwnerCommands", true, true);
+    bhv_fly_with_owner_       = c.GetBoolDefault("Playerbot.Behavior.FlyWithOwner", true, true);
+    bhv_catch_up_to_owner_    = c.GetBoolDefault("Playerbot.Behavior.CatchUpToOwner", true, true);
+    bhv_follow_owner_steps_   = c.GetBoolDefault("Playerbot.Behavior.FollowOwnerSteps", true, true);
     bhv_passive_leash_yd_     = std::max(0.0f, float(c.GetFloatDefault("Playerbot.Behavior.PassiveLeashYd", 25.0f, true)));
     bhv_aggressive_radius_yd_ = std::max(1.0f, float(c.GetFloatDefault("Playerbot.Behavior.AggressiveRadiusYd", 10.0f, true)));
     bhv_fidget_               = c.GetBoolDefault("Playerbot.Behavior.Fidget", true, true);
@@ -308,6 +311,7 @@ void ConfigReader::apply_from_loaded_config()
     bhv_party_banter_         = c.GetBoolDefault("Playerbot.Behavior.PartyBanter", true, true);
     bhv_social_emotes_        = c.GetBoolDefault("Playerbot.Behavior.SocialEmotes", true, true);
     bhv_polite_world_bots_    = c.GetBoolDefault("Playerbot.Behavior.PoliteWorldBots", true, true);
+    bhv_invite_passing_players_ = c.GetBoolDefault("Playerbot.Behavior.InvitePassingPlayers", false, true);
     world_questing_           = c.GetBoolDefault("Playerbot.World.Questing", false, true);
     kindness_enable_          = c.GetBoolDefault("Playerbot.World.Kindness.Enable", true, true);
     kindness_buff_cd_ms_      = uint32(std::clamp<int64_t>(c.GetIntDefault("Playerbot.World.Kindness.BuffCooldownSec", 900, true), 60, 86400)) * 1000u;

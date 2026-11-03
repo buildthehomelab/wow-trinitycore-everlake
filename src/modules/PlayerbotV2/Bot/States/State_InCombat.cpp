@@ -173,6 +173,18 @@ bool MaybeUseResistPotion(BotSnapshotView const& s, BotIntentEmitter& emit)
     return true;
 }
 
+// The cure item for an aura no dispel removes (RaidRules::cureItem: Hourglass Sand on Chromaggus' Brood Affliction: Bronze), between the stuns
+// the aura brings.
+bool MaybeUseCureItem(BotSnapshotView const& s, BotIntentEmitter& emit)
+{
+    uint32 const item = Classic::PickCureItem(s);
+    if (!item)
+        return false;
+    emit.emit(UseItemByEntryIntent{item, ObjectGuid::Empty});
+    Classic::NoteConsumableUse(s, item, "cure item");
+    return true;
+}
+
 // Defensive racials, each on the debuff it clears: Stoneform (Dwarf) on bleed
 // / poison / disease (curse too outside vanilla), Will of the Forsaken
 // (Undead) on fear / charm / sleep, Escape Artist (Gnome) on root / snare.
@@ -753,6 +765,24 @@ ThreatHold EvaluateThreatHold(BotAI& ai, BotSnapshotView const& s, ObjectGuid ta
     // hold and its release limits are raid discipline; in a party the tank holds with its own threat and the healer heals.
     if (!raid_discipline && h == ThreatHold::OverThreat)
         h = ThreatHold::None;
+    // The bot main tank's own pull back is out or on its way back (PveOrder::tank_pulling_back): the pack comes to the return point,
+    // and a damage dealer that opens on it or on a mob of it out there turns it round (eea74327b3 dmnorth_moldar: the mage opened on
+    // the Mage-Lord at 48 y the second the tank's shot landed, the hunter and the rogue on a Brute at 50 y; two Brutes reached the
+    // priest and killed it). Not a mob that hits this bot (self-defence), not a healer.
+    if (!s.is_in_raid() && s.is_in_dungeon() && h == ThreatHold::None && u->victim != s.guid() &&
+        ai.effective_role(s) != Role::Healer)
+    {
+        PveOrder const& po = s.raw().pve_order;
+        // Returned here, not left to the release rules below: the group's fight opens on a trash mob once the tank has hit it, and the
+        // tank's opening shot is what starts the pull back. It ends when the pull back is in its Hold phase, at the return point.
+        if (po.active && po.tank_pulling_back)
+        {
+            if (RaidLogDue(RaidLogKey(s, RaidLogKind::ThreatHold), s.published_at_ms(), 5000u))
+                TC_LOG_INFO("playerbot.v2", "[pull_back] {} holds damage on entry {} ({}): the tank's pull back is under way",
+                    s.name(), u->entry, target.GetCounter());
+            return ThreatHold::TankOpening;
+        }
+    }
     // After the owner's Pull / Pull back the party's DPS wait for his Attack even once the tank has its lead. There is one timer:
     // kPartyOpenWaitMs below (6 s from the tank's first hit) lets them open by themselves. The Pull counts for the fight that
     // follows it, until an Attack or the end of that fight. Not a mob that hits this bot (self-defence), not a healer.
@@ -1580,6 +1610,99 @@ constexpr HelpRunnerStopper kHelpRunnerStoppers[] = {
     { CLASS_SHAMAN,  8056, false, false },
 };
 
+// ---- Line-of-sight pull (PveOrder::sight_pull; PveGroupCoordinator::PlanSightPull) ----
+// The group gathers at a spot out of the sight of the pull's mobs that stand off and shoot (smlibrary_loksey 8d2fd499aa: a Scarlet
+// Beastmaster and an Adept shot from 37-47 y, the tank walked out to taunt them and the fight moved next to the following pack). At
+// the spot nobody walks out to such a mob: it has to come round the corner, and it leaves the order's list once it is in.
+constexpr float kSightPullAtYd   = 4.0f;    // at the spot
+constexpr float kSightPullJoinYd = 45.0f;   // a member farther off is not part of this fight (a corpse run, another room)
+constexpr float kSightPullNearYd = 10.0f;   // a mob this close to the spot is fought while the others come
+constexpr float kSightPullOwnReachYd = 6.0f;   // ... and one this close to the bot (plus its combat reach), wherever the spot is
+constexpr float kSightPullShootYd = 30.0f;  // a ranged bot shoots a mob out there it sees from the spot within this
+constexpr int32 kSightPullHealFirstPct = 50;   // a member under this share of health keeps the healer healing where it stands
+
+// The b3ca0b4b67 overnight runs lost bots under these rules in ten dungeons: a healer whose wand target was a mob out there "waited" and
+// healed nobody, and a tank whose mobs stood just outside the 8 y circle round the spot waited while they beat it. Now a healer only walks
+// to the spot, and only while nobody is low; a bot fights any mob in its own reach or at the spot; a ranged bot shoots a mob out there
+// that it can see from where it stands; only a bot with nothing to fight waits.
+static bool SightPullTick(BotAI& ai, BotSnapshotView const& s, GroupSnapshotView const& g, BotIntentEmitter& emit)
+{
+    PveOrder const& po = s.raw().pve_order;
+    if (!po.active || !po.sight_pull || !s.is_alive() || !s.is_in_dungeon()) return false;
+    float bx, by, bz; s.position(bx, by, bz);
+    auto d2spot = [&](float x, float y) { return (x - po.sight_x) * (x - po.sight_x) + (y - po.sight_y) * (y - po.sight_y); };
+    if (d2spot(bx, by) > kSightPullJoinYd * kSightPullJoinYd) return false;
+    const uint32 now_ms = s.published_at_ms();
+    Role const role = ai.effective_role(s);
+    bool const healer = role == Role::Healer || IsHealerSpec(s.cls(), uint16(s.spec()));
+    // A mob that has come in, in this bot's own reach or at the spot: the one to fight while the others come.
+    NearbyUnit const* near = nullptr;
+    float near_d2 = 1.0e9f;
+    for (auto const& u : s.raw().combat.nearby_enemies)
+    {
+        if (u.hp <= 0 || u.is_player || u.untargetable || u.is_pacified || u.is_cc_locked || !u.unit_in_combat) continue;
+        if (po.sight_pull_mob(u.guid) || po.cc_reserved_mob(u.guid)) continue;
+        ThreatVictim const k = ThreatVictim(u.victim_kind);
+        if (k != ThreatVictim::Me && k != ThreatVictim::Tank && k != ThreatVictim::Member && k != ThreatVictim::MemberPet) continue;
+        const float mx = u.x - bx, my = u.y - by;
+        const float d2 = mx * mx + my * my;
+        const float own = kSightPullOwnReachYd + u.combat_reach;
+        if (d2 > own * own && d2spot(u.x, u.y) > kSightPullNearYd * kSightPullNearYd) continue;
+        if (d2 < near_d2) { near_d2 = d2; near = &u; }
+    }
+    // A pet on a mob out there holds it where it stands (it melees the pet and never walks in): it comes back, or takes the near mob.
+    // Not a claim on the tick: the bot's own walk or fight below goes on.
+    ObjectGuid const pv = s.raw().pet.pet_victim;
+    if (!pv.IsEmpty() && po.sight_pull_mob(pv))
+    {
+        if (near) emit.pet_attack(near->guid);
+        else      emit.pet_set_command_state(1 /*COMMAND_FOLLOW*/);
+        if (RaidLogDue(RaidLogKey(s, RaidLogKind::SightPull) ^ 0x706574u, now_ms, 4000u))
+            TC_LOG_INFO("playerbot.v2", "[sight_pull] {} calls its pet off {} out there: {}", s.name(), pv.GetCounter(),
+                        near ? fmt::format("onto entry {} ({}) at the spot", near->entry, near->guid.GetCounter()) : std::string("follow"));
+    }
+    if (healer)
+    {
+        // Heals come first: a member under kSightPullHealFirstPct keeps the healer where it stands, healing.
+        bool low = false;
+        if (auto const* mems = g.members())
+            for (GroupMemberSummary const& m : *mems)
+                if (m.online && m.is_alive && m.map_id == s.map_id() && m.max_hp > 0 && int64(m.hp) * 100 < int64(m.max_hp) * kSightPullHealFirstPct)
+                { low = true; break; }
+        return !low && SightPullGather(s, ai, emit, /*in_combat_state*/ true);
+    }
+    if (SightPullGather(s, ai, emit, /*in_combat_state*/ true))
+        return true;
+    if (d2spot(bx, by) > kSightPullAtYd * kSightPullAtYd) return false;   // not there and the walk was not taken: the other rules
+    NearbyUnit const* v = s.victim_info();
+    if (!v || v->hp <= 0 || !po.sight_pull_mob(v->guid)) return false;
+    // The victim is a mob still standing off out there: fight one that has come in.
+    if (near)
+    {
+        if (!emit.start_attack(near->guid))
+            return false;
+        if (RaidLogDue(RaidLogKey(s, RaidLogKind::SightPull), now_ms, 4000u))
+            TC_LOG_INFO("playerbot.v2", "[sight_pull] {} leaves entry {} ({}) out there {:.0f} y off and fights entry {} ({}) at the spot",
+                        s.name(), v->entry, v->guid.GetCounter(), std::sqrt(d2spot(v->x, v->y)), near->entry, near->guid.GetCounter());
+        ai.set_last_rule_fired("combat:sight_pull_switch");
+        return true;
+    }
+    // A ranged bot that sees it from here shoots it from here (the rotation; its approach steps are the only thing this rule holds).
+    if (!IsMeleeSpec(s.cls(), s.spec()) && role != Role::Tank && v->in_los)
+    {
+        const float vx = v->x - bx, vy = v->y - by;
+        if (vx * vx + vy * vy <= kSightPullShootYd * kSightPullShootYd)
+            return false;
+    }
+    if (s.is_moving())
+        emit.stop_movement();
+    if (RaidLogDue(RaidLogKey(s, RaidLogKind::SightPull), now_ms, 4000u))
+        TC_LOG_INFO("playerbot.v2", "[sight_pull] {} waits at the spot for entry {} ({}), {:.0f} y off out of sight", s.name(), v->entry,
+                    v->guid.GetCounter(), std::sqrt(d2spot(v->x, v->y)));
+    ai.set_last_rule_fired("combat:sight_pull_wait");
+    return true;
+}
+
 static bool HelpRunnerTick(BotAI& ai, BotSnapshotView const& s, GroupSnapshotView const& g, BotIntentEmitter& emit)
 {
     if (!s.is_in_instance() || s.in_battleground() || !g.exists() || !s.is_alive())
@@ -1898,6 +2021,37 @@ bool SoloFleeTick(BotAI& ai, BotSnapshotView const& s, GroupSnapshotView const& 
 }
 
 } // anonymous
+
+// Shared (MaintainHelpers.h). The line-of-sight pull's walk to the spot (SightPullTick above, idle:sight_pull).
+bool SightPullGather(BotSnapshotView const& s, BotAI& ai, BotIntentEmitter& emit, bool in_combat_state)
+{
+    PveOrder const& po = s.raw().pve_order;
+    if (!po.active || !po.sight_pull || !s.is_alive() || !s.is_in_dungeon()) return false;
+    float bx, by, bz; s.position(bx, by, bz);
+    const float dx = po.sight_x - bx, dy = po.sight_y - by;
+    const float d2 = dx * dx + dy * dy;
+    if (d2 > kSightPullJoinYd * kSightPullJoinYd || d2 <= kSightPullAtYd * kSightPullAtYd) return false;
+    // The cast in progress goes out (a heal on the tank), the walk follows on the next tick; a stunned or rooted bot cannot walk.
+    if (s.is_casting() || s.is_stunned() || s.is_rooted()) return false;
+    char const* const tag = in_combat_state ? "combat:sight_pull_gather" : "idle:sight_pull_gather";
+    if (s.is_moving() && s.has_path_destination())
+    {
+        float qx, qy, qz; s.path_destination(qx, qy, qz);
+        if ((qx - po.sight_x) * (qx - po.sight_x) + (qy - po.sight_y) * (qy - po.sight_y) < 2.0f * 2.0f)
+        {
+            ai.set_last_rule_fired(tag);
+            return true;
+        }
+    }
+    if (!emit.move_already_emitted(po.sight_x, po.sight_y, po.sight_z) && !emit.move_to(po.sight_x, po.sight_y, po.sight_z, /*run*/ true))
+        return false;
+    const uint32 now_ms = s.published_at_ms();
+    if (RaidLogDue(RaidLogKey(s, RaidLogKind::SightPull), now_ms, 4000u))
+        TC_LOG_INFO("playerbot.v2", "[sight_pull] {} gathers at ({:.1f},{:.1f}), {:.0f} y away, out of the shooters' sight", s.name(),
+                    po.sight_x, po.sight_y, std::sqrt(d2));
+    ai.set_last_rule_fired(tag);
+    return true;
+}
 
 // Shared (MaintainHelpers.h).
 bool SightSpotMove(BotSnapshotView const& s, NearbyUnit const& victim, bool melee, bool pack_safe, BotIntentEmitter& emit,
@@ -2309,6 +2463,10 @@ void DispatchInCombat(BotAI& ai,
     // 9 of 40 bots drank, no mage did; a mage Living Bomb carrier took the full 3200 and died).
     const bool resist_potion_used = !survival_item_used && MaybeUseResistPotion(snapshot, emit);
 
+    // A cure item goes out the same way, alongside a raid move: a Bronze carrier gets a short gap between two stuns to act (bwl_chromaggus
+    // 0.1.28i: the stunned carriers stood in the breath).
+    const bool cure_item_used = !survival_item_used && !resist_potion_used && MaybeUseCureItem(snapshot, emit);
+
     // Raid encounter orders (Bot/Raid): hazard moves, taunt swaps, dispels,
     // purges, crowd control and forbidden targets come before everything else.
     if (Raid::DispatchRaidOrder(ai, snapshot, emit))
@@ -2492,6 +2650,12 @@ void DispatchInCombat(BotAI& ai,
     // ---- A mob running for help (HelpRunnerTick above) ----
     // Ahead of the group's fight pick: that pick keeps a live victim, so the switch has to come first.
     if (HelpRunnerTick(ai, snapshot, group, emit))
+        return;
+
+    // ---- Line-of-sight pull (SightPullTick above) ----
+    // After the runner: a mob fleeing for help is still stopped. Ahead of the group's fight pick, the loose-mob pickup and every
+    // line-of-sight step below, which would walk the bot out to a mob that stands off.
+    if (SightPullTick(ai, snapshot, group, emit))
         return;
 
     // ---- The group's fight (Bot/GroupFight.h) ----
@@ -3841,6 +4005,9 @@ void DispatchInCombat(BotAI& ai,
     // Raid resistance potion (boss engaged): emitted above, ahead of the raid orders.
     if (resist_potion_used) return;
 
+    // Cure item (Hourglass Sand on Brood Affliction: Bronze): emitted above, ahead of the raid orders.
+    if (cure_item_used) return;
+
     // Mana refill for low-mana casters. Shares the potion CD with the
     // healing potion above; one will block the other in the API layer.
     if (MaybeUseManaPotion(snapshot, group, emit)) return;
@@ -4234,8 +4401,11 @@ void DispatchInCombat(BotAI& ai,
                             break;
                         }
                 // ...nor out of its healers' reach: in a 5-man the tank stays where the healer sees it and lets the mob come (the DPS
-                // finish it). Ends the chase at once, not after the stuck-chase window.
-                if (ai.effective_role(snapshot) == Role::Tank && vu->victim != snapshot.guid() && !(ai.group_fight() && !snapshot.raid_rules()) &&
+                // finish it). Ends the chase at once, not after the stuck-chase window. A mob on the tank itself too: a caster that
+                // nukes him from range does not walk in, and a tank that walks out to it takes the fight into the next packs
+                // (smlibrary 0.1.28f run 2: the tank followed the Scarlet Adepts 55 y deeper, more than 30 y from the priest, and the
+                // Beastmaster and his hound joined a fight that ran 105 s until the priest was dry).
+                if (ai.effective_role(snapshot) == Role::Tank && !(ai.group_fight() && !snapshot.raid_rules()) &&
                     snapshot.beyond_healer_leash(vu->x, vu->y))
                 {
                     if (RaidLogDue(RaidLogKey(snapshot, RaidLogKind::ThreatHold) ^ 0x68656c70u, snapshot.published_at_ms(), 5000u))

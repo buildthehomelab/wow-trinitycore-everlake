@@ -60,3 +60,37 @@ function Sync-NetworkKeys([string]$ServerDir) {
         } catch { Write-Warning "Could not add the network settings to $($w.File): $($_.Exception.Message)" }
     }
 }
+
+# The hired bots settings (NPC hire broker: on/off, what each broker gives, gear, health, prices) came with 0.1.28. A player's own
+# zz-9-local.conf from an older install does not have them, and updates never rewrite that file. So the block from
+# templates\zz-9-local.conf is added to it once, above "Your own settings", with the hire mode OFF (0) as the server's own default.
+# A setting the player already has in the file is left as it is and not added again. Old copy: zz-9-local.conf.bak.
+function Sync-HireSettings([string]$ServerDir) {
+    try {
+        $path = Join-Path (Join-Path $ServerDir 'worldserver.conf.d') 'zz-9-local.conf'
+        $tpl = Join-Path (Join-Path $PSScriptRoot 'templates') 'zz-9-local.conf'
+        if (-not (Test-Path $path) -or -not (Test-Path $tpl)) { return }
+        $lines = @(Get-Content $path)
+        if ($lines | Where-Object { $_ -match '^\s*Playerbot\.Hire\.Mode\s*=' }) { return }
+        $have = @{}
+        foreach ($l in $lines) { if ($l -match '^\s*([^#;\[\s][^=\s]*)\s*=') { $have[$Matches[1].ToLowerInvariant()] = $true } }
+        $block = @(); $in = $false
+        foreach ($l in @(Get-Content $tpl)) {
+            if ($l -match '^# ---- Hired bots') { $in = $true }
+            elseif ($in -and $l -match '^# ----') { break }
+            if (-not $in) { continue }
+            if ($l -match '^\s*([^#;\[\s][^=\s]*)\s*=' -and $have.ContainsKey($Matches[1].ToLowerInvariant())) { continue }
+            $block += $l
+        }
+        if (-not $block.Count) { return }
+        $out = @(); $done = $false
+        foreach ($l in $lines) {
+            if (-not $done -and $l -match '^# ---- Your own settings') { $out += $block; $done = $true }
+            $out += $l
+        }
+        if (-not $done) { $out += ''; $out += $block }
+        Copy-Item $path "$path.bak" -Force
+        [IO.File]::WriteAllText($path, (($out -join "`r`n") + "`r`n"), (New-Object Text.UTF8Encoding $false))
+        'Added the hired bots settings to zz-9-local.conf (off; old copy: zz-9-local.conf.bak).'
+    } catch { Write-Warning "Could not add the hired bots settings to zz-9-local.conf: $($_.Exception.Message)" }
+}

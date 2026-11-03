@@ -193,6 +193,11 @@ struct AvoidOnStacks { uint32_t enemy; uint32_t aura; uint32_t stacks; float rad
 // 38 y (healers keep healing it from there); a bot with no such spot falls through to the next rule that matches it.
 struct BreakSight { uint32_t enemy; uint32_t aura; uint32_t stacks; Who who; bool seeTank = false; };
 
+// A breath on a fixed clock that hits everyone <enemy> can see (Chromaggus: caster-centred, 100 y, line of sight only). Matching bots
+// that are not its victim walk to a spot it cannot see from <leadMs> before each breath is due until <afterMs> after, and whenever it
+// is casting one of <spells> (the clock slipped). Breath k is due <firstMs> + k * <periodMs> after the enemy entered combat.
+struct HideBeforeBreath { uint32_t enemy; std::vector<uint32_t> spells; uint32_t firstMs; uint32_t periodMs; uint32_t leadMs; uint32_t afterMs; Who who; };
+
 // Line hazard for a breath that sweeps a straight corridor (Onyxia's Deep Breath). When <enemy> is casting <castSpell> (or carries
 // it as an aura), or is flying at >= 2.5x run speed (the breath pass itself), the corridor is latched for about 10 seconds: it
 // starts 10 yards behind the enemy's position and facing at that moment, runs <length> yards straight ahead and is <halfWidth>
@@ -289,6 +294,10 @@ struct ResistPotion { uint32_t enemy; uint32_t item; Who who; };
 // 3200 health dies of its own bomb). The boss-wide ResistPotion order is spent by the first Inferno before the next bomb lands.
 struct CarrierPotion { uint32_t aura; uint32_t item; };
 
+// A member that carries <aura> uses <item> as soon as it can act, whatever the boss order says: the aura is one no dispel removes and the
+// item is its cure (Brood Affliction: Bronze, only Hourglass Sand takes it off). The kit stocks it (Classic::RaidConsumable::combat).
+struct CureItem { uint32_t aura; uint32_t item; };
+
 // Phase windows (hpMax / hpMin on AvoidFrontal, Spread, Stand, AvoidEnemy, StayNear): the rule only applies while the enemy's
 // health percent is within [hpMin, hpMax] (Onyxia's Fireball spread is phase 2: 65..40). Defaults 100 / 0 = always.
 
@@ -319,6 +328,7 @@ struct RaidRules
     std::vector<AvoidEnemy> avoidEnemy;
     std::vector<AvoidOnStacks> avoidOnStacks;
     std::vector<BreakSight> breakSight;
+    std::vector<HideBeforeBreath> hideBeforeBreath;
     std::vector<AvoidBreath> avoidBreath;
     std::vector<BreathSafe> breathSafe;
     std::vector<MeleeSoak> meleeSoak;
@@ -334,6 +344,7 @@ struct RaidRules
     std::vector<StandFlank> standFlank;
     std::vector<ResistPotion> resistPotion;
     std::vector<CarrierPotion> carrierPotion;
+    std::vector<CureItem> cureItem;
     std::vector<uint32_t> retaunt;   // bosses whose threat a Blink, a fear or a threat reset (Ragnaros' Wrath) can leave on a non-tank: a tank taunts them back at once (ElectRetaunt)
     std::vector<ThreatDrop> threatDrop;   // bosses that cut their tank's threat on a schedule (ThreatDropFraction)
     std::vector<uint32_t> noDispel;   // auras nobody removes (removing them hurts: Wyvern Sting, Mutating Injection)

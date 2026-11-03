@@ -21,13 +21,13 @@ $ClientInstallHint = 'Update the game with Battle.net (WoW Forever), then choose
 function Get-ClientProducts([string]$ClientDir) {
     if (-not $ClientDir) { return @() }
     $base = $ClientDir; $only = $null
-    if (-not (Test-Path (Join-Path $base '.build.info'))) {
+    if (-not (Test-Path -LiteralPath (Join-Path $base '.build.info'))) {
         $only = Split-Path $ClientDir -Leaf
         $base = Split-Path $ClientDir -Parent
     }
     $info = Join-Path $base '.build.info'
-    if (-not (Test-Path $info)) { return @() }
-    $lines = @(Get-Content $info -ErrorAction SilentlyContinue)
+    if (-not (Test-Path -LiteralPath $info)) { return @() }
+    $lines = @(Get-Content -LiteralPath $info -ErrorAction SilentlyContinue)
     if ($lines.Count -lt 2) { return @() }
     $col = @(@($lines[0] -split '\|') | ForEach-Object { ($_ -split '!')[0] })
     $iv = [array]::IndexOf($col, 'Version'); $ip = [array]::IndexOf($col, 'Product')
@@ -39,7 +39,7 @@ function Get-ClientProducts([string]$ClientDir) {
         $dir = $null
         if ($ClientLayouts.Contains($product)) {
             $d = Join-Path $base $ClientLayouts[$product][0]
-            if (Test-Path (Join-Path $d $ClientLayouts[$product][1])) { $dir = $d }
+            if (Test-Path -LiteralPath (Join-Path $d $ClientLayouts[$product][1])) { $dir = $d }
         }
         if ($only -and $dir -and (Split-Path $dir -Leaf) -ne $only) { continue }
         [pscustomobject]@{ Product = $product; Build = $build; Dir = $dir }
@@ -227,7 +227,7 @@ function Get-ClientTies($Sorted) {
 # config\client.txt: the client folder on the first line; a second line "picked" when the player chose it (then it is never replaced).
 function Get-SavedClient([string]$Root) {
     $f = Join-Path $Root 'config\client.txt'
-    $l = @(Get-Content $f -TotalCount 2 -ErrorAction SilentlyContinue)
+    $l = @(Get-Content -LiteralPath $f -TotalCount 2 -ErrorAction SilentlyContinue)
     if (-not $l.Count -or -not $l[0].Trim()) { return $null }
     [pscustomobject]@{ Dir = $l[0].Trim(); Picked = ($l.Count -gt 1 -and $l[1].Trim() -eq 'picked') }
 }
@@ -262,10 +262,28 @@ function Test-ClientFolder([string]$Root, [string]$ClientDir) {
 function Test-ClientBuild([string]$Root) {
     try {
         $saved = Join-Path $Root 'config\client.txt'
-        if (-not (Test-Path $saved)) { return }
-        $dir = (Get-Content $saved -TotalCount 1).Trim()
+        if (-not (Test-Path -LiteralPath $saved)) { return }
+        $dir = (Get-Content -LiteralPath $saved -TotalCount 1).Trim()
         $msg = Test-ClientFolder $Root $dir
         if ($msg) { Write-Warning "$msg With another build you can log in to Battle.net but the realm list stays empty (no realms online)." }
         else { $p = Select-ClientProduct $Root $dir; if ($p) { "Using the game in $($p.Dir) (build $($p.Build)), which this server accepts." } }
     } catch { }
+}
+
+# The files worldserver needs for the six start zones before it starts at all (World.cpp: "Unable to load map and vmap data for
+# starting zones - server shutting down!"): the map tile and the vmap tile of each, plus the vmap trees of maps 0 and 1. Returns the
+# missing ones (relative to $DataDir, e.g. server\data); none missing = an empty list. An extraction that stopped part way (ibragim19990:
+# mapextractor exited with code 1, 2200 maps written but 0001_33_39.map missing) must never count as complete.
+function Get-MissingStartZoneData([string]$DataDir) {
+    $missing = @()
+    foreach ($m in '0000', '0001') {
+        if (-not (Test-Path -LiteralPath (Join-Path $DataDir "vmaps\$m\$m.vmtree"))) { $missing += "vmaps\$m\$m.vmtree" }
+    }
+    # tile = map_gx_gy of the start positions World.cpp checks (Coldridge, Northshire, Valley of Trials, Deathknell, Shadowglen, Camp Narache)
+    foreach ($t in '0000_43_31', '0000_48_32', '0001_33_39', '0000_28_28', '0001_12_30', '0001_37_32') {
+        $m = $t.Substring(0, 4)
+        if (-not (Test-Path -LiteralPath (Join-Path $DataDir "maps\$t.map"))) { $missing += "maps\$t.map" }
+        if (-not (Test-Path -LiteralPath (Join-Path $DataDir "vmaps\$m\$t.vmtile"))) { $missing += "vmaps\$m\$t.vmtile" }
+    }
+    $missing   # callers wrap the call in @( ) so none or one missing file is still a list
 }

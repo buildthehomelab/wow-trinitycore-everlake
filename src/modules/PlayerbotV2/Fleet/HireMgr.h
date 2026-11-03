@@ -34,6 +34,8 @@ public:
     // The server's settings, read from the config each call (a `.reload config` takes effect at once).
     static Hire::Mode ConfigMode();
     static Hire::Prices ConfigPrices();
+    // Each grade's gear and health and what each kind of broker sells (Playerbot.Hire.<Grade>.Gear / .HealthPct, <Broker>.Sells).
+    static Hire::Rules ConfigRules();
     static float BrokerRange();
     static uint32 MaxPerAccount();          // 0 = no limit
     static uint32 LegendMaxPerAccount();    // 0 = no limit
@@ -54,6 +56,11 @@ public:
 
     // The gear mode a companion wears under hired mode (Gear::Owned::GearMode value), -1 when the owner's own choice stands.
     int GearModeOverride(BotId bot, uint32 owner_account) const;
+
+    // Gives a hired bot its grade's health (Playerbot.Hire.<Grade>.HealthPct) on top of what its class, level and gear give it, or
+    // takes an old bonus off again (the grade's percent changed, or the bot is no longer hired). Cheap when nothing changed; called
+    // when a companion is set up and on its regular upkeep. World thread.
+    void ApplyHealth(Player* bot);
 
     // The broker NPC within Playerbot.Hire.BrokerRange of `player` that sells `grade`, or nullptr. World thread.
     Creature* NearbyBroker(Player* player, Hire::Grade grade) const;
@@ -76,6 +83,10 @@ private:
     std::unordered_map<BotId, HireRecord> hired_;
     std::unordered_set<uint32> opted_in_;
     std::unordered_map<BotId, uint32> called_ms_;
+    // The health given by ApplyHealth, per bot, with the Player it was given to (a bot that logged out and in again is a new Player
+    // object without it). World thread only.
+    struct HealthBonus { Player const* who = nullptr; float amount = 0.0f; };
+    std::unordered_map<BotId, HealthBonus> health_bonus_;
 };
 
 }  // namespace Playerbot::V2::Fleet

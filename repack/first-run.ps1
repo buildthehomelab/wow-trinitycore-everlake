@@ -1,6 +1,6 @@
 # One-time database setup for the portable MySQL (port 3307, local only, so it never clashes with another MySQL).
 # Creates the data dir, a random password for the 'trinity' user (stored in secrets\mysql.txt), the databases,
-# and imports the world data from the db zip when it is present (otherwise worldserver imports it on first start, slower).
+# and imports the world data from sql\world.sql and sql\hotfixes.sql (the full zip carries them; an install without them stops).
 # Then writes the configs (make-tester-configs.ps1). Safe to re-run: it skips what exists.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
@@ -64,6 +64,12 @@ foreach ($db in 'world', 'hotfixes') {
         cmd /c "`"$mysqlBin\mysql.exe`" --defaults-file=`"$root\config\my.ini`" --default-character-set=utf8mb4 -u root $db < `"$dump`""
         if ($LASTEXITCODE) { throw "Importing $db failed (the error is shown above). Run Install.cmd again; if it stops here again, post repack\install.log in our Discord." }
     }
+}
+# Without the dump the world stays empty, and the worldserver's own import needs a TDB_full_world_forever file that no package
+# carries: it closed at its first start with "Could not populate the World database" (Bebib1, 2026-10-31). Say it here instead.
+$haveWorld = & "$mysqlBin\mysql.exe" "--defaults-file=$root\config\my.ini" -u root -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='world'"
+if ([int]$haveWorld -eq 0) {
+    throw "The world database is empty and $root\sql\world.sql is missing, so the server cannot start. Unpack the full WoW-Forever-Bots zip again into this folder (choose to replace the files; your characters are kept), make sure sql\world.sql is there, then run Install.cmd again."
 }
 # Shared bot database (roads, talent builds, names ...): the worldserver reads it while loading, before any migration runs,
 # so it must exist before the first start. Only imported when still empty.

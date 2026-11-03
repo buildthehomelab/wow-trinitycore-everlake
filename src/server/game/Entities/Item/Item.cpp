@@ -255,6 +255,14 @@ bool ItemCanGoIntoBag(ItemTemplate const* pProto, ItemTemplate const* pBagProto)
     switch (pBagProto->GetClass())
     {
         case ITEM_CLASS_CONTAINER:
+            // Classic 1.60: a profession bag lists the families it holds in its own BagFamily. The skinning satchel (277114,
+            // a leatherworking container) holds family 0x2000000, which is on every leather, hide and scale and on the
+            // skinning tools, while the old leatherworking bit 0x8 is only on a few of them. So when the bag names its
+            // families, the item has to share one of them (the herb, mining, enchanting and soul bags name the same bit as below).
+            if (pBagProto->GetSubClass() != ITEM_SUBCLASS_CONTAINER && pBagProto->GetSubClass() != ITEM_SUBCLASS_REAGENT_CONTAINER
+                && pBagProto->GetBagFamily())
+                return (pProto->GetBagFamily() & pBagProto->GetBagFamily()) != 0;
+
             switch (pBagProto->GetSubClass())
             {
                 case ITEM_SUBCLASS_CONTAINER:

@@ -914,6 +914,39 @@ struct classic_go_oeuf_raz : public GameObjectAI
     }
 };
 
+/*######
+## go_chromaggus_lever
+######*/
+
+// The lever opens Chromaggus's side portcullis; the boss script sees the open door and walks out. The template used to keep the
+// stock go_chromaggus_lever script, which belongs to the stock instance script and does nothing on our map, so a pull of the lever
+// left the door shut and Chromaggus unattackable (scenario bwl_chromaggus 2026-10-28, "still not attackable 30 s after 179148").
+// OnLootStateChanged covers every way in: a player click, a bot use, or a script calling Use().
+struct classic_go_chromaggus_lever : public GameObjectAI
+{
+    classic_go_chromaggus_lever(GameObject* go) : GameObjectAI(go) { }
+
+    void OnLootStateChanged(uint32 state, Unit* unit) override
+    {
+        if (state != GO_ACTIVATED)
+            return;
+
+        InstanceScript* pInstance = me->GetInstanceScript();
+        if (!pInstance)
+            return;
+
+        GameObject* pDoor = me->GetMap()->GetGameObject(pInstance->GetGuidData(CLASSIC_BWL_DATA_DOOR_CHROMAGGUS_SIDE));
+        if (!pDoor)
+        {
+            TC_LOG_INFO("classic.bwl.lever", "Chromaggus lever used by {}: side door not loaded", unit ? unit->GetName() : "nobody");
+            return;
+        }
+
+        pDoor->SetGoState(GO_STATE_ACTIVE);
+        TC_LOG_INFO("classic.bwl.lever", "Chromaggus lever used by {}: side door opened", unit ? unit->GetName() : "nobody");
+    }
+};
+
 /*###############
 ## go_suppression
 ################*/
@@ -1383,6 +1416,7 @@ void AddSC_classic_instance_blackwing_lair()
     RegisterGameObjectAI(classic_go_orbe_domination);
     RegisterGameObjectAI(classic_go_oeuf_raz);
     RegisterGameObjectAI(classic_go_suppression);
+    RegisterGameObjectAI(classic_go_chromaggus_lever);
     RegisterSpellScript(classic_spell_bwl_suppression_aura);
     new classic_at_orb_of_command();
     new classic_at_enter_vael_room();

@@ -56,6 +56,24 @@ TEST_CASE("GroupFight: anyone in the group fighting puts every bot in the fight"
     CHECK(Decide(in) == Mode::Off);
 }
 
+TEST_CASE("GroupFight: the leader's combat flag with nothing near him ends the fight after a few seconds", "[groupfight]")
+{
+    // KailON 0.1.27.2: a Southsea Privateer fled 94 y and kept him flagged; his bots stood still for a minute.
+    Inputs in = Fighting();
+    in.leader_fight_near = false;
+    in.leader_flag_only_ms = 0;
+    CHECK(Decide(in) == Mode::Fight);                       // just started: the mob may still be on its way
+    in.leader_flag_only_ms = kLeaderFlagOnlyMs - 1;
+    CHECK(Decide(in) == Mode::Fight);
+    in.leader_flag_only_ms = kLeaderFlagOnlyMs;
+    CHECK(Decide(in) == Mode::Off);                         // nothing near him: the bots follow again
+    in.leader_fight_near = true;
+    CHECK(Decide(in) == Mode::Fight);                       // the mob comes back: they fight
+    in.leader_fight_near = false;
+    in.member_fighting_near_leader = true;
+    CHECK(Decide(in) == Mode::Fight);                       // a member near him still fights
+}
+
 TEST_CASE("GroupFight: off without a player leader, in a battleground, on a raid boss, or dead", "[groupfight]")
 {
     Inputs in = Fighting();

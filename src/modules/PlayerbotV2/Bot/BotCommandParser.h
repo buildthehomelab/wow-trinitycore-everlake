@@ -8,7 +8,9 @@
 
 #include "BotTypes.h"
 #include <string>
+#include <vector>
 
+class Group;
 class Player;
 
 namespace Playerbot {
@@ -56,6 +58,11 @@ public:
     // Drop the owner's "follow" order on `bot` (BotAI::owner_follow_order) and log [owner_order]
     // when it was set: the party-chat "pull" hands the fight back to the non-tanks this way.
     static void ReleaseOwnerFollowOrder(Player const* sender, Player const* bot, char const* why);
+
+    // The group's marker assignments ("assign <name> <marker> [tank|cc|kill]"), highest marker first: tank marks, then each
+    // bot's kill and cc marks. Read by the "assign list" order and the add-on's hidden ASSIGN_REQ. World thread.
+    struct AssignRow { uint8 marker; std::string name; char const* role; };
+    static std::vector<AssignRow> AssignList(Group* grp);
 
 private:
     // The command table; DispatchSingle wraps it with the [owner_order] log line.

@@ -1107,6 +1107,8 @@ bool DungeonLoopRequeueFire(BotSnapshotView const& s, BotAI& ai,
 // Outgoing invite: solo bot >= L25 in a questing area (no rest bonus =
 // not in a city/inn) invites a same-faction same-bracket nearby player
 // to a group. Per-target 5-min cooldown via InviteOther absorbs declines.
+// Real players (not bots) are left out unless Playerbot.Behavior.InvitePassingPlayers = 1
+// (chris 2026-11-02: bots should not invite you as you walk past; a player asks by whispering "invite").
 bool InviteNearbyPlayerGate(BotSnapshotView const& s, BotAI&,
                             GroupSnapshotView const&, uint32)
 {
@@ -1131,6 +1133,7 @@ bool InviteNearbyPlayerFire(BotSnapshotView const& s, BotAI& ai,
                             BotIntentEmitter& emit, uint32)
 {
     const uint32 inv_now_ms = GameTime::GetGameTimeMS();
+    const bool invite_players = Services::Config().behavior_invite_passing_players();
     for (auto const& u : s.raw().combat.nearby_friends)
     {
         if (u.guid.IsCreature()) continue;
@@ -1138,6 +1141,7 @@ bool InviteNearbyPlayerFire(BotSnapshotView const& s, BotAI& ai,
         if (u.guid == s.raw().guid) continue;
         if (u.is_in_group) continue;
         if (Pool::IsScenarioBot(u.guid.GetCounter())) continue;   // a test squad member is not a pickup-party recruit
+        if (!invite_players && !Services::Registry().has(u.guid.GetCounter())) continue;   // a real player walking past
         if (!u.victim.IsEmpty()) continue;
         const int dlvl = int(u.level) - int(s.level());
         if (dlvl > 5 || dlvl < -5) continue;

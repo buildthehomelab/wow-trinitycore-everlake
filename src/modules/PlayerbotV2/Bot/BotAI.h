@@ -543,6 +543,10 @@ public:
     // Owner "aoe off" (AoeDeny.h): no spell that hits more than one enemy until "aoe on". Mirrored into the snapshot.
     bool       aoe_denied() const { return aoe_denied_; }
     void       set_aoe_denied(bool b) { aoe_denied_ = b; }
+    // Owner "focus heal <name>, <name>": a healer heals only these players (and itself) until "focus heal off". Empty = everyone.
+    // Memory only. Written by the whisper handler (world thread), copied into the snapshot by the builder.
+    std::vector<ObjectGuid> heal_only() const { std::lock_guard<std::mutex> lk(heal_only_mtx_); return heal_only_; }
+    void       set_heal_only(std::vector<ObjectGuid> g) { std::lock_guard<std::mutex> lk(heal_only_mtx_); heal_only_ = std::move(g); }
 
     // The owner's spell picks for this bot ("prefer blessing might", "pet off", "stealth off"; OwnerPicks.h). Memory only: a relog
     // clears them. Written by the whisper handler (world thread), mirrored into the snapshot and the group member summary.
@@ -670,6 +674,15 @@ public:
         clear_follow_drop();
     }
     bool follow_drop_blocked(uint32 now_ms) const { return now_ms < follow_drop_block_until_ms_.load(std::memory_order_relaxed); }
+
+    // Owner's steps (Fleet/OwnerTrail.h, PlayerbotV2.cpp DriveOwnerTrail): the world tick is walking the bot along the way its player went
+    // (the run up the Blackrock Mountain chains and the jumps to the Spire ledge, where the navmesh has no route). Each move renews the
+    // hold; while it lasts the bot's own tick moves nothing, so the follow does not pull it back under the chain. Written on the world
+    // thread, read by the bot worker.
+    static constexpr uint32 kOwnerStepsHoldMs = 1500;
+    bool owner_steps_active(uint32 now_ms) const { return now_ms < owner_steps_until_ms_.load(std::memory_order_relaxed); }
+    void hold_for_owner_steps(uint32 now_ms) { owner_steps_until_ms_.store(now_ms + kOwnerStepsHoldMs, std::memory_order_relaxed); }
+    void clear_owner_steps() { owner_steps_until_ms_.store(0, std::memory_order_relaxed); }
 
     // Owner said flee: run to them without fighting back until the window ends (DispatchInCombat).
     static constexpr uint32 kFleeMs = 8000;
@@ -944,6 +957,7 @@ public:
         bool   opener_unavail = false;        // ranged opener unusable (NO_AMMO) - taunt / plain engage instead
         bool   opener_failed_logged = false;  // the "[pull_back] opener did not engage" line went out
         bool   stand_pull     = false;        // approach abandoned: pull from where the tank stands
+        bool   spot_refused   = false;        // the pull spot on the line to the return point has no path: the straight line is used
         uint8  retakes        = 0;            // Hold: re-taunt / run-back attempts
         uint32 retake_ms      = 0;            // Hold: last attempt
     };
@@ -3311,6 +3325,7 @@ private:
     CombatIdleState combat_idle_;
     std::atomic<GroupFight::Mode> group_fight_mode_{GroupFight::Mode::Off};   // the bot worker writes, the scenario sample reads
     uint32 group_fight_since_ms_ = 0;
+    uint32 leader_flag_only_since_ms_ = 0;   // the leader in combat with nothing near him to fight since (GroupFight::kLeaderFlagOnlyMs)
     std::atomic<uint32> group_idle_since_ms_{0};
     uint32 group_idle_logged_ms_ = 0;
     uint32 group_fight_pick_ms_ = 0;
@@ -3509,6 +3524,8 @@ private:
     uint8          last_train_level_ = 0;
     bool           aoe_preference_   = false;
     bool           aoe_denied_       = false;
+    mutable std::mutex      heal_only_mtx_;
+    std::vector<ObjectGuid> heal_only_;
     OwnerPicks::Picks owner_picks_;
     // Owner-squad-control state (Phase C of OWNER_SQUAD_CONTROL_PLAN.md).
     // The owner's orders to this bot, all in one place. Written by the chat handlers (world thread), read by the bot worker.
@@ -3541,6 +3558,7 @@ private:
     std::atomic<uint32_t> follow_drop_since_ms_{0};
     std::atomic<uint32_t> follow_drop_fine_until_ms_{0};
     std::atomic<uint32_t> follow_drop_block_until_ms_{0};
+    std::atomic<uint32_t> owner_steps_until_ms_{0};
     bool           raid_map_party_hold_   = false;
     bool           owner_hold_            = false;   // an owner Stay / Hold is on: the autopilot walks nobody (update_dungeon_autopilot_hold)
     bool           human_lead_hold_       = false;   // see human_lead_hold()

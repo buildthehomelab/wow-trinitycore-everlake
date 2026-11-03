@@ -6,6 +6,16 @@
 param([string]$Client)
 $root = Split-Path $PSScriptRoot -Parent
 $marker = Join-Path $root 'server\data\.extract-complete'
+. (Join-Path $PSScriptRoot 'ClientBuild.ps1')
+# a marker is only believed when the start-zone files worldserver checks first are there; otherwise the server would stop at once with
+# "Unable to load map and vmap data for starting zones", so the marker is removed and the data is built again below
+if (Test-Path $marker) {
+    $gone = @(Get-MissingStartZoneData (Join-Path $root 'server\data'))
+    if ($gone.Count) {
+        Write-Host ("The game data was marked complete, but these files are missing: " + ($gone -join ', ') + '. It is built again now.') -ForegroundColor Yellow
+        Remove-Item $marker -Force -ErrorAction SilentlyContinue
+    }
+}
 if (Test-Path $marker) {
     # the client may have been patched since the data was built: bring the server's DB2 tables to its build (maps stay)
     $null = & (Join-Path $PSScriptRoot 'refresh-db2.ps1') -Client $Client
@@ -27,7 +37,7 @@ if ($mm -gt 0) { Write-Host "$mm maps already have pathing data; only the missin
 # Then nothing is rebuilt from scratch: check each map in server\data and build only the ones that have game files but no navigation mesh.
 $data = Join-Path $root 'server\data'
 $gen = Join-Path $root 'server\mmaps_generator.exe'
-if ((Test-Path (Join-Path $data 'maps')) -and (Test-Path (Join-Path $data 'vmaps')) -and (Test-Path (Join-Path $data 'dbc')) -and $mm -gt 0 -and (Test-Path $gen)) {
+if ((Test-Path (Join-Path $data 'maps')) -and (Test-Path (Join-Path $data 'vmaps')) -and (Test-Path (Join-Path $data 'dbc')) -and $mm -gt 0 -and (Test-Path $gen) -and -not @(Get-MissingStartZoneData $data).Count) {
     $ids = @()
     foreach ($f in Get-ChildItem (Join-Path $data 'maps') -Filter '*.tilelist' -ErrorAction SilentlyContinue) { if ($f.Name -match '^(\d{4})') { $ids += [int]$Matches[1] } }
     foreach ($d in Get-ChildItem (Join-Path $data 'vmaps') -Directory -ErrorAction SilentlyContinue) { if ($d.Name -match '^\d+$') { $ids += [int]$d.Name } }

@@ -52,7 +52,7 @@ struct ScenarioSample
     std::uint32_t group_idle_ms = 0;       // how long it has been idle in its group's fight (BotAI::group_idle_ms); 0 = acting / no fight
 };
 
-enum class ScenarioFailKind : std::uint8_t { Idle, Stray, OutOfBounds, WrongMap, HealerOom, Death, GroupStalled, Wipe, Timeout, SetupFailed, GroupBroken, BossReset, DpsHold, HealerNoRest, SupportMissing, GroupIdle };
+enum class ScenarioFailKind : std::uint8_t { Idle, Stray, OutOfBounds, WrongMap, HealerOom, Death, GroupStalled, Wipe, Timeout, SetupFailed, GroupBroken, BossReset, DpsHold, HealerNoRest, SupportMissing, GroupIdle, FollowLost };
 
 inline char const* ToString(ScenarioFailKind k)
 {
@@ -74,6 +74,7 @@ inline char const* ToString(ScenarioFailKind k)
         case ScenarioFailKind::DpsHold:      return "dps_hold";
         case ScenarioFailKind::SupportMissing: return "support_missing";
         case ScenarioFailKind::GroupIdle:    return "group_idle";
+        case ScenarioFailKind::FollowLost:   return "follow_lost";
     }
     return "?";
 }
@@ -483,6 +484,8 @@ public:
     }
 
     void NoteSetupFailure(std::uint32_t now_ms, std::string const& bot, std::string const& why) { Fail(ScenarioFailKind::SetupFailed, bot, why, now_ms); }
+    // FollowRoute: a member that did not reach the stand-in at a route point in time.
+    void NoteFollowLost(std::uint32_t now_ms, std::string const& bot, std::string const& why) { Fail(ScenarioFailKind::FollowLost, bot, why, now_ms); }
     void NoteTimeout(std::uint32_t now_ms, std::string const& what) { Fail(ScenarioFailKind::Timeout, "", what, now_ms); }
     // A support job the content calls for (a Tranquilizing Shot on Magmadar's Frenzy, a curse removed in Lucifron's room) was never done.
     void NoteSupportMissing(std::uint32_t now_ms, std::string const& what) { Fail(ScenarioFailKind::SupportMissing, "", what, now_ms); }
@@ -515,6 +518,24 @@ public:
         return lines;
     }
     bool passed(bool goal_reached) const { return goal_reached && failures_.empty(); }
+    // A run that reached its goal passes (the owner, 2026-11-02: "if the dungeon is completed then it's a pass, not a fail because a bot ran
+    // oom or died"): what the bots did wrong on the way (deaths, mana, holds, strays) moves to the warnings. The ends of a run (wipe, timeout,
+    // setup, broken group, boss reset, stall) stay failures.
+    void DemoteToWarningsOnGoal()
+    {
+        std::vector<ScenarioFailure> kept;
+        for (ScenarioFailure& f : failures_)
+        {
+            bool const ends_run = f.kind == ScenarioFailKind::Wipe || f.kind == ScenarioFailKind::Timeout || f.kind == ScenarioFailKind::SetupFailed ||
+                                  f.kind == ScenarioFailKind::GroupBroken || f.kind == ScenarioFailKind::BossReset || f.kind == ScenarioFailKind::GroupStalled ||
+                                  f.kind == ScenarioFailKind::WrongMap || f.kind == ScenarioFailKind::SupportMissing;   // a wrong map or an unmet support check is not about the bots' play
+            if (ends_run)
+                kept.push_back(std::move(f));
+            else
+                warnings_.push_back(std::move(f));
+        }
+        failures_ = std::move(kept);
+    }
     // The run cannot usefully go on: enough members have died.
     // A run whose pass bar is the kill is never ended by a death count, whatever max_deaths says.
     bool terminal() const { return boss_reset_ || (!limits_.kill_is_pass && limits_.max_deaths != 0 && deaths_ >= limits_.max_deaths); }

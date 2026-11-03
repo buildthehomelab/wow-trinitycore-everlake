@@ -979,9 +979,12 @@ bool Pet::ModifyLoyalty(int32 addvalue)
     {
         m_loyaltyLevel = loyaltyLevel;
         UpdateTrainingPoints();
-        if (Player* owner = GetOwner())
-            owner->UpdateStablePetLoyalty(m_charmInfo->GetPetNumber(), m_loyaltyLevel, m_loyaltyPoints);
     }
+
+    // the client reads loyalty only from the stable pet values: sent on level changes alone, the points it shows never moved
+    // between loyalty levels ("pets do not gain loyalty experience")
+    if (Player* owner = GetOwner())
+        owner->UpdateStablePetLoyalty(m_charmInfo->GetPetNumber(), m_loyaltyLevel, m_loyaltyPoints);
     return true;
 }
 

@@ -1,5 +1,6 @@
 #include "HireMgr.h"
 #include "../Bot/ClassTables.h"
+#include "../Bot/Gear/OwnedGearPolicy.h"
 #include "Cell.h"
 #include "CellImpl.h"
 #include "Chat.h"
@@ -18,6 +19,8 @@
 #include "WorldSession.h"
 #include "OwnerRegistry.h"
 #include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <list>
 #include <mutex>
 
@@ -57,6 +60,46 @@ Hire::Prices HireMgr::ConfigPrices()
     p.grade[uint8(Grade::Legend)].raid     = PriceKey("Playerbot.Hire.Legend.RaidPrice",     p.grade[uint8(Grade::Legend)].raid);
     p.upkeep_pct = uint32(std::clamp(sConfigMgr->GetIntDefault("Playerbot.Hire.UpkeepPct", int32(p.upkeep_pct), true), 0, 1000));
     return p;
+}
+
+Hire::Rules HireMgr::ConfigRules()
+{
+    Hire::Rules r;
+    using Hire::Grade;
+    struct GradeKeys { Grade grade; char const* gear; char const* health; };
+    static constexpr GradeKeys kGrades[] = {
+        { Grade::Sellsword, "Playerbot.Hire.Sellsword.Gear", "Playerbot.Hire.Sellsword.HealthPct" },
+        { Grade::Veteran,   "Playerbot.Hire.Veteran.Gear",   "Playerbot.Hire.Veteran.HealthPct" },
+        { Grade::Legend,    "Playerbot.Hire.Legend.Gear",    "Playerbot.Hire.Legend.HealthPct" },
+    };
+    for (GradeKeys const& k : kGrades)
+    {
+        uint8 const g = uint8(k.grade);
+        std::string word = sConfigMgr->GetStringDefault(k.gear, "", true);
+        std::transform(word.begin(), word.end(), word.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        Gear::Owned::GearMode mode;
+        if (!word.empty() && Gear::Owned::ParseGearMode(word, mode))
+            r.gear_mode[g] = int(mode);
+        else if (!word.empty())
+            TC_LOG_ERROR("playerbot.v2", "[hire] {} = \"{}\" is no gear mode (match, best, bis, t1, t2, t3): the default stays", k.gear, word);
+        int32 const pct = sConfigMgr->GetIntDefault(k.health, int32(r.health_pct[g]), true);
+        r.health_pct[g] = uint32(std::clamp<int32>(pct, int32(Hire::kMinHealthPct), int32(Hire::kMaxHealthPct)));
+    }
+    struct BrokerKey { Hire::Broker broker; char const* key; };
+    static constexpr BrokerKey kBrokers[] = {
+        { Hire::Broker::Inn,         "Playerbot.Hire.Inn.Sells" },
+        { Hire::Broker::Capital,     "Playerbot.Hire.Capital.Sells" },
+        { Hire::Broker::BlackMarket, "Playerbot.Hire.BlackMarket.Sells" },
+    };
+    for (BrokerKey const& k : kBrokers)
+    {
+        // A missing line keeps the default; a line that is there (even empty or "none") is the server owner's list.
+        std::string const unset = "\x01";
+        std::string const list = sConfigMgr->GetStringDefault(k.key, unset, true);
+        if (list != unset)
+            r.sells[uint8(k.broker)] = Hire::ParseGradeList(list);
+    }
+    return r;
 }
 
 float HireMgr::BrokerRange()
@@ -177,7 +220,7 @@ int HireMgr::GearModeOverride(BotId bot, uint32 owner_account) const
         if (uint64 const owner_guid = Services::Owners().OwnerCharacter(bot))
             if (Player const* owner = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(owner_guid)))
                 must = MustHire(owner);
-    return Hire::GearModeFor(grade, must);
+    return Hire::GearModeFor(ConfigRules(), grade, must);
 }
 
 Creature* HireMgr::NearbyBroker(Player* player, Hire::Grade grade) const
@@ -185,14 +228,49 @@ Creature* HireMgr::NearbyBroker(Player* player, Hire::Grade grade) const
     if (!player || !player->IsInWorld())
         return nullptr;
     float const range = BrokerRange();
+    Hire::Rules const rules = ConfigRules();
     std::list<Creature*> near;
     Trinity::AnyUnitInObjectRangeCheck check(player, range);
     Trinity::CreatureListSearcher<Trinity::AnyUnitInObjectRangeCheck> searcher(player, near, check);
     Cell::VisitGridObjects(player, searcher, range);
     for (Creature* c : near)
-        if (c && c->IsAlive() && Hire::BrokerSells(Hire::BrokerOfEntry(c->GetEntry()), grade))
+        if (c && c->IsAlive() && Hire::BrokerSells(rules, Hire::BrokerOfEntry(c->GetEntry()), grade))
             return c;
     return nullptr;
+}
+
+void HireMgr::ApplyHealth(Player* bot)
+{
+    if (!bot || !bot->IsInWorld())
+        return;
+    BotId const id = bot->GetGUID().GetCounter();
+    float given = 0.0f;
+    if (auto const it = health_bonus_.find(id); it != health_bonus_.end() && it->second.who == bot)
+        given = it->second.amount;
+    uint32 const pct = Hire::HealthPctFor(ConfigRules(), RecordOf(id).grade);
+    // The bot's health without the bonus, at its class, level and gear now (the bonus follows a level-up or new gear here).
+    float const normal = std::max(float(bot->GetMaxHealth()) - given, 1.0f);
+    float want = float(Hire::HealthBonusFor(uint64(normal), pct));
+    if (normal + want < 1.0f)
+        want = 1.0f - normal;
+    if (std::abs(want - given) < 1.0f)
+    {
+        if (given == 0.0f)
+            health_bonus_.erase(id);
+        return;
+    }
+    bool const was_full = bot->IsAlive() && bot->GetHealth() >= bot->GetMaxHealth();
+    if (given != 0.0f)
+        bot->HandleStatFlatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, given, false);
+    if (want != 0.0f)
+        bot->HandleStatFlatModifier(UNIT_MOD_HEALTH, TOTAL_VALUE, want, true);
+    if (was_full && !bot->IsInCombat())
+        bot->SetFullHealth();
+    if (want != 0.0f)
+        health_bonus_[id] = HealthBonus{ bot, want };
+    else
+        health_bonus_.erase(id);
+    TC_LOG_DEBUG("playerbot.v2", "[hire] {} health {}% ({:+.0f}, max {})", bot->GetName(), pct, want, bot->GetMaxHealth());
 }
 
 bool HireMgr::RaidPlace(Player* player)

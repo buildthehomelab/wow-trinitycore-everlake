@@ -101,6 +101,10 @@ uint32 ResistPotionItem(Resist r);
 // in the bags, off cooldown and its protection is not already up. 0 = none.
 uint32 PickResistPotion(BotSnapshotView const& s);
 
+// In an instance fight: the item that cures an aura the bot carries (RaidRules::cureItem, Hourglass Sand on Brood Affliction: Bronze), when the
+// bot can act, has it in the bags and it is off cooldown. 0 = none. A carrier with no item is logged ([raid_cure], once per 10 s).
+uint32 PickCureItem(BotSnapshotView const& s);
+
 // Raid resistance gear (Playerbot.Raid.ResistGear): the school (SpellSchools value) of the boss a grouped bot stands before: the nearest living
 // boss within the bot's 40 yd scan whose RaidRules::resistPotion row names a Greater Protection Potion, on a map the swap runs on
 // (Bot/ResistGear.h). 0 = none: the bot wears its own gear.

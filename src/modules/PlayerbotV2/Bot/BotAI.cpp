@@ -649,6 +649,13 @@ void BotAI::tick(BotSnapshotView snapshot,
     // state reads dungeon_active() this tick.
     update_dungeon_autopilot_hold(snapshot, group);
 
+    // Owner's steps: the world tick walks the bot up the way its player went (chains, jumps); nothing here may move it meanwhile.
+    if (owner_steps_active(GameTime::GetGameTimeMS()))
+    {
+        set_last_rule_fired("owner_steps");
+        return;
+    }
+
     // Follow-drop: the owner dropped or jumped to a floor 4+ y below; the walk to the ledge and the flight are not interruptible.
     if (States::HonorFollowDrop(snapshot, *this, group, emit))
         return;
@@ -766,6 +773,25 @@ void BotAI::update_group_fight(BotSnapshotView s, GroupSnapshotView g)
             if (!m.online || !m.is_alive || !m.in_combat || m.map_id != s.map_id() || m.guid == s.guid() || m.guid == leader->guid) continue;
             if (std::hypot(m.x - leader->x, m.y - leader->y) <= GroupFight::kGroupFightYd) { in.member_fighting_near_leader = true; break; }
         }
+        // Is there anything near the leader to fight? (GroupFight::kLeaderFlagOnlyMs)
+        if (in.leader_in_combat)
+        {
+            in.leader_fight_near = false;
+            auto near_leader = [&](NearbyUnit const& u)
+            {
+                if (u.hp <= 0 || !u.unit_in_combat) return false;
+                ThreatVictim const k = ThreatVictim(u.victim_kind);
+                return (k == ThreatVictim::Me || k == ThreatVictim::Tank || k == ThreatVictim::Member || k == ThreatVictim::MemberPet) &&
+                       std::hypot(u.x - leader->x, u.y - leader->y) <= GroupFight::kGroupFightYd;
+            };
+            for (NearbyUnit const& u : s.raw().combat.attackers)      if (!in.leader_fight_near && near_leader(u)) in.leader_fight_near = true;
+            for (NearbyUnit const& u : s.raw().combat.nearby_enemies) if (!in.leader_fight_near && near_leader(u)) in.leader_fight_near = true;
+        }
+        if (!in.leader_in_combat || in.leader_fight_near)
+            leader_flag_only_since_ms_ = 0;
+        else if (leader_flag_only_since_ms_ == 0)
+            leader_flag_only_since_ms_ = now_ms ? now_ms : 1u;
+        in.leader_flag_only_ms = leader_flag_only_since_ms_ ? now_ms - leader_flag_only_since_ms_ : 0;
         // A raid map (20 and 40 players) keeps its boss tactics: the gate covers the trash between the bosses only (the owner, 2026-10-28:
         // "make sure that in the middle of a raid the rogues or the druids aren't standing idle whilst we're trying to fight trash").
         if (s.raid_tactics_map())

@@ -1207,6 +1207,8 @@ void BotPopulationManager::CompanionUpkeep(BotId id, Player* p)
             TC_LOG_INFO("playerbot.v2", "[Companion] {} one-time varied gear re-roll: {} slot(s) changed", p->GetName(), changed);
         }
     }
+    // A hired bot's grade health follows its level and gear (and a changed Playerbot.Hire.<Grade>.HealthPct after `.reload config`).
+    HireMgr::Instance().ApplyHealth(p);
 }
 
 void BotPopulationManager::GrantCompanionStarterPet(BotId id, Player* p)
@@ -1733,6 +1735,8 @@ void BotPopulationManager::FinishCompanionSetup(Player* bot, Player* owner, uint
             }
         }
         RegearNow(bot);
+        // A hired bot's grade health (Playerbot.Hire.<Grade>.HealthPct), on the health its new level and gear give it.
+        HireMgr::Instance().ApplyHealth(bot);
         // GiveLevel fills health and mana for the new level, but the gear put on after it raises the pools again: three mages made for
         // the owner in UBRS (2026-10-29 09:28:31) stood at 18-19 % mana with their new L60 gear and were in the fight 12 s later, wanding.
         // A companion just levelled here joins rested.

@@ -141,6 +141,8 @@ Write-Host "Locale : $Locale"
 Write-Host "Threads: $(if ($Threads -le 0) { '(all cores)' } else { $Threads })"
 Write-Host "Mode   : $(if ($MapsOnly) { 'MAPS-ONLY (road workflow)' } else { 'FULL' })$(if ($Resume) { ' (resumable)' })"
 
+# map_gx_gy tiles of the six start positions worldserver checks before it starts (World.cpp ExistMapAndVMap): without them it shuts down
+$StartTiles = @('0000_43_31', '0000_48_32', '0001_33_39', '0000_28_28', '0001_12_30', '0001_37_32')
 function Test-Done($name) { $Resume -and (Test-Path (Join-Path $OutputPath ".extract-$name.done")) }
 function Set-Done($name) { if ($Resume) { Set-Content (Join-Path $OutputPath ".extract-$name.done") (Get-Date -Format s) } }
 $clock = [Diagnostics.Stopwatch]::StartNew()
@@ -188,6 +190,10 @@ try {
     else {
         $eFlag = if ($MapsOnly) { "3" } else { "15" }
         & ".\mapextractor.exe" -i "$ClientPath" -o "$OutputPath" -e $eFlag -f 1 -l $Locale @productArgs
+        if ($LASTEXITCODE -eq 2) {
+            Fail "mapextractor could not read some map tiles of Eastern Kingdoms / Kalimdor from the game client (exit code 2).
+The game is not completely downloaded or is damaged: let Battle.net finish downloading it, run its Scan and Repair, then run this again."
+        }
         if ($LASTEXITCODE -ne 0) {
             Fail "mapextractor failed with exit code $LASTEXITCODE.
 Check stdout above; usual culprits: CASC init failure, wrong client path, antivirus."
@@ -195,6 +201,11 @@ Check stdout above; usual culprits: CASC init failure, wrong client path, antivi
         # mapextractor ends with exit code 0 when it could open no locale of the client ("No locales detected"): check what it wrote
         if (-not (Test-Path (Join-Path $OutputPath 'dbc')) -or -not (Get-ChildItem (Join-Path $OutputPath 'maps') -Filter '*.map' -File -ErrorAction SilentlyContinue | Select-Object -First 1)) {
             Fail "mapextractor could not read the game client in $ClientPath as product '$Product' (no dbc or maps were written). Check stdout above."
+        }
+        # the start-zone tiles worldserver checks before it starts: a run that stopped part way must not be marked done
+        $noTile = @($StartTiles | Where-Object { -not (Test-Path -LiteralPath (Join-Path $OutputPath "maps\$_.map")) })
+        if ($noTile.Count) {
+            Fail ("mapextractor did not write every map: " + (($noTile | ForEach-Object { "maps\$_.map" }) -join ', ') + " missing. Check stdout above (antivirus, full disk, or the game client needs Battle.net's Scan and Repair), then run it again.")
         }
         Set-Done 'maps'
     }
@@ -237,6 +248,11 @@ If the game shows an update in the Battle.net app, let it finish first; with a g
     & ".\vmap4assembler.exe" @asmArgs
     if ($LASTEXITCODE -ne 0) {
         Fail "vmap4assembler failed with exit code $LASTEXITCODE."
+    }
+    $noTile = @($StartTiles | Where-Object { $m = $_.Substring(0, 4); -not (Test-Path -LiteralPath (Join-Path $OutputPath "vmaps\$m\$_.vmtile")) })
+    foreach ($m in '0000', '0001') { if (-not (Test-Path -LiteralPath (Join-Path $OutputPath "vmaps\$m\$m.vmtree"))) { $noTile += $m } }
+    if ($noTile.Count) {
+        Fail ("vmap4assembler did not write every vmap the server needs at the start zones (" + ($noTile -join ', ') + " missing in vmaps). Check stdout above, then run it again.")
     }
     Set-Done 'vmaps'
     }

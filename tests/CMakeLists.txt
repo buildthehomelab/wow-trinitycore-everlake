@@ -58,7 +58,8 @@ if(NOT BUILD_PLAYERBOT_V2)
     ClassicRaidResistPotions.cpp
     ClassicDrinkSay.cpp
     ClassicReactionTiming.cpp
-    ClassicReactionWake.cpp)
+    ClassicReactionWake.cpp
+    ClassicBotSize.cpp)
   foreach(_test_source ${TESTS_MODULE_ONLY_SOURCES})
     set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/game/${_test_source} PROPERTIES HEADER_FILE_ONLY TRUE)
   endforeach()

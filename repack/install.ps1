@@ -7,6 +7,25 @@
 param([string]$Client, [switch]$SkipMaps, [switch]$NoStart, [switch]$Elevated, [switch]$Gui)   # -Gui: started by the launcher window (already administrator): no questions, no pauses
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
+# A zip downloaded from the internet marks every file it holds as "from the internet" (the Zone.Identifier stream). Windows Smart
+# App Control then blocks scripts and programs of the package that are started later (Create-Account.ps1, console-send.ps1,
+# mysql\bin\mysql.exe): TihonSky's first start failed this way. The mark is taken off every file of the main folder first.
+# Unblock-File only changes the player's own files and needs no administrator rights; a file it can't change is skipped with a
+# warning, and the install goes on.
+if ($MyInvocation.InvocationName -ne '.') {
+    $unblockFailed = 0; $unblockFirst = $null
+    try {
+        Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            $file = $_.FullName
+            try { Unblock-File -LiteralPath $file -ErrorAction Stop }
+            catch { $unblockFailed++; if (-not $unblockFirst) { $unblockFirst = $file + ': ' + $_.Exception.Message } }
+        }
+    } catch { $unblockFailed++; if (-not $unblockFirst) { $unblockFirst = $_.Exception.Message } }
+    if ($unblockFailed) {
+        Write-Warning ("Could not remove the internet mark from " + $unblockFailed + " file(s) in " + $root + " (first: " + $unblockFirst +
+            "). If Windows blocks a script or mysql.exe later, right-click the downloaded zip, Properties, tick Unblock, and unpack it again.")
+    }
+}
 . "$PSScriptRoot\ClientBuild.ps1"   # the build the realm accepts is read from the shipped auth updates, never typed here
 
 # Looks for WoW Forever client folders (a folder with .build.info next to _forever_ (Wow.exe) or _classic_beta_ (WowB.exe)). Returns candidates
@@ -17,26 +36,48 @@ function Find-ClientFolders([string[]]$roots, [int]$maxSeconds = 25, [string[]]$
     $found = New-Object System.Collections.Generic.List[string]
     foreach ($d in $registered) { if (-not $found.Contains($d)) { $found.Add($d) } }
     $clock = [Diagnostics.Stopwatch]::StartNew()   # the search gives up after $maxSeconds; the player can pick the folder by hand
+    # Every path is used literally (-LiteralPath): a folder named with [ or ] (common in downloaded media folders) is otherwise read as a
+    # wildcard pattern and stopped the whole install ("The specified wildcard character pattern is not valid"). A folder that still
+    # cannot be read (no access, a broken link, a name Windows refuses) is skipped; the search goes on.
     foreach ($r in $roots) {
-        if (-not (Test-Path $r)) { continue }
+        if (-not $r) { continue }
+        try { if (-not (Test-Path -LiteralPath $r)) { continue } } catch { continue }
         $stack = New-Object System.Collections.Generic.Stack[object]
         $stack.Push(@($r, 0))
         while ($stack.Count -and $clock.Elapsed.TotalSeconds -lt $maxSeconds) {
             $item = $stack.Pop(); $dir = $item[0]; $depth = $item[1]
-            if (Test-Path (Join-Path $dir '.build.info')) {
-                if ((Test-Path (Join-Path $dir '_forever_')) -or (Test-Path (Join-Path $dir '_classic_beta_')) -or @(Get-ChildItem $dir -Filter 'Wow*.exe' -ErrorAction SilentlyContinue).Count) {
-                    if (-not $found.Contains($dir)) { $found.Add($dir) }
-                    continue
+            try {
+                if (Test-Path -LiteralPath (Join-Path $dir '.build.info')) {
+                    if ((Test-Path -LiteralPath (Join-Path $dir '_forever_')) -or (Test-Path -LiteralPath (Join-Path $dir '_classic_beta_')) -or @(Get-ChildItem -LiteralPath $dir -Filter 'Wow*.exe' -File -ErrorAction SilentlyContinue).Count) {
+                        if (-not $found.Contains($dir)) { $found.Add($dir) }
+                        continue
+                    }
                 }
-            }
-            if ($depth -ge 3) { continue }
-            foreach ($sub in Get-ChildItem $dir -Directory -ErrorAction SilentlyContinue) {
-                if ($sub.Name -in 'Windows', '$Recycle.Bin', 'System Volume Information', 'ProgramData', 'node_modules', '.git') { continue }
-                $stack.Push(@($sub.FullName, ($depth + 1)))
-            }
+                if ($depth -ge 3) { continue }
+                foreach ($sub in @(Get-ChildItem -LiteralPath $dir -Directory -ErrorAction SilentlyContinue)) {
+                    if ($sub.Name -in 'Windows', '$Recycle.Bin', 'System Volume Information', 'ProgramData', 'node_modules', '.git') { continue }
+                    $stack.Push(@($sub.FullName, ($depth + 1)))
+                }
+            } catch { continue }
         }
     }
     @(Sort-ClientFolders $root @($found) $registered | ForEach-Object { $_.Dir })
+}
+# The client folder (with .build.info) for a path the player typed or pasted: quotes and spaces around it are removed, and a game
+# folder (_forever_ / _classic_beta_) or the program inside it (Wow.exe) leads to its client folder. $null when there is none.
+function Resolve-ClientInput([string]$text) {
+    if (-not $text) { return $null }
+    $p = $text.Trim().Trim('"').Trim("'").Trim().TrimEnd('\', '/')
+    if (-not $p) { return $null }
+    if ($p -match '^[A-Za-z]:$') { $p += '\' }
+    try {
+        if (Test-Path -LiteralPath $p -PathType Leaf) { $p = Split-Path $p -Parent }
+        for ($i = 0; $i -lt 3 -and $p; $i++) {
+            if (Test-Path -LiteralPath (Join-Path $p '.build.info') -PathType Leaf) { return $p }
+            $p = Split-Path $p -Parent
+        }
+    } catch { }
+    $null
 }
 
 if ($MyInvocation.InvocationName -eq '.') { return }   # dot-sourced by the tests: functions only
@@ -77,7 +118,9 @@ try {
     $freeGb = [math]::Round((Get-PSDrive ($root.Substring(0, 1))).Free / 1GB)
     if ($freeGb -lt 50) { Write-Warning "Only $freeGb GB free on this drive; about 50 GB are needed while the game data is built (about 45 GB of it is removed again at the end)." }
     # data counts as complete ONLY with the marker; a partial run (even with many navmesh tiles) is finished by extract-data.ps1 -Resume
-    $dataDone = Test-Path "$root\server\data\.extract-complete"
+    # and only when the start-zone files worldserver checks first are there (a marker from a run that stopped part way is not believed;
+    # extract-data.ps1 then removes it and builds the data again)
+    $dataDone = (Test-Path "$root\server\data\.extract-complete") -and -not @(Get-MissingStartZoneData "$root\server\data").Count
 
     Step 2 $total "Finding your WoW Forever game folder (build $((Get-AcceptedBuilds $root) -join ' or '))"
     $saved = Join-Path $root 'config\client.txt'
@@ -89,8 +132,8 @@ try {
         if ($better) { Write-Host "Not using $Client (it looks like a backup copy); using the Battle.net install $better."; $Client = $better }
     }
     # the launcher saves the game folder (_forever_ / _classic_beta_); the client folder with .build.info is its parent
-    if ($Client -and -not (Test-Path (Join-Path $Client '.build.info')) -and (Test-Path (Join-Path (Split-Path $Client -Parent) '.build.info'))) { $Client = Split-Path $Client -Parent }
-    if ($Client -and -not (Test-Path (Join-Path $Client '.build.info'))) { Write-Warning "$Client has no .build.info; looking again."; $Client = $null }
+    if ($Client -and -not (Test-Path -LiteralPath (Join-Path $Client '.build.info')) -and (Test-Path -LiteralPath (Join-Path (Split-Path $Client -Parent) '.build.info'))) { $Client = Split-Path $Client -Parent }
+    if ($Client -and -not (Test-Path -LiteralPath (Join-Path $Client '.build.info'))) { Write-Warning "$Client has no .build.info; looking again."; $Client = $null }
     # a remembered folder of another build (the other Forever install) is not used; look again
     if ($Client -and -not $Gui -and (Test-ClientFolder $root $Client)) { Write-Warning (Test-ClientFolder $root $Client); Write-Host 'Looking for another game folder.'; $Client = $null }
     if (-not $Client -and $Gui) { throw 'No valid game folder was given to the installer.' }
@@ -100,7 +143,8 @@ try {
         $roots = @("$env:USERPROFILE\Desktop", "$env:USERPROFILE\Downloads", "$env:USERPROFILE\Documents", "$env:PUBLIC\Games", "$env:ProgramFiles", "${env:ProgramFiles(x86)}")
         foreach ($d in Get-PSDrive -PSProvider FileSystem) { $roots += $d.Root }
         $registered = @(Get-BattleNetClients)
-        $found = @(Find-ClientFolders $roots 25 $registered)
+        # the search never stops the install: if it fails, the player chooses or pastes the folder below
+        $found = @(); try { $found = @(Find-ClientFolders $roots 25 $registered) } catch { Write-Warning "The search stopped early ($($_.Exception.Message)); choose the folder yourself." }
         $ties = @(Get-ClientTies (Sort-ClientFolders $root $found $registered))
         $guess = if ($found.Count) { $found[0] } else { $null }
         if ($ties.Count -gt 1) {
@@ -112,10 +156,20 @@ try {
         } elseif ($guess) { Write-Host "Found a likely game folder: $guess" } else { Write-Host 'Could not find it by itself.' }
         if (-not $Client) {
             Write-Host 'A window opens: select the folder of your WoW Forever game (the one that contains the file .build.info).'
-            $Client = Pick-Folder $guess
+            $Client = $null; try { $Client = Pick-Folder $guess } catch { Write-Warning "The folder window could not open ($($_.Exception.Message))." }
+            if ($Client) { $Client = Resolve-ClientInput $Client }
             if ($Client -and $Client -ne $guess) { $picked = $true }
         }
-        if (-not $Client -or -not (Test-Path (Join-Path $Client '.build.info'))) { throw 'No valid game folder chosen (it must contain .build.info). Run Install.cmd again.' }
+        # no folder chosen in the window (or not one with .build.info): the path can be pasted here instead
+        for ($try = 0; -not $Client -and $try -lt 3; $try++) {
+            Write-Host 'Paste the path of your WoW Forever game folder (the folder with the file .build.info, for example C:\Program Files (x86)\World of Warcraft) and press Enter.'
+            Write-Host 'In Explorer: open the folder, click the address bar, Ctrl+C, then right-click in this window to paste. Press Enter on an empty line to stop.'
+            $typed = Read-Host 'Game folder'
+            if (-not $typed.Trim()) { break }
+            $Client = Resolve-ClientInput $typed
+            if ($Client) { $picked = $true } else { Write-Warning "No .build.info found in $typed or the folders above it." }
+        }
+        if (-not $Client -or -not (Test-Path -LiteralPath (Join-Path $Client '.build.info'))) { throw 'No valid game folder chosen (it must contain .build.info). Run Install.cmd again, or run it as: Install.cmd "C:\path\to\your\game folder"' }
     }
     # the game data is extracted from this client, so it must be a build the server accepts
     $wrong = Test-ClientFolder $root $Client
@@ -133,7 +187,7 @@ try {
     else {
         Write-Host 'This is the slow part: about 10 to 20 minutes on a modern PC, longer on an older one (maps, then the pathfinding data for every map). The bots need it to walk. Do not close this window; if it is interrupted, run Install.cmd again and it continues.'
         & "$PSScriptRoot\extract-data.ps1" -Client $Client
-        $dataDone = Test-Path "$root\server\data\.extract-complete"
+        $dataDone = (Test-Path "$root\server\data\.extract-complete") -and -not @(Get-MissingStartZoneData "$root\server\data").Count
     }
 
     Step 5 $total 'Certificate and hosts entry (so the game client trusts your own server)'

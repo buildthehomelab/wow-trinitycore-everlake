@@ -55,10 +55,10 @@ TEST_CASE("Veterans and Legends are for the level cap only", "[ClassicHirePolicy
 
 TEST_CASE("Brokers sell their own grades", "[ClassicHirePolicy]")
 {
-    CHECK(BrokerOfEntry(9110000) == Broker::Inn);
-    CHECK(BrokerOfEntry(9110105) == Broker::Capital);
-    CHECK(BrokerOfEntry(9110202) == Broker::BlackMarket);
-    CHECK(BrokerOfEntry(9110300) == Broker::None);
+    CHECK(BrokerOfEntry(6110000) == Broker::Inn);
+    CHECK(BrokerOfEntry(6110105) == Broker::Capital);
+    CHECK(BrokerOfEntry(6110202) == Broker::BlackMarket);
+    CHECK(BrokerOfEntry(6110300) == Broker::None);
     CHECK(BrokerOfEntry(295) == Broker::None);
     CHECK(BrokerSells(Broker::Inn, Grade::Sellsword));
     CHECK_FALSE(BrokerSells(Broker::Inn, Grade::Veteran));
@@ -99,6 +99,49 @@ TEST_CASE("The grade sets the gear", "[ClassicHirePolicy]")
     CHECK(GearModeFor(Grade::Sellsword, false) == 0);
     CHECK(GearModeFor(Grade::None, true) == 0);
     CHECK(GearModeFor(Grade::None, false) == -1);
+}
+
+TEST_CASE("Default rules are the built-in ones", "[ClassicHirePolicy]")
+{
+    Rules const r;
+    for (Broker b : { Broker::Inn, Broker::Capital, Broker::BlackMarket, Broker::None })
+        for (Grade g : { Grade::None, Grade::Sellsword, Grade::Veteran, Grade::Legend })
+            CHECK(BrokerSells(r, b, g) == BrokerSells(b, g));
+    for (Grade g : { Grade::None, Grade::Sellsword, Grade::Veteran, Grade::Legend })
+        for (bool must : { false, true })
+            CHECK(GearModeFor(r, g, must) == GearModeFor(g, must));
+    CHECK(HealthPctFor(r, Grade::Legend) == 100);
+    CHECK(HealthBonusFor(4000, 100) == 0);
+}
+
+TEST_CASE("The server owner sets what brokers sell, gear and health", "[ClassicHirePolicy]")
+{
+    CHECK(ParseGradeList("sellsword, veteran") == ((1u << 1) | (1u << 2)));
+    CHECK(ParseGradeList("Legend") == (1u << 3));
+    CHECK(ParseGradeList("legends sellswords") == ((1u << 1) | (1u << 3)));
+    CHECK(ParseGradeList("none") == 0);
+    CHECK(ParseGradeList("") == 0);
+    CHECK(ParseGradeList("dragon") == 0);
+
+    Rules r;
+    r.sells[uint8_t(Broker::Inn)] = ParseGradeList("sellsword, legend");
+    CHECK(BrokerSells(r, Broker::Inn, Grade::Legend));
+    CHECK_FALSE(BrokerSells(r, Broker::Inn, Grade::Veteran));
+    CHECK_FALSE(BrokerSells(r, Broker::None, Grade::Legend));
+
+    r.gear_mode[uint8_t(Grade::Veteran)] = 3;   // t2
+    CHECK(GearModeFor(r, Grade::Veteran, false) == 3);
+    CHECK(GearModeFor(r, Grade::None, false) == -1);
+    CHECK(GearModeFor(r, Grade::None, true) == 0);
+
+    r.health_pct[uint8_t(Grade::Legend)] = 150;
+    CHECK(HealthPctFor(r, Grade::Legend) == 150);
+    CHECK(HealthBonusFor(4000, 150) == 2000);
+    CHECK(HealthBonusFor(4000, 50) == -2000);
+    CHECK(HealthBonusFor(4000, 1) == -3000);     // never under kMinHealthPct (25%)
+    r.health_pct[uint8_t(Grade::Legend)] = 99999;
+    CHECK(HealthPctFor(r, Grade::Legend) == kMaxHealthPct);
+    CHECK(HealthPctFor(r, Grade::None) == 100);
 }
 
 TEST_CASE("Money reads like the game's", "[ClassicHirePolicy]")

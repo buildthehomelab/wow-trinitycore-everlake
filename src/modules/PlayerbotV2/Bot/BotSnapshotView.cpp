@@ -973,6 +973,10 @@ static NearbyUnit const* UnclaimedLooseAttacker(BotSnapshot const& s, float rang
         if (ThreatVictim(e.victim_kind) != ThreatVictim::Member) continue;
         if (s.pve_order.active && s.pve_order.claimed_by_other_tank(e.guid) && LooseOnMemberMs(e.guid, s.published_at_ms) < kClaimStaleMs) continue;
         if (OtherTankTakesLoose(s, e)) continue;
+        // The line-of-sight pull (PveOrder::sight_pull): a mob standing off out of the group's sight is on its way to the spot; a tank
+        // that walks out to it takes the fight back to where it stood (smlibrary_loksey 8d2fd499aa: Taunt reach 4 y, the tank walked 30 y
+        // to the Beastmaster on the priest).
+        if (s.pve_order.active && s.pve_order.sight_pull_mob(e.guid)) continue;
         if (leash && BeyondHealerLeash(s, e.x, e.y))
         {
             static std::atomic<uint32> s_hleash_log{ 0 };

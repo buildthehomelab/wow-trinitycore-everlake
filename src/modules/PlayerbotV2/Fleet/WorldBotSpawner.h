@@ -27,6 +27,7 @@
 #include <string>
 
 #include "AreaCap.h"
+#include "BotSize.h"
 #include "GateDuels.h"
 #include "Gathering.h"
 #include "MovingBubble.h"
@@ -112,6 +113,14 @@ private:
         MovingRule moving;
         uint32 moving_spawn_factor = 2;    // x spawn rate while he moves
         float  moving_despawn_behind = 450.0f;   // bots this far behind a moving player log out (out of sight); 0 = only DespawnRadius
+        // Plain bot numbers (Bots.* lines, Fleet/BotSize.h). plain = at least one Bots.* line is set: max_bots, pool_max, city_bots,
+        // zone_bots (= zone_hi) and bots_per_player then come from them, each zone rolls its number in [zone_lo, zone_hi], the cap
+        // is shared evenly over the occupied places, and a place nobody is in for leave_zone_ms loses its bots fast.
+        bool   plain            = false;
+        uint32 zone_lo          = 0;
+        uint32 zone_hi          = 0;
+        uint32 leave_zone_ms    = 20000;   // Bots.LeaveZoneSec: a zone without a player for this long logs its bots out (0 = old rule only)
+        std::string plain_summary;         // for the start line
     };
 
     struct Anchor
@@ -181,6 +190,12 @@ private:
     std::unordered_map<uint32, uint32> AwakeByZone(Anchor const& a) const;
     uint32 SpawnRateFor(Anchor const& a) const;
     uint32 TargetFor(Anchor const& a) const;   // bubble size for this anchor: city_bots / zone_bots / bots_per_player
+    // Plain bot numbers: each occupied place's number for this tick (rolled zone number, even share of the cap) and how many
+    // players are in it; a place's roll and when it last had a player.
+    void PlanPlaces(uint32 now_ms, std::vector<Anchor> const& anchors, std::vector<Anchor> const& keep_anchors);
+    uint32 PlaceWantFor(Anchor const& a);
+    std::unordered_map<uint64, uint32> place_target_, place_players_, zone_roll_, place_seen_ms_;
+    std::string plain_logged_;
 
     struct Ghost { Anchor a; uint32 until_ms; };   // where a player was before an instance / far jump: keeps its bots for a grace
     std::vector<Ghost> ghosts_;

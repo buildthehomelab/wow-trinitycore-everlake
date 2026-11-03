@@ -1049,6 +1049,14 @@ bool PullBackTick(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
     {
         uint32 const bc = s.path_blocked_count();
         bool give = false;
+        // A stunned or rooted tank cannot move: its refused walks and its standing still say nothing about the way. smlibrary
+        // 0.1.28f: a Scarlet Gallant's Hammer of Justice held the tank 4 s on the way back, both refusals came from the stun, and
+        // the order gave the return point up 15 y short and fought the pack where the stun had caught him.
+        if (s.is_stunned() || s.is_rooted())
+        {
+            ai.edit_pull_back([&](BotAI::PullBackPlan& q) { q.blocked_seen = bc; q.progress_ms = now_ms; });
+            return false;
+        }
         ai.edit_pull_back([&](BotAI::PullBackPlan& q)
         {
             if (q.blocked_seen == ~0u) q.blocked_seen = bc;
@@ -1145,6 +1153,37 @@ bool PullBackTick(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
         if (p.retakes > 0)
             if (NearbyUnit const* u = pack_on_group_at_point())
                 return finish_for_pack(*u);
+        // Another pack took the tank on the way to the opener spot: run that one back now and leave the far target alone.
+        // smlibrary L33 (d90ef3de69, 0128m): the Adept had no walkable pull spot, the straight line to the opener spot passed two
+        // idle Scarlet Gallants, they were on the tank 3 s before the Throw, the tank threw at the Adept all the same and ran
+        // back with both packs; a Gallant stun held him and the Adept's Holy Smite killed him.
+        if (p.opened_ms == 0 && p.retakes == 0)
+        {
+            NearbyUnit const* caught = nullptr;
+            float caught_d2 = 30.0f * 30.0f;
+            for (auto const& u : s.raw().combat.attackers)
+            {
+                if (u.hp <= 0 || u.guid == p.target || !u.unit_in_combat) continue;
+                if (u.victim != s.guid()) continue;
+                const float d2 = d2xy(bx, by, u.x, u.y);
+                if (d2 < caught_d2) { caught_d2 = d2; caught = &u; }
+            }
+            if (caught)
+            {
+                TC_LOG_INFO("playerbot.v2", "[pull_back] {} entry {} ({}) took me {:.0f}y away before the opener on {}: the order goes on with "
+                    "it, the far target stays where it is", s.name(), caught->entry, caught->guid.GetCounter(), std::sqrt(caught_d2),
+                    p.target.GetCounter());
+                ObjectGuid const ng = caught->guid;
+                float const nx = caught->x, ny = caught->y, nz = caught->z;
+                ai.edit_pull_back([&](BotAI::PullBackPlan& q) { q.target = ng; q.tx = nx; q.ty = ny; q.tz = nz; });
+                ai.set_pull_back_phase(Phase::Retreat, now_ms);
+                if (!s.victim().IsEmpty()) emit.stop_attack();
+                if (s.is_casting()) emit.cancel_cast();
+                head_to(p.rx, p.ry, p.rz, true);
+                tag("idle:pull_back_retreat", "combat:pull_back_retreat");
+                return true;
+            }
+        }
         if (tu && tu->unit_in_combat && !tu->victim.IsEmpty() && (p.retakes == 0 || tu->victim == s.guid()))
         {
             // Aggro'd (by the opener or anybody) - or, on a retake, back on the tank: run it back.
@@ -1247,10 +1286,18 @@ bool PullBackTick(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
             const float sz = use_ret ? tz + (p.rz - tz) * std::min(1.0f, want / od) : tz;
             if (in_circle(sx, sy))
                 return finish("pull spot is inside an avoid circle");
-            bool queued = head_to(sx, sy, sz, true);
+            // A refused spot is not asked for again: smlibrary 0.1.28f, the spot (243,-217) lay outside the room with no ground under it,
+            // and the tank asked for it and for the straight-line spot on every tick for 5 s (40 refused paths) while walking the line.
+            bool queued = !p.spot_refused && head_to(sx, sy, sz, true);
             if (!queued)
             {
-                TC_LOG_INFO("playerbot.v2", "[pull_back] {} move to pull spot ({:.1f},{:.1f},{:.1f}) refused", s.name(), sx, sy, sz);
+                bool const first_refusal = !p.spot_refused;
+                if (first_refusal)
+                {
+                    ai.edit_pull_back([](BotAI::PullBackPlan& q) { q.spot_refused = true; });
+                    TC_LOG_INFO("playerbot.v2", "[pull_back] {} move to pull spot ({:.1f},{:.1f},{:.1f}) refused: the straight line to the target from now on",
+                        s.name(), sx, sy, sz);
+                }
                 // The spot on the line to the return point may sit where no path leads (a ledge, a wall): the straight line
                 // toward the mob is the other way to get in window (deadmines_full: both refusals ended the order at 18 y).
                 if (d > want + 1.0f)
@@ -1260,8 +1307,9 @@ bool PullBackTick(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
                     if (!in_circle(ax, ay))
                     {
                         queued = head_to(ax, ay, az, true);
-                        TC_LOG_INFO("playerbot.v2", "[pull_back] {} straight-line spot ({:.1f},{:.1f},{:.1f}) {}", s.name(), ax, ay, az,
-                            queued ? "queued" : "refused too");
+                        if (first_refusal || !queued)
+                            TC_LOG_INFO("playerbot.v2", "[pull_back] {} straight-line spot ({:.1f},{:.1f},{:.1f}) {}", s.name(), ax, ay, az,
+                                queued ? "queued" : "refused too");
                         // Mob in sight and close, no route from the navmesh (a lip in the floor, Deadmines 2026-10-15): walk the line itself.
                         if (!queued && tu && tu->in_los && d <= 25.0f)
                         {
@@ -1341,19 +1389,46 @@ bool PullBackTick(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
         {
             if (!s.victim().IsEmpty()) emit.stop_attack();
             if (s.is_casting()) emit.cancel_cast();
-            bool const queued = head_to(p.rx, p.ry, p.rz, true);
+            bool queued = head_to(p.rx, p.ry, p.rz, true);
+            // The emitter refuses a point for 6 s after one failed path to it (BotIntentEmitter refusal guard, 3 y), even a point
+            // the tank stood on a moment ago. RFD rfd_glutton (0.1.27): the tank reached the return point, went back for the mob
+            // (retake), and the run home was refused twice in the same second; the order ended 18 y out and the Boneflayer pack
+            // ran over the mage. Ask once more for a spot 4 y short of the point, on the tank's side, before counting a refusal.
+            if (!queued && dr > 6.0f)
+            {
+                float const k = 4.0f / dr;
+                queued = head_to(p.rx + (bx - p.rx) * k, p.ry + (by - p.ry) * k, p.rz, true);
+            }
             std::string why;
             if (hopeless(dr, !queued, why))
             {
-                // The run home keeps failing (hazard on the way): stop pathing into it, the tank rules take the mob.
-                TC_LOG_INFO("playerbot.v2", "[pull_back] {} unreachable: retreat to ({:.1f},{:.1f}) {} ({:.0f}y short, mob {:.0f}y)",
+                // The run home keeps failing: the tank holds where it stands and lets the pack come to it. Ending the order here
+                // handed the pull to the tank rules, which walked the tank onto the pack (smlibrary_loksey 0.1.28b: the return point
+                // refused twice 24 y short, the warrior went in and the run failed 15 s later). The Hold below hands the fight to the
+                // rotation once the mob arrives, hits the tank, or 8 s pass.
+                TC_LOG_INFO("playerbot.v2", "[pull_back] {} unreachable: retreat to ({:.1f},{:.1f}) {} ({:.0f}y short, mob {:.0f}y): holds here for the pack",
                     s.name(), p.rx, p.ry, why, dr, dmob);
-                return finish("unreachable (retreat) - tank rules take over");
+                ai.edit_pull_back([&](BotAI::PullBackPlan& q) { q.rx = bx; q.ry = by; q.rz = bz; });
+                ai.set_pull_back_phase(Phase::Hold, now_ms);
+                emit.face_target(p.target);
+                tag("idle:pull_back_hold", "combat:pull_back_hold");
+                return true;
             }
             tag("idle:pull_back_retreat", "combat:pull_back_retreat");
             return true;
         }
         // At the return point. Hold only with the mob on the tank; else go and get it back (bounded).
+        // A mob of the line-of-sight pull (PveOrder::sight_pull) stands off out of sight of this point and has to come to it: a retake
+        // would walk the tank back out to where it stands.
+        if (tu->victim != s.guid() && s.raw().pve_order.active && s.raw().pve_order.sight_pull_mob(tu->guid))
+        {
+            ai.set_pull_back_phase(Phase::Hold, now_ms);
+            emit.face_target(p.target);
+            TC_LOG_INFO("playerbot.v2", "[pull_back] {} phase Hold: at the line-of-sight spot after {}s, target {:.0f}y away stands off out of sight",
+                s.name(), (now_ms - p.started_ms) / 1000u, dmob);
+            tag("idle:pull_back_hold", "combat:pull_back_hold");
+            return true;
+        }
         if (tu->victim != s.guid())
         {
             if (NearbyUnit const* u = pack_on_group_at_point())
@@ -1412,6 +1487,17 @@ bool PullBackTick(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
 }
 
 } // namespace States
+
+// idle:sight_pull - the line-of-sight pull (PveOrder::sight_pull): a member out of combat walks to the spot with the others, so the
+// first heal or shot does not open from where the mobs that stand off can see it.
+bool SightPullIdleGate(BotSnapshotView const& s, BotAI&, GroupSnapshotView const&, uint32)
+{
+    return s.raw().pve_order.active && s.raw().pve_order.sight_pull;
+}
+bool SightPullIdleFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32)
+{
+    return States::SightPullGather(s, ai, emit, /*in_combat_state*/ false);
+}
 
 // idle:owner_use - the owner's "use <object>": walk to within reach of the object, use it once, then stay (the command set Stay).
 bool OwnerUseGate(BotSnapshotView const&, BotAI& ai, GroupSnapshotView const&, uint32)
@@ -1482,6 +1568,8 @@ void RegisterPrologueRules(IdleRuleRegistry& r)
     add("idle:fallback",          994, &FallbackGate,       &FallbackFire);
     add("idle:pull_back",         994, &PullBackGate,       &PullBackFire);
     add("idle:owner_use",         994, &OwnerUseGate,       &OwnerUseFire);
+    // 992: a member not yet in the fight joins the line-of-sight pull's spot (SightPullGather) before the opener and the follow rules.
+    add("idle:sight_pull",        992, &SightPullIdleGate,  &SightPullIdleFire);
     add("combat:opener",          993, &OpenerGate,         &OpenerFire);
     // 991: fires BEFORE owner_following (990) so a corridor threat
     // preempts the no-op follow tag and start_attack interrupts the

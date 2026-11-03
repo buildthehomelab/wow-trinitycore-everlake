@@ -836,10 +836,21 @@ void PathGenerator::BuildPointPath(const float *startPoint, const float *endPoin
     TC_LOG_DEBUG("maps.mmaps", "++ PathGenerator::BuildPointPath path type {} size {} poly-size {}", _type, pointCount, _polyLength);
 }
 
-void PathGenerator::NormalizePath()
+// Every path point lies on a walkable navmesh polygon. The height probe can miss the floor model under it (a gap in a WMO floor) and
+// hand back the terrain grid below; a point moved that far down puts the unit under the floor (SM Library, map 189: the hall floor at
+// z 18.5, the grid at 0; a hunter's path came back with points at z 3.8 and 0.0 and it walked under the hall). A drop of more than
+// kMaxNormalizeDrop below the polygon is that, not a correction of the mesh's height error, and the polygon's height is kept.
+// meshPoints false (BuildShortcut: the caller's destination, not a navmesh point): every point takes the probed height, as before.
+void PathGenerator::NormalizePath(bool meshPoints)
 {
+    constexpr float kMaxNormalizeDrop = 6.0f;
     for (uint32 i = 0; i < _pathPoints.size(); ++i)
-        _source->UpdateAllowedPositionZ(_pathPoints[i].x, _pathPoints[i].y, _pathPoints[i].z);
+    {
+        float z = _pathPoints[i].z;
+        _source->UpdateAllowedPositionZ(_pathPoints[i].x, _pathPoints[i].y, z);
+        if (!meshPoints || z >= _pathPoints[i].z - kMaxNormalizeDrop)
+            _pathPoints[i].z = z;
+    }
 }
 
 // A segment shorter than 0.1 y makes MoveSplineInitArgs::_checkPathLengths() reject the whole spline and the unit does not move.
@@ -882,7 +893,7 @@ void PathGenerator::BuildShortcut()
     _pathPoints[0] = GetStartPosition();
     _pathPoints[1] = GetActualEndPosition();
 
-    NormalizePath();
+    NormalizePath(/*meshPoints*/ false);
 
     _type = PATHFIND_SHORTCUT;
 }
@@ -1090,8 +1101,10 @@ bool PathGenerator::GetSteerTarget(float const* startPos, float const* endPos,
                               float minTargetDist, dtPolyRef const* path, uint32 pathSize,
                               float* steerPos, unsigned char& steerPosFlag, dtPolyRef& steerPosRef, float& steerPosHeight)
 {
-    // Find steer target.
-    static const uint32 MAX_STEER_POINTS = 3;
+    // Find steer target. Where a corridor crosses a stair on a tile seam, the straight path has several corners at one spot in plan
+    // (one per floor height), and with three corners all three can lie within the slop of the walk: no target is found and the path
+    // stops there, short of its end. Eight corners reach past the stack.
+    static const uint32 MAX_STEER_POINTS = 8;
     float steerPath[MAX_STEER_POINTS*VERTEX_SIZE];
     unsigned char steerPathFlags[MAX_STEER_POINTS];
     dtPolyRef steerPathPolys[MAX_STEER_POINTS];
@@ -1307,6 +1320,38 @@ dtStatus PathGenerator::FindSmoothPath(float const* startPos, float const* endPo
                 if (dtStatusFailed(_navMeshQuery->getPolyHeight(polys[0], iterPos, &iterPos[1])))
                     _navMeshQuery->closestPointOnPolyBoundary(polys[0], iterPos, iterPos);
                 iterPos[1] += 0.5f;
+            }
+        }
+        else if (!endOfPath && !offMeshConnection && steerPosRef != INVALID_POLYREF && steerPosRef != polys[0])
+        {
+            // The walk came back to where it stood a few steps ago while the corner it steers to opens into a polygon further on:
+            // the corridor runs along the edge it should cross, and the walk slides along that edge without entering the next
+            // polygon. Where a corridor follows a tile seam between two floors (Shadowfang Keep, the stair from the cells up to
+            // the ledge: the polygons on either side of the seam lie 3-5 y apart), the corner is reached in plan, the walk stays on
+            // its own floor, and the next steer target is the corner it came from; the walk swung between two corners 1.3 y apart
+            // until the path ran out of points, and every path from the cells up to the ledge was NoPath although the corridor
+            // reached the ledge. The corridor says the corner leads into that polygon, so the walk drops the swing it made and
+            // goes on from that polygon.
+            uint32 back = nsmoothPath;
+            uint32 const lowest = nsmoothPath > 6 ? nsmoothPath - 6 : 0;
+            while (back > lowest && !InRangeYZX(&smoothPath[(back - 1) * VERTEX_SIZE], iterPos, SMOOTH_PATH_SLOP, 1000.0f))
+                --back;
+            uint32 ahead = 1;
+            while (ahead < npolys && polys[ahead] != steerPosRef)
+                ++ahead;
+            if (back > lowest && ahead < npolys)
+            {
+                for (uint32 i = ahead; i < npolys; ++i)
+                    polys[i - ahead] = polys[i];
+                npolys -= ahead;
+                float onPoly[VERTEX_SIZE];
+                if (dtStatusSucceed(_navMeshQuery->closestPointOnPoly(polys[0], iterPos, onPoly, nullptr)))
+                {
+                    dtVcopy(iterPos, onPoly);
+                    iterPos[1] += 0.5f;
+                }
+                // Keep the point the swing started from, drop the swing itself.
+                nsmoothPath = back;
             }
         }
 

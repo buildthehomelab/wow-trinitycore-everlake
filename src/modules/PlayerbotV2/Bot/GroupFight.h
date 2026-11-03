@@ -36,6 +36,10 @@ constexpr uint32_t kOrderWinsMs = 10000;
 // a target swap, an opener lost to a moving mob or a walk into sight takes up to about 4 s (sfk RC8: 3.7 and 4.0 s); the UBRS faults
 // this catches ran 18 s.
 constexpr uint32_t kIdleFaultMs = 5000;
+// The leader's combat flag alone holds the group in the fight this long. After that it counts only while a mob in combat with the group
+// is within kGroupFightYd of him: a mob that fled, or one his pet chased off, kept him flagged in combat with nothing near, and his
+// bots stood still up to 67 s, neither fighting nor following (KailON, Southsea Privateers, 0.1.27.2).
+constexpr uint32_t kLeaderFlagOnlyMs = 8000;
 
 enum class Order : uint8_t { None, Stop, Flee, Follow, Stay, PullBack, Fallback };
 
@@ -55,6 +59,8 @@ struct Inputs
     bool leader_alive = false;
     bool leader_in_combat = false;
     bool member_fighting_near_leader = false;   // another living member within kGroupFightYd of the leader is in combat
+    bool leader_fight_near = true;      // a mob in combat with the group (or its pets) is within kGroupFightYd of the leader
+    uint32_t leader_flag_only_ms = 0;   // how long the leader has been in combat with nothing near him (0 while something is)
     bool self_in_combat = false;        // the bot itself has aggro: it fights whatever (self-defence is never held)
     Order order = Order::None;          // the leader's standing order to this bot
     uint32_t order_age_ms = 0;          // how long ago it was given
@@ -63,7 +69,8 @@ struct Inputs
 
 inline bool GroupFighting(Inputs const& in)
 {
-    return in.leader_alive && (in.leader_in_combat || in.member_fighting_near_leader);
+    bool const leader_fights = in.leader_in_combat && (in.leader_fight_near || in.leader_flag_only_ms < kLeaderFlagOnlyMs);
+    return in.leader_alive && (leader_fights || in.member_fighting_near_leader);
 }
 
 // Whether a leader order still beats the fight: Stop, Flee, Pull back and Fallback always while fresh; Follow and Stay while fresh, or

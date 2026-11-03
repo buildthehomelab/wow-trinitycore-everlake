@@ -4325,12 +4325,14 @@ AuctionHouseBot.Buyer.ChanceMultiplier.Yellow = 100
 AuctionHouseBot.Buyer.Recheck.Interval = 20
 
 #
-#    AuctionHouseBot.Buyer.Stacks
-#       Description: Also buy stackable listings (herbs, ore, cloth...), always the whole listing.
-#       Default:     0 - (Disabled, only single items are bought)
-#                    1 - (Enabled)
+#    AuctionHouseBot.Buyer.Commodities
+#       Description: Also buy stackable listings (herbs, ore, cloth, potions...), always the whole listing.
+#                    AuctionHouseBot.Buyer.Stacks is the older name for the same switch and is only read
+#                    when AuctionHouseBot.Buyer.Commodities is not set.
+#       Default:     1 - (Enabled)
+#                    0 - (Disabled, only single items are bought)
 
-AuctionHouseBot.Buyer.Stacks = 0
+AuctionHouseBot.Buyer.Commodities = 1
 
 #
 #    AuctionHouseBot.Buyer.MaxPriceMultiplier

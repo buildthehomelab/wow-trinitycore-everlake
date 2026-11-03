@@ -20,7 +20,7 @@
         'Playerbot.World.MaxBots'           = '220'
         'Playerbot.World.BotsPerPlayer'     = '160'
         'Playerbot.World.CityBots'          = '160'
-        'Playerbot.World.ZoneBots'          = '60'
+        'Playerbot.World.ZoneBots'          = '48'
         'Playerbot.World.PoolMax'           = '3000'
         'Playerbot.AddonHint.Enable'        = '0'
         'Playerbot.World.ActivityRadius'    = '600'
