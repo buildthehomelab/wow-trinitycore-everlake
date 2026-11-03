@@ -9,6 +9,19 @@ $root = Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'ClientBuild.ps1')
 $dbc = Join-Path $root 'server\data\dbc'
 if (-not (Test-Path $dbc)) { return $true }   # no data yet: the full extraction (extract-data.ps1) writes the tables and the stamp
+# The game tables come in one language folder (server\data\dbc\enUS, ruRU, deDE ...). 0.1.28.1 picked the language of the new client
+# from its .build.info each time and put the new folder next to the old one: two builds side by side, and a worldserver that loads one
+# as its tables and the other's strings on top crashes at start. Keep the oldest folder (the language of the install) and extract that
+# language again below; the stamp is cleared for it.
+$localeNames = 'enUS', 'deDE', 'esES', 'esMX', 'frFR', 'itIT', 'koKR', 'ptBR', 'ruRU', 'zhCN', 'zhTW'
+function Get-TableSets { @(Get-ChildItem $dbc -Directory -ErrorAction SilentlyContinue | Where-Object { $localeNames -contains $_.Name } | Sort-Object CreationTime, Name) }
+$sets = @(Get-TableSets)
+if ($sets.Count -gt 1) {
+    $keep = $sets[0]
+    foreach ($s in $sets | Select-Object -Skip 1) { Remove-Item $s.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+    Remove-Item (Join-Path $dbc '.client-build') -ErrorAction SilentlyContinue
+    Write-Warning "The server's game tables had $($sets.Count) language folders ($(($sets | ForEach-Object Name) -join ', ')); kept $($keep.Name) and they are extracted again from your game."
+}
 if (-not $Client) {
     $saved = Join-Path $root 'config\client.txt'
     if (Test-Path $saved) { $Client = (Get-Content $saved -TotalCount 1).Trim() }
@@ -32,12 +45,24 @@ $base = Split-Path $use.Dir -Parent
 $locale = 'enUS'
 $bi = Get-Content (Join-Path $base '.build.info') -Raw -ErrorAction SilentlyContinue
 if ($bi -match '\b(enUS|enGB|deDE|esES|esMX|frFR|itIT|koKR|ptBR|ruRU|zhCN|zhTW)\b') { $locale = $Matches[1]; if ($locale -eq 'enGB') { $locale = 'enUS' } }
+$infoLocale = $locale
+$have1 = @(Get-TableSets)
+if ($have1.Count -eq 1) { $locale = $have1[0].Name }   # the tables stay in the language they were made in
 Write-Host "Updating the server's game tables to your client's build $($use.Build) (about a minute)..." -ForegroundColor Yellow
 $work = Join-Path $root 'server\db2-refresh'
 Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $work | Out-Null
 Push-Location (Join-Path $root 'server')
-try { & $tool -i "$base" -o "$work" -e 2 -l $locale -p $use.Product | Out-Null } finally { Pop-Location }
+try {
+    & $tool -i "$base" -o "$work" -e 2 -l $locale -p $use.Product | Out-Null
+    if (-not @(Get-ChildItem (Join-Path $work 'dbc') -Recurse -Filter '*.db2' -ErrorAction SilentlyContinue).Count -and $locale -ne $infoLocale) {
+        # the client has no files in the language of the old tables: take the client's own language and replace the old folder
+        $locale = $infoLocale
+        Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force $work | Out-Null
+        & $tool -i "$base" -o "$work" -e 2 -l $locale -p $use.Product | Out-Null
+    }
+} finally { Pop-Location }
 $new = Join-Path $work 'dbc'
 if (-not @(Get-ChildItem $new -Recurse -Filter '*.db2' -ErrorAction SilentlyContinue).Count) {
     Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
@@ -55,6 +80,7 @@ if ($LASTEXITCODE -ge 8) {
     Write-Warning 'Copying the new game tables failed; the previous ones were put back.'
     return $false
 }
+foreach ($s in @(Get-TableSets | Where-Object { $_.Name -ne $locale })) { Remove-Item $s.FullName -Recurse -Force -ErrorAction SilentlyContinue }   # never two builds side by side
 Set-Content $stamp "$($use.Build)" -Encoding ascii
 Remove-Item $work, $old -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "The server's game tables are now build $($use.Build)." -ForegroundColor Green
