@@ -118,7 +118,7 @@ function Do-Settings {
     # the server ignores a settings file that does not start with a section line, so the file always begins with [worldserver].
     # Left without a setting the start sets it aside (the 0.1.15 server does not start with a settings file that holds none).
     if (-not (Test-Path $f)) {
-        "[worldserver]`r`n# Your own settings. Anything here overrides the realm settings and survives updates.`r`n# Example:  Playerbot.World.MaxBots = 300`r`n# Restart the server after saving (menu 3)." | Set-Content $f
+        "[worldserver]`r`n# Your own settings. Anything here overrides the realm settings and survives updates.`r`n# Example:  Bots.Size = Normal   (Off, Low, Normal or High)`r`n# Restart the server after saving (menu 3)." | Set-Content $f
     } elseif (-not (Select-String -Path $f -Pattern '^\s*\[' -Quiet)) {
         ("[worldserver]`r`n" + (Get-Content $f -Raw)) | Set-Content $f
     }

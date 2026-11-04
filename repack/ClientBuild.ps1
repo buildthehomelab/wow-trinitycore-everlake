@@ -152,6 +152,8 @@ function Sync-AlsoAcceptBuilds([string]$Root) {
             $hit = $false
             $out = @(foreach ($l in $lines) { if ($l -match '^\s*Realm\.AlsoAcceptBuilds\s*=') { $hit = $true; $want } else { $l } })
             if (-not $hit) { $out += $want }
+            # bnetserver reads Network.RequestsPerSecond and warns when an older conf has no such line (the server falls back to 10)
+            if ($name -eq 'bnetserver.conf' -and -not @($out | Where-Object { $_ -match '^\s*Network\.RequestsPerSecond\s*=' }).Count) { $out += 'Network.RequestsPerSecond = 10' }
             if (($out -join "`n") -ne ($lines -join "`n")) { Set-Content $conf $out -Encoding ascii }
         } catch { Write-Warning "Could not set Realm.AlsoAcceptBuilds in $($name): $($_.Exception.Message)" }
     }

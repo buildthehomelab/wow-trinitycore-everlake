@@ -847,13 +847,21 @@ public:
     //   Passive    - the bot starts nothing on its own (no autopilot pull, no assist on the owner's, the skull's or a member's
     //                target); it defends itself and the group (a mob already on a member) and fights on the owner's
     //                attack / pull order (release_owner_lead opens a window);
-    //   Aggressive - besides the group's own fights it attacks any hostile within kAggressiveRadiusYd of the owner.
+    //   Aggressive - besides the group's own fights it attacks any hostile within kAggressiveRadiusYd of the owner;
+    //   NoFight    - the panel's "Passive" (the word "passive"): the bot attacks nothing at all, not to defend itself or the group,
+    //                not on the group's fight and not on an attack / pull order, until the stance changes. Heals, buffs and other
+    //                friendly spells go on. The builder sets BotSnapshot::no_fight; the emitter drops every attack and harmful spell
+    //                and the snapshot shows the bot no enemy (a hunter player tames a beast while the bots stand by, 2026-11-03).
+    // Passive is shown as "Defensive" on the panel (the word "defensive"): it starts nothing but defends and joins the group's fight.
     // Written by the chat handlers (world thread), read by the bot worker.
-    enum class OwnerStance : uint8_t { Auto = 0, Passive = 1, Aggressive = 2 };
+    enum class OwnerStance : uint8_t { Auto = 0, Passive = 1, Aggressive = 2, NoFight = 3 };
     static constexpr float kAggressiveRadiusYd = 10.0f;   // Aggressive: hostiles this close to the owner are attacked
     OwnerStance owner_stance() const { return OwnerStance(orders_.stance.load(std::memory_order_relaxed)); }
     bool set_owner_stance(OwnerStance st) { return orders_.stance.exchange(uint8_t(st), std::memory_order_relaxed) != uint8_t(st); }
-    bool owner_passive() const { return owner_stance() == OwnerStance::Passive; }
+    // Starts no fight on its own: Defensive (Passive) or the full Passive (NoFight).
+    bool owner_passive() const { OwnerStance const st = owner_stance(); return st == OwnerStance::Passive || st == OwnerStance::NoFight; }
+    // The full Passive: fights nothing at all (see OwnerStance::NoFight).
+    bool owner_no_fight() const { return owner_stance() == OwnerStance::NoFight; }
     // The owner's last attack / pull / assist order is fresh (15 s): a passive bot fights during it.
     bool owner_order_window_open() const
     {
@@ -865,6 +873,7 @@ public:
     // Starts no fight on its own right now (stance Passive, or Auto in an instance led by a human), outside an order window.
     bool passive_now(bool human_led_instance) const
     {
+        if (owner_no_fight()) return true;   // no order window opens the full Passive
         if (owner_order_window_open()) return false;
         OwnerStance const st = owner_stance();
         return st == OwnerStance::Passive || (st == OwnerStance::Auto && human_led_instance);
@@ -1445,7 +1454,11 @@ public:
     bool       dungeon_cross_direct() const { return dungeon_cross_direct_; }
     void       set_dungeon_cross_direct(bool d) { dungeon_cross_direct_ = d; }
     void       clear_dungeon_cross() { dungeon_cross_until_ms_ = 0; cross_episode_since_ms_ = 0;
-                                       dungeon_cross_direct_ = false; }
+                                       dungeon_cross_direct_ = false; cross_fight_yield_ = false; }
+    // A crossing that stalled while mobs hit the bot gives way to the fight until combat ends (DungeonHonorCross); the
+    // commitment itself is kept, so the hop resumes (or its out-of-combat recovery fires) after the fight.
+    bool       cross_fight_yield() const { return cross_fight_yield_; }
+    void       set_cross_fight_yield(bool y) { cross_fight_yield_ = y; }
 
     // ── Tank chase-commit latch (2026-07-02, stage 4) ──────────────────────
     // Once a tank in combat chooses to walk a genuinely LONG-but-complete
@@ -3981,6 +3994,7 @@ private:
     // cross_frozen_ms) — kept separate from frozen_x_/y_/z_ which the strand
     // recovery owns and resets on cohesion.
     uint32         cross_frozen_since_ms_ = 0;
+    bool           cross_fight_yield_ = false;
     float          cross_frozen_x_ = 0.f;
     float          cross_frozen_y_ = 0.f;
     float          cross_frozen_z_ = 0.f;

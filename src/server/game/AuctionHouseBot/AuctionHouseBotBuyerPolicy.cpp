@@ -42,6 +42,7 @@ namespace
     uint32 _maxBuysPerHour = 0;       // 0 = unlimited
     bool _fair = false;
     float _fairMinChance = 35.0f;     // percent at the price cap
+    uint32 _dropFloorPerLevel = 0;    // copper per item level, 0 = off
 
     time_t _dayStart = 0;
     uint64 _spentToday = 0;
@@ -71,6 +72,27 @@ namespace
         }
     }
 
+    // Loot-only scrolls, potions, recipes and other drops carry a token vendor price (a scroll sells for a few copper),
+    // so their fair price came out at 1 silver and the price cap at 4 silver: a player's listing at any normal price
+    // was never bought, while crafted gear (real vendor value) sold. Give white and better consumables, recipes and
+    // miscellaneous items a floor by item level (AuctionHouseBot.Buyer.DropFloorPerLevel copper per level).
+    // Gray junk and trade goods (cloth, herbs, ore) keep their old value.
+    uint64 DropFloor(ItemTemplate const* proto)
+    {
+        if (!_dropFloorPerLevel || proto->GetQuality() < ITEM_QUALITY_NORMAL)
+            return 0;
+        switch (proto->GetClass())
+        {
+            case ITEM_CLASS_CONSUMABLE:
+            case ITEM_CLASS_RECIPE:
+            case ITEM_CLASS_MISCELLANEOUS:
+                break;
+            default:
+                return 0;
+        }
+        return uint64(std::max<uint32>(proto->GetBaseItemLevel(), 1)) * _dropFloorPerLevel;
+    }
+
     // What the item is worth per unit: the vendor buy price, or four times the vendor sell price
     // (the same stand-in the seller uses when an item has no buy price).
     uint64 FairUnitPrice(ItemTemplate const* proto)
@@ -78,7 +100,7 @@ namespace
         uint64 buy = proto->GetBuyPrice() / std::max<uint32>(1, proto->GetBuyCount());
         uint64 sell = uint64(proto->GetSellPrice()) * 4;
         // the seller's market value when AuctionHouseBot.Vanilla.ValueCurve is on, so the buyer pays what the bot asks
-        return std::max<uint64>({ buy, sell, AuctionBotVanilla::UnitValue(proto), SILVER });
+        return std::max<uint64>({ buy, sell, AuctionBotVanilla::UnitValue(proto), SILVER, DropFloor(proto) });
     }
 }
 
@@ -95,9 +117,10 @@ void LoadConfig()
     _maxBuysPerHour = sConfigMgr->GetIntDefault("AuctionHouseBot.Buyer.MaxBuysPerHour", 0);
     _fair = sConfigMgr->GetBoolDefault("AuctionHouseBot.Buyer.FairPricing", false);
     _fairMinChance = std::clamp(sConfigMgr->GetFloatDefault("AuctionHouseBot.Buyer.FairMinChance", 35.0f), 0.0f, 100.0f);
+    _dropFloorPerLevel = sConfigMgr->GetIntDefault("AuctionHouseBot.Buyer.DropFloorPerLevel", 100);
 
-    TC_LOG_INFO("ahbot", "AHBot buyer: stackable items {}, fair pricing {}, price cap x{:.2f}, delay {}-{} s, max {} per hour, budget {}g a day",
-        _stacks ? "on" : "off", _fair ? "on" : "off", _maxPriceMultiplier, _minDelay, _maxDelay, _maxBuysPerHour, _dailyBudget / GOLD);
+    TC_LOG_INFO("ahbot", "AHBot buyer: stackable items {}, fair pricing {}, price cap x{:.2f}, delay {}-{} s, max {} per hour, budget {}g a day, drop floor {} copper per item level",
+        _stacks ? "on" : "off", _fair ? "on" : "off", _maxPriceMultiplier, _minDelay, _maxDelay, _maxBuysPerHour, _dailyBudget / GOLD, _dropFloorPerLevel);
 }
 
 bool StacksEnabled()

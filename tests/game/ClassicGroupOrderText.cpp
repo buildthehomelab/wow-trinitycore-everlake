@@ -54,6 +54,15 @@ TEST_CASE("GroupOrder: owner words need the config switch", "[grouporder]")
     CHECK(ClassifyGroupOrder("stance passive", true) == "stance passive");
     CHECK(ClassifyGroupOrder("Stance Aggressive", true) == "stance aggressive");
     CHECK_FALSE(ClassifyGroupOrder("stance passive", false));
+    // The three stances (0.1.29): Defensive, Aggressive and the full Passive, and their re-sends.
+    CHECK(ClassifyGroupOrder("Passive", true) == "passive");
+    CHECK(ClassifyGroupOrder("defensive", true) == "defensive");
+    CHECK(ClassifyGroupOrder("stance defensive", true) == "stance defensive");
+    CHECK(ClassifyGroupOrder("stance nofight", true) == "stance nofight");
+    // Ignore target / Clear: the owner's list, a group order whether or not the plain words are on.
+    CHECK(ClassifyGroupOrder("Ignore Target", false) == "ignore target");
+    CHECK(ClassifyGroupOrder("ignore clear", false) == "ignore clear");
+    CHECK_FALSE(ClassifyGroupOrder("ignore", false));
 }
 TEST_CASE("GroupOrder: a line addressed to a group bot by name is its order without the ';'", "[grouporder]")
 {

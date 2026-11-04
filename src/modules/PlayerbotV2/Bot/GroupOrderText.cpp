@@ -29,9 +29,10 @@ std::optional<std::string> ClassifyGroupOrder(std::string_view msg, bool owner_w
     static constexpr std::array<std::string_view, 18> kGroupOrders =
         { "follow", "stay", "hold", "resume", "attack", "come", "disengage", "assist", "pull", "flee", "release",
           "fallback", "fall back", "pull back", "pullback", "pull and back", "back", "rally here" };
-    // "stance passive" / "stance aggressive" are the ForeverBots panel's own re-send of its stance (BotCommandParser): stance only.
-    static constexpr std::array<std::string_view, 22> kOwnerWords =
-        { "summon", "passive", "defensive", "aggressive", "stance passive", "stance aggressive", "who", "help", "stats", "gear", "inventory",
+    // "stance nofight" / "stance defensive" / "stance aggressive" (and the older add-on's "stance passive") are the ForeverBots panel's
+    // own re-send of its stance (BotCommandParser): stance only.
+    static constexpr std::array<std::string_view, 24> kOwnerWords =
+        { "summon", "passive", "defensive", "aggressive", "stance passive", "stance aggressive", "stance defensive", "stance nofight", "who", "help", "stats", "gear", "inventory",
           "quests", "quest list", "accept", "accept all", "turn in", "turnin", "share", "loot", "loot all",
           "sell grey", "repair" };
     bool const owner_word = owner_words &&
@@ -52,7 +53,11 @@ std::optional<std::string> ClassifyGroupOrder(std::string_view msg, bool owner_w
         order.rfind("tank ", 0) == 0 || order == "clear tanks" || order == "clear tank" ||
         order.rfind("rti ", 0) == 0 || order.rfind("pull rti", 0) == 0 ||
         // The panel's CC switch: "crowdcontrol on|off" (also "cc on|off"), answered once for the whole group.
-        order.rfind("crowdcontrol ", 0) == 0 || order.rfind("crowd control ", 0) == 0 || order == "cc on" || order == "cc off";
+        order.rfind("crowdcontrol ", 0) == 0 || order.rfind("crowd control ", 0) == 0 || order == "cc on" || order == "cc off" ||
+        // The panel's Ignore target button and key: the owner's own list, answered once (BotCommandParser::ApplyIgnoreOrder).
+        order == "ignore target" || order == "ignore clear" ||
+        // The Positions tab's words: "place <shape> [gap] [here|target] [who...]", answered once (BotCommandParser::ApplyPlaceOrder).
+        order.rfind("place ", 0) == 0;
     if (!arg_order && !owner_word && std::find(kGroupOrders.begin(), kGroupOrders.end(), order) == kGroupOrders.end())
         return std::nullopt;
     if (order == "assist")

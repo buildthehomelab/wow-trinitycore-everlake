@@ -10,6 +10,7 @@
 #include "GameTime.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
+#include "Timer.h"
 #include "Group.h"
 #include "InstanceGroupCap.h"
 #include "Log.h"
@@ -124,19 +125,25 @@ void HireMgr::LoadFromDb()
     std::unique_lock lk(mtx_);
     hired_.clear();
     opted_in_.clear();
+    loaned_.clear();
     if (rows)
         do
         {
             Field* f = rows->Fetch();
             uint8 const g = f[1].GetUInt8();
+            if (g == Hire::kLoanGradeDb)
+            {
+                loaned_[f[0].GetUInt64()] = 0;
+                continue;
+            }
             if (g == 0 || g >= Hire::kGradeCount)
                 continue;
             hired_[f[0].GetUInt64()] = HireRecord{ Hire::Grade(g), f[2].GetUInt64(), f[3].GetUInt64() };
         } while (rows->NextRow());
     if (prefs)
         do { opted_in_.insert(prefs->Fetch()[0].GetUInt32()); } while (prefs->NextRow());
-    TC_LOG_INFO("playerbot.v2", "[hire] mode={} hired bots={} accounts choosing hired bots={}", uint32(ConfigMode()), hired_.size(),
-                opted_in_.size());
+    TC_LOG_INFO("playerbot.v2", "[hire] mode={} hired bots={} finder loan bots={} accounts choosing hired bots={}", uint32(ConfigMode()),
+                hired_.size(), loaned_.size(), opted_in_.size());
 }
 
 bool HireMgr::OptedIn(uint32 account_id) const
@@ -160,7 +167,7 @@ bool HireMgr::MustHire(Player const* player) const
     if (!player || !player->GetSession() || player->GetSession()->IsBot())
         return false;
     bool const gm = player->GetSession()->GetSecurity() > SEC_PLAYER;
-    bool const bypass = sConfigMgr->GetBoolDefault("Playerbot.Hire.GmBypass", true, true);
+    bool const bypass = sConfigMgr->GetBoolDefault("Playerbot.Hire.GmBypass", false, true);
     return Hire::Required(ConfigMode(), OptedIn(player->GetSession()->GetAccountId()), gm, bypass);
 }
 
@@ -193,11 +200,47 @@ void HireMgr::Forget(BotId bot)
 {
     {
         std::unique_lock lk(mtx_);
-        if (!hired_.erase(bot))
+        bool const was_hired = hired_.erase(bot) != 0;
+        bool const was_loaned = loaned_.erase(bot) != 0;
+        if (!was_hired && !was_loaned)
             return;
         called_ms_.erase(bot);
     }
     Db().DirectPExecute("UPDATE playerbot_v2_character SET hire_grade = 0, hire_price = 0, hire_paid_until = 0 WHERE character_guid_low = {}", bot);
+}
+
+void HireMgr::SetLoaned(BotId bot, uint32 now_ms)
+{
+    {
+        std::unique_lock lk(mtx_);
+        hired_.erase(bot);
+        loaned_[bot] = now_ms ? now_ms : 1;
+    }
+    Db().DirectPExecute("UPDATE playerbot_v2_character SET hire_grade = {}, hire_price = 0, hire_paid_until = 0 WHERE character_guid_low = {}",
+                        uint32(Hire::kLoanGradeDb), bot);
+}
+
+bool HireMgr::IsLoaned(BotId bot) const
+{
+    std::shared_lock lk(mtx_);
+    return loaned_.contains(bot);
+}
+
+bool HireMgr::LoanSettled(BotId bot, uint32 now_ms) const
+{
+    std::shared_lock lk(mtx_);
+    auto const it = loaned_.find(bot);
+    return it != loaned_.end() && (it->second == 0 || getMSTimeDiff(it->second, now_ms) >= Hire::kLoanGraceMs);
+}
+
+std::vector<BotId> HireMgr::LoanedBots() const
+{
+    std::shared_lock lk(mtx_);
+    std::vector<BotId> out;
+    out.reserve(loaned_.size());
+    for (auto const& [id, _] : loaned_)
+        out.push_back(id);
+    return out;
 }
 
 uint32 HireMgr::CountGrade(uint32 account_id, Hire::Grade grade) const

@@ -26,6 +26,67 @@ function Get-PortOwnerPath([int]$Port) {
         return (Get-Process -Id $c.OwningProcess -ErrorAction Stop).Path
     } catch { return $null }
 }
+# True when the MySQL that answers on our port is the one of THIS folder: it lets root in without a password (as ours does) and
+# its data folder is this folder's mysql-data. Used when Windows does not say which program listens (a Windows service or a
+# program run as administrator hides its path from a normal user), which used to count as ours.
+function Test-OurMySqlAnswers([string]$Root) {
+    $mysql = Join-Path $Root 'mysql\bin\mysql.exe'
+    if (-not (Test-Path $mysql)) { return $true }   # cannot ask: keep the old behaviour
+    $out = @(& $mysql "--defaults-file=$Root\config\my.ini" -u root --connect-timeout=5 -N -B -e 'SELECT @@datadir' 2>&1)
+    if ($LASTEXITCODE) { return $false }
+    $dir = ([string]($out | Select-Object -Last 1)).Trim().TrimEnd('\', '/')
+    try { return ([IO.Path]::GetFullPath($dir) -ieq [IO.Path]::GetFullPath((Join-Path $Root 'mysql-data'))) } catch { return $false }
+}
+# A short name for whatever listens on the port, for the player: the Windows service (MySQL80, MariaDB...) when it is one,
+# else the program path, else ''.
+function Get-PortOwnerText([int]$Port) {
+    try {
+        $c = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop | Select-Object -First 1
+        $svc = @(Get-CimInstance Win32_Service -Filter "ProcessId = $($c.OwningProcess)" -ErrorAction SilentlyContinue) | Select-Object -First 1
+        if ($svc) { return "the Windows service `"$($svc.Name)`"" }
+        $p = Get-Process -Id $c.OwningProcess -ErrorAction Stop
+        if ($p.Path) { return $p.Path }
+        return "$($p.ProcessName).exe (process $($c.OwningProcess))"
+    } catch { return '' }
+}
+# Logs in to the database the way the worldserver does (its LoginDatabaseInfo; a later conf.d file wins) and returns MySQL's
+# error text, or '' when the login works. The worldserver itself only logs fatal SQL errors (Logger.sql.sql = 6), so when it
+# closes with "DatabasePool Login NOT opened" this is the only place the real reason shows.
+function Test-WorldDbLogin([string]$Root) {
+    $files = @(Join-Path $Root 'server\worldserver.conf') + @(Get-ChildItem (Join-Path $Root 'server\worldserver.conf.d') -Filter '*.conf' -File -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object FullName)
+    $info = $null
+    foreach ($f in $files) {
+        $m = Select-String -Path $f -Pattern '^\s*LoginDatabaseInfo\s*=\s*"([^"]*)"' -ErrorAction SilentlyContinue | Select-Object -Last 1
+        if ($m) { $info = $m.Matches[0].Groups[1].Value }
+    }
+    if (-not $info) { return 'No LoginDatabaseInfo line in worldserver.conf.' }
+    $v = $info -split ';'
+    if ($v.Count -lt 5) { return "The LoginDatabaseInfo line has $($v.Count) parts instead of 5 (host;port;user;password;database)." }
+    $out = @(& (Join-Path $Root 'mysql\bin\mysql.exe') --no-defaults "--host=$($v[0])" "--port=$($v[1])" "--user=$($v[2])" "--password=$($v[3])" --connect-timeout=5 -N -B -e 'SELECT 1' $v[4] 2>&1 |
+             ForEach-Object { "$_" } | Where-Object { $_ -notmatch 'Using a password on the command line' })
+    if ($LASTEXITCODE) { return (($out | Where-Object { $_ }) -join ' ').Trim() }
+    ''
+}
+# The servers log in with the password written in their *DatabaseInfo lines; Sync-TrinityUser gives the database the one in
+# secrets\mysql.txt. When the two differ (settings files from an older install or another folder, a secrets file copied over),
+# every start ended with "Access denied for user 'trinity'" and "DatabasePool Login NOT opened". Puts the secrets password and
+# our port into every trinity line of the server settings. Only those two parts of those lines change.
+function Sync-ConfDbPassword([string]$Root) {
+    $m = Select-String -Path (Join-Path $Root 'secrets\mysql.txt') -Pattern '^mysql trinity: (.+)$' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $m) { return }
+    $pw = $m.Matches[0].Groups[1].Value; $port = Get-OurMySqlPort $Root
+    $confs = @(Get-ChildItem (Join-Path $Root 'server') -Filter '*.conf' -File -ErrorAction SilentlyContinue) +
+             @(Get-ChildItem (Join-Path $Root 'server\worldserver.conf.d') -Filter '*.conf' -File -ErrorAction SilentlyContinue)
+    foreach ($f in $confs) {
+        $t = @(Get-Content $f.FullName)
+        $n = $t | ForEach-Object {
+            if ($_ -match '^(\s*\w*DatabaseInfo\s*=\s*")(127\.0\.0\.1|localhost);(\d+);trinity;([^;"]*);([^;"]+)"(.*)$' -and ($Matches[4] -ne $pw -or $Matches[3] -ne "$port")) {
+                "$($Matches[1])$($Matches[2]);$port;trinity;$pw;$($Matches[5])`"$($Matches[6])"
+            } else { $_ }
+        }
+        if (($n -join "`n") -ne ($t -join "`n")) { Set-Content $f.FullName $n -Encoding ascii; Write-Host "Database login in $($f.Name) set to match secrets\mysql.txt." }
+    }
+}
 # Makes the 'trinity' user, its password and the databases match secrets\mysql.txt. The password file used to be written before
 # the user was created and the result was never checked, so an install whose first database step failed (or ran against another
 # MySQL on the port) kept a password the database never got, and every start ended with "DatabasePool Login NOT opened".
@@ -122,6 +183,28 @@ function Set-OurMySqlPort([string]$Root, [int]$Old, [int]$New) {
     }
     Write-Host "Port $Old cannot be used on this PC (Windows keeps it for something else), so the database now uses port $New."
 }
+# The login server (1119, 8081) and the world server (8085) cannot move to other ports like MySQL can: the game asks for them.
+# Before a server starts, its ports are checked: one Windows keeps for itself (same ranges as above) or one another program
+# listens on stops the start with the reason, instead of a server window that closes or a login that never answers.
+function Test-GamePorts([string]$Root) {
+    $ranges = Get-ExcludedPortRanges
+    $want = @()
+    if (-not (Get-Process bnetserver -ErrorAction SilentlyContinue)) { $want += 1119, 8081 }
+    if (-not (Get-Process worldserver -ErrorAction SilentlyContinue)) { $want += 8085 }
+    foreach ($p in $want) {
+        foreach ($x in $ranges) {
+            if ($p -ge $x[0] -and $p -le $x[1]) {
+                throw "Windows keeps port $p for itself right now (Hyper-V, WSL or Docker reserve ports, and that can change after a restart or a Windows update), so the server cannot use it. Fix: right-click Start, open Terminal (Admin) and run: net stop winnat   then   net start winnat. Then start again."
+            }
+        }
+        $owner = Get-PortOwnerPath $p
+        if ($owner) {
+            $name = [IO.Path]::GetFileName($owner)
+            if ($name -ieq 'WoWForeverLauncher.exe') { throw "Port $p is used by the WoW Forever launcher: it is still connected to a friend's server. Pick your own server in the launcher (or close and open the launcher again), then start again." }
+            throw "Port $p is already used by another program: $name ($owner). The server needs that port. Close that program (Task Manager, Details tab) or stop it from starting with Windows, then start again."
+        }
+    }
+}
 function Move-OurMySqlPort([string]$Root, [int]$Port) {
     $ranges = Get-ExcludedPortRanges
     foreach ($p in (3308..3399) + (13307..13399) + (23307..23399)) {
@@ -207,6 +290,15 @@ function Start-OurMySql([string]$Root, [int]$WaitSeconds = 90) {
         $ours = [IO.Path]::GetFullPath((Join-Path $Root 'mysql\bin\mysqld.exe'))
         if ($owner -and ([IO.Path]::GetFullPath($owner) -ne $ours)) {
             throw "Port $port is already used by another program: $owner. This is usually the MySQL of an older WoW Forever Bots folder that is still running. Stop that one (option 2 in its WoW Forever Bots menu, or restart the PC), then start again."
+        }
+        # Windows did not say which program it is (a service, or one run as administrator): ask the database itself.
+        if (-not $owner -and -not (Test-OurMySqlAnswers $Root)) {
+            $who = Get-PortOwnerText $port
+            if ($who -match '^the Windows service "(.+)"$') {
+                throw "Port $port is used by another MySQL on this PC ($who), not the one in this folder. Stop it: press Win+R, type services.msc, press Enter, find $($Matches[1]), right-click it and choose Stop, then open it and set Startup type to Manual so it does not start with Windows again. Then start again."
+            }
+            if (-not $who) { $who = 'a program Windows does not name' }
+            throw "Port $port is used by another MySQL on this PC ($who), not the one in this folder. It is usually another server pack, XAMPP, a MySQL install or an older WoW Forever Bots folder. Close it (Task Manager, Details tab: right-click mysqld.exe, Open file location shows which one), then start again."
         }
         return
     }

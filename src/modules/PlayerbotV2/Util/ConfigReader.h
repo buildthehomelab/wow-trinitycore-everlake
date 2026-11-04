@@ -362,6 +362,7 @@ public:
         float       temperature       = 0.8f;
         std::string keep_alive        = "30m";
         uint32      context_length    = 2048;
+        bool        think             = false;
         uint32      party_chance      = 100;
         uint32      second_reply_chance = 35;
         uint32      quiet_chance      = 30;

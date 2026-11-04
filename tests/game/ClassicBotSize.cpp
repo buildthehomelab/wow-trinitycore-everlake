@@ -106,3 +106,55 @@ TEST_CASE("Players in one zone share its bots", "[ClassicBotSize]")
     CHECK(PerPlayer(0, 3) == 0);
     CHECK(PerPlayer(2, 5) == 1);
 }
+
+TEST_CASE("Bots.Size = Off in the file means no world bots, not a size", "[ClassicBotSize]")
+{
+    CHECK(IsBotSizeOff("Off"));
+    CHECK(IsBotSizeOff(" OFF "));
+    CHECK(IsBotSizeOff("\"off\""));
+    CHECK(IsBotSizeOff("none"));
+    CHECK(IsBotSizeOff("0"));
+    CHECK(!IsBotSizeOff("Low"));
+    CHECK(!IsBotSizeOff(""));
+    CHECK(!IsBotSizeOff("of"));
+    CHECK(!ParseBotSize("Off"));   // Low / Normal / High stay the only sizes
+    PlainInput in;
+    in.size = ParseBotSize("Off");
+    CHECK(!ResolvePlainBots(in));   // on its own it sets no numbers; the spawner itself stops for Off
+}
+
+TEST_CASE("The panel's world bot choice", "[ClassicBotSize]")
+{
+    CHECK((ParsePopLevel("Off") == PopLevel::Off));
+    CHECK((ParsePopLevel(" 0 ") == PopLevel::Off));
+    CHECK((ParsePopLevel("low") == PopLevel::Low));
+    CHECK((ParsePopLevel("Medium") == PopLevel::Medium));
+    CHECK((ParsePopLevel("normal") == PopLevel::Medium));
+    CHECK((ParsePopLevel("HIGH") == PopLevel::High));
+    CHECK(!ParsePopLevel("file"));
+    CHECK(!ParsePopLevel(""));
+    CHECK(std::string(PopLevelWord(PopLevel::Medium)) == "medium");
+
+    PlainBots const off = PopLevelBots(PopLevel::Off, 1500);
+    CHECK(off.active_cap == 0);
+    CHECK(off.zone_hi == 0);
+    CHECK(off.in_city == 0);
+    CHECK(off.reserve == 1500);   // the characters stay; only nobody logs in
+    PlainBots const med = PopLevelBots(PopLevel::Medium, 0);
+    CHECK(med.active_cap == 250);
+    CHECK(med.zone_lo == 30);
+    CHECK(med.zone_hi == 45);
+    CHECK(med.in_city == 80);
+    CHECK(PopLevelBots(PopLevel::High, 0).active_cap == 500);
+    CHECK(PopLevelBots(PopLevel::Low, 0).active_cap == 120);
+}
+
+TEST_CASE("A step down logs bots out first, a step up does not", "[ClassicBotSize]")
+{
+    PlainBots const high = PresetBots(BotSize::High);
+    PlainBots const low = PresetBots(BotSize::Low);
+    CHECK(PopLevelNeedsDrain(high.active_cap, high.zone_hi, high.in_city, low));
+    CHECK(PopLevelNeedsDrain(low.active_cap, low.zone_hi, low.in_city, PopLevelBots(PopLevel::Off, 600)));
+    CHECK(!PopLevelNeedsDrain(low.active_cap, low.zone_hi, low.in_city, high));
+    CHECK(!PopLevelNeedsDrain(high.active_cap, high.zone_hi, high.in_city, high));
+}

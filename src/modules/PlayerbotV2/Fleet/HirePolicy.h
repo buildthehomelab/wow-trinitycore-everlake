@@ -33,6 +33,10 @@ constexpr uint64_t kMinPriceCopper   = 100;       // 1 silver
 constexpr uint32_t kPartyPlaces      = 4;         // the places beside the player in a 5-man
 constexpr uint32_t kRaidPlaces       = 39;        // ... in a 40-man
 constexpr uint32_t kDaySeconds       = 86400;
+// A Group Finder / dungeon finder bot made for a player who must hire: it plays with them for free while it stays in their group,
+// cannot be called on its own and is deleted once it leaves the group (a loan, not a hire). Stored as this hire_grade value.
+constexpr uint8_t  kLoanGradeDb      = 9;
+constexpr uint32_t kLoanGraceMs      = 120000;    // a loan bot that is still logging in or joining is not taken back yet
 
 constexpr Broker BrokerOfEntry(uint32_t entry)
 {

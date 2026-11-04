@@ -4335,6 +4335,17 @@ AuctionHouseBot.Buyer.Recheck.Interval = 20
 AuctionHouseBot.Buyer.Commodities = 1
 
 #
+#    AuctionHouseBot.Buyer.DropFloorPerLevel
+#       Description: Lowest fair price, in copper per item level, the buyer uses for white or better
+#                    consumables, recipes and miscellaneous items (scrolls, potions, drops). Their vendor
+#                    price is a few copper, so without a floor a player's listing was never bought.
+#                    Gray items and trade goods are not changed.
+#       Default:     100 - (1 silver per item level: a level 10 scroll is worth 10 silver)
+#                    0   - (Off)
+
+AuctionHouseBot.Buyer.DropFloorPerLevel = 100
+
+#
 #    AuctionHouseBot.Buyer.MaxPriceMultiplier
 #       Description: Never pay more per item than this times its fair price (vendor buy price, or four
 #                    times the vendor sell price, at least 1 silver).
@@ -4934,6 +4945,41 @@ Classic.ForeverKillXp = 0
 #                     0 - (Disabled, every caster uses the spell-level numbers)
 
 Classic.CreatureSpellLevelScaling = 2
+
+#    Classic.Respawn.Level1to10Pct
+#    Classic.Respawn.Level11to20Pct
+#    Classic.Respawn.Level21to30Pct
+#    Classic.Respawn.Level31to60Pct
+#        Description: WoW Forever: starting zones respawn fastest and respawns slow down as zones go up in level. The
+#                     creature's level picks this percent of its normal respawn time (open world only; dungeons, raids,
+#                     summons, bosses and rares keep their own timers; never shorter than 30 seconds).
+#                     100 = normal time, 50 = twice as fast. All four at 100 = off.
+#        Default:     50 / 70 / 85 / 100
+
+Classic.Respawn.Level1to10Pct = 50
+Classic.Respawn.Level11to20Pct = 70
+Classic.Respawn.Level21to30Pct = 85
+Classic.Respawn.Level31to60Pct = 100
+
+#    Classic.CreatureHealth.RaiseFromLevel
+#    Classic.CreatureHealth.RaiseAt60Pct
+#    Classic.CreatureHealth.Raids
+#        Description: WoW Forever gave higher level creatures more health. Vanilla creatures above RaiseFromLevel get more
+#                     health, rising in a straight line to RaiseAt60Pct percent more at level 60 (defaults: +5% at 30,
+#                     +10% at 40, +20% at 60). Raids only when Classic.CreatureHealth.Raids = 1. RaiseAt60Pct = 0 = off.
+#        Default:     20 / 20 / 0
+
+Classic.CreatureHealth.RaiseFromLevel = 20
+Classic.CreatureHealth.RaiseAt60Pct = 20
+Classic.CreatureHealth.Raids = 0
+
+#    Classic.AutoEquipNewBags
+#        Description: A new bag goes straight onto an empty bag slot. WoW Forever stopped this: new bags go into the
+#                     backpack and the player puts them on by hand. Bots always put new bags on.
+#        Default:     0 - (Disabled, WoW Forever: equip bags by hand)
+#                     1 - (Enabled, old behaviour)
+
+Classic.AutoEquipNewBags = 0
 
 #    Classic.Shop.Enabled
 #        Description: In-game Store: shop points, products from world.shop_* (.shop reload), the Gold Market, character

@@ -548,6 +548,9 @@ public:
     // it's PvE-only. Mirrors HandleTogglePvP. Sticky for 5 minutes after
     // disable per the standard PvP flag protocol.
     Result toggle_pvp();
+    // Set the explicit PvP flag (PLAYER_FLAGS_IN_PVP) on or off, as WorldSession::HandleSetPvP: on flags the bot now; off starts
+    // the usual 5 minute toggle-off outside hostile territory (inside it the realm keeps the bot flagged).
+    Result set_pvp(bool on);
     // Friend/ignore list management. `name` is normalized then resolved via
     // sCharacterCache (no async DB lookup — uses the cached snapshot, so newly-
     // created characters not yet flushed to cache will return InvalidTarget).

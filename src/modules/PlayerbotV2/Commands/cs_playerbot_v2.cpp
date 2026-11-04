@@ -60,6 +60,7 @@
 #include "Fleet/BotComposition.h"
 #include "Fleet/BotIdentityRegistry.h"
 #include "Fleet/BotPopulationManager.h"
+#include "Fleet/BotSize.h"
 #include "Fleet/InstanceGroupCap.h"
 #include "Fleet/BotSetupPipeline.h"
 #include "Fleet/CompanionDelete.h"
@@ -659,6 +660,8 @@ public:
             { "addon",         HandleBotAddonHello, rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No },
             { "add",           HandleBotAdd,        rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             { "lfg",           HandleBotLfg,        rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
+            // Every player: `.bot arena 2|3|leave` queues the caller's party (leader only) for a 2v2 / 3v3 arena, or leaves it.
+            { "arena",         HandleBotArena,      rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             { "dungeon",       HandleBotDungeon,    rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             { "call",          HandleBotCall,       rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             // Every player: brings the caller's own bots only (`.bot summon all|saved|<bot name>`).
@@ -673,6 +676,8 @@ public:
             { "list",          HandleBotList,       rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             { "hire",          HandleBotHire,       rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             { "world",         HandleBotWorld,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            // GM only: how many world bots the realm has (Off / Low / Medium / High), the same as the ForeverBots panel's World tab.
+            { "population",    HandleBotPopulation, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "bgstress",      HandleBotBgStress,   rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "bgsoak",        HandleBotBgSoak,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
         };
@@ -812,6 +817,61 @@ public:
 
     // .bot lfg [tank|healer|dps]: fill the group's missing tank / healer / damage places now with level-matched companions
     // (the Group Finder does the same by itself when nobody joins a posted listing in time). The word is your own role.
+    // `.bot arena 2|3|leave`: the arena join without the client's arena window. The party leader queues the whole party through
+    // the same handler as the client's join (party size, level bracket and the bot opponents all as for the window). "leave"
+    // leaves the arena queue (not a running match). The ForeverBots add-on can send the same line.
+    static bool HandleBotArena(ChatHandler* handler, Optional<std::string> what)
+    {
+        WorldSession* session = handler->GetSession();
+        Player* player = session ? session->GetPlayer() : nullptr;
+        if (!player)
+            return false;
+        std::string const w = what ? *what : std::string();
+        if (w == "leave")
+        {
+            bool left = false;
+            for (uint8 slot = 0; slot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++slot)
+            {
+                BattlegroundQueueTypeId const q = player->GetBattlegroundQueueTypeId(slot);
+                if (q == BATTLEGROUND_QUEUE_NONE || q.Type != uint8(BattlegroundQueueIdType::Arena))
+                    continue;
+                WorldPackets::Battleground::BattlefieldPort port{ WorldPacket(CMSG_BATTLEFIELD_PORT) };
+                port.Ticket.RequesterGuid = player->GetGUID();
+                port.Ticket.Id = slot;
+                port.Ticket.Type = WorldPackets::LFG::RideType::Battlegrounds;
+                port.AcceptedInvite = false;
+                session->HandleBattleFieldPortOpcode(port);
+                left = true;
+            }
+            handler->SendSysMessage(left ? "You left the arena queue." : "You are not in an arena queue.");
+            return true;
+        }
+        uint8 slot = 0xFF;
+        if (w == "2" || w == "2v2") slot = 0;          // ArenaTeam::GetTypeBySlot: 0 = 2v2, 1 = 3v3
+        else if (w == "3" || w == "3v3") slot = 1;
+        if (slot == 0xFF)
+        {
+            handler->SendSysMessage("Usage: .bot arena 2 (2v2, a party of 2), .bot arena 3 (3v3, a party of 3), .bot arena leave");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        if (Group const* grp = player->GetGroup(); grp && grp->GetLeaderGUID() != player->GetGUID())
+        {
+            handler->SendSysMessage("Only the party leader can queue the party for an arena.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        if (player->InBattleground())
+        {
+            handler->SendSysMessage("You are already in a battleground or arena.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        // HandleBattlemasterJoinArena answers on its own (queued, wrong party size, arenas off)
+        BattlegroundMgr::QueuePlayerForArena(player, slot, 0);
+        return true;
+    }
+
     static bool HandleBotLfg(ChatHandler* handler, Optional<std::string> ownRoleArg)
     {
         WorldSession* sess = handler->GetSession();
@@ -937,8 +997,8 @@ public:
         for (Playerbot::BotId id : CompanionsMatching(sess, "all"))
         {
             ObjectGuid const guid = ObjectGuid::Create<HighGuid::Player>(id);
-            if ((group && group->IsMember(guid)) || HireMgr::Instance().RecentlyCalled(id, now))
-                continue;
+            if ((group && group->IsMember(guid)) || HireMgr::Instance().RecentlyCalled(id, now) || HireMgr::Instance().IsLoaned(id))
+                continue;   // (a Group Finder loan bot only plays inside the group it was made for)
             if (Player const* online = ObjectAccessor::FindConnectedPlayer(guid); online && online->GetGroup())
                 continue;   // out with someone else of the account
             Playerbot::Role const declared = Playerbot::Services::Owners().DeclaredRole(id);
@@ -959,14 +1019,19 @@ public:
     // normal companion setup. Shared by `.bot add`, the Group Finder bot fill and the hire brokers. `outMsg` is what the owner
     // is told. In hired mode (Playerbot.Hire.*, HirePolicy.h) nothing is made out of nothing: an idle companion of the account
     // comes instead, or next to a broker a Sellsword is hired; `hireGrade` hires that grade from the broker beside `me`.
+    // `finder`: the Group Finder / dungeon finder fill (`.bot lfg`, `.bot dungeon`, a posted listing). It still works in hired mode
+    // (chris 2026-11-03: "you can still look for group"), but the bot is only lent: free, it stays with the group and is deleted
+    // when it leaves it, and it cannot be called on its own (HireMgr::SetLoaned).
     static bool AddCompanionFor(Player* me, WorldSession* sess, uint8 cls, Playerbot::Role role, uint8 race, uint8 gender,
                                 std::string const& className, std::string& outMsg,
-                                Playerbot::V2::Fleet::Hire::Grade hireGrade = Playerbot::V2::Fleet::Hire::Grade::None)
+                                Playerbot::V2::Fleet::Hire::Grade hireGrade = Playerbot::V2::Fleet::Hire::Grade::None,
+                                bool finder = false)
     {
         namespace Hire = Playerbot::V2::Fleet::Hire;
         using Playerbot::V2::Fleet::HireMgr;
         HireMgr& hire = HireMgr::Instance();
-        if (hireGrade == Hire::Grade::None && hire.MustHire(me))
+        bool const loan = finder && hireGrade == Hire::Grade::None && hire.MustHire(me);
+        if (!loan && hireGrade == Hire::Grade::None && hire.MustHire(me))
         {
             if (Playerbot::BotId const idle = IdleHiredCompanion(me, sess, cls, role))
             {
@@ -978,7 +1043,7 @@ public:
             if (!hire.NearbyBroker(me, Hire::Grade::Sellsword))
             {
                 char const* const what = role == Playerbot::Role::Tank ? "tank" : role == Playerbot::Role::Healer ? "healer" : "fighter";
-                outMsg = Trinity::StringFormat("You have no hired {} free. Hire one from a Sellsword Captain at an inn or in a capital city.", what);
+                outMsg = Trinity::StringFormat("Hired bots only on this realm: you have no hired {} free. Hire one from a Sellsword Captain at an inn or in a capital city (the Group Finder and the dungeon finder still bring bots).", what);
                 return false;
             }
             hireGrade = Hire::Grade::Sellsword;
@@ -1029,6 +1094,11 @@ public:
             hire.SetHired(id, hireGrade, price);
             hire.NoteCalled(id, getMSTime());
             TC_LOG_INFO("playerbot.v2", "[hire] {} hired {} ({} {}) for {} copper", me->GetName(), pick.name, Hire::GradeName(hireGrade), className, price);
+        }
+        else if (loan)
+        {
+            hire.SetLoaned(id, getMSTime());
+            TC_LOG_INFO("playerbot.v2", "[hire] {} gets {} ({}) from the group finder, lent while it stays in the group", me->GetName(), pick.name, className);
         }
         Playerbot::Services::Population().QueueCompanionSetup(id, me->GetGUID().GetCounter(), uint8(role));
         auto const login = Playerbot::Services::SessionMgr().LoginBot(created.guid);
@@ -1164,9 +1234,16 @@ public:
         Group const* myGroup = me->GetGroup();
         uint32 members = myGroup ? myGroup->GetMembersCount() : 1;
         uint32 out = cap ? Playerbot::V2::Fleet::CompanionsOut(me) : 0;
+        bool const mustHire = Playerbot::V2::Fleet::HireMgr::Instance().MustHire(me);
         for (Playerbot::BotId id : ids)
         {
             ObjectGuid const guid = ObjectGuid::Create<HighGuid::Player>(id);
+            // Hired bots only: a Group Finder bot was lent for that group and cannot be called back on its own.
+            if (mustHire && Playerbot::V2::Fleet::HireMgr::Instance().IsLoaned(id) && !(myGroup && myGroup->IsMember(guid)))
+            {
+                handler->PSendSysMessage("%s came with the group finder and only plays in that group (hired bots only on this realm).", CompanionName(id).c_str());
+                continue;
+            }
             if (cap && !ObjectAccessor::FindConnectedPlayer(guid))
             {
                 if (!inInstance && out >= cap) { ++refused; continue; }
@@ -1552,6 +1629,38 @@ public:
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); return false; }
         handler->SendSysMessage(Playerbot::Services::Population().WorldReport().c_str());
+        return true;
+    }
+
+    // `.bot population [off|low|medium|high|file]`: the world bots of the whole realm, right away and kept over a restart. No word: what
+    // it is now. `file` hands the numbers back to the config files (Bots.Size and the other Bots.* lines, Playerbot.World.Enable).
+    static bool HandleBotPopulation(ChatHandler* handler, Optional<std::string> word)
+    {
+        if (!Playerbot::Services::Initialized())
+        { handler->SendSysMessage("PlayerbotV2 not initialized."); return false; }
+        auto& pop = Playerbot::Services::Population();
+        if (word && !word->empty())
+        {
+            std::string const w = ToLowerAscii(*word);
+            if (w == "file" || w == "config" || w == "default")
+                pop.SetWorldPopulation(-1);
+            else if (std::optional<Playerbot::V2::Fleet::PopLevel> const lv = Playerbot::V2::Fleet::ParsePopLevel(w))
+                pop.SetWorldPopulation(int(*lv));
+            else
+            {
+                handler->SendSysMessage("Usage: .bot population off|low|medium|high|file");
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+            static char const* const kSaid[] = { "World bots: Off. The world bots online log out now.",
+                                                 "World bots: Low. Applies now and stays after a restart.",
+                                                 "World bots: Medium. Applies now and stays after a restart.",
+                                                 "World bots: High. Applies now and stays after a restart." };
+            int const now = pop.WorldPopulation();
+            handler->SendSysMessage(now >= 0 && now <= 3 ? kSaid[now] : "World bots: back to the config files (applies now).");
+            return true;
+        }
+        handler->SendSysMessage(pop.WorldPopulationLine().c_str());
         return true;
     }
 
@@ -6310,7 +6419,8 @@ public:
 bool Playerbot::V2::AddCompanionForOwner(Player* owner, uint8 cls, Playerbot::Role role, std::string& msg)
 {
     return playerbot_v2_commandscript::AddCompanionFor(owner, owner->GetSession(), cls, role, 0,
-                                                      uint8(urand(GENDER_MALE, GENDER_FEMALE)), "bot", msg);
+                                                      uint8(urand(GENDER_MALE, GENDER_FEMALE)), "bot", msg,
+                                                      Playerbot::V2::Fleet::Hire::Grade::None, /*finder*/ true);
 }
 
 bool Playerbot::V2::HireCompanionForOwner(Player* owner, uint8 cls, Playerbot::Role role, Playerbot::V2::Fleet::Hire::Grade grade,

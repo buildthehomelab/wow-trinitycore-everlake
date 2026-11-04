@@ -1,4 +1,4 @@
-#include "AddonControl.h"
+﻿#include "AddonControl.h"
 
 #include "Bot/BotAI.h"
 #include "Bot/BotCommandParser.h"
@@ -12,6 +12,8 @@
 #include "Fleet/OwnerRegistry.h"
 #include "Fleet/BotIdentityRegistry.h"
 #include "Fleet/BotPopulationManager.h"
+#include "Fleet/BotSize.h"
+#include "Fleet/HireMgr.h"
 #include "LfgBotFill.h"
 #include "Services.h"
 #include "Session/BotSessionMgr.h"
@@ -35,10 +37,12 @@
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "QuestDef.h"
+#include "RBAC.h"
 #include "World.h"
 #include "WorldSession.h"
 
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <map>
@@ -839,6 +843,97 @@ void HandleLfgReq(uint32 client_seq, WorldSession* sess)
 }
 
 // ----------------------------------------------------------------------------
+// POP_REQ - the ForeverBots World tab: how many world bots the realm has.
+//   POP_REQ|                      ask only
+//   POP_REQ|<off|low|medium|high|file>   set it (GM accounts only; applies now,
+//                                 kept over a restart, Fleet/BotSize.h PopLevel)
+// Returns:
+//   POP_RESP|<off|low|medium|high|file>|<can set 0/1>|<draining 0/1>|<line>|<set result: ok|denied|bad|>
+// ----------------------------------------------------------------------------
+void HandlePopReq(uint32 client_seq, WorldSession* sess, std::vector<std::string> const& fields)
+{
+    if (!sess || !Services::Initialized())
+    {
+        SendFields(sess, client_seq, "POP_RESP", {"file", "0", "0", Escape("The bot server is not ready."), "bad"});
+        return;
+    }
+    // The realm owner's account is a GM (the install makes it one); a friend joining a hosted realm is not and can only look.
+    bool const can_set = sess->HasPermission(rbac::RBAC_PERM_COMMAND_GM);
+    auto& pop = Services::Population();
+    std::string result;
+    if (!fields.empty() && !fields[0].empty())
+    {
+        std::string w = fields[0];
+        for (char& ch : w) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+        if (!can_set)
+            result = "denied";
+        else if (w == "file")
+        {
+            pop.SetWorldPopulation(-1);
+            result = "ok";
+        }
+        else if (std::optional<V2::Fleet::PopLevel> const lv = V2::Fleet::ParsePopLevel(w))
+        {
+            pop.SetWorldPopulation(int(*lv));
+            result = "ok";
+        }
+        else
+            result = "bad";
+        TC_LOG_INFO("playerbot.v2", "[addon_pbc] {} (account {}) world bots -> {}: {}",
+                    sess->GetPlayer() ? sess->GetPlayer()->GetName() : std::string("?"), sess->GetAccountId(), w, result);
+    }
+    int const now = pop.WorldPopulation();
+    static char const* const kWord[] = { "off", "low", "medium", "high" };
+    SendFields(sess, client_seq, "POP_RESP", {
+        now >= 0 && now <= 3 ? kWord[now] : "file", can_set ? "1" : "0", pop.WorldPopulationDraining() ? "1" : "0",
+        Escape(pop.WorldPopulationLine()), result });
+}
+
+// ----------------------------------------------------------------------------
+// HIRE_REQ - hired bots only (Playerbot.Hire.Mode): the ForeverBots Bots tab greys its
+// "Add a bot" buttons for a player who must hire (chris 2026-11-03). Returns:
+//   HIRE_RESP|<must hire 0/1>|<mode 0 off, 1 everyone, 2 each player>
+// ----------------------------------------------------------------------------
+void HandleHireReq(uint32 client_seq, WorldSession* sess)
+{
+    Player* me = sess ? sess->GetPlayer() : nullptr;
+    if (!me || !Services::Initialized())
+    {
+        SendFields(sess, client_seq, "HIRE_RESP", {"0", "0"});
+        return;
+    }
+    bool const must = V2::Fleet::HireMgr::Instance().MustHire(me);
+    SendFields(sess, client_seq, "HIRE_RESP", { must ? "1" : "0", std::to_string(uint32(V2::Fleet::HireMgr::ConfigMode())) });
+}
+
+// ----------------------------------------------------------------------------
+// PLACE_REQ - the ForeverBots Positions tab: chosen bots stand in a shape at a spot
+// and stay there (BotCommandParser::PlaceBots, Bot/Placement.h).
+//   PLACE_REQ|<shape>|<tight|normal|wide>|<here|target>|<who>|<who>|...
+//     shape: close circle arc spread line column spear arrow, or follow (let them go)
+//     who:   bot names, or all / tanks / healers / melee / ranged / dps / group1..8 / a class;
+//            none = every bot of yours in the group
+// Returns:
+//   PLACE_RESP|<placed>|<chosen>|<line>
+// ----------------------------------------------------------------------------
+void HandlePlaceReq(uint32 client_seq, WorldSession* sess, std::vector<std::string> const& fields)
+{
+    Player* me = sess ? sess->GetPlayer() : nullptr;
+    if (!me || !Services::Initialized())
+    {
+        SendFields(sess, client_seq, "PLACE_RESP", {"0", "0", Escape("The bot server is not ready.")});
+        return;
+    }
+    auto field = [&](size_t i) { return i < fields.size() ? fields[i] : std::string(); };
+    std::vector<std::string> who;
+    for (size_t i = 3; i < fields.size() && who.size() < 40; ++i)
+        if (!fields[i].empty())
+            who.push_back(fields[i]);
+    BotCommandParser::PlaceResult const r = BotCommandParser::PlaceBots(me, field(0), field(1), field(2), who, "addon");
+    SendFields(sess, client_seq, "PLACE_RESP", {std::to_string(r.placed), std::to_string(r.asked), Escape(r.line)});
+}
+
+// ----------------------------------------------------------------------------
 // ASSIGN_REQ — the marker assignments of the caller's group for the Assign
 // panel. It used to ask with a whispered "assign list", and in a dungeon fight
 // the client hands those whispers over as secret strings that no chat filter
@@ -1552,6 +1647,18 @@ void DispatchAssembled(WorldSession* sess, uint32 seq,
     {
         HandleAssignReq(seq, sess);
     }
+    else if (mtype == "POP_REQ")
+    {
+        HandlePopReq(seq, sess, fields);
+    }
+    else if (mtype == "HIRE_REQ")
+    {
+        HandleHireReq(seq, sess);
+    }
+    else if (mtype == "PLACE_REQ")
+    {
+        HandlePlaceReq(seq, sess, fields);
+    }
     else if (mtype == "STATS_REQ")
     {
         HandleStatsReq(seq, sess);
@@ -1653,6 +1760,8 @@ bool OnAddonWhisper(Player* sender, Player* /*receiver*/,
             && mtype != "SELF"
             && mtype != "PING"
             && mtype != "LFG_REQ"
+            && mtype != "POP_REQ"
+            && mtype != "HIRE_REQ"
             && mtype != "ASSIGN_REQ")
             return false;
     }

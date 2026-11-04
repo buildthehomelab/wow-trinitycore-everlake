@@ -8,6 +8,7 @@ if (-not (& "$PSScriptRoot\ensure-data.ps1")) { throw 'The game data is not fini
 . "$PSScriptRoot\mysql-helpers.ps1"
 Start-OurMySql $root
 Sync-TrinityUser $root   # repairs an install whose first database step left the user without its password
+Sync-ConfDbPassword $root   # and the servers' settings log in with that same password
 . "$PSScriptRoot\HostForOthers.ps1"
 Sync-HostForOthers $root   # only while Host-For-Others.cmd has hosting on: settings an update rewrote, a changed internet address
 $dir = Join-Path $root 'server'
@@ -18,6 +19,7 @@ Set-ClientLanguageConf $dir
 Repair-ConfDir $dir
 Sync-NetworkKeys $dir
 Sync-HireSettings $dir
+Sync-BotClothesSettings $dir
 . "$PSScriptRoot\ConfigCheck.ps1"
 # the same setting twice in one file (or a broken line) makes the server close at once with the reason only in its own window
 $cfg = Test-ServerConfig $dir
@@ -30,6 +32,7 @@ Sync-AlsoAcceptBuilds $root
 Sync-UntestedBuildRows $root
 . "$PSScriptRoot\BotChat.ps1"
 Start-BotChat $root   # Ollama, only when bot chat is switched on
+Test-GamePorts $root   # 1119/8081/8085 free and not kept by Windows (else a clear reason instead of a server that closes)
 foreach ($exe in 'worldserver', 'bnetserver') {
     if (Get-Process $exe -ErrorAction SilentlyContinue) { "$exe already running"; continue }
     $since = (Get-Date).AddMinutes(-1)
@@ -44,6 +47,9 @@ foreach ($exe in 'worldserver', 'bnetserver') {
         if (-not (Get-Process worldserver -ErrorAction SilentlyContinue)) {
             # the worldserver could not log in to the database: another MySQL on our port (an older install still running) is the usual reason
             if (Select-String -Path (Join-Path $logDir 'Server.log') -Pattern 'DatabasePool .* NOT opened' -Quiet -ErrorAction SilentlyContinue) {
+                $why = Select-String -Path (Join-Path $logDir 'DBErrors.log'), (Join-Path $logDir 'Server.log') -Pattern 'Could not connect to MySQL database at .*' -ErrorAction SilentlyContinue | Select-Object -Last 1
+                if ($why) { "MySQL said: $($why.Matches[0].Value)" }
+                else { $why = Test-WorldDbLogin $root; if ($why) { "Logging in the way the worldserver does, MySQL said: $why" } else { 'Logging in the way the worldserver does works now: something on this PC blocked or broke the worldserver''s own connection (a VPN, zapret/GoodbyeDPI or another traffic filter, or a firewall).' } }
                 throw "worldserver could not open its databases and closed. Usually another MySQL is running on port $(Get-OurMySqlPort $root), most often from an older WoW Forever Bots folder: stop it (option 2 in its menu, or restart the PC) and start again. If that does not help, double-click Bug-Report.cmd in the main folder and post the zip in our Discord."
             }
             throw "worldserver exited; double-click Bug-Report.cmd in the main folder and post the zip in our Discord"

@@ -53,7 +53,7 @@ Rules worth knowing:
 
 ## 2. Getting bots: add, call, save, dismiss
 
-The `.bot` commands for your own bots work for every account, no GM needed; each one only touches bots owned by your account. `.bot world`, `.bot bgstress`, `.bot bgsoak` and `.bot itemstats` need GM (level 3). The addon buttons run the same commands.
+The `.bot` commands for your own bots work for every account, no GM needed; each one only touches bots owned by your account. `.bot world`, `.bot population`, `.bot bgstress`, `.bot bgsoak` and `.bot itemstats` need GM (level 3). The addon buttons run the same commands.
 
 | Command | What it does |
 |---|---|
@@ -70,6 +70,7 @@ The `.bot` commands for your own bots work for every account, no GM needed; each
 | `.bot hire [on\|off]` | Hired bots (`Playerbot.Hire.Mode`). No word: whether you must hire and what one bot costs where you stand. `on` / `off`: your own choice when the realm leaves it to each player. With hired bots on, `.bot add`, Quick party and the Group finder bring a hired companion of yours that is not out; next to a broker they hire a Sellsword. Brokers sell by gossip: Sellsword Captains at inns and capitals, Veteran Recruiters in capitals (level cap), Black Market Brokers in Gadgetzan, Booty Bay and Ratchet (Legends, level cap). Wages: `Playerbot.Hire.UpkeepPct` of the price, on each day the bot is called. `.bot delete` ends a contract (no refund). |
 | `.bot regear <name\|all>` | Re-rolls the equipment of online companions so they do not all wear the same pieces. Better pieces they wear stay; replaced ones go to the bags. |
 | `.bot world` | Status of the world-bot spawner (Playerbot.World.*), console too. |
+| `.bot population [off\|low\|medium\|high\|file]` | How many world bots the realm has, the same as the add-on's World bots tab. Applies right away (a step down logs the world bots out first) and is kept over a restart (characters table `playerbot_v2_realm_setting`). It wins over `Bots.Size` and `Playerbot.World.Enable`; `file` hands back to the config files. No word: what it is now. Console too. |
 
 Group size is capped by the map you stand in, see [Instance rules](#8-instance-rules). In a group that is full,
 `.bot add` and `.bot call` tell you why instead of silently failing.
@@ -117,10 +118,13 @@ from the bot.
 | `follow` | yes | yes | `follow` -> `Raveni: following at 5 yards`. Follow holds: while it stands, bots only defend and do not advance or pull until you say attack, pull or resume. `follow <name>`, `follow tank`, `follow healer`, `follow leader`, `follow stop` also work by whisper. |
 | `stay` / `halt` | yes | yes (`stay`) | `stay` -> `Raveni: staying here`. |
 | `hold` | yes | yes | Like stay but may fight what attacks it. `Hold: holding position.` |
-| `defensive` | yes | yes | Same as hold: `Raveni: defensive, holding here and fighting only what attacks`. |
-| `aggressive` | yes | yes | Back to autonomous: `Raveni: aggressive, engaging enemies on my own`. |
+| `defensive` | yes | yes | The start stance (the panel's Defensive): starts nothing, fights what you pull or what attacks the group, joins the group's fight. `Raveni: defensive, defending only until you say attack or pull`. |
+| `aggressive` | yes | yes | Also attacks anything hostile within about 10 yards of you: `Raveni: aggressive, attacking anything hostile within 10 yards of you`. |
+| `passive` | yes | yes | The panel's Passive: attacks nothing at all, not to defend itself or you, not on the group's fight, not on attack or pull, until `defensive` or `aggressive`. Heals, buffs and other friendly spells go on; its pet goes passive and follows. `Raveni: passive, I attack nothing (I still heal and buff) until you say defensive or aggressive`. |
+| `ignore target` / `ignore clear` | yes | yes | Your selected mob goes on (or, again on it, off) the list of mobs none of your bots attack, even when it attacks you or them (a beast you tame); the other mobs are fought as usual, and no area spell goes out while it is within 30 yards of the bot. `ignore clear` empties the list. Answered once as a system line. Memory only, up to 8 mobs, each forgotten after 30 minutes. |
+| `place <shape> [tight\|normal\|wide] [here\|target] [who...]` / `place follow [who...]` | yes | yes | The ForeverBots Positions tab. The chosen bots stand in a shape and stay there: `close`, `circle`, `arc`, `spread` (far apart, about 10 yards on a normal gap), `line`, `column`, `spear`, `arrow`. `here` (the default) centres it where you stand and points it the way you face; `target` puts it round your target, facing you. Who: bot names, `all`, `tanks`, `healers`, `melee`, `ranged`, `dps`, `group1`..`group8` or a class; none = all your bots in the group. Tanks take the front, healers the back. After a fight they walk back to their own spot. `place follow` lets them follow again. Answered once as a system line. |
 | `resume` | yes | yes | Autonomous again; `Resume: autonomous.` |
-| `passive` / `stop` / `disengage` | yes | `passive`, `disengage` | Stop attacking: `Raveni: stopped`. |
+| `stop` / `disengage` | yes | `disengage` | Stop attacking: `Raveni: stopped`. |
 | `come` | yes | yes | Teleports the bot to you and follows. `Raveni: coming to you`. |
 | `summon` | yes | yes | Like `come`, with the summoning refusals: not while the bot is dead or in combat, not while you are in combat, not into a battleground, not into or out of an instance you are not both in. Answer on refusal: `Raveni: can't be summoned, I am in combat`. |
 | `flee` / `retreat` | yes | `flee` | Break off and run to you: `Raveni: fleeing to you`. |
@@ -189,7 +193,7 @@ All of these are group-allowed (party/raid chat) and whisperable.
   with no order needed. Damage dealers take your `attack` / `focus` / skull target, the dungeon's priority add, the tank's target,
   your target, then the nearest mob on a member; tanks first take any mob off a non-tank; healers heal; a bot that cannot reach or
   see its target moves until it can. A `stop`, `flee`, `follow`, `stay` or `pull back` from the last 10 s (or given during the fight)
-  still wins. Passive, Stay, follow, formation and leashes are out-of-combat only: a bot left on an older Stay fights, then walks
+  still wins, and so does the `passive` stance (it fights nothing). Defensive, Stay, follow, formation and leashes are out-of-combat only: a bot left on an older Stay fights, then walks
   back to its spot. Raid tactics (threat holds, the ranged spots behind the tank) are for 20 and 40-player raids; a UBRS 10-man
   plays as a dungeon. The log names why a bot stood idle in a fight (`[group_idle]`).
 - **Marks need an order** (`MarksNeedOrder`, default on): putting an icon on a mob never starts a fight by itself.
@@ -402,8 +406,8 @@ The module logs nothing unless `Logger.playerbot.v2=3` is set. Grep the server l
   bot walks over and you repeat the order. There is no standing "go and sell, then come back" order; the bots'
   own vendor upkeep (idle vendor visit, bag-full recovery) still runs when they are not in a group.
 - `loot all` is held in memory per bot and resets on relog.
-- `aggressive` / `defensive` / `passive` map onto the existing manual modes (resume, hold, stop); there is no
-  separate attack-stance engine.
+- `defensive` / `aggressive` / `passive` are the three owner stances (BotAI::OwnerStance Passive / Aggressive / NoFight); there
+  is no separate attack-stance engine.
 - Quest words depend on `Bot/Quest/QuestOrders.h` (section 10).
 - Right-click unit-menu entry of the addon and the whisper `!` prefix are **(unverified)**.
 

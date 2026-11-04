@@ -18,6 +18,8 @@
 # BOT NUMBERS, THE SIMPLE WAY (put these in zz-9-local.conf, your own file)
 #
 #   Bots.Size      = High    Low, Normal or High: fills the four below.
+#                            Off: no world bots at all; your own bots, dungeon
+#                            finder and battleground bots still come.
 #   Bots.Reserve   = 3000    bot characters kept ready, logged out, balanced by
 #                            faction and level (disk, not memory)
 #   Bots.ActiveCap = 500     most bots logged in at once, for everyone together;
@@ -27,6 +29,10 @@
 #   Bots.InCity    = 120     bots in a capital with a player in it
 #   Bots.LeaveZoneSec  = 20  a zone nobody is in logs its bots out after this
 #   Bots.LeaveWorldSec = 60  the same after a dungeon, battleground or logout
+#   Bots.HolidayClothes = 1  1 = bots may wear holiday items (Winter Veil hats...), 0 = never;
+#                            worn ones come off when the bot next logs in
+#   Bots.DayRhythm = 0       1 = fewer bots at night, more in the evening
+#                            (0: the numbers above hold all day)
 #
 #   Low = 600 / 120 / 15-25 / 50, Normal = 1500 / 250 / 30-45 / 80,
 #   High = 3000 / 500 / 50-70 / 120.
@@ -163,16 +169,16 @@ Playerbot.World.Enable = 0
 # [world] log line with 50, 150 and 300 bots): 8 GB: MaxBots 60. 16 GB: MaxBots 100 (this default). RssBudgetMb below stops the bubble
 # whatever MaxBots says. Sleeping residents (PoolMax) cost a database row, not memory. NaturalMoves, TownLife and DayRhythm each have an
 # off key.
-Playerbot.World.MaxBots = 100
+# Playerbot.World.MaxBots = 100   (built-in value; set Bots.* in zz-9-local.conf instead)
 # Target number of bots within ActivityRadius of each real player.
-Playerbot.World.BotsPerPlayer = 25
+# Playerbot.World.BotsPerPlayer = 25   (built-in value; set Bots.* in zz-9-local.conf instead)
 # A bot this close (yards, same map) to a real player counts toward that player's target.
 Playerbot.World.ActivityRadius = 300
 
 # Bubble size by where the player is (0 = use BotsPerPlayer): CityBots in a capital or town, ZoneBots in a leveling
 # zone. Bots are placed at quest hubs within ActivityRadius, so a bigger radius spreads a zone crowd over the zone.
-Playerbot.World.CityBots = 0
-Playerbot.World.ZoneBots = 0
+# Playerbot.World.CityBots = 0   (built-in value; set Bots.* in zz-9-local.conf instead)
+# Playerbot.World.ZoneBots = 0   (built-in value; set Bots.* in zz-9-local.conf instead)
 # The same in a start zone (Mulgore, Durotar, Elwynn, ...): one valley and one camp, so no more than this many world bots there (0 = ZoneBots).
 # A valley has a few dozen mobs on a slow respawn: 50 bots left a new character in Deathknell nothing to kill, 8 looked empty.
 # Only bots at the start levels (1-10) of the races that begin there are placed or kept in a start zone.
@@ -182,7 +188,7 @@ Playerbot.World.StartZoneBots = 25
 Playerbot.World.CitySpawnPerTick = 0
 # Seconds the bots around a spot stay after the player left it (instance, battleground, hearth, far jump), so a quick
 # trip does not log out and rebuild the whole crowd. 0 = off.
-Playerbot.World.ZoneGraceSec = 300
+# Playerbot.World.ZoneGraceSec = 300   (built-in value; set Bots.* in zz-9-local.conf instead)
 # Persistent residents. 0 = off (a bot is created and placed when a player arrives). > 0: the pool is a fixed roster; a bot
 # that no player is near is logged out and sleeps at its saved spot (offline, no memory, no bot logic). When a player comes
 # within this many yards, sleeping bots standing there (60 y or farther from him) log in where they are. Where nobody
@@ -233,7 +239,7 @@ Playerbot.World.FillerHubOnly = 1
 # Process memory budget (MB). Over it the world-wide filler stops adding bots (logged once); 15% over it the bubble
 # around players waits too. Bots already online stay. -1 = 45% of the machine's RAM (the default), 0 = no limit.
 # Stage B/C: 12000 on a 31 GB PC that also runs a client.
-Playerbot.World.RssBudgetMb = -1
+# Playerbot.World.RssBudgetMb = -1   (built-in value; set Bots.* in zz-9-local.conf instead)
 # Bot level limits. MinLevel is the floor of the wide level spread in capitals and of the world-wide filler; bots around a player in
 # a zone follow the player's own level (from 1) inside the zone's level range.
 Playerbot.World.MinLevel = 10
@@ -246,6 +252,33 @@ Playerbot.World.FriendlyPct = 100
 Playerbot.World.ZoneMix = 1
 Playerbot.World.CapitalFriendlyPct = 100
 Playerbot.World.HomeFriendlyPct = 100
+
+# World PvP of the world bots (Fleet/WorldPvp.h). Only on a PvP, RP-PvP or free-for-all realm (GameType 1, 8, 16: the launcher's
+# Realm type); on a normal realm none of this does anything. Each world bot has a temper that stays the same:
+#   flagged  keeps its PvP flag on as a player who typed /pvp (FlaggedPct of the bots; every hunter is flagged too).
+#   hunter   sometimes starts a fight itself (HunterPct of the bots, FfaHunterPct on free-for-all): for each enemy it sees within
+#            35 y, at most LevelsBelow levels under it and LevelsAbove over it, it rolls AttackPct (FfaAttackPct) once every
+#            RollMinutes and attacks on a hit. Any class can be a hunter and opens its own way: warrior Charge, mage Frostbolt,
+#            warlock Corruption, priest Shadow Word: Pain, druid Moonfire, paladin Judgement / Hammer of Justice, shaman Earth
+#            Shock / Lightning Bolt, hunter Serpent Sting, rogue from stealth (Cheap Shot / Ambush). AttackBots = 1: enemy world bots too.
+#   Everyone else never starts a fight with a player; it fights back when attacked.
+# Never a companion, hired bot or bot in a group; never in a battleground, dungeon, raid, capital or sanctuary. On free-for-all
+# realms hunters also jump bots and players of their own faction. Log lines: [world_pvp] in Playerbot.log.
+# BorderFriendlyPct / ContestedFriendlyPct: on those realms the share of the player's own faction among the bots around him in
+# border and contested zones is at most this (so enemies are about); home zones and capitals keep the numbers above.
+# Enable = 0 switches all of it off.
+Playerbot.World.Pvp.Enable = 1
+Playerbot.World.Pvp.FlaggedPct = 50
+Playerbot.World.Pvp.HunterPct = 30
+Playerbot.World.Pvp.AttackPct = 40
+Playerbot.World.Pvp.FfaHunterPct = 60
+Playerbot.World.Pvp.FfaAttackPct = 60
+Playerbot.World.Pvp.RollMinutes = 10
+Playerbot.World.Pvp.LevelsBelow = 5
+Playerbot.World.Pvp.LevelsAbove = 2
+Playerbot.World.Pvp.AttackBots = 1
+Playerbot.World.Pvp.BorderFriendlyPct = 85
+Playerbot.World.Pvp.ContestedFriendlyPct = 70
 Playerbot.World.BorderFriendlyPct = 100
 Playerbot.World.ContestedFriendlyPct = 100
 # Ambient characters allowed to exist (online or offline). Offline ones are reused before new ones are created.
@@ -259,7 +292,7 @@ Playerbot.World.SeedRoster = 0
 # Seeded residents being set up at the same time.
 Playerbot.World.SeedInFlight = 8
 # Faction balance of the roster (Fleet/PoolBalance.h): with SeedRoster = 1 the seeder always creates the faction and level bracket
-# (10s, 50-60) that is furthest below this share of Horde, so the pool is balanced in every bracket and there are enough bots of
+# (1-9, 10s .. 50s, 60 alone) that is furthest below this share of Horde, so the pool is balanced in every bracket and there are enough bots of
 # the opposing faction for world PvP and battleground queues. 5..95. PoolMax must leave room for the Horde characters a lopsided
 # pool still lacks.
 Playerbot.World.PoolHordePct = 50
@@ -448,6 +481,10 @@ Playerbot.Bg.AutoSeed.Matches = 0
 
 # Also auto-seed Arena matches (bot-only). 0 = off.
 Playerbot.Bg.AutoSeed.Arena = 0
+
+# Arena opponents: when a real party queues for a 2v2 or 3v3 arena, idle bots of the other faction in the same level
+# bracket form a party of the same size and queue against it. 1 = on, 0 = off (the party then waits for another party).
+Playerbot.Arena.BotOpponents = 1
 
 # Force a specific Arena bracket type for auto-seeding (0 = let the system
 # choose; otherwise an arena type id, e.g. 2 = 2v2, 3 = 3v3).
@@ -716,7 +753,12 @@ Playerbot.OwnedGear.AllowedModes = ""
 #                                whatever you wear), a Black Market Broker in Gadgetzan, Booty Bay and Ratchet (Legend: level cap only, best
 #                                in slot). Bots you owned before hired mode came on count as Sellswords with no upkeep. World bots are not
 #                                affected, and a listed Group finder group you join plays with you without becoming yours.
-#   Playerbot.Hire.GmBypass     a GM account (security above player) makes bots for free as before. Default 1.
+#                                Hired bots only (chris 2026-11-03): with it on the ForeverBots add-on hides its "Add a bot" buttons (the server
+#                                says so in HIRE_RESP). The Group finder and the dungeon finder (`.bot lfg`, `.bot dungeon`, a posted listing)
+#                                still fill the group for free, but those bots are only lent: they cannot be called on their own and are
+#                                deleted once they leave that group.
+#   Playerbot.Hire.GmBypass     1 = a GM account (security above player) makes bots for free as before. Default 0 (since 0.1.29: on a
+#                                local realm the player's own account is a GM, and hired bots only must hold for them too).
 #   Playerbot.Hire.BrokerRange  yards from a broker in which `.bot add` and Quick party hire. Default 15.
 #   Playerbot.Hire.<Grade>.PartyPrice / RaidPrice   copper, at the level cap: what the 4 bots of a 5-man / the 39 bots of a 40-man cost
 #                                together. One bot costs the party price / 4, or the raid price / 39 in a raid group or an instance for
@@ -737,7 +779,7 @@ Playerbot.OwnedGear.AllowedModes = ""
 #                                sellsword, veteran, legend; "none" = sells nothing. Defaults: Inn "sellsword", Capital
 #                                "sellsword, veteran", BlackMarket "legend". Veterans and Legends still only sign on at the level cap.
 Playerbot.Hire.Mode = 0
-Playerbot.Hire.GmBypass = 1
+Playerbot.Hire.GmBypass = 0
 Playerbot.Hire.BrokerRange = 15
 Playerbot.Hire.Sellsword.PartyPrice = 10000
 Playerbot.Hire.Sellsword.RaidPrice = 200000
@@ -1435,6 +1477,8 @@ Playerbot.Chatter.BotCooldownMs   = 60000
 #   MaxTokens        longest reply, in tokens (one line of chat is about 20-40).
 #   Temperature      0 = always the same answer, higher = more varied.
 #   KeepAlive        how long Ollama keeps the model in memory after a reply ("30m", "-1" = always, "0" = unload).
+#   Think            0 = a reasoning model (qwen3, qwen3.5, deepseek-r1...) answers straight away (default); 1 = it thinks
+#                    first, which is slow and needs a much larger MaxTokens, or the reply comes back empty.
 #   ContextLength    the model's context window in tokens (sent as num_ctx). Our prompts need well under 2048; Ollama's own
 #                    default can be 32768, which costs several GB of graphics memory for nothing.
 #   PartyChance      percent of party / raid lines no bot was named in that one bot answers (default 100).
@@ -1468,6 +1512,7 @@ Playerbot.ChatModel.MaxTokens       = 60
 Playerbot.ChatModel.Temperature     = 0.8
 Playerbot.ChatModel.KeepAlive       = "30m"
 Playerbot.ChatModel.ContextLength   = 2048
+Playerbot.ChatModel.Think           = 0
 Playerbot.ChatModel.PartyChance     = 100
 Playerbot.ChatModel.SecondReplyChance = 35
 Playerbot.ChatModel.QuietChance     = 30

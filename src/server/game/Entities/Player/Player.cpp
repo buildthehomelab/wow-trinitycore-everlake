@@ -3349,10 +3349,20 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
             // Classic 1.60: a weapon spell taught by a weapon master (Two-Handed Maces 199, Two-Handed Axes 197 for a shaman) opens its
             // weapon skill when the race and class may have it. These spells carry no skill effect and those skills are not given at
             // creation, so the spell was in the spellbook but the weapon could not be equipped ("you don't know how to use it").
-            else if (IsWeaponSkill(_spell_idx->second->SkillLine) && !HasSkill(_spell_idx->second->SkillLine))
+            // Pick Lock 1804 is the same for Lockpicking 633: no skill effect, and its SkillRaceClassInfo 601 has Availability 0, so
+            // rogues had Pick Lock but no Lockpicking ("insufficient skill" on every lock). This runs at login too, so existing
+            // rogues get the skill on their next login.
+            else if ((IsWeaponSkill(_spell_idx->second->SkillLine) || _spell_idx->second->SkillLine == SKILL_LOCKPICKING)
+                && !HasSkill(_spell_idx->second->SkillLine))
             {
                 if (SkillRaceClassInfoEntry const* rcInfo = sDB2Manager.GetSkillRaceClassInfo(_spell_idx->second->SkillLine, GetRace(), GetClass()))
+                {
                     LearnDefaultSkill(rcInfo);
+                    // Lockpicking starts full (level x 5) so rogues who had Pick Lock without the skill are not sent back to 1;
+                    // after a level gain the cap rises and picking locks raises the value again
+                    if (_spell_idx->second->SkillLine == SKILL_LOCKPICKING)
+                        SetSkill(SKILL_LOCKPICKING, 0, GetMaxSkillValueForLevel(), GetMaxSkillValueForLevel());
+                }
             }
         }
     }
@@ -5926,6 +5936,7 @@ bool Player::UpdateGatherSkill(uint32 skillId, uint32 skillValue, uint32 redLeve
     switch (skillEntry->ParentSkillLineID ? skillEntry->ParentSkillLineID : skillEntry->ID)
     {
         case SKILL_HERBALISM:
+        case SKILL_LOCKPICKING: // Classic 1.60 (vanilla, VMaNGOS): picking a lock raises Lockpicking like a gathering skill
             return UpdateSkillPro(skillId, SkillGainChance(skillValue, grayLevel, greenLevel, yellowLevel) * multiplicator, gatheringSkillGain);
         case SKILL_SKINNING:
             if (sWorld->getIntConfig(CONFIG_SKILL_CHANCE_SKINNING_STEPS) == 0)
@@ -10044,6 +10055,7 @@ uint8 Player::FindEquipSlot(Item const* item, uint8 slot, bool swap) const
             slots[0] = EQUIPMENT_SLOT_OFFHAND;
             break;
         case INVTYPE_RANGEDRIGHT:
+        case INVTYPE_RELIC:                                 // Classic: librams, idols and totems go in the ranged slot
             slots[0] = EQUIPMENT_SLOT_RANGED;
             break;
         case INVTYPE_BAG:
@@ -11313,7 +11325,10 @@ InventoryResult Player::CanStoreItem(uint8 bag, uint8 slot, ItemPosCountVec &des
 
     // search free slot
     // new bags can be directly equipped
+    // Classic 1.60 (WoW Forever, Blizzard notes of 2 November 2026): new bags are no longer equipped automatically; the player
+    // puts them on by hand. Classic.AutoEquipNewBags = 1 brings the old behaviour back. Bots still put new bags on themselves.
     if (!pItem && pProto->GetClass() == ITEM_CLASS_CONTAINER &&
+        (sWorld->getBoolConfig(CONFIG_CLASSIC_AUTO_EQUIP_NEW_BAGS) || (GetSession() && GetSession()->IsBot())) &&
         (pProto->GetBonding() == BIND_NONE || pProto->GetBonding() == BIND_ON_ACQUIRE))
     {
         switch (pProto->GetSubClass())
@@ -19357,7 +19372,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     {
         Battleground* currentBg = nullptr;
         if (m_bgData.bgInstanceID)                                                //saved in Battleground
-            currentBg = sBattlegroundMgr->GetBattleground(m_bgData.bgInstanceID, BATTLEGROUND_TYPE_NONE);
+            currentBg = sBattlegroundMgr->GetBattleground(m_bgData.bgInstanceID, m_bgData.queueId);
 
         player_at_bg = currentBg && currentBg->IsPlayerInBattleground(GetGUID());
 
@@ -26795,7 +26810,7 @@ Battleground* Player::GetBattleground() const
     if (GetBattlegroundId() == 0)
         return nullptr;
 
-    return sBattlegroundMgr->GetBattleground(GetBattlegroundId(), m_bgData.bgTypeID);
+    return sBattlegroundMgr->GetBattleground(GetBattlegroundId(), m_bgData.queueId);
 }
 
 uint32 Player::GetBattlegroundQueueJoinTime(BattlegroundQueueTypeId bgQueueTypeId) const
@@ -27365,6 +27380,11 @@ bool Player::HasItemFitToSpellRequirements(SpellInfo const* spellInfo, Item cons
                     if (Item* item = GetUseableItemByPos(INVENTORY_SLOT_BAG_0, i))
                         if (item != ignoreItem && item->IsFitToSpellRequirements(spellInfo))
                             return true;
+
+                // Classic: librams, idols and totems are armor in the ranged slot
+                if (Item* item = GetUseableItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_RANGED))
+                    if (item != ignoreItem && item->IsFitToSpellRequirements(spellInfo))
+                        return true;
             }
             else
             {
@@ -32289,7 +32309,8 @@ static bool ForEachEquipmentSlot(InventoryType inventoryType, bool canDualWield,
             return true;
         case INVTYPE_RANGED:
         case INVTYPE_RANGEDRIGHT:
-        case INVTYPE_THROWN: callback(EQUIPMENT_SLOT_RANGED); return true;
+        case INVTYPE_THROWN:
+        case INVTYPE_RELIC: callback(EQUIPMENT_SLOT_RANGED); return true;
         case INVTYPE_WEAPONMAINHAND: callback(EQUIPMENT_SLOT_MAINHAND); return true;
         case INVTYPE_SHIELD:
         case INVTYPE_HOLDABLE:
@@ -32300,7 +32321,6 @@ static bool ForEachEquipmentSlot(InventoryType inventoryType, bool canDualWield,
         case INVTYPE_TABARD:
         case INVTYPE_AMMO:
         case INVTYPE_QUIVER:
-        case INVTYPE_RELIC:
         default:
             return false;
     }

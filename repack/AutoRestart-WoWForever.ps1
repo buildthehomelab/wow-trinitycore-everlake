@@ -19,7 +19,7 @@ Log 'Auto-restart started. Menu option 2 (Shut down server) stops it.'
 while (-not (Test-Path $flag)) {
     if (-not (Test-MySqlPort (Get-OurMySqlPort $root))) {
         Log 'Starting MySQL...'
-        try { Start-OurMySql $root | Out-Null; Sync-TrinityUser $root } catch { Log "$_"; Start-Sleep 30; continue }
+        try { Start-OurMySql $root | Out-Null; Sync-TrinityUser $root; Sync-ConfDbPassword $root | ForEach-Object { Log $_ } } catch { Log "$_"; Start-Sleep 30; continue }
     }
     $w = Get-Process worldserver -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $w) {
@@ -27,6 +27,7 @@ while (-not (Test-Path $flag)) {
         Repair-ConfDir $server | ForEach-Object { Log $_ }
         Sync-NetworkKeys $server
         Sync-HireSettings $server | ForEach-Object { Log $_ }
+        Sync-BotClothesSettings $server | ForEach-Object { Log $_ }
         $cfg = Test-ServerConfig $server
         $cfg.Lines | ForEach-Object { Log $_ }
         if (-not $cfg.Ok) { Log 'Not starting: a settings file has a problem the server stops on (PROBLEM above: file and line number). Fix it and start again.'; break }

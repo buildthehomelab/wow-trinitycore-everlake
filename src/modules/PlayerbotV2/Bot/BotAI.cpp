@@ -827,7 +827,10 @@ void BotAI::update_group_fight(BotSnapshotView s, GroupSnapshotView g)
         for (NearbyUnit const& u : s.raw().combat.attackers)      if (!loose_on_group && loose(u)) loose_on_group = true;
         for (NearbyUnit const& u : s.raw().combat.nearby_enemies) if (!loose_on_group && loose(u)) loose_on_group = true;
     }
-    if (fleeing(now_ms))
+    // The full Passive (the panel's Passive): the group's fight does not pull the bot in, as a fresh Stop would not.
+    if (owner_no_fight())
+        in.order = GroupFight::Order::Stop;
+    else if (fleeing(now_ms))
         in.order = GroupFight::Order::Flee;
     else if (fallback_active())
         in.order = GroupFight::Order::Fallback;
@@ -853,7 +856,7 @@ void BotAI::update_group_fight(BotSnapshotView s, GroupSnapshotView g)
     }
     else if (owner_follow_order())
         in.order = GroupFight::Order::Follow;
-    in.order_age_ms = (in.order == GroupFight::Order::Flee || in.order == GroupFight::Order::Fallback ||
+    in.order_age_ms = (owner_no_fight() || in.order == GroupFight::Order::Flee || in.order == GroupFight::Order::Fallback ||
                        (in.order == GroupFight::Order::PullBack && pull_back_active())) ? 0u
                     : in.order == GroupFight::Order::PullBack ? now_ms - owner_pull_ms() : order_age;
 

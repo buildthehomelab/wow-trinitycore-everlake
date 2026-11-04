@@ -28,6 +28,7 @@
 #include "Metric.h"
 #include "PhasingHandler.h"
 #include "Player.h"
+#include "WorldSession.h"
 #include <algorithm>
 #include <array>
 #include <mutex>
@@ -117,11 +118,23 @@ void ReleaseNavLockAfterFault()
 ////////////////// PathGenerator //////////////////
 PathGenerator::PathGenerator(WorldObject const* owner) :
     _polyLength(0), _type(PATHFIND_BLANK), _useStraightPath(false),
-    _forceDestination(false), _pointPathLimit(MAX_POINT_PATH_LENGTH), _useRaycast(false),
+    _forceDestination(false), _pointPathLimit(DEFAULT_POINT_PATH_LENGTH), _polyPathLimit(DEFAULT_PATH_LENGTH),
+    _maxPointPathLimit(DEFAULT_POINT_PATH_LENGTH), _useRaycast(false),
     _startPosition(PositionToVector3(owner->GetPosition())), _endPosition(G3D::Vector3::zero()), _source(owner), _navMesh(nullptr),
     _navMeshQuery(nullptr)
 {
     memset(_pathPolyRefs, 0, sizeof(_pathPolyRefs));
+
+    // A bot player's far travel legs need the long budget; creatures, pets and real players keep the default (see PathGenerator.h).
+    if (Player const* player = _source->ToPlayer())
+    {
+        if (WorldSession const* session = player->GetSession(); session && session->IsBot())
+        {
+            _polyPathLimit = MAX_PATH_LENGTH;
+            _maxPointPathLimit = MAX_POINT_PATH_LENGTH;
+            _pointPathLimit = MAX_POINT_PATH_LENGTH;
+        }
+    }
 
     TC_LOG_DEBUG("maps.mmaps", "++ PathGenerator::PathGenerator for {}", _source->GetGUID().ToString());
 
@@ -587,7 +600,7 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
                             &_filter,            // polygon search filter
                             _pathPolyRefs + prefixPolyLength - 1,    // [out] path
                             (int*)&suffixPolyLength,
-                            MAX_PATH_LENGTH - prefixPolyLength);   // max number of polygons in output path
+                            _polyPathLimit - prefixPolyLength);   // max number of polygons in output path
         }
 
         if (!suffixPolyLength || dtStatusFailed(dtResult))
@@ -630,7 +643,7 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
                             hitNormal,
                             _pathPolyRefs,
                             (int*)&_polyLength,
-                            MAX_PATH_LENGTH);
+                            _polyPathLimit);
 
             if (!_polyLength || dtStatusFailed(dtResult))
             {
@@ -694,7 +707,7 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
                             &_filter,           // polygon search filter
                             _pathPolyRefs,     // [out] path
                             (int*)&_polyLength,
-                            MAX_PATH_LENGTH);   // max number of polygons in output path
+                            _polyPathLimit);   // max number of polygons in output path
         }
 
         if (!_polyLength || dtStatusFailed(dtResult))
@@ -1242,7 +1255,7 @@ dtStatus PathGenerator::FindSmoothPath(float const* startPos, float const* endPo
             surfaceFail = true;
             break;
         }
-        npolys = FixupCorridor(polys, npolys, MAX_PATH_LENGTH, visited, nvisited);
+        npolys = FixupCorridor(polys, npolys, _polyPathLimit, visited, nvisited);
 
         if (dtStatusFailed(_navMeshQuery->getPolyHeight(polys[0], result, &result[1])))
             TC_LOG_DEBUG("maps.mmaps", "Cannot find height at position X: {} Y: {} Z: {} for {}", result[2], result[0], result[1], _source->GetDebugInfo());

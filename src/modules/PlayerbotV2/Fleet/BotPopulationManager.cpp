@@ -4,6 +4,7 @@
 #include "../Util/SlowCall.h"
 #include "BotPopulationManager.h"
 #include "HireMgr.h"
+#include "CompanionDelete.h"   // a finder loan bot is deleted like `.bot delete`
 #include "ClassicSpec.h"
 #include "SoakAnchors.h"
 #include "CompanionRole.h"
@@ -1160,6 +1161,7 @@ void BotPopulationManager::RunGearBackfill(uint32 now_ms)
         gear_scan_pos_ = 0;
         gear_regear_count_ = 0;
         Services::Registry().for_each([&](BotId id, BotRegistryEntry const&) { gear_scan_.push_back(id); });
+        ReleaseOfflineLoans(now_ms);
     }
     const uint32 t0 = getMSTime();
     while (gear_scan_pos_ < gear_scan_.size() && getMSTimeDiff(t0, getMSTime()) < kGearBudgetMs)
@@ -1175,9 +1177,52 @@ void BotPopulationManager::RunGearBackfill(uint32 now_ms)
     }
 }
 
+// Hired bots only (Playerbot.Hire.Mode): a Group Finder / dungeon finder bot is lent to its group (HireMgr::SetLoaned). Once it is
+// out of its owner's group (left, dismissed, the owner went offline) it is deleted like `.bot delete`, so a free bot never becomes
+// one to keep. True when it was taken back.
+bool BotPopulationManager::ReleaseLoan(BotId id, Player* p, uint32 now_ms)
+{
+    HireMgr& hire = HireMgr::Instance();
+    if (!hire.IsLoaned(id) || !hire.LoanSettled(id, now_ms) || pending_companions_.contains(id) || pending_deletes_.contains(id))
+        return false;
+    ObjectGuid const guid = ObjectGuid::Create<HighGuid::Player>(id);
+    if (p)
+    {
+        uint64 const owner_guid = Services::Owners().OwnerCharacter(id);
+        Player const* owner = owner_guid ? ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(owner_guid)) : nullptr;
+        Group* group = p->GetGroup();
+        if (owner && group && group->IsMember(owner->GetGUID()))
+            return false;   // still playing with the group it was lent to
+    }
+    if (!Fleet::MayDeleteCompanion(Services::Accounts().is_pool_account(sCharacterCache->GetCharacterAccountIdByGuid(guid))))
+    {
+        hire.Forget(id);   // never a player's own character; just not a loan any more
+        return false;
+    }
+    TC_LOG_INFO("playerbot.v2", "[hire] finder loan bot {} left its group: it goes", guid.ToString());
+    if (p)
+    {
+        if (Group* group = p->GetGroup())
+            group->RemoveMember(guid);
+        Services::SessionMgr().LogoutBot(guid);
+    }
+    QueueCompanionDelete(id);
+    hire.Forget(id);
+    return true;
+}
+
+void BotPopulationManager::ReleaseOfflineLoans(uint32 now_ms)
+{
+    for (BotId id : HireMgr::Instance().LoanedBots())
+        if (!ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(id)))
+            ReleaseLoan(id, nullptr, now_ms);
+}
+
 void BotPopulationManager::CompanionUpkeep(BotId id, Player* p)
 {
     if (Services::Owners().OwnerCharacter(id) == 0 || IsPlayersOwnCharacter(p))
+        return;
+    if (ReleaseLoan(id, p, getMSTime()))
         return;
     ::Playerbot::API api(p);
     api.learn_class_quest_spells_free();
@@ -3918,6 +3963,20 @@ bool BotPopulationManager::AmbientFleetEnabled()
 
 std::string BotPopulationManager::WorldReport() const { return world_spawner_->Report(); }
 WorldLoadFacts BotPopulationManager::WorldLoad() const { return world_spawner_ ? world_spawner_->Load() : WorldLoadFacts{}; }
+void BotPopulationManager::SetWorldPopulation(int level)
+{
+    if (!world_spawner_) return;
+    if (level < 0 || level > 3) world_spawner_->SetPopulation(std::nullopt);
+    else world_spawner_->SetPopulation(PopLevel(level));
+}
+int BotPopulationManager::WorldPopulation() const
+{
+    if (!world_spawner_) return -1;
+    std::optional<PopLevel> const p = world_spawner_->Population();
+    return p ? int(*p) : -1;
+}
+std::string BotPopulationManager::WorldPopulationLine() const { return world_spawner_ ? world_spawner_->PopulationLine() : std::string(); }
+bool BotPopulationManager::WorldPopulationDraining() const { return world_spawner_ && world_spawner_->PopulationDraining(); }
 bool BotPopulationManager::WorldSpawnerPending(uint64 guid_low) const { return world_spawner_->IsPending(guid_low); }
 
 bool BotPopulationManager::IsWorldPlaced(BotId id) const { return world_spawner_ && world_spawner_->IsPlaced(uint64(id)); }
@@ -4906,16 +4965,9 @@ void BotPopulationManager::SeedBgMatches(uint32 now_ms)
     // Count active bot-relevant BG instances (any status) — same enumeration
     // TopUpActiveBGs uses. Seed only when below the cap.
     int32 active = 0;
-    {
-        std::unordered_set<uint32> seen_maps;
-        for (BattlemasterListXMapEntry const* xmap : sBattlemasterListXMapStore)
-        {
-            if (!xmap || xmap->MapID <= 0) continue;
-            if (!seen_maps.insert(uint32(xmap->MapID)).second) continue;
-            for (Battleground* bg : sBattlegroundMgr->GetBGFreeSlotQueueStore(uint32(xmap->MapID)))
-                if (bg) ++active;
-        }
-    }
+    for (auto const& [_, free_slot_store] : sBattlegroundMgr->GetBGFreeSlotQueues())
+        for (Battleground* bg : free_slot_store)
+            if (bg) ++active;
     if (active > 0)
         bg_seed_match_seen_ = true;   // current type produced a match — rotate next cycle
     if (active >= matches_cap) return;
@@ -5217,23 +5269,14 @@ void BotPopulationManager::TopUpActiveBGs(uint32 now_ms)
     if (prep_due)    last_bg_topup_ms_         = now_ms;
     if (running_due) last_bg_running_topup_ms_ = now_ms;
 
-    // Walk BattlemasterListXMap (BattlemasterListID → MapID) → per-map
-    // free-slot queue. The free-slot queue contains BG instances that
-    // still have capacity (TC's existing FreeSlotQueue mechanism). For
-    // each BG below max population in prep OR running, re-issue
-    // BotQueueFiller::Fill. Newly-queued bots are auto-pulled into the
-    // BG by AddToBGFreeSlotQueue when the next queue cycle runs.
-    // Dedup by map_id so we don't process the same map's free-slot store
-    // multiple times when several BattlemasterLists share a map.
-    std::unordered_set<uint32> seen_maps;
-    for (BattlemasterListXMapEntry const* xmap : sBattlemasterListXMapStore)
+    // Walk every queue's free-slot list. It holds the BG instances that
+    // still have capacity (TC's existing FreeSlotQueue mechanism), each
+    // in exactly one queue's list. For each BG below max population in
+    // prep OR running, re-issue BotQueueFiller::Fill. Newly-queued bots
+    // are auto-pulled into the BG by AddToBGFreeSlotQueue when the next
+    // queue cycle runs.
+    for (auto const& [_, free_slot_store] : sBattlegroundMgr->GetBGFreeSlotQueues())
     {
-        if (!xmap) continue;
-        if (xmap->MapID <= 0) continue;
-        uint32 map_id = uint32(xmap->MapID);
-        if (!seen_maps.insert(map_id).second) continue;
-
-        auto& free_slot_store = sBattlegroundMgr->GetBGFreeSlotQueueStore(map_id);
         for (Battleground* bg : free_slot_store)
         {
             if (!bg) continue;

@@ -44,6 +44,7 @@ public:
     // A heal is refused (PREVENTED_BY_MECHANIC) while stunned, feared, confused or silenced.
     bool   cannot_heal()  const { return s_->vitals.is_stunned || s_->vitals.is_feared || s_->vitals.is_confused || s_->vitals.is_silenced; }
     bool   is_pvp()       const { return s_->vitals.is_pvp; }
+    bool   pvp_wanted()   const { return s_->vitals.pvp_wanted; }
     // True when any state would block cast attempts (stun + silence + active
     // cast). Caller should still check spell-specific gates (CD, resource).
     bool   can_cast() const { return !s_->vitals.is_stunned && !s_->vitals.is_silenced &&

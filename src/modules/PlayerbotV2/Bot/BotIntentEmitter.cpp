@@ -204,6 +204,44 @@ bool BotIntentEmitter::cc_denied(uint32 spell_id) const
     return school_snap_ && school_snap_->cc_deny && spell_id && (SpellCcKind(spell_id) & school_snap_->cc_deny) != 0;
 }
 
+bool BotIntentEmitter::fight_denied(uint32 spell_id, ObjectGuid target, bool pet) const
+{
+    if (!school_snap_ || (!school_snap_->no_fight && school_snap_->fight_ignore.empty()))
+        return false;
+    SpellInfo const* si = nullptr;
+    if (spell_id)
+    {
+        si = sSpellMgr->GetSpellInfo(spell_id, DIFFICULTY_NONE);
+        if (!si || si->IsPositive())
+            return false;   // heals, buffs, forms, friendly dispels
+        if (!target.IsEmpty() && (target == school_snap_->guid || target == school_snap_->pet.pet_guid))
+            return false;   // a spell on itself or its own pet (Bloodrage, Life Tap, Dark Pact) hurts no mob
+    }
+    if (school_snap_->no_fight)
+        return true;
+    auto const& list = school_snap_->fight_ignore;
+    auto const ignored = [&list](ObjectGuid g) { return !g.IsEmpty() && std::find(list.begin(), list.end(), g) != list.end(); };
+    if (!target.IsEmpty())
+    {
+        if (ignored(target))
+            return true;
+    }
+    else if (pet ? ignored(school_snap_->pet.pet_victim)
+                 : (ignored(school_snap_->combat.victim) || ignored(school_snap_->combat.current_target)))
+        return true;
+    if (si && school_snap_->fight_ignore_near)
+    {
+        uint32 chain = 0;
+        for (SpellEffectInfo const& eff : si->GetEffects())
+            if (eff.IsEffect() && eff.ChainTargets > 0 && uint32(eff.ChainTargets) > chain)
+                chain = uint32(eff.ChainTargets);
+        uint32 const first = sSpellMgr->GetFirstSpellInChain(spell_id);
+        if (AoeDeny::IsAoe(false, si->IsAffectingArea(), chain, first ? first : spell_id))
+            return true;
+    }
+    return false;
+}
+
 bool BotIntentEmitter::aoe_denied(uint32 spell_id) const
 {
     if (!school_snap_ || !school_snap_->aoe_denied || !spell_id)

@@ -5946,6 +5946,7 @@ enum SkillType
     SKILL_RAPTOR_RIDING                             = 533,
     SKILL_MECHANOSTRIDER_PILOTING                   = 553,
     SKILL_UNDEAD_HORSEMANSHIP                       = 554,
+    SKILL_LOCKPICKING                               = 633, // Classic 1.60: rogue skill line, gone from retail
     SKILL_PET_BAT                                   = 653,
     SKILL_PET_HYENA                                 = 654,
     SKILL_PET_BIRD_OF_PREY                          = 655,
@@ -6275,6 +6276,7 @@ constexpr SkillType SkillByLockType(LockType locktype)
         case LOCKTYPE_MINING_2:
         case LOCKTYPE_ELUSIVE_MINING:                 return SKILL_MINING;
         case LOCKTYPE_FISHING:                        return SKILL_FISHING;
+        case LOCKTYPE_LOCKPICKING:                    return SKILL_LOCKPICKING; // Classic 1.60: Pick Lock checks the Lockpicking skill
         case LOCKTYPE_INSCRIPTION:                    return SKILL_INSCRIPTION;
         case LOCKTYPE_ARCHAEOLOGY:                    return SKILL_ARCHAEOLOGY;
         case LOCKTYPE_LUMBER_MILL:                    return SKILL_LOGGING;
@@ -6969,9 +6971,9 @@ enum BattlegroundTypeId : uint32
     BATTLEGROUND_SS_VS_TM       = 789,      // Southshore vs. Tarren Mill
     BATTLEGROUND_SMALL_D        = 803,      // Small Battleground D
     BATTLEGROUND_BRH            = 808,      // Black Rook Hold Arena
-    // 809 = "New Nagrand Arena (Legion)"
+    BATTLEGROUND_NA_NEW         = 809,      // New Nagrand Arena (Legion)
     BATTLEGROUND_AF             = 816,      // Ashamane's Fall
-    // 844 = "New Blade's Edge Arena (Legion)"
+    BATTLEGROUND_BE_NEW         = 844,      // New Blade's Edge Arena (Legion)
     BATTLEGROUND_BRAWL_TBG      = 846,      // Brawl - The Battle for Gilneas (Old City Map)
     BATTLEGROUND_BRAWL_ABW      = 847,      // Brawl - Arathi Basin Winter
     // 848 = "AI Test - Arathi Basin"

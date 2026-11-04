@@ -75,6 +75,11 @@ function Set-HostBindIp([string]$Root, [string]$Ip) {
     foreach ($c in 'bnetserver.conf', 'worldserver.conf') { Set-HostConfLine (Join-Path $server $c) 'BindIP' "`"$Ip`"" }
     $local = Join-Path $server 'worldserver.conf.d\zz-9-local.conf'
     if ((Test-Path $local) -and (Select-String -Path $local -Pattern '^\s*BindIP\s*=' -Quiet)) { Set-HostConfLine $local 'BindIP' "`"$Ip`"" }
+    # The login page address bnetserver hands to each player (LoginRESTService::GetHostnameForClient). It must be the portal name:
+    # a friend's launcher points trinity.actual.battle.net at this PC, and the certificate is only valid for that name. A
+    # bnetserver.conf made from the plain .dist (127.0.0.1) would send every friend to their own PC and their login would fail.
+    $bnet = Join-Path $server 'bnetserver.conf'
+    foreach ($k in 'LoginREST.ExternalAddress', 'LoginREST.LocalAddress') { Set-HostConfLine $bnet $k 'trinity.actual.battle.net' }
 }
 # $true while the login server listens for other PCs: also after an On that stopped before it wrote the state file
 function Test-HostBound([string]$Root) {

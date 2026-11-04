@@ -20,6 +20,8 @@
 
 // Plain bot numbers (chris 2026-11-01). The player's file has at most these lines:
 //   Bots.Size      = Low | Normal | High     fills the four below; most people need only this
+//                  = Off                     no world bots at all (own bots, dungeon finder and battleground bots still come);
+//                                            the four below are then not used (the launcher's Bots window, 0.1.29)
 //   Bots.Reserve   = 3000                    bot characters kept ready, logged out, balanced by faction and level
 //   Bots.ActiveCap = 500                     most bots logged in at once, for everyone together
 //   Bots.PerZone   = 50-70                   bots in a levelling zone with a player in it; each zone picks a number in the range
@@ -86,6 +88,13 @@ namespace Playerbot::V2::Fleet
         if (t == "normal" || t == "medium") return BotSize::Normal;
         if (t == "high" || t == "large") return BotSize::High;
         return std::nullopt;
+    }
+
+    // Bots.Size = Off (also "none", "0"): the player's file asks for no world bots. Not a size: Low / Normal / High stay the presets.
+    inline bool IsBotSizeOff(std::string_view text)
+    {
+        std::string const t = Squeeze(text);
+        return t == "off" || t == "none" || t == "0" || t == "zero";
     }
 
     // "50-70" -> 50..70, "60" -> 60..60, "70-50" -> 50..70; anything else -> none
@@ -174,6 +183,52 @@ namespace Playerbot::V2::Fleet
     }
 
     inline uint64_t PlaceKey(uint32_t map, uint32_t zone) { return (uint64_t(map) << 32) | zone; }
+
+    // The world bot choice of the ForeverBots panel (chris 2026-11-03: "bots off, low, medium or high ... rather than having it in
+    // the config"). A GM picks it in game; the server keeps it (characters table playerbot_v2_realm_setting) and it wins over
+    // Bots.Size, the other Bots.* numbers and Playerbot.World.Enable until "file" (.bot population file) hands back to the files.
+    // Off: no world bots (the ones online log out). Low / Medium / High: that preset, world bots on. Medium is Normal.
+    enum class PopLevel : int { Off = 0, Low = 1, Medium = 2, High = 3 };
+
+    inline char const* PopLevelWord(PopLevel p)
+    {
+        switch (p)
+        {
+            case PopLevel::Off:  return "off";
+            case PopLevel::Low:  return "low";
+            case PopLevel::High: return "high";
+            default:             return "medium";
+        }
+    }
+
+    // "off" / "none" / "0", "low", "medium" / "normal", "high"; anything else -> none.
+    inline std::optional<PopLevel> ParsePopLevel(std::string_view text)
+    {
+        std::string const t = Squeeze(text);
+        if (t == "off" || t == "none" || t == "0" || t == "zero") return PopLevel::Off;
+        if (std::optional<BotSize> const s = ParseBotSize(t))
+            return *s == BotSize::Low ? PopLevel::Low : *s == BotSize::High ? PopLevel::High : PopLevel::Medium;
+        return std::nullopt;
+    }
+
+    // Low / Medium / High -> its preset; Off -> all zero (nothing comes, the reserve is left as it is).
+    inline PlainBots PopLevelBots(PopLevel p, uint32_t keep_reserve)
+    {
+        switch (p)
+        {
+            case PopLevel::Off:  return { keep_reserve, 0, 0, 0, 0 };
+            case PopLevel::Low:  return PresetBots(BotSize::Low);
+            case PopLevel::High: return PresetBots(BotSize::High);
+            default:             return PresetBots(BotSize::Normal);
+        }
+    }
+
+    // The bots online have to go first when the new choice wants fewer of them than are allowed now (or none): a step down logs
+    // the world bots out and the new numbers fill again; a step up only lets more come.
+    inline bool PopLevelNeedsDrain(uint32_t old_active_cap, uint32_t old_zone_hi, uint32_t old_city, PlainBots const& now)
+    {
+        return now.active_cap < old_active_cap || now.zone_hi < old_zone_hi || now.in_city < old_city;
+    }
 }
 
 #endif

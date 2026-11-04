@@ -2144,6 +2144,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     snap->vitals.is_silenced = p->HasAuraType(SPELL_AURA_MOD_SILENCE);
     snap->vitals.is_pvp       = p->IsPvP();
     snap->vitals.is_ffa_pvp   = p->IsFFAPvP();
+    snap->vitals.pvp_wanted   = p->HasPlayerFlag(PLAYER_FLAGS_IN_PVP);
     snap->vitals.is_sanctuary = p->IsInSanctuary();
     snap->death.has_resurrect_request = p->IsResurrectRequested();
     snap->social_events.has_summon_pending    = p->HasSummonPending();
@@ -3371,7 +3372,8 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         {
             snap->holding_position = bot_ai->holding_position(snap->published_at_ms);
             auto const stance = bot_ai->owner_stance();
-            snap->no_tag_stance = stance == BotAI::OwnerStance::Passive ||
+            snap->no_fight = stance == BotAI::OwnerStance::NoFight;
+            snap->no_tag_stance = bot_ai->owner_passive() ||
                                   (stance == BotAI::OwnerStance::Auto && (snap->owner_in_group || snap->led_by_player));
         }
     }
@@ -3396,6 +3398,9 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         // A scenario squad told "yes fear" (ScenarioDef::yes_fear): Fear and Scare Beast allowed, as after an owner's order.
         if (!cc_account && ::Playerbot::Scenario::HasYesFear(snap->bot_id))
             snap->cc_deny = uint16(snap->cc_deny & ~uint16(::Playerbot::CcDeny::Fear));
+        // The same account's "ignore target" list (OwnerRegistry::FightIgnored): applied to the combat lists at the end of Build.
+        if (cc_account)
+            snap->fight_ignore = Services::Owners().FightIgnored(cc_account, GameTime::GetGameTimeMS());
     }
 
     // ---- Spellbook (sorted, binary-searchable in BotSnapshotView::knows_spell) ----
@@ -10740,6 +10745,52 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                 snap->craft_orders.want_quantity       = best_qty == 0 ? 1u : best_qty;
                 snap->craft_orders.want_payment_copper = payment;
             }
+        }
+    }
+
+    // ---- The owner's full Passive and Ignore target (BotSnapshot::no_fight / fight_ignore) ----
+    // Last, once every combat list is built: a mob the bot must leave alone is not in its attackers or nearby enemies, so no target pick,
+    // retaliation, group-fight pick or chase sees it. The full Passive leaves no enemy at all. The emitter drops any attack or harmful
+    // spell that still names one (BotIntentEmitter::fight_denied), and State_InCombat calls the bot and its pet off (NoFightTick).
+    if (snap->no_fight || !snap->fight_ignore.empty())
+    {
+        auto& c = snap->combat;
+        if (snap->no_fight)
+        {
+            c.attackers.clear();
+            c.nearby_enemies.clear();
+            c.fightable_attackers = 0;
+            c.current_target_hostile = false;
+        }
+        else
+        {
+            auto const ignored = [snap](ObjectGuid g)
+            { return !g.IsEmpty() && std::find(snap->fight_ignore.begin(), snap->fight_ignore.end(), g) != snap->fight_ignore.end(); };
+            float bx = 0.f, by = 0.f;
+            if (p) { bx = p->GetPositionX(); by = p->GetPositionY(); }
+            auto const note_near = [&](NearbyUnit const& u)
+            {
+                if (ignored(u.guid) && std::hypot(u.x - bx, u.y - by) <= BotSnapshot::kFightIgnoreAoeYd)
+                    snap->fight_ignore_near = true;
+            };
+            for (NearbyUnit const& u : c.attackers)      note_near(u);
+            for (NearbyUnit const& u : c.nearby_enemies) note_near(u);
+            size_t const before = c.attackers.size();
+            c.attackers.erase(std::remove_if(c.attackers.begin(), c.attackers.end(), [&](NearbyUnit const& u) { return ignored(u.guid); }),
+                              c.attackers.end());
+            if (c.attackers.size() != before)
+            {
+                uint16 n = 0;
+                for (NearbyUnit const& u : c.attackers)
+                    if (u.hp > 0 && !u.is_pacified)
+                        ++n;
+                c.fightable_attackers = std::min<uint16>(c.fightable_attackers, n);
+            }
+            c.nearby_enemies.erase(std::remove_if(c.nearby_enemies.begin(), c.nearby_enemies.end(),
+                                                  [&](NearbyUnit const& u) { return ignored(u.guid); }),
+                                   c.nearby_enemies.end());
+            if (ignored(c.current_target))
+                c.current_target_hostile = false;
         }
     }
 

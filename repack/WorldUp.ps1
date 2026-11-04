@@ -37,14 +37,15 @@ function Test-ConfDuplicates([string]$ServerDir) {
     $out
 }
 
-# The network limits the 0.1.25 server reads (connections per address and the login timeouts) are missing from the settings files of
+# The network limits the 0.1.25 server reads (connections per address, the login timeouts and the Battle.net
+# requests per second) are missing from the settings files of
 # installs made before them, and the server logs a "Missing name ..." line for each one on every connection. The defaults are used
 # anyway, so this changes nothing in how the server behaves: it writes the same values into the files, once, to end that log noise.
 # Settings files are written without a byte order mark: the server does not read a file that starts with one.
 function Sync-NetworkKeys([string]$ServerDir) {
     $want = @(
         @{ File = 'worldserver.conf'; Keys = [ordered]@{ 'Network.ConnectionsPerIp' = '16'; 'Network.AuthTimeout' = '60' } },
-        @{ File = 'bnetserver.conf';  Keys = [ordered]@{ 'Network.ConnectionsPerIp' = '16'; 'Network.HandshakeTimeout' = '30'; 'Network.LoginTimeout' = '600' } })
+        @{ File = 'bnetserver.conf';  Keys = [ordered]@{ 'Network.ConnectionsPerIp' = '16'; 'Network.HandshakeTimeout' = '30'; 'Network.LoginTimeout' = '600'; 'Network.RequestsPerSecond' = '10' } })
     foreach ($w in $want) {
         try {
             $path = Join-Path $ServerDir $w.File
@@ -59,6 +60,35 @@ function Sync-NetworkKeys([string]$ServerDir) {
             [IO.File]::WriteAllText($path, $text + "`r`n# added by the updater: the defaults the server used anyway`r`n" + $add, (New-Object Text.UTF8Encoding $false))
         } catch { Write-Warning "Could not add the network settings to $($w.File): $($_.Exception.Message)" }
     }
+}
+
+# The bot clothes setting (Bots.HolidayClothes: holiday hats on bots or not) came with 0.1.28. A player's own zz-9-local.conf
+# from an older install does not have it, and updates never rewrite that file. So the block from templates\zz-9-local.conf is
+# added to it once, above "Your own settings", with the server's own default (1, as before). A player's own line is kept.
+function Sync-BotClothesSettings([string]$ServerDir) {
+    try {
+        $path = Join-Path (Join-Path $ServerDir 'worldserver.conf.d') 'zz-9-local.conf'
+        $tpl = Join-Path (Join-Path $PSScriptRoot 'templates') 'zz-9-local.conf'
+        if (-not (Test-Path $path) -or -not (Test-Path $tpl)) { return }
+        $lines = @(Get-Content $path)
+        if ($lines | Where-Object { $_ -match '^\s*Bots\.HolidayClothes\s*=' }) { return }
+        $block = @(); $in = $false
+        foreach ($l in @(Get-Content $tpl)) {
+            if ($l -match '^# ---- Bot clothes') { $in = $true }
+            elseif ($in -and $l -match '^# ----') { break }
+            if ($in) { $block += $l }
+        }
+        if (-not $block.Count) { return }
+        $out = @(); $done = $false
+        foreach ($l in $lines) {
+            if (-not $done -and $l -match '^# ---- Your own settings') { $out += $block; $done = $true }
+            $out += $l
+        }
+        if (-not $done) { $out += ''; $out += $block }
+        Copy-Item $path "$path.bak" -Force
+        [IO.File]::WriteAllText($path, (($out -join "`r`n") + "`r`n"), (New-Object Text.UTF8Encoding $false))
+        'Added the bot clothes setting to zz-9-local.conf (holiday hats on, as before; old copy: zz-9-local.conf.bak).'
+    } catch { Write-Warning "Could not add the bot clothes setting to zz-9-local.conf: $($_.Exception.Message)" }
 }
 
 # The hired bots settings (NPC hire broker: on/off, what each broker gives, gear, health, prices) came with 0.1.28. A player's own

@@ -1892,6 +1892,22 @@ bool DungeonHonorCross(BotSnapshotView const& s, BotAI& ai,
     // full fresh window instead of re-tripping every tick), and fall
     // through to the tail re-assert — the rescue fires on the first
     // out-of-combat evaluation.
+    // Hit while the hop is stalled: fight back. Re-asserting the move every tick kept a bot walking in place under the
+    // mobs' blows, never swinging (overnight 11-02, LBRS: the tank died 26 s in on dungeon_offmesh_cross_hold, killed by a
+    // Scarshield Acolyte). Only a stalled hop gives way (3 s without moving 3 y; one in flight moves) and only to mobs that
+    // can be fought; once it gives way it stays so until combat ends, then the crossing carries on from where the bot is.
+    if (!s.in_combat())
+        ai.set_cross_fight_yield(false);
+    else if (s.fightable_attackers_count() > 0 && (ai.cross_fight_yield() || cross_frozen > 3000u))
+    {
+        if (!ai.cross_fight_yield())
+            TC_LOG_INFO("playerbot.v2", "[dungeon_cross] {} is hit while its crossing is stalled ({} y from the exit): it fights first",
+                        s.name(), uint32(dist_to_exit));
+        ai.set_cross_fight_yield(true);
+        ai.set_dungeon_cross(tgx, tgy, tgz, now_ms + 12000);   // keep the commitment for after the fight
+        ai.set_last_rule_fired("dungeon_offmesh_cross_yield_fight");
+        return false;
+    }
     const bool can_teleport = !s.in_combat() && !s.is_casting();
     if (!can_teleport)
     {

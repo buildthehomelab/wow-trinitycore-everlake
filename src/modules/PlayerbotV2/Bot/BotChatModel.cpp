@@ -97,6 +97,7 @@ ChatModel::Settings SettingsFrom(ConfigReader::ChatModelConfig const& cfg)
     s.temperature = cfg.temperature;
     s.keep_alive = cfg.keep_alive;
     s.context_length = cfg.context_length;
+    s.think = cfg.think;
     return s;
 }
 

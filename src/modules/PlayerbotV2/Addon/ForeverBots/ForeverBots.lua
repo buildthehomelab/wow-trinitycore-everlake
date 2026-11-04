@@ -252,27 +252,46 @@ local function ServerCommand(text)
     Cmd.Say(text)
 end
 
--- Stance toggle of the panel: ForeverBotsDB.stance is "passive" or "aggressive" (nil = never picked: passive, the server's start
--- stance for every bot in your group). The pick is kept between sessions and re-sent to the group whenever it changes (new bots).
-local function StanceIsAggressive()
-    return ForeverBotsDB ~= nil and ForeverBotsDB.stance == "aggressive"
+-- Stance button of the panel, three steps (chris 2026-11-03: "passive, defensive and aggressive"). ForeverBotsDB.stance is
+--   "nofight"    - Passive: the bots attack nothing at all, not even to defend; heals and buffs go on (taming a beast, a sheep that
+--                  must not break, a quest mob that must stay alive). Server word "passive".
+--   "defensive"  - Defensive: they start nothing and fight what you pull or what attacks the group (the server's start stance).
+--                  Older add-ons saved this one as "passive".
+--   "aggressive" - Aggressive: they also attack anything hostile within about 10 yards of you.
+-- nil = never picked: Defensive. The pick is kept between sessions and re-sent to the group whenever it changes (new bots).
+-- (Kept on Cmd: the main chunk is at Lua 5.1's 200-local limit.)
+Cmd.STANCES = { "defensive", "aggressive", "nofight" }   -- the order a click steps through
+function Cmd.StanceKey()
+    local st = ForeverBotsDB and ForeverBotsDB.stance
+    if st == "aggressive" or st == "nofight" then return st end
+    return "defensive"   -- nil, "defensive", and the older add-on's "passive"
 end
--- What the button shows: the pick; before one, "Passive" (nothing is sent until you pick, the server starts every grouped bot Passive).
-local function StanceLabel()
-    local stance = ForeverBotsDB and ForeverBotsDB.stance
-    if stance == "aggressive" then return L["Aggressive"] end
-    if stance == "passive" then return L["Passive"] end
-    -- Nothing picked yet: every bot in your group starts Passive on the server (it fights only what the group pulled or what
-    -- attacks the group, and follows you back), so the button says so.
-    return L["Passive"]
+-- The word a plain pick sends (it also answers in the bot whispers) and the stance-only re-send for new bots.
+Cmd.STANCE_ORDER  = { defensive = "defensive", aggressive = "aggressive", nofight = "passive" }
+Cmd.STANCE_RESEND = { defensive = "stance defensive", aggressive = "stance aggressive", nofight = "stance nofight" }
+local function StanceLabel(short)
+    local k = Cmd.StanceKey()
+    if k == "aggressive" then return short and L["Aggr."] or L["Aggressive"] end
+    if k == "nofight" then return L["Passive"] end
+    return short and L["short:Defensive"] or L["Defensive"]
 end
 local stanceBtn
 local function RefreshStance()
     if stanceBtn then
         stanceBtn:SetText(StanceLabel())
-        -- bar.tga rows 5 (blue, Passive) and 6 (red, Aggressive)
-        if stanceBtn.FBSetRow then stanceBtn:FBSetRow(StanceIsAggressive() and 6 or 5) end
+        -- tint: green Passive, blue Defensive, red Aggressive (MakeSkinButton rows 7, 5, 6)
+        local k = Cmd.StanceKey()
+        if stanceBtn.FBSetRow then stanceBtn:FBSetRow(k == "aggressive" and 6 or k == "nofight" and 7 or 5) end
     end
+end
+-- One step on (back with step -1), or straight to a stance key, and send it to the group. Cmd.GroupOrder is set below GroupOrder.
+function Cmd.SetStance(step, key)
+    local list, i = Cmd.STANCES, 1
+    for n, v in ipairs(list) do if v == (key or Cmd.StanceKey()) then i = n end end
+    if not key then i = (i - 1 + (step or 1)) % #list + 1 end
+    ForeverBotsDB.stance = list[i]
+    Cmd.GroupOrder(Cmd.STANCE_ORDER[list[i]])
+    RefreshStance()
 end
 
 -- Bot orders go to the group as addon messages under a fixed prefix; the server reads them like party chat. SendChatMessage
@@ -416,6 +435,8 @@ local function GroupOrder(text, attempt)
     end
     SendChatMessage(text, channel)
 end
+Cmd.GroupOrder = GroupOrder
+Cmd.ns.GroupOrder = function(text) GroupOrder(text) end
 
 -- Raid markers the tank panel cycles through (the chat order words), and the one picked now.
 local TANK_MARKERS = { "skull", "cross", "star", "circle", "diamond", "triangle", "moon", "square" }
@@ -832,16 +853,32 @@ local KEY_ORDERS = {
     { "Come", "come", L["Come"] },
     { "FallBack", "fallback", L["Fall back"] },
     { "AttackMouseover", "attack", L["Attack (mouseover)"], "/target [@mouseover,harm,nodead]\n" },
+    -- The three stances, one key each (a key works in combat too; the panel's stance button follows it).
+    { "Passive", "passive", L["Stance: Passive (attack nothing)"], nil, "nofight" },
+    { "Defensive", "defensive", L["Stance: Defensive"], nil, "defensive" },
+    { "Aggressive", "aggressive", L["Stance: Aggressive"], nil, "aggressive" },
+    -- Your target goes on (or, pressed again on it, off) the list of mobs your bots never attack; the second key empties the list.
+    { "IgnoreTarget", "ignore target", L["Ignore my target (again: undo)"] },
+    { "IgnoreClear", "ignore clear", L["Clear ignored mobs"] },
 }
 BINDING_HEADER_FOREVERBOTS = "WoW Forever Bots"
 BINDING_NAME_FOREVERBOTS_TOGGLE_WINDOW = L["Show / hide the bot window"]
-BINDING_NAME_FOREVERBOTS_TOGGLE_STANCE = L["Toggle stance (Passive / Aggressive)"]
+BINDING_NAME_FOREVERBOTS_TOGGLE_STANCE = L["Next stance (Defensive / Aggressive / Passive)"]
 for _, k in ipairs(KEY_ORDERS) do
     local name = "ForeverBotsKey" .. k[1]
     local b = CreateFrame("Button", name, UIParent, "SecureActionButtonTemplate")
     b:RegisterForClicks("AnyUp", "AnyDown")
     b.orderText = k[2]
     b.macroPre = k[4]   -- optional macro lines before the order (Attack mouseover targets the unit under the cursor first)
+    if k[5] then
+        -- A stance key: the panel shows it and re-sends it to bots that join (saved like a pick on the button). Plain Lua after the
+        -- secure click, nothing protected, so it runs in combat too.
+        local key = k[5]
+        b:HookScript("OnClick", function()
+            if ForeverBotsDB then ForeverBotsDB.stance = key end
+            RefreshStance()
+        end)
+    end
     secureOrders[#secureOrders + 1] = b
     _G["BINDING_NAME_CLICK " .. name .. ":LeftButton"] = k[3]
 end
@@ -933,6 +970,7 @@ end)
 local TEXDIR = "Interface\\AddOns\\" .. tostring(ADDON) .. "\\Textures\\"
 local FONT_LABEL = "Fonts\\FRIZQT__.TTF"
 local ROW_NORMAL, ROW_GOLD, ROW_BLUE, ROW_RED = 0, 4, 5, 6   -- resting look, chosen (kept highlighted), blue text, red text
+-- row 7: green text (the stance button's Passive)
 
 -- o.order: a secure order button (runs "/party <order>" or "/raid <order>", also in combat). Same template and font as the
 -- "Raid Info" button of the client's Raid window.
@@ -952,6 +990,7 @@ local function MakeSkinButton(parent, text, w, h, o)
         if row == ROW_GOLD then self:LockHighlight() else self:UnlockHighlight() end
         if row == ROW_BLUE then self.fbTint = { 0.62, 0.8, 1 }
         elseif row == ROW_RED then self.fbTint = { 1, 0.45, 0.35 }
+        elseif row == 7 then self.fbTint = { 0.45, 1, 0.45 }
         else
             self.fbTint = nil
             local fs = self.GetFontString and self:GetFontString()
@@ -1229,7 +1268,8 @@ local LAYOUT = {
     FOOTER = 38,
     TAB_STEP = 44,    -- side tabs down the right edge
 }
-local TAB_DEFS = { { "orders", L["Orders"] }, { "bots", L["Bots"] }, { "form", L["Form"] }, { "marks", L["Marks"] }, { "finder", L["Group finder"] } }
+local TAB_DEFS = { { "orders", L["Orders"] }, { "bots", L["Bots"] }, { "form", L["Form"] }, { "marks", L["Marks"] }, { "finder", L["Group finder"] },
+                   { "world", L["World bots"] }, { "place", L["Positions"] } }
 local frameTabs, framePanes = {}, {}
 local emptyFS, ordersGrid, footerFS
 local nativeFrame = false
@@ -1303,7 +1343,7 @@ local function UpdateEmpty()
     local grouped = InGroupQuiet() and true or false
     if grouped then emptyFS:Hide() else emptyFS:Show() end
     ordersGrid:SetAlpha(grouped and 1 or 0.45)
-    if footerFS then footerFS:SetText((grouped and L["%d bots"]:format(MemberCount() - 1) or L["No bots"]) .. " - " .. (StanceIsAggressive() and L["Aggr."] or L["Passive"])) end
+    if footerFS then footerFS:SetText((grouped and L["%d bots"]:format(MemberCount() - 1) or L["No bots"]) .. " - " .. StanceLabel(true)) end
 end
 
 -- The client's own window: the same portrait frame its Raid and Looking For Group windows use. If this client has no such
@@ -1400,15 +1440,19 @@ function UI.BuildOrders()
     end
     local rally = Btn(ordersGrid, 0, 18 + 3 * 32, 76, 26, L["short:Set rally"], { order = "rally here", size = 11 })
     Tip(rally, L["Set rally"], L["Sets the rally point to where you stand (used by Fall back and Pull back)."])
-    -- Stance: Passive (blue word) or Aggressive (red word), sent to the group on every pick and again to every bot that joins.
+    -- Stance: Defensive (blue word), Aggressive (red) or Passive (green); a click steps on, a right-click back. Sent to the group on
+    -- every pick and again to every bot that joins.
     stanceBtn = Btn(ordersGrid, 81, 18 + 3 * 32, 157, 26, StanceLabel(), { size = 11 })
-    stanceBtn:SetScript("OnClick", function()
-        ForeverBotsDB.stance = StanceIsAggressive() and "passive" or "aggressive"
-        GroupOrder(ForeverBotsDB.stance)
-        RefreshStance()
-    end)
-    Tip(stanceBtn, L["Stance"], L["Passive (the start setting): bots start nothing, fight only what you pull or what attacks the group, and come back to follow you. Aggressive: they also attack anything hostile within about 10 yards of you. Shows what you last sent; it is sent again to every bot that joins."])
+    stanceBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    stanceBtn:SetScript("OnClick", function(_, button) Cmd.SetStance(button == "RightButton" and -1 or 1) end)
+    Tip(stanceBtn, L["Stance"], L["Click for the next stance, right-click for the one before.\nDefensive (the start setting): bots start nothing, fight only what you pull or what attacks the group, and come back to follow you.\nAggressive: they also attack anything hostile within about 10 yards of you.\nPassive: they attack nothing at all, not even to defend you or themselves; healers still heal and everyone still buffs. For taming a beast, a sheep that must not break or a mob that must stay alive.\nShows what you last sent; it is sent again to every bot that joins."])
     RefreshStance()
+    -- Ignore target: your target goes on the list of mobs your bots never attack, even when it attacks you (a beast you tame); the
+    -- same button on it again takes it off. Clear empties the list. Secure order buttons, so they work in combat.
+    local ign = Btn(ordersGrid, 0, 18 + 4 * 32, 157, 26, L["Ignore target"], { order = "ignore target", size = 11 })
+    Tip(ign, L["Ignore target"], L["Your bots will not attack the mob you have targeted, even if it attacks you or them, until you press this again on it (or Clear). They fight every other mob as usual. Area spells wait while it is near. Forgotten after 30 minutes."])
+    local ignClear = Btn(ordersGrid, 162, 18 + 4 * 32, 76, 26, L["short:Clear ignored"], { order = "ignore clear", size = 11 })
+    Tip(ignClear, L["Clear ignored"], L["Your bots may attack every mob again."])
 
     -- Two on/off check boxes at the bottom (the client's own check box). Area spells: on (the server's start setting) the bots use
     -- them as their rotations call for; off, nothing that hits more than one enemy (server: "aoe_all on|off", whispered to one of
@@ -1534,6 +1578,9 @@ function UI.BuildBots()
     local quick = Btn(botsPane, 0, 106, 117, 24, L["Quick party"], {})
     quick:SetScript("OnClick", QuickParty)
     Tip(quick, L["Quick party"], L["Fills your group with bots at your level: to five in the open world and 5-player dungeons, to the size of a bigger instance (10 in Upper Blackrock Spire) or raid. With hired bots on (/fb hire), your hired bots come; next to a mercenary broker the missing places are hired for gold."])
+    -- hired bots only hides the class and role buttons (ForeverBots_Hire.lua)
+    Cmd.ns.addButtons = { roles = roleBtns, classes = classBtns, sel = selFS, pane = botsPane }
+    if Cmd.ns.Hire then Cmd.ns.Hire.Attach(botsPane) end
     gearBtn = Btn(botsPane, 121, 106, 117, 24, "", {})
     gearBtn:SetScript("OnClick", function()
         local cur = ForeverBotsDB.gear or "match"
@@ -1725,13 +1772,15 @@ function UI.BuildTabs()
         form = "Interface\\Icons\\INV_Misc_Map_01",
         marks = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8",
         finder = "Interface\\Icons\\INV_Misc_Spyglass_03",
+        world = "Interface\\Icons\\INV_Misc_Map02",
+        place = "Interface\\Icons\\Ability_Warrior_DefensiveStance",
     }
     -- The tabs are secure click handlers: the client runs their pane switch as its own code, so they work in combat too (an add-on
     -- function may not show or hide the Orders pane in a fight, 0.5.15 in UBRS 2026-10-26: Follow and Stop could not be reached).
     -- Without the secure template (an older client) a tab is a plain button and a switch to or from Orders waits for the end of combat.
     local switchSnippet = [[
         local want = self:GetAttribute("fbtab")
-        for k = 1, 5 do
+        for k = 1, 7 do
             local p = self:GetFrameRef("fbpane" .. k)
             if p then
                 if k == want then p:Show() else p:Hide() end
@@ -1864,6 +1913,16 @@ local function BuildFrame()
                                          DungeonsForLevel = UI.DungeonsForLevel, Queue = UI.DungeonQueue,
                                          Lfg = function(role) SendGear(); Cmd.Queue(".bot lfg" .. (role and (" " .. role) or "")) end })
     end
+    -- World bots (ForeverBots_World.lua): Off / Low / Medium / High for the realm, GM only
+    local worldPane = UI.NewPane()
+    if Cmd.ns.BuildWorld then
+        Cmd.ns.BuildWorld(worldPane, { Btn = UI.Btn, Section = UI.Section, Tip = Tip })
+    end
+    -- Positions (ForeverBots_Place.lua): ticked bots stand in a shape here or round the target and stay there
+    local placePane = UI.NewPane()
+    if Cmd.ns.BuildPlace then
+        Cmd.ns.BuildPlace(placePane, { Btn = UI.Btn, Section = UI.Section, Tip = Tip })
+    end
     UI.BuildFooter()
     UI.BuildTabs()
 
@@ -1919,7 +1978,7 @@ distFrame:SetScript("OnUpdate", function(self, elapsed)
         -- you said "attack" called the whole group off (UBRS: the melee stood by you until you said it again).
         local okI, inInstance = pcall(IsInInstance)
         if GroupSize() > 0 and (ForeverBotsDB.stance or (okI and inInstance)) then
-            Auto(GroupOrder, StanceIsAggressive() and "stance aggressive" or "stance passive")
+            Auto(GroupOrder, Cmd.STANCE_RESEND[Cmd.StanceKey()])
         end
         RefreshStance()
     end
@@ -2044,7 +2103,7 @@ local function ToggleMinimapMenu()
     if not mmMenu then
         local m = CreateFrame("Frame", "ForeverBotsMinimapMenu", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
         mmMenu = m
-        m:SetSize(150, 4 * 28 + 12)
+        m:SetSize(150, 7 * 28 + 12)   -- seven items below
         m:SetFrameStrata("DIALOG")
         m:EnableMouse(true)
         if m.SetBackdrop then
@@ -2058,6 +2117,10 @@ local function ToggleMinimapMenu()
             { L["Raid ready"], RaidReady },
             { L["Call saved bots"], function() ServerCommand(".bot summon saved") end },
             { L["Dismiss all bots"], function() ServerCommand(".bot dismiss all") end },
+            -- arena (".bot arena"): the party leader queues the party; 2v2 needs a party of 2, 3v3 a party of 3 (bots count)
+            { L["Arena 2v2"], function() ServerCommand(".bot arena 2") end },
+            { L["Arena 3v3"], function() ServerCommand(".bot arena 3") end },
+            { L["Leave arena queue"], function() ServerCommand(".bot arena leave") end },
             { L["Hide this button"], function()
                 ForeverBotsDB.minimap.hidden = true
                 mmButton:Hide()
@@ -2136,9 +2199,7 @@ end
 
 function ForeverBots_ToggleStance()
     if not ForeverBotsDB then return end
-    ForeverBotsDB.stance = StanceIsAggressive() and "passive" or "aggressive"
-    GroupOrder(ForeverBotsDB.stance)
-    RefreshStance()
+    Cmd.SetStance(1)
     Print(L["stance: %s"]:format(StanceLabel()))
 end
 
@@ -2332,12 +2393,13 @@ local function BuildBotPanel()
         botRoleBtn:SetText(L["Role: %s"]:format(L[ROLE_CYCLE[botRoleChoice]]))
     end)
     B(L["Dismiss"], 72, 102, -110, function() if botName then ServerCommand(".bot dismiss " .. botName) end end)
-    local botStanceAggressive = false
+    -- This bot's stance, three steps like the window's: Defensive, Aggressive, Passive (attacks nothing).
+    local botStanceStep = 1
     local botStanceBtn
-    botStanceBtn = B(L["short:Passive"], 56, 177, -110, function()
-        botStanceAggressive = not botStanceAggressive
-        BotWhisper(botStanceAggressive and "aggressive" or "passive")
-        botStanceBtn:SetText(botStanceAggressive and L["Aggress."] or L["short:Passive"])
+    botStanceBtn = B(L["short:Defensive"], 56, 177, -110, function()
+        botStanceStep = botStanceStep % 3 + 1
+        BotWhisper(botStanceStep == 1 and "defensive" or botStanceStep == 2 and "aggressive" or "passive")
+        botStanceBtn:SetText(botStanceStep == 1 and L["short:Defensive"] or botStanceStep == 2 and L["Aggress."] or L["short:Passive"])
     end)
     botStatusFS = p:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     botStatusFS:SetPoint("TOPLEFT", 14, -136)

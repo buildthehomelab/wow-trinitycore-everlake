@@ -11,6 +11,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 class Creature;
 class Player;
@@ -52,6 +53,13 @@ public:
     // A bot was hired for `price`: its first day is paid.
     void SetHired(BotId bot, Hire::Grade grade, uint64 price);
     void Forget(BotId bot);
+    // Group Finder / dungeon finder bots of a player who must hire (Hire::kLoanGradeDb): free while they stay in that player's
+    // group, never called on their own, deleted when they leave it (BotPopulationManager::CompanionUpkeep / ReleaseLoans).
+    void SetLoaned(BotId bot, uint32 now_ms);
+    bool IsLoaned(BotId bot) const;
+    // A loan bot older than Hire::kLoanGraceMs (made before this start counts as old).
+    bool LoanSettled(BotId bot, uint32 now_ms) const;
+    std::vector<BotId> LoanedBots() const;
     uint32 CountGrade(uint32 account_id, Hire::Grade grade) const;
 
     // The gear mode a companion wears under hired mode (Gear::Owned::GearMode value), -1 when the owner's own choice stands.
@@ -83,6 +91,7 @@ private:
     std::unordered_map<BotId, HireRecord> hired_;
     std::unordered_set<uint32> opted_in_;
     std::unordered_map<BotId, uint32> called_ms_;
+    std::unordered_map<BotId, uint32> loaned_;   // bot -> when it was lent (getMSTime), 0 = before this start
     // The health given by ApplyHealth, per bot, with the Player it was given to (a bot that logged out and in again is a new Player
     // object without it). World thread only.
     struct HealthBonus { Player const* who = nullptr; float amount = 0.0f; };

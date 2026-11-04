@@ -316,6 +316,7 @@ struct IntentVisitor
     // VendorBuyByEntry / VendorBuy / VendorSell / VendorSellTrash / RepairAll /
     // VendorBuyByCategory bundled into VendorIntent.
     Result operator()(TogglePvpIntent const&)              { return api.toggle_pvp(); }
+    Result operator()(SetPvpIntent const& i)               { return api.set_pvp(i.on); }
     Result operator()(AddFriendIntent const& i)            { return api.add_friend(i.name, i.note); }
     Result operator()(RemoveFriendIntent const& i)         { return api.remove_friend(i.friend_guid); }
     Result operator()(AddIgnoreIntent const& i)            { return api.add_ignore(i.name); }

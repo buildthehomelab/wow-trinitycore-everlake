@@ -45,6 +45,7 @@
 #include "Bot/PartyLink.h"
 #include "Bot/BotRegistry.h"
 #include "Fleet/OwnerRegistry.h"
+#include "Fleet/WorldPvpConfig.h"
 #include "Util.h"
 #include "Log.h"
 #include "Config.h"
@@ -104,6 +105,101 @@ bool AssistFriendPvpFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView 
     if (best_attacker.IsEmpty() || best_d2 >= 40.0f * 40.0f) return false;
     if (!emit.start_attack(best_attacker)) return false;
     ai.set_last_rule_fired("idle:assist_friend_pvp");
+    return true;
+}
+
+// ---------- idle:world_pvp_flag / idle:world_pvp_ambush ----------
+// World PvP of the world bots on a PvP or free-for-all realm (Fleet/WorldPvp.h). A flagged bot keeps its PvP flag on as a player who
+// typed /pvp; a hunter (a flagged bot too) sometimes attacks an enemy it sees, a roll per enemy every RollMinutes. Only free world
+// bots: never a companion, a hired bot or a bot in a group, never in a battleground, dungeon, raid or capital.
+namespace F = ::Playerbot::V2::Fleet;
+
+static bool FreeWorldBotForPvp(BotSnapshotView const& s)
+{
+    return s.is_alive() && !s.has_owner_character() && !s.in_group() && !s.in_battleground() && !s.is_in_instance()
+        && !s.is_in_dungeon() && !s.is_sanctuary() && !::Playerbot::V2::World::IsVanillaCapitalZone(s.zone_id());
+}
+
+// The PvP button of the bot follows its temper: on for a flagged bot (it stays flagged everywhere); off for the others, which then
+// carry the flag only where the realm puts it on everyone (hostile territory), and lose it 5 minutes after leaving it, as a player.
+// A bot whose button was turned on here and whose temper is no longer flagged (the setting changed, a normal realm now) turns it off.
+static bool WantsPvpFlag(BotSnapshotView const& s)
+{
+    F::LiveWorldPvp const w = F::CurrentWorldPvp();
+    return F::IsPvpFlagged(w.cfg, w.realm, uint64(s.bot_id()));
+}
+
+bool WorldPvpFlagGate(BotSnapshotView const& s, BotAI&, GroupSnapshotView const&, uint32)
+{
+    if (s.in_combat() || s.has_owner_character() || s.in_group() || !s.is_alive() || s.in_battleground()) return false;
+    return WantsPvpFlag(s) != s.pvp_wanted();
+}
+
+bool WorldPvpFlagFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32)
+{
+    if (!emit.set_pvp(WantsPvpFlag(s))) return false;
+    ai.set_last_rule_fired("idle:world_pvp_flag");
+    return true;
+}
+
+bool WorldPvpAmbushGate(BotSnapshotView const& s, BotAI&, GroupSnapshotView const&, uint32)
+{
+    if (s.in_combat() || s.is_casting() || !FreeWorldBotForPvp(s)) return false;
+    if (s.hp_pct() < 80 || s.raw().movement.is_mounted) return false;
+    F::LiveWorldPvp const w = F::CurrentWorldPvp();
+    return F::IsPvpHunter(w.cfg, w.realm, uint64(s.bot_id()));
+}
+
+bool WorldPvpAmbushFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32 now_ms)
+{
+    F::LiveWorldPvp const w = F::CurrentWorldPvp();
+    uint64 const now_s = uint64(GameTime::GetGameTime());
+    float bx, by, bz;
+    s.position(bx, by, bz);
+    NearbyUnit const* best = nullptr;
+    float best_d = 35.0f;   // what a player sees coming: a rogue still has to walk in from here
+    auto consider = [&](NearbyUnit const& u)
+    {
+        if (!u.is_player || u.hp <= 0 || u.untargetable || !u.in_los || u.guid == s.raw().guid) return;
+        if (!F::LevelOk(w.cfg, uint32(s.level()), uint32(u.level))) return;
+        bool const is_bot = Services::Registry().has(BotId(u.guid.GetCounter()));
+        if (is_bot && !w.cfg.attack_bots) return;
+        if (ai.start_attack_recently_refused(u.guid.GetCounter(), now_ms)) return;
+        float const d = std::hypot(u.x - bx, u.y - by);
+        if (d >= best_d || std::fabs(u.z - bz) > 12.0f) return;
+        if (!F::AttackRoll(w.cfg, w.realm, uint64(s.bot_id()), u.guid.GetCounter(), now_s)) return;
+        best = &u;
+        best_d = d;
+    };
+    for (auto const& u : s.nearby_enemies())
+        consider(u);
+    // Free-for-all: the bot's own faction is fair game too (start_attack is refused by the server where it is not, and that
+    // target is then left alone for a while).
+    if (w.realm == F::RealmPvp::Ffa)
+        for (auto const& u : s.nearby_friends())
+            if (!u.is_in_group)
+                consider(u);
+    if (!best) return false;
+    // The class's own first hit (F::PvpOpeners): the first one known, ready and in range. A caster that opens with a spell does not
+    // also start a melee swing (it would run in); a warrior's Charge and every class without a fitting opener start the attack.
+    bool const in_form = s.has_aura(768) || s.has_aura(5487) || s.has_aura(9634);   // cat, bear, dire bear
+    F::PvpOpener const* list = nullptr;
+    int const n = F::PvpOpeners(s.cls(), in_form, list);
+    bool const has_seal = s.has_aura(21084) || s.has_aura(20375) || s.has_aura(20165) || s.has_aura(20166) || s.has_aura(21082);
+    uint32 opener = 0;
+    for (int i = 0; i < n && !opener; ++i)
+    {
+        F::PvpOpener const& o = list[i];
+        if (best_d < o.min_yards || best_d > o.max_yards || (o.needs_seal && !has_seal)) continue;
+        if (s.knows_spell(o.spell) && s.is_ready(o.spell)) opener = o.spell;
+    }
+    bool const melee_too = !opener || opener == 100;   // Charge, or no opener: swing as well
+    if (opener && !emit.cast(opener, best->guid)) opener = 0;
+    if ((melee_too || !opener) && !emit.start_attack(best->guid) && !opener) return false;
+    ai.set_last_rule_fired("idle:world_pvp_ambush");
+    TC_LOG_INFO("playerbot.v2", "[world_pvp] {} lvl={} cls={} zone={} attacks {} {} lvl={} at {:.0f} y, opener {} ({} realm)", s.name(),
+                uint32(s.level()), uint32(s.cls()), s.zone_id(), Services::Registry().has(BotId(best->guid.GetCounter())) ? "bot" : "player",
+                best->guid.GetCounter(), uint32(best->level), best_d, opener, w.realm == F::RealmPvp::Ffa ? "free-for-all" : "PvP");
     return true;
 }
 
@@ -1756,6 +1852,26 @@ void RegisterAmbientRules(IdleRuleRegistry& r)
         rule.priority = 705;
         rule.gate     = &AssistFriendPvpGate;
         rule.fire     = &AssistFriendPvpFire;
+        r.register_rule(std::move(rule));
+    }
+    {
+        IdleRule rule;
+        rule.name     = "idle:world_pvp_ambush";
+        // Just under the PvP defence of a friend (705): helping comes first, then the hunt. A roll per enemy per RollMinutes, so a
+        // look every second is enough.
+        rule.priority = 704;
+        rule.min_interval_ms = 1000;
+        rule.gate     = &WorldPvpAmbushGate;
+        rule.fire     = &WorldPvpAmbushFire;
+        r.register_rule(std::move(rule));
+    }
+    {
+        IdleRule rule;
+        rule.name     = "idle:world_pvp_flag";
+        rule.priority = 140;
+        rule.min_interval_ms = 30000;
+        rule.gate     = &WorldPvpFlagGate;
+        rule.fire     = &WorldPvpFlagFire;
         r.register_rule(std::move(rule));
     }
     {

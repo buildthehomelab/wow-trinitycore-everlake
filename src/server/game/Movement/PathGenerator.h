@@ -33,8 +33,12 @@ TC_GAME_API void ReleaseNavLockAfterFault();
 // 74*4.0f=296y number_of_points*interval = max_path_len
 // this is way more than actual evade range
 // I think we can safely cut those down even more
-#define MAX_PATH_LENGTH         74
-#define MAX_POINT_PATH_LENGTH   74
+#define DEFAULT_PATH_LENGTH         74
+#define DEFAULT_POINT_PATH_LENGTH   74
+// Bot players walk far travel legs (Westfall to the Deadmines entrance) that the 74 polygon budget cut short, so the bot stopped
+// partway. Their paths may use up to 512 polygons and points (512*4.0f = 2048y); every other unit keeps the default above.
+#define MAX_PATH_LENGTH             512
+#define MAX_POINT_PATH_LENGTH       512
 
 #define SMOOTH_PATH_STEP_SIZE   4.0f
 #define SMOOTH_PATH_SLOP        0.3f
@@ -84,7 +88,7 @@ class TC_GAME_API PathGenerator
 
         // option setters - use optional
         void SetUseStraightPath(bool useStraightPath) { _useStraightPath = useStraightPath; }
-        void SetPathLengthLimit(float distance) { _pointPathLimit = std::min<uint32>(uint32(distance/SMOOTH_PATH_STEP_SIZE), MAX_POINT_PATH_LENGTH); }
+        void SetPathLengthLimit(float distance) { _pointPathLimit = std::min<uint32>(uint32(distance/SMOOTH_PATH_STEP_SIZE), _maxPointPathLimit); }
         void SetUseRaycast(bool useRaycast) { _useRaycast = useRaycast; }
 
         // result getters
@@ -128,7 +132,9 @@ class TC_GAME_API PathGenerator
 
         bool _useStraightPath;  // type of path will be generated
         bool _forceDestination; // when set, we will always arrive at given point
-        uint32 _pointPathLimit; // limit point path size; min(this, MAX_POINT_PATH_LENGTH)
+        uint32 _pointPathLimit; // limit point path size; min(this, _maxPointPathLimit)
+        uint32 _polyPathLimit;      // polygon budget of findPath/raycast: DEFAULT_PATH_LENGTH, MAX_PATH_LENGTH for a bot player
+        uint32 _maxPointPathLimit;  // point budget ceiling: DEFAULT_POINT_PATH_LENGTH, MAX_POINT_PATH_LENGTH for a bot player
         bool _useRaycast;       // use raycast if true for a straight line path
 
         G3D::Vector3 _startPosition;        // {x, y, z} of current location

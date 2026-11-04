@@ -1351,6 +1351,16 @@ void DB2Manager::IndexLoadedStores()
         for (auto& [curveId, curvePoints] : unsortedPoints)
         {
             std::ranges::sort(curvePoints, {}, &CurvePointEntry::OrderIndex);
+
+            // Classic 1.60 (70707): the TransmogCost curve 106855 has a leftover point (60, 1) at OrderIndex 2, between (2, 50)
+            // and (3, 50). Evaluated in OrderIndex order every level from 3 to 59 interpolates towards it, so the outfit price
+            // the server works out is far below the one the client shows and every outfit save is refused. Interpolated
+            // curves are looked up by X, so put their points in X order (OrderIndex still decides between equal X).
+            // Bezier curves (type 2) use their points as control points in OrderIndex order and are left alone.
+            if (sCurveStore.AssertEntry(curveId)->Type != 2
+                && !std::ranges::is_sorted(curvePoints, {}, [](CurvePointEntry const* point) { return point->Pos.X; }))
+                std::ranges::stable_sort(curvePoints, {}, [](CurvePointEntry const* point) { return point->Pos.X; });
+
             std::vector<DBCPosition2D>& points = _curvePoints[curveId];
             points.resize(curvePoints.size());
             std::ranges::transform(curvePoints, points.begin(), &CurvePointEntry::Pos);

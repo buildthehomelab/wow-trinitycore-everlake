@@ -61,6 +61,15 @@ public:
     // A bot this spawner placed (or is placing) in the world. The battleground filler never drafts these.
     bool IsPlaced(uint64 guid_low) const { return placed_.contains(guid_low) || pending_.contains(guid_low); }
 
+    // The world bot choice of the ForeverBots panel (Fleet/BotSize.h PopLevel), set by a GM in game (.bot population, add-on POP_REQ).
+    // It applies on the next world tick, is saved in the characters database and read back at the next start. nullopt = the files
+    // decide (Bots.* lines, Playerbot.World.Enable).
+    void SetPopulation(std::optional<PopLevel> level);
+    std::optional<PopLevel> Population() const { return pop_level_; }
+    // One plain line for the panel and the command: the choice, what it gives, and whether bots are still logging out.
+    std::string PopulationLine() const;
+    bool PopulationDraining() const { return drain_until_ms_ != 0; }
+
 private:
     struct Config
     {
@@ -115,7 +124,8 @@ private:
         float  moving_despawn_behind = 450.0f;   // bots this far behind a moving player log out (out of sight); 0 = only DespawnRadius
         // Plain bot numbers (Bots.* lines, Fleet/BotSize.h). plain = at least one Bots.* line is set: max_bots, pool_max, city_bots,
         // zone_bots (= zone_hi) and bots_per_player then come from them, each zone rolls its number in [zone_lo, zone_hi], the cap
-        // is shared evenly over the occupied places, and a place nobody is in for leave_zone_ms loses its bots fast.
+        // is shared evenly over the occupied places, and a place nobody is in for leave_zone_ms loses its bots fast. day_rhythm is off
+        // unless Bots.DayRhythm = 1 (the numbers are flat).
         bool   plain            = false;
         uint32 zone_lo          = 0;
         uint32 zone_hi          = 0;
@@ -196,6 +206,14 @@ private:
     uint32 PlaceWantFor(Anchor const& a);
     std::unordered_map<uint64, uint32> place_target_, place_players_, zone_roll_, place_seen_ms_;
     std::string plain_logged_;
+    std::optional<PopLevel> pop_level_;       // the panel's choice (SetPopulation); loaded once from the database
+    bool   pop_loaded_ = false;
+    bool   pop_changed_ = false;              // SetPopulation since the last LoadConfig: the config is read again at once
+    bool   drain_requested_ = false;          // SetPopulation stepped down: the next tick starts the drain
+    uint32 drain_until_ms_ = 0;               // a step down / Off: every world bot not busy logs out until then (or none is left)
+    uint32 drain_started_ms_ = 0;
+    void LoadPopulationOnce();
+    void DriveDrain(uint32 now_ms, std::vector<Anchor> const& anchors);
 
     struct Ghost { Anchor a; uint32 until_ms; };   // where a player was before an instance / far jump: keeps its bots for a grace
     std::vector<Ghost> ghosts_;

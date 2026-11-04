@@ -215,6 +215,7 @@ void ConfigReader::apply_from_loaded_config()
         m.max_tokens        = uint32(std::clamp<int32>(c.GetIntDefault("Playerbot.ChatModel.MaxTokens", 60, true), 10, 400));
         m.temperature       = std::clamp(float(c.GetFloatDefault("Playerbot.ChatModel.Temperature", 0.8f, true)), 0.0f, 2.0f);
         m.keep_alive        = c.GetStringDefault("Playerbot.ChatModel.KeepAlive", "30m", true);
+        m.think             = c.GetBoolDefault("Playerbot.ChatModel.Think", false, true);
         m.context_length    = uint32(std::clamp<int32>(c.GetIntDefault("Playerbot.ChatModel.ContextLength", 2048, true), 512, 32768));
         m.party_chance      = uint32(std::clamp<int32>(c.GetIntDefault("Playerbot.ChatModel.PartyChance", 100, true), 0, 100));
         m.second_reply_chance = uint32(std::clamp<int32>(c.GetIntDefault("Playerbot.ChatModel.SecondReplyChance", 35, true), 0, 100));

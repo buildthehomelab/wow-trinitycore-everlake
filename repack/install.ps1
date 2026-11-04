@@ -7,86 +7,22 @@
 param([string]$Client, [switch]$SkipMaps, [switch]$NoStart, [switch]$Elevated, [switch]$Gui)   # -Gui: started by the launcher window (already administrator): no questions, no pauses
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-# The "from the internet" mark (Zone.Identifier) is taken off the package by the launcher, or by repack\unblock.ps1 that
-# Install.cmd runs first. It is not done here: a script that strips that mark from a whole folder tree is what antivirus
-# heuristics look for (Kaspersky named install.ps1 UDS:Trojan-PSW.PowerShell.Stealer.gen in 0.1.28).
-. "$PSScriptRoot\ClientBuild.ps1"   # the build the realm accepts is read from the shipped auth updates, never typed here
-
-# Looks for WoW Forever client folders (a folder with .build.info next to _forever_ (Wow.exe) or _classic_beta_ (WowB.exe)). Returns candidates
-# in the order Sort-ClientFolders gives: an accepted build first (repack\client-builds.txt), then the clients Battle.net installed, then
-# folders not named like a backup. $roots is a list of folders to search (to depth 3); the Battle.net installs are always included.
-# Battle.net can have two WoW Forever installs of different builds (the beta and the Forever release); a build is what decides.
-function Find-ClientFolders([string[]]$roots, [int]$maxSeconds = 25, [string[]]$registered = @(Get-BattleNetClients)) {
-    $found = New-Object System.Collections.Generic.List[string]
-    foreach ($d in $registered) { if (-not $found.Contains($d)) { $found.Add($d) } }
-    $clock = [Diagnostics.Stopwatch]::StartNew()   # the search gives up after $maxSeconds; the player can pick the folder by hand
-    # Every path is used literally (-LiteralPath): a folder named with [ or ] (common in downloaded media folders) is otherwise read as a
-    # wildcard pattern and stopped the whole install ("The specified wildcard character pattern is not valid"). A folder that still
-    # cannot be read (no access, a broken link, a name Windows refuses) is skipped; the search goes on.
-    foreach ($r in $roots) {
-        if (-not $r) { continue }
-        try { if (-not (Test-Path -LiteralPath $r)) { continue } } catch { continue }
-        $stack = New-Object System.Collections.Generic.Stack[object]
-        $stack.Push(@($r, 0))
-        while ($stack.Count -and $clock.Elapsed.TotalSeconds -lt $maxSeconds) {
-            $item = $stack.Pop(); $dir = $item[0]; $depth = $item[1]
-            try {
-                if (Test-Path -LiteralPath (Join-Path $dir '.build.info')) {
-                    if ((Test-Path -LiteralPath (Join-Path $dir '_forever_')) -or (Test-Path -LiteralPath (Join-Path $dir '_classic_beta_')) -or @(Get-ChildItem -LiteralPath $dir -Filter 'Wow*.exe' -File -ErrorAction SilentlyContinue).Count) {
-                        if (-not $found.Contains($dir)) { $found.Add($dir) }
-                        continue
-                    }
-                }
-                if ($depth -ge 3) { continue }
-                foreach ($sub in @(Get-ChildItem -LiteralPath $dir -Directory -ErrorAction SilentlyContinue)) {
-                    if ($sub.Name -in 'Windows', '$Recycle.Bin', 'System Volume Information', 'ProgramData', 'node_modules', '.git') { continue }
-                    $stack.Push(@($sub.FullName, ($depth + 1)))
-                }
-            } catch { continue }
-        }
-    }
-    @(Sort-ClientFolders $root @($found) $registered | ForEach-Object { $_.Dir })
-}
-# The client folder (with .build.info) for a path the player typed or pasted: quotes and spaces around it are removed, and a game
-# folder (_forever_ / _classic_beta_) or the program inside it (Wow.exe) leads to its client folder. $null when there is none.
-function Resolve-ClientInput([string]$text) {
-    if (-not $text) { return $null }
-    $p = $text.Trim().Trim('"').Trim("'").Trim().TrimEnd('\', '/')
-    if (-not $p) { return $null }
-    if ($p -match '^[A-Za-z]:$') { $p += '\' }
-    try {
-        if (Test-Path -LiteralPath $p -PathType Leaf) { $p = Split-Path $p -Parent }
-        for ($i = 0; $i -lt 3 -and $p; $i++) {
-            if (Test-Path -LiteralPath (Join-Path $p '.build.info') -PathType Leaf) { return $p }
-            $p = Split-Path $p -Parent
-        }
-    } catch { }
-    $null
-}
+# The "from the internet" mark is taken off the package by the launcher, or by repack\unblock.ps1 that Install.cmd runs first.
+. "$PSScriptRoot\client-search.ps1"   # finding the game folder (also loads ClientBuild.ps1)
 
 if ($MyInvocation.InvocationName -eq '.') { return }   # dot-sourced by the tests: functions only
 
 function Step($n, $total, $text) { Write-Host "`n[$n/$total] $text" -ForegroundColor Cyan }
-function Pick-Folder($start) {
-    Add-Type -AssemblyName System.Windows.Forms
-    $d = New-Object System.Windows.Forms.FolderBrowserDialog
-    if ($start) { $d.SelectedPath = $start }
-    $d.Description = 'Select your WoW Forever game folder (the one that contains the file .build.info)'
-    $d.ShowNewFolderButton = $false
-    if ($d.ShowDialog() -eq 'OK') { return $d.SelectedPath }
-    return $null
-}
 
-# --- admin rights (certificate + hosts entry) --------------------------------------------------------------------------
-$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+# --- administrator rights (for the certificate and hosts line of step 5) ------------------------------------------------
+$isAdmin = & "$PSScriptRoot\elevate.ps1" -Test
 if (-not $isAdmin -and $Gui) { Write-Host 'Setup needs administrator rights. Open the launcher again and press Yes.'; exit 1 }
 if (-not $isAdmin) {
-    Write-Host 'Windows will ask for permission once: it is needed to trust the local certificate and add the hosts line.'
-    $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Elevated"
-    if ($Client) { $argList += " -Client `"$Client`"" }
-    if ($SkipMaps) { $argList += ' -SkipMaps' }
-    if ($NoStart) { $argList += ' -NoStart' }
-    Start-Process powershell.exe -ArgumentList $argList -Verb RunAs -Wait
+    $pass = @()
+    if ($Client) { $pass += "-Client `"$Client`"" }
+    if ($SkipMaps) { $pass += '-SkipMaps' }
+    if ($NoStart) { $pass += '-NoStart' }
+    & "$PSScriptRoot\elevate.ps1" -Script $PSCommandPath -Pass $pass
     return
 }
 try { Start-Transcript -Path "$PSScriptRoot\install.log" -Append | Out-Null } catch { }
@@ -111,9 +47,9 @@ try {
     $picked = $false
     if (-not $Client -and (Get-SavedClient $root)) {
         $Client = (Get-SavedClient $root).Dir
-        # a backup copy found by an earlier install gives way to the client Battle.net installed
+        # a backup copy found by an earlier install gives way to the installed game
         $better = Get-BetterThanSaved $root
-        if ($better) { Write-Host "Not using $Client (it looks like a backup copy); using the Battle.net install $better."; $Client = $better }
+        if ($better) { Write-Host "Not using $Client (it looks like a backup copy); using the installed game in $better."; $Client = $better }
     }
     # the launcher saves the game folder (_forever_ / _classic_beta_); the client folder with .build.info is its parent
     if ($Client -and -not (Test-Path -LiteralPath (Join-Path $Client '.build.info')) -and (Test-Path -LiteralPath (Join-Path (Split-Path $Client -Parent) '.build.info'))) { $Client = Split-Path $Client -Parent }
@@ -124,15 +60,14 @@ try {
     if (-not $Client) {
         # look for it, then let the player confirm or change it in a folder window (it opens at the best guess)
         Write-Host 'Looking for it (at most 25 seconds)...'
-        $roots = @("$env:USERPROFILE\Desktop", "$env:USERPROFILE\Downloads", "$env:USERPROFILE\Documents", "$env:PUBLIC\Games", "$env:ProgramFiles", "${env:ProgramFiles(x86)}")
-        foreach ($d in Get-PSDrive -PSProvider FileSystem) { $roots += $d.Root }
-        $registered = @(Get-BattleNetClients)
+        $roots = @(Get-ClientSearchRoots)
+        $registered = @(Get-InstalledClients)
         # the search never stops the install: if it fails, the player chooses or pastes the folder below
         $found = @(); try { $found = @(Find-ClientFolders $roots 25 $registered) } catch { Write-Warning "The search stopped early ($($_.Exception.Message)); choose the folder yourself." }
         $ties = @(Get-ClientTies (Sort-ClientFolders $root $found $registered))
         $guess = if ($found.Count) { $found[0] } else { $null }
         if ($ties.Count -gt 1) {
-            # several equally good clients (same build, none set apart by Battle.net or a backup name): the player says which
+            # several equally good clients (same build, none set apart as installed or by a backup name): the player says which
             Write-Host 'Found more than one WoW Forever game folder that would work:'
             for ($i = 0; $i -lt $ties.Count; $i++) { Write-Host "  $($i + 1)) $($ties[$i])" }
             $n = Read-Host "Type the number of the one you play with (or press Enter to choose a folder yourself)"
@@ -194,28 +129,9 @@ try {
         Start-Process explorer.exe -ArgumentList "`"$root\repack\FirstStart.cmd`""
     }
 
-    # --- first account --------------------------------------------------------------------------------------------------
-    try { Stop-Transcript | Out-Null } catch { }   # no log of what is typed from here on (passwords)
-    Write-Host ''
-    Write-Host 'HOW TO LOG IN' -ForegroundColor Green
-    Write-Host 'You need an account. It is created through the running server (the server finishes starting in the other window).'
-    if ($Gui) { Write-Host 'The launcher window asks for the account name and password next.' }
-    else {
-    $make = Read-Host 'Create your account now? [Y/n]'
-    if ($make -notmatch '^(n|no|nein)$') {
-        try { & "$PSScriptRoot\Create-Account.ps1" } catch { Write-Warning $_.Exception.Message; Write-Host 'You can do it later: menu option A (Create account).' }
-    } else { Write-Host 'Later: menu option A (Create account).' }
-    }
-    $help = @"
-Next steps
-1. Start the game with Play-WoWForever.cmd (or P in the control panel; it applies the server key, keep its window open) and log in with
-   your account name plus @local (for example yourname@local) and your password. Realm: Trinity. In game, type /fb for the bots window.
-2. Next time: Start Menu > WoW Forever Bots (or the Desktop shortcut) opens the control panel: 1 Start, 2 Stop, 3 Restart,
-   T Restarter mode, A Create account, S Settings, B Backup, U Update.
-Help and news: https://discord.gg/QJBM6tR3E4
-"@
-    Set-Content (Join-Path $root 'secrets\first-login.txt') $help -Encoding ascii
-    if (-not $Gui) { Write-Host "`n$help" -ForegroundColor Green }
+    # --- first account and the next-steps note --------------------------------------------------------------------------
+    try { Stop-Transcript | Out-Null } catch { }   # the log ends here: the account step is not written to install.log
+    & "$PSScriptRoot\finish-install.ps1" -Root $root -Gui:$Gui
 }
 catch {
     Write-Host "`nInstall stopped: $($_.Exception.Message)" -ForegroundColor Red

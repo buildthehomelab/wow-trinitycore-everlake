@@ -221,11 +221,14 @@ try {
     $skipFiles = @('*.conf', 'my.ini', 'version.json')
     $skipDirs = @('data', 'logs', 'Crashes', 'mysql', 'mysql-data', 'config', 'secrets', 'certs', 'backups', 'update-tmp')
     $count = Copy-Tree $new $Root $skipFiles $skipDirs
-    $managed = Join (Join (Join $new 'server') 'worldserver.conf.d') 'zz-1-wow-forever-realm.conf'
-    if (Test-Path $managed) {
-        $cd = Join (Join $Root 'server') 'worldserver.conf.d'
-        New-Item -ItemType Directory -Force $cd | Out-Null
-        Copy-Item $managed (Join $cd 'zz-1-wow-forever-realm.conf') -Force
+    # The two managed settings files (ours, replaced by every release); zz-9-local.conf is the player's own and stays.
+    foreach ($mf in 'zz-0-playerbot-defaults.conf', 'zz-1-wow-forever-realm.conf') {
+        $managed = Join (Join (Join $new 'server') 'worldserver.conf.d') $mf
+        if (Test-Path $managed) {
+            $cd = Join (Join $Root 'server') 'worldserver.conf.d'
+            New-Item -ItemType Directory -Force $cd | Out-Null
+            Copy-Item $managed (Join $cd $mf) -Force
+        }
     }
     $localConf = Join (Join (Join $Root 'server') 'worldserver.conf.d') 'zz-9-local.conf'
     # The server only reads a settings file that starts a section: without a [worldserver] line every setting in it is ignored.

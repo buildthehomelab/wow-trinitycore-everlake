@@ -837,6 +837,7 @@ struct VitalsState
     // PvP context flags.
     bool is_pvp        = false;
     bool is_ffa_pvp    = false;
+    bool pvp_wanted    = false;   // the explicit PvP flag (PLAYER_FLAGS_IN_PVP, the PvP button) is on
     bool is_sanctuary  = false;
 
     // Pure-POD (fixed arrays + scalars): default-assign is allocation-free.
@@ -2751,6 +2752,18 @@ struct BotSnapshot
     // The owner's "focus heal <name>, <name>" (BotAI::heal_only), mirrored by the builder: when not empty the bot heals only these
     // players and itself. PickPatient keeps to them; the emitter drops any other friendly heal (the tank shield / Renew rules too).
     std::vector<ObjectGuid> heal_only;
+    // The owner's full Passive (BotAI::OwnerStance::NoFight, the panel's Passive), mirrored by the builder: the emitter drops every
+    // attack and harmful spell, and the builder empties combat.attackers / nearby_enemies, so no rule picks a target or walks to one.
+    // Heals, buffs and other friendly spells still go.
+    bool no_fight = false;
+    // The owner's "ignore target" list (OwnerRegistry::FightIgnored, the panel's Ignore target button): mobs this bot must not attack,
+    // not even when they attack the owner or the bot (a rare beast the hunter player tames). The builder takes them out of
+    // combat.attackers / nearby_enemies; the emitter drops an attack or harmful spell at one; State_InCombat calls the bot and its pet
+    // off one. Other mobs are fought as usual. fight_ignore_near: one of them is within kFightIgnoreAoeYd of the bot, so no spell that
+    // hits more than one enemy goes out either.
+    std::vector<ObjectGuid> fight_ignore;
+    bool fight_ignore_near = false;
+    static constexpr float kFightIgnoreAoeYd = 30.0f;
     // (duel + quest-share + trade + summon migrated into social_events above)
     // LFG queue / role-check / proposal / vote-kick state — REFACTOR_2
     // sub-struct rollout. See LfgState above for per-field semantics.
@@ -3037,6 +3050,9 @@ struct BotSnapshot
         cc_deny = 0;
         owner_picks = {};
         aoe_denied = false;
+        no_fight = false;
+        fight_ignore.clear();
+        fight_ignore_near = false;
 
         // Sub-structs (declaration order).
         identity.reset();

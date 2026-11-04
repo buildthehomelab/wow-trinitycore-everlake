@@ -3224,6 +3224,7 @@ void SpellInfo::_LoadSpellDiminishInfo()
             case 23694:                                                 // Improved Hamstring
             case 19229:                                                 // Improved Wing Clip
             case 19185:                                                 // Entrapment
+            case 19306: case 20909: case 20910:                         // Counterattack (WoW Forever launch notes 2026-11-03: proc roots diminish)
                 return DIMINISHING_TRIGGER_ROOT;
             default:
                 break;

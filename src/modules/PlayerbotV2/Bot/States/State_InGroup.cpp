@@ -517,7 +517,7 @@ void DispatchInGroup(BotAI& ai,
     {
         auto const stance = ai.owner_stance();
         bool const aggressive = stance == BotAI::OwnerStance::Aggressive;
-        bool const leashed = aggressive || stance == BotAI::OwnerStance::Passive || stance == BotAI::OwnerStance::Auto;
+        bool const leashed = aggressive || ai.owner_passive() || stance == BotAI::OwnerStance::Auto;
         float const reach = aggressive ? Services::Config().behavior_aggressive_radius_yd() : Services::Config().behavior_passive_leash_yd();
         auto const* grp_members = group.members();
         NearbyUnit const* tgt = snapshot.victim_info();
@@ -781,7 +781,7 @@ void DispatchInGroup(BotAI& ai,
     // seconds the window never closed and the whole assist chain ran, the tank opening on mobs 32-43 y away).
     // Once the group fights, the window limits nothing: the owner pressing Attack through a pull kept his rogue and cat druid on his own
     // target only, and a warlock's is a spell's, not a melee victim; they stood beside him (UBRS 2026-10-28 22:10, Attack every 4-8 s).
-    const bool passive_kind = ai.owner_stance() == BotAI::OwnerStance::Passive ||
+    const bool passive_kind = ai.owner_passive() ||
                               (ai.owner_stance() == BotAI::OwnerStance::Auto && auto_passive);
     const bool window_limited = !owner_passive_stance && passive_kind && !group_fight_on;
     // A Passive bot the group's fight released joins only that fight (GroupControl::LeaderFightMayJoin): his target, a mob near him,

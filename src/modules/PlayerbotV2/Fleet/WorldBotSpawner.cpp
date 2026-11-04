@@ -34,6 +34,7 @@
 #include "UnitDefines.h"
 #include "TownGatherSource.h"
 #include "WorldFactionMix.h"
+#include "Fleet/WorldPvpConfig.h"
 #include "SkyborneIsle.h"
 #include "BotPopulationManager.h"
 #include "BotIdentityRegistry.h"
@@ -116,6 +117,7 @@ constexpr uint32 kConfigReloadMs   = 15000u;
 constexpr uint32 kReportMs         = 60000u;
 constexpr uint32 kMemReportMs      = 60000u;    // [mem] line
 constexpr uint32 kSwapBurstMs = 60000u;          // after a jump the swap runs faster for this long
+constexpr uint32 kDrainMaxMs = 600000u;         // a population step down logs the world bots out for at most 10 min (busy ones may stay)
 constexpr uint32 kSwapBurstFactor = 3u;          // x spawn and despawn rate during it
 constexpr uint32 kPendingTimeoutMs = 120000u;   // login + setup pipeline + placement
 constexpr uint32 kQueryTimeoutMs   = 20000u;
@@ -291,6 +293,15 @@ void WorldBotSpawner::LoadConfig()
     c.mix.home_pct      = std::min<uint32>(100, uint32(sConfigMgr->GetIntDefault("Playerbot.World.HomeFriendlyPct", 100, true)));
     c.mix.border_pct    = std::min<uint32>(100, uint32(sConfigMgr->GetIntDefault("Playerbot.World.BorderFriendlyPct", 100, true)));
     c.mix.contested_pct = std::min<uint32>(100, uint32(sConfigMgr->GetIntDefault("Playerbot.World.ContestedFriendlyPct", 100, true)));
+    // A PvP or free-for-all realm (GameType) with Playerbot.World.Pvp.Enable: enemy bots about in the border and contested zones
+    // (Fleet/WorldPvp.h), so the world PvP of the bots has someone to meet. Capitals and home zones stay as the files say.
+    {
+        namespace F = ::Playerbot::V2::Fleet;
+        F::WorldPvpCfg const pvp = F::ReadWorldPvpCfg();
+        F::RealmPvp const realm = F::RealmPvpOf(::World::instance()->getIntConfig(CONFIG_GAME_TYPE));
+        c.mix.border_pct = F::PvpBorderPct(pvp, realm, c.mix.border_pct);
+        c.mix.contested_pct = F::PvpContestedPct(pvp, realm, c.mix.contested_pct);
+    }
     c.pool_max         = uint32(sConfigMgr->GetIntDefault("Playerbot.World.PoolMax", std::max<uint32>(c.max_bots * 4, 200), true));
     c.area_cap_outdoors = uint32(std::clamp<int64>(sConfigMgr->GetIntDefault("Playerbot.World.AreaCapOutdoors", 14, true), 0, 500));
     c.area_cap_town    = uint32(std::clamp<int64>(sConfigMgr->GetIntDefault("Playerbot.World.AreaCapTown", 40, true), 0, 500));
@@ -315,8 +326,12 @@ void WorldBotSpawner::LoadConfig()
     {
         namespace F = ::Playerbot::V2::Fleet;
         F::PlainInput in;
+        bool file_off = false;   // Bots.Size = Off: no world bots from the files (the launcher's Bots window, Off)
         if (std::string const t = sConfigMgr->GetStringDefault("Bots.Size", "", true); !t.empty())
+        {
+            file_off = F::IsBotSizeOff(t);
             in.size = F::ParseBotSize(t);
+        }
         auto num = [](char const* key) -> std::optional<uint32>
         {
             int32 const v = sConfigMgr->GetIntDefault(key, -1, true);
@@ -327,7 +342,31 @@ void WorldBotSpawner::LoadConfig()
         in.in_city = num("Bots.InCity");
         if (std::string const t = sConfigMgr->GetStringDefault("Bots.PerZone", "", true); !t.empty())
             in.per_zone = t;
-        if (std::optional<F::PlainBots> const b = F::ResolvePlainBots(in))
+        std::optional<F::PlainBots> b = F::ResolvePlainBots(in);
+        // The ForeverBots panel's choice (a GM, in game) wins over the files: Low / Medium / High is that preset with world bots
+        // on, Off is no world bots. While an Off still has bots logging out the spawner keeps running with nothing to fill.
+        LoadPopulationOnce();
+        // The file's Off is the in-game Off without the logging out: the launcher restarts the realm after the choice, so no world bot
+        // is online. Only the world spawner stops; Playerbot.World.Enable stays as it is, so battleground and dungeon finder bots and
+        // the player's own bots still come. An in-game pick (below) still wins over it.
+        if (file_off && !pop_level_)
+        {
+            c.enable = false;
+            c.seed_roster = false;
+            c.global_fill = false;
+            if (!b) b = F::PresetBots(F::BotSize::Normal);
+        }
+        if (pop_level_)
+        {
+            c.enable = *pop_level_ != F::PopLevel::Off || drain_until_ms_ != 0 || drain_requested_;
+            b = F::PopLevelBots(*pop_level_, b ? b->reserve : c.pool_max);
+            if (*pop_level_ == F::PopLevel::Off)
+            {
+                c.seed_roster = false;
+                c.global_fill = false;
+            }
+        }
+        if (b)
         {
             c.plain = true;
             c.max_bots = b->active_cap;
@@ -338,22 +377,40 @@ void WorldBotSpawner::LoadConfig()
             c.zone_bots = b->zone_hi;
             c.bots_per_player = b->zone_hi;                        // fallback and the per-player reserve of the global filler
             c.rss_budget_mb = uint32(PhysicalRamMb() * 45u / 100u);   // memory stop: automatic
+            // The numbers are flat (chris 11-01: "a flat number"): no quieter night unless the player asks for it. With the old rule a
+            // 50-70 zone held 30-42 bots after midnight and a 120 city held 72, so a late player saw a thin world.
+            c.day_rhythm = sConfigMgr->GetBoolDefault("Bots.DayRhythm", false, true);
             // Leaving: a zone nobody is in loses its bots after LeaveZoneSec; after a dungeon, battleground or logout the spot is
             // kept as a ghost so the total is LeaveWorldSec (chris 11-01: "the bots should log out fast").
             uint32 const leave_zone = uint32(std::clamp<int32>(sConfigMgr->GetIntDefault("Bots.LeaveZoneSec", 20, true), 0, 3600));
             uint32 const leave_world = uint32(std::clamp<int32>(sConfigMgr->GetIntDefault("Bots.LeaveWorldSec", 60, true), 0, 3600));
             c.leave_zone_ms = leave_zone * 1000u;
             c.zone_grace_ms = (leave_world > leave_zone ? leave_world - leave_zone : 0u) * 1000u;
+            // Named only when a file gives it a value of its own: the shipped playerbot.conf held the built-in defaults, and the start
+            // line then listed six "not used" keys on every install that nobody had ever touched.
+            struct OldKey { char const* key; int32 builtin; };
+            static constexpr OldKey kOld[] = {
+                { "Playerbot.World.MaxBots", 100 }, { "Playerbot.World.BotsPerPlayer", 25 }, { "Playerbot.World.CityBots", 0 },
+                { "Playerbot.World.ZoneBots", 0 }, { "Playerbot.World.PoolMax", -2 }, { "Playerbot.World.RssBudgetMb", -1 },
+                { "Playerbot.World.ZoneGraceSec", 300 } };
             std::string old;
-            for (char const* key : { "Playerbot.World.MaxBots", "Playerbot.World.BotsPerPlayer", "Playerbot.World.CityBots",
-                                     "Playerbot.World.ZoneBots", "Playerbot.World.PoolMax", "Playerbot.World.RssBudgetMb",
-                                     "Playerbot.World.ZoneGraceSec" })
-                for (std::string const& k : sConfigMgr->GetKeysByString(key))
-                    if (k == key) old += (old.empty() ? "" : ", ") + k;
+            for (OldKey const& o : kOld)
+                for (std::string const& k : sConfigMgr->GetKeysByString(o.key))
+                    if (k == o.key && sConfigMgr->GetIntDefault(o.key, o.builtin, true) != o.builtin)
+                        old += (old.empty() ? "" : ", ") + k;
             c.plain_summary = Trinity::StringFormat("Bots: {} - reserve {}, at most {} active, {}-{} per zone, {} in a city; bots leave {} s after a zone empties, "
-                                                    "{} s after a dungeon/BG/logout{}{}",
-                in.size ? F::BotSizeName(*in.size) : "own numbers", c.pool_max, c.max_bots, c.zone_lo, c.zone_hi, c.city_bots, leave_zone, leave_world,
+                                                    "{} s after a dungeon/BG/logout{}{}{}",
+                pop_level_ ? std::string("set in game: ") + F::PopLevelWord(*pop_level_) : std::string(in.size ? F::BotSizeName(*in.size) : "own numbers"), c.pool_max, c.max_bots, c.zone_lo, c.zone_hi, c.city_bots, leave_zone, leave_world,
+                c.day_rhythm ? "; quieter at night (Bots.DayRhythm = 1)" : "",
                 old.empty() ? "" : ". Not used any more (Bots.* lines win): ", old);
+            if (file_off && !pop_level_)
+                c.plain_summary = "Bots: Off (Bots.Size = Off) - no world bots; own bots, dungeon finder and battleground bots still come "
+                                  "(the launcher's Bots window, or a GM in game with the ForeverBots panel, World tab, turns them on)";
+            if (pop_level_ && *pop_level_ == F::PopLevel::Off)
+                c.plain_summary = "Bots: set in game: off - no world bots (a GM can turn them on with the ForeverBots panel, World tab, "
+                                  "or .bot population low|medium|high; .bot population file hands back to the config files)";
+            else if (pop_level_)
+                c.plain_summary += " (set in game with the ForeverBots panel; .bot population file hands back to the config files)";
         }
     }
     if (c.plain && c.plain_summary != plain_logged_)
@@ -363,6 +420,124 @@ void WorldBotSpawner::LoadConfig()
         TC_LOG_INFO("playerbot.v2", "[world] {}", c.plain_summary);
     }
     cfg_ = c;
+}
+
+// ---- The world bot choice of the ForeverBots panel (Off / Low / Medium / High) ------------------------------------------------
+// Kept in the characters database, one row per realm setting, so a restart keeps what the GM picked in game. The table is made here
+// (not a migration file) so the panel works on every install that has this server, whatever migrations it already ran.
+namespace
+{
+    constexpr char const* kPopSettingName = "world_bots";
+}
+
+void WorldBotSpawner::LoadPopulationOnce()
+{
+    if (pop_loaded_)
+        return;
+    pop_loaded_ = true;
+    CharacterDatabase.DirectExecute("CREATE TABLE IF NOT EXISTS playerbot_v2_realm_setting ("
+                                    "name VARCHAR(64) NOT NULL, value VARCHAR(64) NOT NULL DEFAULT '', PRIMARY KEY (name)"
+                                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    if (QueryResult r = CharacterDatabase.Query(Trinity::StringFormat(
+            "SELECT value FROM playerbot_v2_realm_setting WHERE name = '{}'", kPopSettingName).c_str()))
+    {
+        pop_level_ = ::Playerbot::V2::Fleet::ParsePopLevel((*r)[0].GetString());
+        if (pop_level_)
+            TC_LOG_INFO("server.loading", "World bots: {} (picked in game with the ForeverBots panel; .bot population file hands back to the config files)",
+                        ::Playerbot::V2::Fleet::PopLevelWord(*pop_level_));
+    }
+}
+
+void WorldBotSpawner::SetPopulation(std::optional<PopLevel> level)
+{
+    namespace F = ::Playerbot::V2::Fleet;
+    LoadPopulationOnce();
+    // What is allowed now, against what the new choice allows: fewer (or none) means the bots online go first.
+    bool const was_on = cfg_.enable;
+    uint32 const old_cap = cfg_.max_bots, old_zone = cfg_.plain ? cfg_.zone_hi : std::max(cfg_.zone_bots, cfg_.bots_per_player),
+                 old_city = cfg_.city_bots ? cfg_.city_bots : cfg_.bots_per_player;
+    pop_level_ = level;
+    pop_changed_ = true;
+    if (level)
+    {
+        F::PlainBots const now = F::PopLevelBots(*level, cfg_.pool_max);
+        if (was_on && F::PopLevelNeedsDrain(old_cap, old_zone, old_city, now))
+            drain_requested_ = true;
+        else if (*level != F::PopLevel::Off)
+        {
+            drain_requested_ = false;   // a step up while a step down is still logging bots out: let them come again
+            drain_until_ms_ = 0;
+        }
+        CharacterDatabase.Execute(Trinity::StringFormat(
+            "REPLACE INTO playerbot_v2_realm_setting (name, value) VALUES ('{}', '{}')", kPopSettingName, F::PopLevelWord(*level)).c_str());
+    }
+    else
+        CharacterDatabase.Execute(Trinity::StringFormat(
+            "DELETE FROM playerbot_v2_realm_setting WHERE name = '{}'", kPopSettingName).c_str());
+    TC_LOG_INFO("playerbot.v2", "[world] population choice: {}", level ? F::PopLevelWord(*level) : "the config files");
+}
+
+std::string WorldBotSpawner::PopulationLine() const
+{
+    namespace F = ::Playerbot::V2::Fleet;
+    std::string line;
+    if (!pop_level_)
+        line = Trinity::StringFormat("World bots: from the config files ({}).", cfg_.enable
+            ? Trinity::StringFormat("on, at most {} at once", cfg_.max_bots) : std::string("off"));
+    else if (*pop_level_ == F::PopLevel::Off)
+        line = "World bots: Off.";
+    else
+    {
+        F::PlainBots const b = F::PopLevelBots(*pop_level_, cfg_.pool_max);
+        line = Trinity::StringFormat("World bots: {} - at most {} at once, {}-{} in a zone with you, {} in a capital.",
+            *pop_level_ == F::PopLevel::Low ? "Low" : *pop_level_ == F::PopLevel::High ? "High" : "Medium",
+            b.active_cap, b.zone_lo, b.zone_hi, b.in_city);
+    }
+    if (drain_until_ms_ || drain_requested_)
+        line += Trinity::StringFormat(" {} world bot(s) still logging out.", ambient_online_);
+    return line;
+}
+
+// A step down or Off: every world bot that is not busy (no group, instance, battleground or fight) logs out, out of sight where it
+// can, a few each tick. Ends when none is left or after kDrainMaxMs; then the new numbers fill (or, for Off, the spawner stops).
+void WorldBotSpawner::DriveDrain(uint32 now_ms, std::vector<Anchor> const& anchors)
+{
+    uint32 left = 0;
+    uint32 sent = 0;
+    uint32 const limit = cfg_.despawn_per_tick * kSwapBurstFactor;
+    std::vector<ObjectGuid> go;
+    Services::Registry().for_each([&](BotId id, BotRegistryEntry const&)
+    {
+        ObjectGuid const g = ObjectGuid::Create<HighGuid::Player>(id);
+        Player* p = ObjectAccessor::FindConnectedPlayer(g);
+        if (!p || !p->IsInWorld()) return;
+        if (!owner_.IsAmbientBot(id, p)) return;
+        if (p->InBattleground() || p->InBattlegroundQueue() || p->GetGroup()
+            || (p->GetMap() && (p->GetMap()->IsDungeon() || p->GetMap()->IsBattlegroundOrArena())))
+            return;
+        ++left;
+        if (leaving_.contains(uint64(id)) || pending_.contains(uint64(id)) || seeding_.contains(uint64(id))) return;
+        if (p->IsInCombat() || p->IsBeingTeleported() || owner_.IsKickProtected(id, now_ms)) return;
+        if (go.size() < limit) go.push_back(g);
+    });
+    for (ObjectGuid const& g : go)
+        if (Player* p = ObjectAccessor::FindConnectedPlayer(g))
+            if (RetireBot(p, now_ms, anchors))
+            {
+                ++sent;
+                ++n_despawned_;
+                placed_.erase(g.GetCounter());
+            }
+    // Off has no time limit: once it ends the spawner stops, and a bot still online then would stay for good.
+    bool const off = pop_level_ && *pop_level_ == ::Playerbot::V2::Fleet::PopLevel::Off;
+    bool const timed_out = !off && int32(drain_until_ms_ - now_ms) <= 0;
+    if ((left == 0 && pending_.empty() && leaving_.empty()) || timed_out)
+    {
+        TC_LOG_INFO("playerbot.v2", "[world] population change done after {} s{}", getMSTimeDiff(drain_started_ms_, now_ms) / 1000u,
+                    timed_out ? Trinity::StringFormat(" (time limit; {} busy world bot(s) stay until they are free)", left) : std::string());
+        drain_until_ms_ = 0;
+        pop_changed_ = true;   // Off: read the config again, the spawner now stops
+    }
 }
 
 WorldLoadFacts WorldBotSpawner::Load() const
@@ -394,7 +569,7 @@ std::string WorldBotSpawner::Report() const
         n_logged_in_, n_created_, n_placed_, n_despawned_, n_abandoned_, last_tick_cost_ms_, avg, max_tick_cost_ms_,
         rss / 1024, baseline_rss_kb_ / 1024, per_bot_mb);
     {
-        // The standing roster by level bracket (1-9 / 10s / 20s / 30s / 40s / 50-60), Alliance/Horde, as of the last census plus creations since.
+        // The standing roster by level bracket (1-9 / 10s / 20s / 30s / 40s / 50s / 60), Alliance/Horde, as of the last census plus creations since.
         std::string pool;
         for (std::size_t b = 0; b < kPoolBrackets; ++b)
             pool += Trinity::StringFormat(" {}/{}", pool_counts_.alliance[b], pool_counts_.horde[b]);
@@ -1419,8 +1594,10 @@ void WorldBotSpawner::DriveDespawn(uint32 now_ms, std::vector<Anchor> const& anc
         }
         // Plain bot numbers: a zone nobody has been in for LeaveZoneSec loses its bots, unless one stands inside a player's spawn ring
         // (a bot just over a zone line next to him stays; chris 11-01: "why would you hold 50 bots still active there?").
+        // Inside a player's bubble (ActivityRadius) the bot counts for him, so it stays even over a zone line: logging it out there only
+        // had the spawner put a new one in its place (a bot grinding 360 y away in the next zone went, and came back as another one).
         bool emptied = false;
-        if (cfg_.plain && cfg_.leave_zone_ms && !p->IsInFlight() && nearest > cfg_.ring_max)
+        if (cfg_.plain && cfg_.leave_zone_ms && !p->IsInFlight() && nearest > cfg_.activity_radius)
             emptied = !place_seen_ms_.contains(::Playerbot::V2::Fleet::PlaceKey(p->GetMapId(), bot_zone));
         // A misfit goes as an orphan does: a level 25 human priest in Deathknell takes the new player's mobs (PC 26 Oct).
         bool const orphan = nearest > cfg_.despawn_radius || misfit || trail || emptied;
@@ -3341,10 +3518,21 @@ void WorldBotSpawner::FinishSpawn(Anchor const& a, std::vector<bool> const& slot
 void WorldBotSpawner::OnWorldTick(uint32 now_ms)
 {
     // Config reload also covers "enabled at runtime"; while disabled this costs one config read per 15 s.
-    if (!last_cfg_ms_ || getMSTimeDiff(last_cfg_ms_, now_ms) >= kConfigReloadMs)
+    // A choice from the ForeverBots panel (SetPopulation) is read at once, not at the next 15 s reload.
+    if (!last_cfg_ms_ || pop_changed_ || getMSTimeDiff(last_cfg_ms_, now_ms) >= kConfigReloadMs)
     {
         last_cfg_ms_ = now_ms;
+        pop_changed_ = false;
         LoadConfig();
+    }
+    if (drain_requested_)
+    {
+        drain_requested_ = false;
+        drain_started_ms_ = now_ms ? now_ms : 1u;
+        drain_until_ms_ = drain_started_ms_ + kDrainMaxMs;
+        if (!drain_until_ms_) drain_until_ms_ = 1u;
+        TC_LOG_INFO("playerbot.v2", "[world] population set to {}: the world bots online log out, then the new numbers fill",
+                    pop_level_ ? ::Playerbot::V2::Fleet::PopLevelWord(*pop_level_) : "the config files");
     }
     // The [mem] line runs whatever the population mode: the 2026-10-11 leak hunt had World bots off and saw nothing.
     if (!last_mem_ms_ || getMSTimeDiff(last_mem_ms_, now_ms) >= kMemReportMs)
@@ -3443,9 +3631,10 @@ void WorldBotSpawner::OnWorldTick(uint32 now_ms)
             pool_counts_inflight_ = false;
             uint32 a = 0, h = 0;
             for (std::size_t b = 0; b < kPoolBrackets; ++b) { a += counts.alliance[b]; h += counts.horde[b]; }
-            TC_LOG_INFO("playerbot.v2", "[world] roster census: Alliance {} Horde {} (target Horde {}%, cap {} per bracket); per bracket 1-9/10s/20s/30s/40s/50-60 A/H: {}/{} {}/{} {}/{} {}/{} {}/{} {}/{}",
+            TC_LOG_INFO("playerbot.v2", "[world] roster census: Alliance {} Horde {} (target Horde {}%, cap {} per bracket); per bracket 1-9/10s/20s/30s/40s/50s/60 A/H: {}/{} {}/{} {}/{} {}/{} {}/{} {}/{} {}/{}",
                 a, h, cfg_.pool_horde_pct, PoolBracketCap(cfg_.pool_max), counts.alliance[0], counts.horde[0], counts.alliance[1], counts.horde[1],
-                counts.alliance[2], counts.horde[2], counts.alliance[3], counts.horde[3], counts.alliance[4], counts.horde[4], counts.alliance[5], counts.horde[5]);
+                counts.alliance[2], counts.horde[2], counts.alliance[3], counts.horde[3], counts.alliance[4], counts.horde[4], counts.alliance[5], counts.horde[5],
+                counts.alliance[6], counts.horde[6]);
         }));
     }
 
@@ -3514,13 +3703,20 @@ void WorldBotSpawner::OnWorldTick(uint32 now_ms)
 
     DrivePending(now_ms, anchors);
     DriveDespawn(now_ms, keep_anchors);
-    DriveSpawn(now_ms, anchors);
-    DriveSeed(now_ms);
+    // While a step down (or Off) still has world bots logging out, nothing new comes: a new bot would only be logged out again.
+    if (drain_until_ms_)
+        DriveDrain(now_ms, keep_anchors);
+    else
+    {
+        DriveSpawn(now_ms, anchors);
+        DriveSeed(now_ms);
+    }
     DriveRetire(now_ms);
     DriveTravelSoak(now_ms);
     DriveGraduation(now_ms);
     DriveStranded(now_ms, anchors);
-    DriveIdleSwap(now_ms, anchors);
+    if (!drain_until_ms_)
+        DriveIdleSwap(now_ms, anchors);
     DriveStuckLedger(now_ms);
     DriveLeaving(now_ms, anchors);
     DriveCrowd(now_ms, anchors);

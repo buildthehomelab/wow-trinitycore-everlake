@@ -2361,11 +2361,52 @@ struct GroupIdleProbe
     }
 };
 
+// The owner's full Passive and Ignore target (BotSnapshot::no_fight / fight_ignore). The snapshot already hides the mobs and the emitter
+// drops any new attack on them; this calls off what is already under way: the bot's own swing or shot, a harmful cast on its way, and
+// the pet. Then the tick goes on, so a healer still heals and buffs go out (the full Passive leaves no enemy for any rule to pick).
+static void NoFightTick(BotAI& ai, BotSnapshotView const& s, BotIntentEmitter& emit)
+{
+    BotSnapshot const& raw = s.raw();
+    if (!raw.no_fight && raw.fight_ignore.empty())
+        return;
+    auto const leave = [&raw](ObjectGuid g)
+    {
+        return !g.IsEmpty() &&
+               (raw.no_fight || std::find(raw.fight_ignore.begin(), raw.fight_ignore.end(), g) != raw.fight_ignore.end());
+    };
+    uint32 const now = s.published_at_ms();
+    bool const log_due = RaidLogDue(raw.guid.GetCounter() ^ 0x4e6f466967687400ull, now, 5000u);
+    if (ObjectGuid const v = s.victim(); leave(v))
+    {
+        emit.stop_attack();
+        if (log_due)
+            TC_LOG_INFO("playerbot.v2", "[no_fight] {} stops attacking {} ({})", s.name(), v.ToString(),
+                        raw.no_fight ? "passive" : "ignored target");
+    }
+    if (s.is_casting() && raw.cast.current_cast_spell_id)
+        if (SpellInfo const* si = sSpellMgr->GetSpellInfo(raw.cast.current_cast_spell_id, DIFFICULTY_NONE); si && !si->IsPositive())
+            if (raw.no_fight || leave(raw.cast.current_cast_target) || (raw.cast.current_cast_target.IsEmpty() && leave(s.victim())))
+                emit.cancel_cast();
+    if (!s.pet_guid().IsEmpty())
+    {
+        if (leave(s.pet_victim()))
+        {
+            emit.pet_set_react_state(0 /*REACT_PASSIVE*/);
+            emit.pet_set_command_state(1 /*COMMAND_FOLLOW*/);
+        }
+        else if (raw.no_fight && raw.pet.pet_react != 0)
+            emit.pet_set_react_state(0 /*REACT_PASSIVE*/);
+    }
+    if (raw.no_fight)
+        ai.set_last_rule_fired("combat:no_fight");
+}
+
 void DispatchInCombat(BotAI& ai,
                       BotSnapshotView snapshot,
                       GroupSnapshotView group,
                       BotIntentEmitter& emit)
 {
+    NoFightTick(ai, snapshot, emit);
     // Reports a damage bot that ends this tick with nothing to do ([dps_idle_reason]).
     CombatIdleProbe const idle_probe{ ai, snapshot, emit, emit.combat_action_count(), ai.rule_fire_seq() };
     GroupIdleProbe const group_idle_probe{ ai, snapshot, emit, emit.combat_action_count(), emit.emitted_count(), ai.rule_fire_seq() };

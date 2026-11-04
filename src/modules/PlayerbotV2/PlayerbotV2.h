@@ -22,6 +22,7 @@ class Aura;
 class Group;
 class Channel;
 struct Position;
+struct BattlegroundTemplate;
 
 namespace Playerbot { class SnapshotBuildPool; struct GroupSnapshot; }
 
@@ -109,6 +110,8 @@ public:
     // core when a Player joins a BG / LFG queue; we hand off to
     // BotQueueFiller to invite online + JIT-spawn missing roles.
     void OnPlayerJoinedBgQueue(Player* player, uint32 bg_type_id, uint8 bracket);
+    // arena (2v2 / 3v3) queue of a real party: asks BotGroupBuilder for an opposing bot team
+    void OnHumanArenaQueue(Player* player, BattlegroundTemplate const* tmpl, uint8 bracket);
     void OnPlayerJoinedLfg(Player* player, uint32 dungeon_id, uint8 role_mask);
     bool HoldNewBattleground(uint32 bg_type_id, uint8 bracket);
 
