@@ -26,7 +26,8 @@
 namespace ClassicOpcodes
 {
     /// client number -> core OpcodeClient value. clientBuild = the build this connection's client logged in with (0 = not known yet):
-    /// builds from Classic.Build70755.FirstBuild on also get that build's moved message numbers (see Classic.Build70755.*)
+    /// builds from Classic.Build70755.FirstBuild on also get that build's moved message numbers (see Classic.Build70755.*), and
+    /// builds from Classic.Build70790.FirstBuild on also those of 70790 (Classic.Build70790.*)
     TC_GAME_API uint32 TranslateClientOpcode(uint32 classicOpcode, uint32 clientBuild = 0);
 
     /// core OpcodeServer value -> client number, for a client of build clientBuild (0 = not known yet)

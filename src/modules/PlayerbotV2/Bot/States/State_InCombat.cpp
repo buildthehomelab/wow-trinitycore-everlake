@@ -4551,7 +4551,11 @@ void DispatchInCombat(BotAI& ai,
                 // quest area) AND HP is healthy (low-HP defensives/flee fired
                 // earlier own that case); a NEAR goal chases normally so the bot
                 // can actually kill its quest mobs.
-                if (snapshot.hp_pct() > 50 &&
+                // Never for a bot in a group: it fights with its group, and its own quest goal is not where the group is going
+                // (Discord 2026-11-04, KailON: Rayso, a cat druid in his party, ran off toward its own Ashenvale objective 770 y
+                // away in the middle of every fight, "running away to the side").
+                if (!group.exists() &&
+                    snapshot.hp_pct() > 50 &&
                     snapshot.has_current_objective() &&
                     snapshot.current_objective_poi().valid &&
                     snapshot.current_objective_poi().map_id == snapshot.map_id())

@@ -38,9 +38,14 @@ function Test-Ipv4([string]$A) {
 }
 
 # This PC's address in the home network: the network card that has a router (default gateway), with its subnet mask.
+# A VPN (or another virtual card) that is on also has a default gateway and often comes first; the realm then handed out the
+# VPN's address and logins broke as soon as the VPN was turned off. Real network cards (Ethernet, Wi-Fi) win; a virtual one is
+# used only when it is the only card with a router (Radmin VPN / ZeroTier setups type their own address anyway).
 function Get-HostLan {
     try {
-        $c = Get-NetIPConfiguration -ErrorAction Stop | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } | Select-Object -First 1
+        $cards = @(Get-NetIPConfiguration -ErrorAction Stop | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' })
+        $real = @($cards | Where-Object { $_.NetAdapter.HardwareInterface -and -not $_.NetAdapter.Virtual })
+        $c = if ($real.Count) { $real | Select-Object -First 1 } else { $cards | Select-Object -First 1 }
         $a = $c.IPv4Address | Select-Object -First 1
         if (-not $a) { return $null }
         $bits = ('1' * $a.PrefixLength).PadRight(32, '0')

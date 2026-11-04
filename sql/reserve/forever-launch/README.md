@@ -33,13 +33,18 @@ and the steps below take it in quickly. Nothing here runs by itself: no install,
 ## 3. Trainers and removed spells (after step 1 or 2 has removed them)
 
 - `01_world_trainers_launch.sql` (world): trainers stop teaching Frost Blast, Lava Burst, Blessing of Salvation / Light (and the
-  Greater ones), and Lacerate, which is now a talent. Righteous Fury trains at level 10. Undo: `01_undo.sql`.
+  Greater ones). Righteous Fury trains at level 10. (Lacerate stays: its ranks train after the talent, world 2026_11_03_42.) Undo: `01_undo.sql`.
 - `02_characters_unlearn_removed.sql` (characters): characters forget the removed spells. Undo: `02_undo.sql`.
-- New ranks (Ferocious Bite rank 1 at 24, new Rogue ability at 24, Death Mark, Oath of Light, Reckless Swing ...) need their spell
-  ids from the new data before trainer rows can be made.
-- Training costs: the notes say 206-207 gold in total for 1-60 per class. Needs Forever's price list (live trainer data).
-- Bots (PlayerbotV2): check the rotations and talent builds that use removed spells (Apl_Classic_Shaman Lava Burst, mage Frost
-  Blast, paladin Salvation in ClassicUpkeep / OwnerPicks, druid Berserk / Lacerate in ClassicTalentBuilds).
+- New ranks already live (Ferocious Bite rank 1 at 24, Lacerate rank 2 at 34) are in world 2026_11_03_42. The others (new Rogue
+  ability at 24, Death Mark, Reckless Swing ...) need their spell ids from the new data before trainer rows can be made.
+- Training costs: the notes say 206-207 gold in total for 1-60 per class. Ours (from Forever sniffs) already total 201-212 gold for
+  warrior, hunter, rogue, shaman and druid; warlock 134 (Grimoires come on top). Paladin, priest and mage come out at 260-270 only
+  because their trainers list both factions' and all races' spells. No change needed.
+- Bots (PlayerbotV2): every rotation and blessing check asks knows_spell first, so a removed spell is simply not cast (Lava Burst,
+  Frost Blast, Salvation, Light). The paladin blessing plan leaves unknown blessings out before it splits them between paladins, so
+  two paladins never both land on the same one. The talent builds name the launch talents (ClassicTalentBuilds.cpp: Precision,
+  Accelerant, Missile Barrage, Oath of Light, Shieldsworn, Unsealed Wrath, the druid node swaps). After a new live push, check the log
+  for "build talents not found".
 
 ## 4. Mob health
 

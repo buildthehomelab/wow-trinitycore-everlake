@@ -178,6 +178,27 @@ BuildMessageChanges const& Build70755Changes()
     return changes;
 }
 
+// Client 1.60.1.70790 (2026-11-04 18:49 UK, Battle.net update a few hours before the launch). Same idea one step further: a 70790
+// client's numbers are first mapped to 70755 numbers with Classic.Build70790.*, then to 70707 numbers with Classic.Build70755.*.
+// Both lists are empty by default (70790 then uses the 70755 numbers as they are); fill them from a login test without a rebuild.
+BuildMessageChanges const& Build70790Changes()
+{
+    static BuildMessageChanges const changes = []()
+    {
+        BuildMessageChanges c;
+        c.FirstBuild = uint32(sConfigMgr->GetIntDefault("Classic.Build70790.FirstBuild", 70790));
+        c.ClientNew = ParseOpcodeList(sConfigMgr->GetStringDefault("Classic.Build70790.ClientNewMessages", ""));
+        c.ServerNew = ParseOpcodeList(sConfigMgr->GetStringDefault("Classic.Build70790.ServerNewMessages", ""));
+        return c;
+    }();
+    return changes;
+}
+
+bool AppliesTo(BuildMessageChanges const& changes, uint32 clientBuild)
+{
+    return clientBuild && changes.FirstBuild && clientBuild >= changes.FirstBuild;
+}
+
 // 70755 client number -> 70707 client number (UNKNOWN_OPCODE for a message 70707 does not have)
 uint32 ClientToBaseBuild(uint32 opcode, BuildMessageChanges const& changes)
 {
@@ -208,7 +229,14 @@ uint32 ServerFromBaseBuild(uint32 opcode, BuildMessageChanges const& changes)
 
 uint32 ClassicOpcodes::TranslateClientOpcode(uint32 classicOpcode, uint32 clientBuild)
 {
-    if (BuildMessageChanges const& changes = Build70755Changes(); clientBuild && changes.FirstBuild && clientBuild >= changes.FirstBuild)
+    if (BuildMessageChanges const& changes = Build70790Changes(); AppliesTo(changes, clientBuild))
+    {
+        classicOpcode = ClientToBaseBuild(classicOpcode, changes);
+        if (classicOpcode == UNKNOWN_OPCODE)
+            return UNKNOWN_OPCODE;
+    }
+
+    if (BuildMessageChanges const& changes = Build70755Changes(); AppliesTo(changes, clientBuild))
     {
         classicOpcode = ClientToBaseBuild(classicOpcode, changes);
         if (classicOpcode == UNKNOWN_OPCODE)
@@ -244,7 +272,9 @@ uint32 ClassicOpcodes::TranslateServerOpcode(uint32 coreOpcode, uint32 clientBui
         if (group >= FirstRetailServerGroup + 1 && group <= LastRetailServerGroup + 1)
             classicOpcode = WithOpcodeGroup(classicOpcode, group + shift);
     }
-    if (BuildMessageChanges const& changes = Build70755Changes(); clientBuild && changes.FirstBuild && clientBuild >= changes.FirstBuild)
+    if (BuildMessageChanges const& changes = Build70755Changes(); AppliesTo(changes, clientBuild))
+        classicOpcode = ServerFromBaseBuild(classicOpcode, changes);
+    if (BuildMessageChanges const& changes = Build70790Changes(); AppliesTo(changes, clientBuild))
         classicOpcode = ServerFromBaseBuild(classicOpcode, changes);
     return classicOpcode;
 }

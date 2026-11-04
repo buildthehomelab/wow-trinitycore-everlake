@@ -1918,7 +1918,7 @@ bool ConditionMgr::isSourceTypeValid(Condition* cond) const
                     case TARGET_SELECT_CATEGORY_CONE:
                     case TARGET_SELECT_CATEGORY_AREA:
                     case TARGET_SELECT_CATEGORY_TRAJ:
-                    case TARGET_SELECT_CATEGORY_LINE:
+                    case TARGET_SELECT_CATEGORY_RECT:
                         continue;
                     default:
                         break;
@@ -1930,7 +1930,7 @@ bool ConditionMgr::isSourceTypeValid(Condition* cond) const
                     case TARGET_SELECT_CATEGORY_CONE:
                     case TARGET_SELECT_CATEGORY_AREA:
                     case TARGET_SELECT_CATEGORY_TRAJ:
-                    case TARGET_SELECT_CATEGORY_LINE:
+                    case TARGET_SELECT_CATEGORY_RECT:
                         continue;
                     default:
                         break;

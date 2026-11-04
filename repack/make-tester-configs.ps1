@@ -74,7 +74,7 @@ $worldOptions = [ordered]@{
     'AuctionHouseBot.Account' = '2000000001'; 'AuctionHouseBot.Sellers.Count' = '12'
     'AuctionHouseBot.Vanilla.Only' = '1'; 'AuctionHouseBot.Vanilla.MaxReqLevel' = '60'; 'AuctionHouseBot.Vanilla.MaxItemLevel' = '100'
     'AuctionHouseBot.Alliance.Items.Amount.Ratio' = '0'; 'AuctionHouseBot.Horde.Items.Amount.Ratio' = '0'; 'AuctionHouseBot.Neutral.Items.Amount.Ratio' = '100'
-    'AuctionHouseBot.Buyer.FairPricing' = '1'; 'AuctionHouseBot.Buyer.DailyBudgetGold' = '5000'; 'AuctionHouseBot.Buyer.MaxBuysPerHour' = '60'
+    'AuctionHouseBot.Buyer.FairPricing' = '1'; 'AuctionHouseBot.Buyer.DailyBudgetGold' = '5000'; 'AuctionHouseBot.Buyer.MaxBuysPerHour' = '200'
     'PlayerSave.Stats.MinLevel' = '1'
 }
 foreach ($k in $protocol.Keys) { $worldOptions[$k] = $protocol[$k] }

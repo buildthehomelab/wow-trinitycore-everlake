@@ -1784,6 +1784,28 @@ class classic_spell_warl_devour_magic : public SpellScript
     }
 };
 
+// 14297, 26546, 26555 - Shadow Storm (Anubisath Sentinel, Guardian and Defender)
+// The vanilla spell only hits players at least 25 yards from the caster: standing close is the answer to it (VMaNGOS
+// handles it the same way). The client data has no minimum radius, so without this every player inside 45 yards was hit.
+class classic_spell_shadow_storm_min_range : public SpellScript
+{
+    static constexpr float MIN_RANGE = 25.0f;
+
+    void FilterTargets(std::list<WorldObject*>& targets)
+    {
+        Unit* caster = GetCaster();
+        targets.remove_if([caster](WorldObject* target)
+        {
+            return caster->GetExactDist2d(target) < MIN_RANGE;
+        });
+    }
+
+    void Register() override
+    {
+        OnObjectAreaTargetSelect += SpellObjectAreaTargetSelectFn(classic_spell_shadow_storm_min_range::FilterTargets, EFFECT_0, TARGET_UNIT_SRC_AREA_ENEMY);
+    }
+};
+
 void AddSC_classic_spell_scripts()
 {
     RegisterSpellScript(classic_spell_warr_gore_drinker);
@@ -1830,4 +1852,5 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_alaketh_spiritcaller_dot);
     RegisterSpellScript(classic_spell_mage_decipher);
     new classic_player_scroll_deciphering();
+    RegisterSpellScript(classic_spell_shadow_storm_min_range);
 }

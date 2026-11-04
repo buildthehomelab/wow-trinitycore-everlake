@@ -524,6 +524,42 @@ class classic_spell_warr_bloodthirst : public SpellScript
     }
 };
 
+// 402927 - Victory Rush (Classic 1.60): "Instantly attack the target causing ${1+$AP*$m3/100} damage and healing you for $s2% of your
+// maximum health. Only useable within $402975d after you kill a non-trivial enemy." The client spell's school damage effect has only the 1
+// and the percent of attack power (15) sits in a dummy effect that nothing read, so the attack hit for 1 or 2. The damage is 1 plus that
+// percent of attack power, with the damage bonuses, armor and crit of a melee special attack on top. One use per kill: the Victorious
+// buff (402975) goes when Victory Rush is used, as the retail script does for its own buff.
+class classic_spell_warr_victory_rush : public SpellScript
+{
+    static constexpr uint32 SPELL_VICTORIOUS_CLASSIC = 402975;
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_2 } });
+    }
+
+    void CalculateDamage(SpellEffectInfo const& spellEffectInfo, Unit* /*victim*/, int32& damage, int32& flatMod, float& /*pctMod*/) const
+    {
+        if (spellEffectInfo.EffectIndex != EFFECT_0)
+            return;
+
+        Unit* warrior = GetCaster();
+        float const percent = float(GetSpellInfo()->GetEffect(EFFECT_2).CalcValue(warrior));
+        flatMod += 1 + int32(warrior->GetTotalAttackPowerValue(BASE_ATTACK) * percent / 100.0f) - damage;
+    }
+
+    void ConsumeVictorious()
+    {
+        GetCaster()->RemoveAurasDueToSpell(SPELL_VICTORIOUS_CLASSIC);
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_warr_victory_rush::CalculateDamage);
+        AfterCast += SpellCastFn(classic_spell_warr_victory_rush::ConsumeVictorious);
+    }
+};
+
 // 1290261 - Weaponmaster (warrior) and 13960 - Hack and Slash (rogue), Forever talents: "Gives your melee weapon attacks a benefit
 // depending on the weapon." The client data has a hidden passive per weapon group with the weapon requirement (SpellEquippedItems):
 //   Weaponmaster:   $s1 crit    Axe/Polearm -> 12700 (aura 290)     $s2 armor ignored  Mace/Staff -> 12284 (aura 280)
@@ -1692,6 +1728,7 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScript(classic_spell_warr_last_stand);
     RegisterSpellScript(classic_spell_warr_retaliation);
     RegisterSpellScript(classic_spell_warr_shield_slam);
+    RegisterSpellScript(classic_spell_warr_victory_rush);
     RegisterSpellScriptWithArgs(classic_spell_weapon_type_talent, "classic_spell_warr_weaponmaster", 12700u, 12284u, 12281u);
     RegisterSpellScript(classic_spell_weapon_extra_attack_chance);
     RegisterSpellScript(classic_spell_warr_meathook);

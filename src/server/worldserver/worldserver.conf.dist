@@ -4892,6 +4892,27 @@ Classic.Build70755.ClientNewMessages = "0x440071,0x440072"
 
 Classic.Build70755.ServerNewMessages = "0x470125"
 
+#    Classic.Build70790.FirstBuild
+#        Description: Clients of this build or newer get the 70790 message numbers below on top of the 70755 ones.
+#                     0 turns the 70790 numbers off (70790 clients then use the 70755 numbers).
+#        Default:     70790
+
+Classic.Build70790.FirstBuild = 70790
+
+#    Classic.Build70790.ClientNewMessages
+#        Description: Comma list of client message numbers (70790 numbering) that are new in 70790. Client messages after a
+#                     listed one (same group) are one lower in 70755 numbering. Empty = none moved. Tune with a restart.
+#        Default:     ""
+
+Classic.Build70790.ClientNewMessages = ""
+
+#    Classic.Build70790.ServerNewMessages
+#        Description: Comma list of server message numbers (70790 numbering) that are new in 70790. Server messages from a
+#                     listed number on (same group) are sent one higher. Empty = none moved. Tune with a restart.
+#        Default:     ""
+
+Classic.Build70790.ServerNewMessages = ""
+
 #    Classic.OfficialFeatureFlags
 #        Description: Send the client feature flags exactly as the official server does (sniffs 70205/70235).
 #                     0 goes back to the older hand-picked flags.

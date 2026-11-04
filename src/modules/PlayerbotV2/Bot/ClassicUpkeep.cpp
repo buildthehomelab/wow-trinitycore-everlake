@@ -624,6 +624,9 @@ CastPick PickBlessing(BotSnapshotView const& s, GroupSnapshotView const& g, bool
             && !pinned_other(m) && !(others_pinned & (1u << KINGS)) && (kings_guid.IsEmpty() || m.guid < kings_guid))
             kings_guid = m.guid;
     size_t const index_without_kings = (!kings_guid.IsEmpty() && kings_guid != s.guid() && kings_guid < s.guid()) ? index - 1 : index;
+    // Blessings this paladin does not know are left out of the order before it is indexed, not skipped after (BlessingAt): with
+    // Salvation and Light gone from Forever's trainers, or Kings on a paladin without the talent, two paladins at index 1 and 2
+    // would otherwise both skip forward to the same blessing.
     struct ClassPlan { std::array<Blessing, 6> order{}; size_t n = 0; size_t index = 0; };
     auto plan_for = [&](std::span<Blessing const> base, bool tank_class) -> ClassPlan
     {
@@ -636,13 +639,13 @@ CastPick PickBlessing(BotSnapshotView const& s, GroupSnapshotView const& g, bool
                 return p;
             }
             for (Blessing b : base)
-                if (b != KINGS && !(others_pinned & (1u << b)))
+                if (b != KINGS && !(others_pinned & (1u << b)) && s.knows_spell(kBlessings[b].normal))
                     p.order[p.n++] = b;
             p.index = index_without_kings;
             return p;
         }
         for (Blessing b : base)
-            if (!(others_pinned & (1u << b)))
+            if (!(others_pinned & (1u << b)) && s.knows_spell(kBlessings[b].normal))
                 p.order[p.n++] = b;
         p.index = index;
         return p;
@@ -3167,6 +3170,18 @@ std::string_view SpellEnglishName(SpellInfo const* si)
     return si && si->SpellName ? std::string_view((*si->SpellName)[LOCALE_enUS]) : std::string_view();
 }
 
+// The eating or drinking aura of a food or drink (Food 1129 / 1131): put on as an always-on aura it sits the bot down, and it ends when
+// the bot stands, so it is never kept on. Stat food carries it as one of the spells its on-use spell triggers, next to Well Fed.
+bool IsSitDownAura(SpellInfo const* si)
+{
+    if (!si)
+        return false;
+    if (si->HasAuraInterruptFlag(SpellAuraInterruptFlags::Standing))
+        return true;
+    SpellSpecificType const spec = si->GetSpellSpecific();
+    return spec == SPELL_SPECIFIC_FOOD || spec == SPELL_SPECIFIC_DRINK || spec == SPELL_SPECIFIC_FOOD_AND_DRINK;
+}
+
 void ResolveAlwaysAura(AlwaysAura const& row, std::vector<uint32>& out)
 {
     if (row.kind == AlwaysKind::Spell)
@@ -3201,14 +3216,17 @@ void ResolveAlwaysAura(AlwaysAura const& row, std::vector<uint32>& out)
             }
             else if (e.TriggerSpell)
             {
-                out.push_back(e.TriggerSpell);
+                // A trigger that is the eating aura itself is left out (chris's priest companion sat in Stormwind with full mana and
+                // health: "+1129" put Food on again every 30 s, 0.1.29 dev realm, Consumables.World on).
+                if (!IsSitDownAura(sSpellMgr->GetSpellInfo(e.TriggerSpell, DIFFICULTY_NONE)))
+                    out.push_back(e.TriggerSpell);
                 triggers = true;
             }
         }
         // A scroll or elixir leaves its own aura; food only eats and triggers the stat buff (Well Fed). The eating aura (Food 1129 / 1131, an on-use
         // spell of its own beside the Well Fed one) ends when the bot stands, so it is never up on a bot that fights: as a row aura it read as
         // missing on every check and idle:always_buff fired every 10 s for each bot through the whole support scorecard (233, "+1129").
-        if (row.kind == AlwaysKind::Item && !triggers && !si->HasAuraInterruptFlag(SpellAuraInterruptFlags::Standing))
+        if (row.kind == AlwaysKind::Item && !triggers && !IsSitDownAura(si))
             out.push_back(uint32(eff->SpellID));
     }
 }

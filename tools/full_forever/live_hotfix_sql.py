@@ -111,6 +111,10 @@ def main():
     ap.add_argument('--dbc', default='', help='.db2 folder of the build (optional: table hashes are also computed from the names)')
     ap.add_argument('--spells', default='')
     ap.add_argument('--items', default='')
+    ap.add_argument('--whole-tables', default='', help='take every live record of these tables (e.g. the Trait tables)')
+    ap.add_argument('--skip', default='', help='records to leave out, as Table:id,Table:id (e.g. records our own hotfixes own)')
+    ap.add_argument('--min-push', type=int, default=0, help='only records from this push on')
+    ap.add_argument('--max-push', type=int, default=1000000, help='only records up to this push (the cache also holds per-item shop pushes above 16 million)')
     ap.add_argument('--tables', default='', help='only these tables (default: every spell or item table)')
     ap.add_argument('--first-id', type=int, required=True)
     ap.add_argument('--last-id', type=int, required=True)
@@ -119,6 +123,8 @@ def main():
     spells = {int(x) for x in a.spells.split(',') if x}
     items = {int(x) for x in a.items.split(',') if x}
     only = {x for x in a.tables.split(',') if x}
+    whole = {x for x in a.whole_tables.split(',') if x}
+    skip = {(x.split(':')[0], int(x.split(':')[1])) for x in a.skip.split(',') if x}
     sch = wdc5.Schemas(a.repo)
     hashes = table_hashes(a.dbc, sch.meta.keys())
     by_hash = {v: k for k, v in hashes.items()}
@@ -130,16 +136,20 @@ def main():
             last[(t, rec)] = (push, status, data)
     rows, blobs, data_rows = {}, [], []
     for (t, rec), (push, status, data) in sorted(last.items()):
-        if only and t not in only:
+        if only and t not in only and t not in whole:
             continue
-        if t == 'Spell':
+        if not a.min_push <= push <= a.max_push or (t, rec) in skip:
+            continue
+        if t in whole and t not in SPELL_TABLES and t != 'Spell':
+            pass  # every record, removed ones too (they become hotfix_data rows with live's status)
+        elif t == 'Spell':
             if rec not in spells:
                 continue
             if status == 1:
                 blobs.append((hashes[t], rec, data))
             data_rows.append((hashes[t], rec, status))
             continue
-        if t in ITEM_TABLES:
+        elif t in ITEM_TABLES:
             if rec not in items:
                 continue
         elif t in SPELL_TABLES:
