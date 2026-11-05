@@ -4538,6 +4538,8 @@ Logger.scripts.hotswap=3,Console Server
 Logger.sql.sql=5,Console DBErrors
 Logger.sql.updates=3,Console Server
 Logger.mmaps=3,Server
+Logger.entities.player.talents=4,Console Server
+#Logger.scripts.classic.firewalker=3,Console Server
 
 #Logger.addon=3,Console Server
 #Logger.ahbot=3,Console Server

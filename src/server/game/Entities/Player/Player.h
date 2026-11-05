@@ -2838,6 +2838,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         uint32 GetTemporaryUnsummonedPetNumber() const { return m_temporaryUnsummonedPetNumber; }
         void SetTemporaryUnsummonedPetNumber(uint32 petnumber) { m_temporaryUnsummonedPetNumber = petnumber; }
         void DelayPetResummon(uint32 ms) { m_petResummonDelay = ms; }
+        void ParkPetForTravel();
+        void UpdateParkedPet(uint32 diff);
         Optional<ReactStates> GetTemporaryPetReactState() const { return m_temporaryPetReactState; }
         void DisablePetControlsOnMount(ReactStates reactState, CommandStates commandState);
         void EnablePetControlsOnDismount();
@@ -3499,6 +3501,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         uint32 m_temporaryUnsummonedPetNumber;
         uint32 m_botSheathIdleMs = 0;                       // bot only: ms with weapons drawn and no fight
         uint32 m_petResummonDelay;                          // ms until the pet remembered at login is summoned (0 = none pending)
+        bool m_petParkedForTravel;                          // pet put away because it could not follow the owner (boat, taxi, teleport)
+        uint32 m_petParkedCheckTimer;
         Optional<ReactStates> m_temporaryPetReactState;
         uint32 m_oldpetspell;
         ObjectGuid m_temporaryUnsummonedBattlePet;

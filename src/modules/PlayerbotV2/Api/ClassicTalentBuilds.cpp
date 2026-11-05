@@ -15,15 +15,25 @@ constexpr TalentPick kWarriorArms[] = {
     // A talent below another needs a parent node filled to its maximum, so the first rows are bought in full (Deflection 5, Improved
     // Tactical Mastery 5, Improved Rend 3, Improved Thunder Clap 3): 143 stopped Deflection at 4 and Tactical Mastery at 3 and never
     // got Deep Wounds, Anger Management or Impale.
-    { "Improved Heroic Strike", 3 }, { "Deflection", 5 }, { "Improved Rend", 3 }, { "Improved Charge", 2 }, { "Improved Tactical Mastery", 5 },
-    { "Improved Thunder Clap", 3 },
-    { "Improved Overpower", 2 }, { "Anger Management", 1 }, { "Deep Wounds", 3 },
-    { "Two-Handed Weapon Specialization", 5 }, { "Impale", 2 }, { "Sweeping Strikes", 1 },
-    { "Weaponmaster", 5 }, { "Improved Hamstring", 1 }, { "Mortal Strike", 1 },
-    { "Cruelty", 5 }, { "Unbridled Wrath", 4 },
+    // 0.1.30 (client tree of 70755): Deflection (parry) and Improved Thunder Clap only filled rows; Improved Heroic Strike and Improved Rend
+    // already open the second row, so their 8 points (and Improved Hamstring's 1) go to the Fury tab: Unbridled Wrath 5 makes 10 there, which
+    // opens Furious Precision (+hit, row 3), then Booming Voice and Improved Execute. Mortal Strike still has its 30 Arms points.
+    // Client 70790: every tier gate of the warrior tree counts the points spent in the whole tree (one trait currency, 3820, for all
+    // three tabs), so a row is open by the points spent anywhere. Scorecard 0.1.30 (5 Nov, 12 measurements): arms 708-834 against fury's
+    // 1076-1260, with 5 points in Booming Voice (shout area and cost only) and 2 in Improved Charge (no Charge in a boss fight), and 2
+    // in Improved Thunder Clap from the fillers. Those 9 points, and the 4 that the 70790 tree took from Improved Tactical Mastery and
+    // Two-Handed Weapon Specialization (now 3 ranks each), buy the fury damage talents that need no fury rotation: Death Wish (+20%
+    // physical damage for 30 s, cast in boss fights by classic_war:death_wish), Flurry (attack speed after a crit; arms crits 40%+) and
+    // Improved Whirlwind (a shorter Whirlwind cooldown, and arms fights in Berserker Stance in boss fights).
+    { "Improved Heroic Strike", 3 }, { "Improved Rend", 3 }, { "Improved Tactical Mastery", 3 },
+    { "Anger Management", 1 }, { "Deep Wounds", 3 },
+    { "Two-Handed Weapon Specialization", 3 }, { "Impale", 2 }, { "Sweeping Strikes", 1 },
+    { "Weaponmaster", 5 }, { "Mortal Strike", 1 },
+    { "Cruelty", 5 }, { "Unbridled Wrath", 5 }, { "Furious Precision", 3 }, { "Improved Execute", 2 },
+    { "Death Wish", 1 }, { "Flurry", 3 }, { "Improved Whirlwind", 2 },
     // Fillers, bought only with points left over (Forever's trees have no Tactical Mastery, Sword Specialization or Improved Battle Shout,
     // and the 70532 tree no Axe Specialization: "build talents not found" on every arms walk of 235).
-    { "Improved Execute", 2, true }, { "Enrage", 3, true }, { "Booming Voice", 5, true },
+    { "Improved Overpower", 2, true }, { "Improved Charge", 2, true }, { "Booming Voice", 5, true },
 };
 constexpr TalentPick kWarriorFury[] = {
     // The vanilla raid fury build, 17 Arms / 34 Fury (51 points). The Arms core goes first: the last build spent 46 points in Fury before it
@@ -93,30 +103,37 @@ constexpr TalentPick kPaladinRetribution[] = {
 constexpr TalentPick kHunterBeastMastery[] = {
     // Forever names (talent coverage dump of the client data): Deadly Aspects is the Improved Aspect of the Hawk, Lethal Attacks the Lethal Shots;
     // Aimed Shot is a trainer spell there, not a talent.
-    { "Deadly Aspects", 5 }, { "Endurance Training", 5 }, { "Unleashed Fury", 5 }, { "Ferocity", 5 },
-    { "Intimidation", 1 }, { "Spirit Bond", 2 }, { "Bestial Discipline", 2 }, { "Frenzy", 2 },
+    // Bestial Wrath (node 104961, row 7) needs 30 points in the tab and Intimidation, which hangs under Bestial Swiftness (client tree of
+    // 70755). 0.1.29 spent 28 there and never got it (scorecard: "refused Bestial Wrath has parents: node 104964", "Bestial Wrath 0/1"):
+    // Bestial Swiftness and Frenzy 5 make the 30; the 3 points come off Efficiency.
+    { "Deadly Aspects", 5 }, { "Endurance Training", 5 }, { "Unleashed Fury", 5 }, { "Ferocity", 5 }, { "Bestial Swiftness", 1 },
+    { "Intimidation", 1 }, { "Bestial Discipline", 2 }, { "Spirit Bond", 1 }, { "Frenzy", 5 },
     { "Bestial Wrath", 1 },
     // Mortal Shots (node 105002) hangs under Careful Aim (node 105008) in full: without it Mortal Shots was refused in every scorecard
-    // (236: "refused Mortal Shots has parents: node 105008 edge type 2 0/5"). Careful Aim's 5 points come off Hawk Eye and Efficiency.
-    { "Efficiency", 3 }, { "Lethal Attacks", 5 }, { "Careful Aim", 5 },
+    // (236: "refused Mortal Shots has parents: node 105008 edge type 2 0/5"), and its row needs 15 points in Marksmanship.
+    { "Lethal Attacks", 5 }, { "Careful Aim", 5 },
     { "Improved Arcane Shot", 5 }, { "Mortal Shots", 5 },
 };
 constexpr TalentPick kHunterMarksmanship[] = {
     // Names from the talent dump of the client data (147/156 logs): Forever's Marksmanship has no Lethal Shots, Aimed Shot (a trainer
     // spell there), Improved Hunter's Mark, Monster / Humanoid Slaying or Trap Mastery. Mortal Shots was refused with the tab full of
     // other points, so the rows that open its tier are bought before it, then the leftover pass spends what remains in the tab.
-    { "Improved Concussive Shot", 5 }, { "Efficiency", 5 }, { "Improved Arcane Shot", 5 }, { "Hawk Eye", 3 },
-    { "Improved Serpent Sting", 5 }, { "Improved Stings", 3 }, { "Rapid Killing", 2 }, { "Careful Aim", 5 },
-    { "Barrage", 3 }, { "Scatter Shot", 1 }, { "Mortal Shots", 5 }, { "Ranged Weapon Specialization", 5 },
-    { "Trueshot Aura", 1 },
+    // 0.1.30 (client tree of 70755): Lethal Attacks (+5% crit) and Lone Wolf (row 3, +20% damage with no pet out; the bot sends the pet
+    // away in a raid) replace Improved Concussive Shot, Scatter Shot and Hawk Eye, which add no damage; Deadly Aspects goes to 5 (Quick Shots).
+    { "Lethal Attacks", 5 }, { "Efficiency", 5 }, { "Careful Aim", 5 }, { "Improved Arcane Shot", 5 }, { "Lone Wolf", 1 },
+    { "Improved Stings", 3 }, { "Rapid Killing", 2 }, { "Mortal Shots", 5 }, { "Trueshot Aura", 1 }, { "Improved Serpent Sting", 5 },
+    { "Barrage", 3 }, { "Ranged Weapon Specialization", 5 }, { "Deadly Aspects", 5 }, { "Hawk Eye", 1 },
 };
 constexpr TalentPick kHunterSurvival[] = {
-    // Forever's Survival nodes (talent coverage dump of the client data): no Monster / Humanoid Slaying, Trap Mastery, Killer Instinct, Improved
-    // Feign Death or Lightning Reflexes there, and Wyvern Sting is a spell. 31 points in the tab, the rest in the Marksmanship nodes the rotation uses.
-    { "Savage Strikes", 2 }, { "Entrapment", 5 }, { "Survivalist", 5 }, { "Deterrence", 1 }, { "Surefooted", 3 }, { "Clever Traps", 1 },
-    { "Survival Tactics", 2 }, { "Counterattack", 1 }, { "Improved Wing Clip", 3 }, { "Predator's Edge", 5 },
-    { "Efficiency", 3 }, { "Lethal Attacks", 5 }, { "Careful Aim", 5 },   // Mortal Shots needs Careful Aim in full, see Beast Mastery
-    { "Improved Arcane Shot", 5 }, { "Mortal Shots", 5 },
+    // Forever's Survival nodes (client tree of 70755): no Monster / Humanoid Slaying, Trap Mastery or Killer Instinct, and Wyvern Sting is a
+    // spell. Lightning Reflexes (row 6, +15% agility) is there now and needs 25 points in the tab: the rows before it take the talents a bot
+    // that also levels and fights in melee uses. The rest goes to Marksmanship: Lethal Attacks, Careful Aim, Improved Arcane Shot, Lone Wolf
+    // (+20% damage with no pet out; the bot sends the pet away in a raid) and Mortal Shots. Entrapment, Clever Traps and Improved Wing Clip
+    // (traps and snares) are left out; 0.1.29 survival was the lowest hunter (547-616 dps).
+    { "Deflection", 5 }, { "Survivalist", 5 }, { "Savage Strikes", 2 }, { "Surefooted", 3 }, { "Deterrence", 1 },
+    { "Survival Tactics", 2 }, { "Counterattack", 1 }, { "Predator's Edge", 5 }, { "Resourcefulness", 1 }, { "Lightning Reflexes", 5 },
+    { "Lethal Attacks", 5 }, { "Careful Aim", 5 },   // Mortal Shots needs Careful Aim in full, see Beast Mastery
+    { "Improved Arcane Shot", 5 }, { "Lone Wolf", 1 }, { "Mortal Shots", 5 },
 };
 
 // ---- Rogue ----

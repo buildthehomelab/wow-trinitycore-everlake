@@ -724,7 +724,9 @@ local function WhisperFilter(_, _, msg, author)
     -- /fb chat on: show the bot confirmations ("<Bot>: followed you") and distance replies in chat as well
     if ForeverBotsDB.showChat then return false end
     if ConfirmText(msg, author) then return true end
-    return Now() < distSilentUntil and type(msg) == "string" and strmatch(msg, "^Follow distance %d+ yards$") ~= nil
+    if Now() >= distSilentUntil or type(msg) ~= "string" then return false end
+    -- the server answers in the player's language: English, or the Russian line from Util/BotLocaleRu.cpp (written as bytes)
+    return strmatch(msg, "^Follow distance %d+ yards$") ~= nil or strmatch(msg, "^\208\148\208\184\209\129\209\130\208\176\208\189\209\134\208\184\209\143 \209\129\208\187\208\181\208\180\208\190\208\178\208\176\208\189\208\184\209\143: %d+ \209\143\209\128\208\180%.$") ~= nil
 end
 local function OwnListFilter(_, _, msg, author)
     if msg ~= "assign list" and not (Now() < distSilentUntil and type(msg) == "string" and strmatch(msg, "^distance %d+$")) then
@@ -1269,7 +1271,7 @@ local LAYOUT = {
     TAB_STEP = 44,    -- side tabs down the right edge
 }
 local TAB_DEFS = { { "orders", L["Orders"] }, { "bots", L["Bots"] }, { "form", L["Form"] }, { "marks", L["Marks"] }, { "finder", L["Group finder"] },
-                   { "world", L["World bots"] }, { "place", L["Positions"] } }
+                   { "place", L["Positions"] } }   -- no World bots tab (0.6.13, owner decision 2026-11-04: world bots are set in the launcher only)
 local frameTabs, framePanes = {}, {}
 local emptyFS, ordersGrid, footerFS
 local nativeFrame = false
@@ -1500,6 +1502,7 @@ function UI.BuildBots()
     local Btn, Section, Hint, NewPane = UI.Btn, UI.Section, UI.Hint, UI.NewPane
     ---------------------------------------------------------------------------------------------- bots
     local botsPane = NewPane()
+    UI.botsPane = botsPane
     Section(botsPane, 0, L["Add a bot"])
     -- Every class for both factions: Forever has Dwarf Shamans for the Alliance and Undead Paladins for the Horde.
     local shown = CLASSES
@@ -1516,20 +1519,12 @@ function UI.BuildBots()
         local tex = rb:CreateTexture(nil, "ARTWORK")
         tex:SetAllPoints()
         rb.fbTex = tex
-        -- the small check box at the bottom left of the round icon, as in the Looking For Group window's role row
-        local check = CreateFrame("CheckButton", nil, rb, "UICheckButtonTemplate")
-        check:SetSize(22, 22)
-        check:SetPoint("BOTTOMLEFT", rb, "BOTTOMLEFT", -6, -8)
-        check:EnableMouse(false)
-        check:SetChecked(false)
-        rb.fbCheck = check
+        -- just the role icon, no check box under it (0.6.15, owner decision 2026-11-04): one click on the icon adds the bot
         rb:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight", "ADD")
         rb:SetScript("OnClick", function(self)
             local class = shown[selected]
             if not (class and self.fbRole) then return end
             AddBotWithGear(class.key, self.fbRole)
-            check:SetChecked(true)
-            if C_Timer and C_Timer.After then C_Timer.After(0.8, function() check:SetChecked(false) end) end
         end)
         rb:SetScript("OnEnter", function(self)
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -1746,17 +1741,20 @@ end
 
 function UI.BuildFooter()
     ---------------------------------------------------------------------------------------------- footer
-    -- group and stance on the left (one line, never wrapped), two quick buttons on the right; the text has its own room.
+    -- group and stance on the left (one line, never wrapped) on every tab. Call saved and Dismiss all only on the Bots tab: they
+    -- belong to the Bots pane, so they show and hide with it (owner request 2026-11-04: not on every page). Plain buttons, so
+    -- hiding them is allowed in a fight too.
     footerFS = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     footerFS:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 14, 17)
     footerFS:SetWidth(92)
     footerFS:SetJustifyH("LEFT")
     footerFS:SetWordWrap(false)
-    local fCall = MakeSkinButton(frame, L["Call saved"], 72, 22, {})
+    local owner = UI.botsPane or frame
+    local fCall = MakeSkinButton(owner, L["Call saved"], 72, 22, {})
     fCall:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -88, 12)
     fCall:SetScript("OnClick", function() ServerCommand(".bot summon saved") end)
     Tip(fCall, L["Call saved"], L["Brings your saved bots, and every bot in your group, to you."])
-    local fDismiss = MakeSkinButton(frame, L["short:Dismiss all"], 74, 22, {})
+    local fDismiss = MakeSkinButton(owner, L["short:Dismiss all"], 74, 22, {})
     fDismiss:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 12)
     fDismiss:SetScript("OnClick", function() ServerCommand(".bot dismiss all") end)
     Tip(fDismiss, L["Dismiss all"], L["Sends all your bots away."])
@@ -1772,7 +1770,6 @@ function UI.BuildTabs()
         form = "Interface\\Icons\\INV_Misc_Map_01",
         marks = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8",
         finder = "Interface\\Icons\\INV_Misc_Spyglass_03",
-        world = "Interface\\Icons\\INV_Misc_Map02",
         place = "Interface\\Icons\\Ability_Warrior_DefensiveStance",
     }
     -- The tabs are secure click handlers: the client runs their pane switch as its own code, so they work in combat too (an add-on
@@ -1912,11 +1909,6 @@ local function BuildFrame()
         Cmd.ns.BuildFinder(finderPane, { Btn = UI.Btn, Section = UI.Section, Tip = Tip, DUNGEONS = UI.DUNGEONS,
                                          DungeonsForLevel = UI.DungeonsForLevel, Queue = UI.DungeonQueue,
                                          Lfg = function(role) SendGear(); Cmd.Queue(".bot lfg" .. (role and (" " .. role) or "")) end })
-    end
-    -- World bots (ForeverBots_World.lua): Off / Low / Medium / High for the realm, GM only
-    local worldPane = UI.NewPane()
-    if Cmd.ns.BuildWorld then
-        Cmd.ns.BuildWorld(worldPane, { Btn = UI.Btn, Section = UI.Section, Tip = Tip })
     end
     -- Positions (ForeverBots_Place.lua): ticked bots stand in a shape here or round the target and stay there
     local placePane = UI.NewPane()

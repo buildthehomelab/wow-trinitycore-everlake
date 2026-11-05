@@ -110,6 +110,7 @@ void ConfigReader::apply_from_loaded_config()
     guilds_max_members_per_guild_            = static_cast<uint16>(c.GetIntDefault("PlayerbotV2.Guilds.MaxMembersPerGuild", 75, true));
     guilds_events_enabled_                   = c.GetBoolDefault("PlayerbotV2.Guilds.EventsEnabled", true, true);
     guilds_recruitment_channel_enabled_      = c.GetBoolDefault("PlayerbotV2.Guilds.RecruitmentChannelEnabled", true, true);
+    guilds_invite_players_                   = c.GetBoolDefault("PlayerbotV2.Guilds.InvitePlayers", false, true);
 
     max_alts_as_bots_ = static_cast<uint8>(
         c.GetIntDefault("PlayerbotV2.MaxAltsAsBots", 5, true));
@@ -316,7 +317,8 @@ void ConfigReader::apply_from_loaded_config()
     world_questing_           = c.GetBoolDefault("Playerbot.World.Questing", false, true);
     kindness_enable_          = c.GetBoolDefault("Playerbot.World.Kindness.Enable", true, true);
     kindness_buff_cd_ms_      = uint32(std::clamp<int64_t>(c.GetIntDefault("Playerbot.World.Kindness.BuffCooldownSec", 900, true), 60, 86400)) * 1000u;
-    kindness_help_hp_pct_     = uint32(std::clamp<int64_t>(c.GetIntDefault("Playerbot.World.Kindness.HelpHpPct", 40, true), 5, 90));
+    kindness_help_hp_pct_     = uint32(std::clamp<int64_t>(c.GetIntDefault("Playerbot.World.Kindness.HelpHpPct", 60, true), 0, 90));
+    kindness_help_cd_ms_      = uint32(std::clamp<int64_t>(c.GetIntDefault("Playerbot.World.Kindness.HelpCooldownSec", 180, true), 0, 3600)) * 1000u;
     kindness_heal_hp_pct_     = uint32(std::clamp<int64_t>(c.GetIntDefault("Playerbot.World.Kindness.HealHpPct", 60, true), 0, 95));
     kindness_heal_cd_ms_      = uint32(std::clamp<int64_t>(c.GetIntDefault("Playerbot.World.Kindness.HealCooldownSec", 45, true), 10, 3600)) * 1000u;
     share_mobs_enable_        = c.GetBoolDefault("Playerbot.World.ShareMobs.Enable", true, true);

@@ -1,4 +1,5 @@
 #include "LfgBotFill.h"
+#include "Api/BotLanguage.h"
 
 #include "Chat.h"
 #include "Common.h"
@@ -171,7 +172,7 @@ namespace
     void Tell(Player* player, std::string const& text)
     {
         if (player && player->GetSession())
-            ChatHandler(player->GetSession()).SendSysMessage(text.c_str());
+            Playerbot::BotLanguage::LocalizedHandler(player->GetSession()).SendSysMessage(text.c_str());
     }
 
     uint8 PickDpsClass()

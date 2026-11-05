@@ -75,6 +75,8 @@ enum ClassicWarlockDruidTalentSpells
     SPELL_CWD_IMPROVED_HEALTHSTONE_R2       = 18693,
     SPELL_CWD_GRIMOIRE_OF_SYNERGY           = 426301,
     SPELL_CWD_GRIMOIRE_OF_SYNERGY_BUFF      = 426303,   // all damage done, 15 sec
+    SPELL_CWD_DECIMATION                    = 440870,
+    SPELL_CWD_DECIMATION_BUFF               = 440873,   // Soul Fire cast time (bp0) and no Soul Shard, 10 sec
 
     // druid
     SPELL_CWD_THICK_HIDE                    = 16929,
@@ -96,6 +98,10 @@ enum ClassicWarlockDruidTalentSpells
     SPELL_CWD_HEART_OF_THE_WILD             = 17003,
     SPELL_CWD_HEART_OF_THE_WILD_BEAR        = 24899,    // total stat percentage (stamina), bp = amount
     SPELL_CWD_HEART_OF_THE_WILD_CAT         = 24900,    // total stat percentage (strength), bp = amount
+    SPELL_CWD_FERAL_SWIFTNESS               = 17002,    // effect 0: dodge, effect 1: Cat Form movement speed (dummy)
+    SPELL_CWD_FERAL_SWIFTNESS_CAT           = 24867,    // movement speed, bp = amount
+    SPELL_CWD_NATURAL_REACTION_RAGE         = 417053,   // energize rage (rage x10)
+    SPELL_CWD_OVERGROWTH                    = 17245,    // effect 0: extra Entangling Roots targets (dummy)
 };
 
 enum ClassicWarlockDruidTalentMisc
@@ -783,6 +789,98 @@ class classic_talent_warl_conflagrate : public SpellScript
     }
 };
 
+// 412758, 1293812, 1293813 - Incinerate (70532): "Deals $s1 Fire damage to your target and an additional $m2% damage if the target is
+// afflicted by Immolate." Effect 1 is the bonus as a dummy. The Immolate is the warlock's own (warlock family flag 0x4), as for Conflagrate.
+class classic_spell_warl_incinerate : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
+    }
+
+    void HandleCalcDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod)
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !victim)
+            return;
+
+        if (victim->GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_WARLOCK, flag128(0x4, 0, 0, 0), caster->GetGUID()))
+            AddPct(pctMod, GetEffectInfo(EFFECT_1).CalcValue(caster));
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_warl_incinerate::HandleCalcDamage);
+    }
+};
+
+// 440870 - Decimation (70532): "When you cast Shadow Bolt or Searing Pain on an enemy below $m3% health, they deal $m4% increased damage, and
+// for the next $440873d your Soul Fire spell has its cast time reduced by $m1% and costs no Soul Shards." Effect 3 is a damage spell modifier
+// on Shadow Bolt and Searing Pain that the client data applies at any health, so the talent keeps it at 0 and the bonus is given per target by
+// classic_spell_warl_decimation. Effects 0 and 2 (cast time, health threshold) are dummies.
+class classic_talent_warl_decimation : public AuraScript
+{
+    void CalculateAmount(AuraEffect const* /*aurEff*/, SpellEffectValue& amount, bool& /*canBeRecalculated*/)
+    {
+        amount = 0;
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(classic_talent_warl_decimation::CalculateAmount, EFFECT_3, SPELL_AURA_ADD_PCT_MODIFIER);
+    }
+};
+
+// Shadow Bolt (686, 695, 705, 1088, 1106, 7641, 11659, 11660, 11661, 25307) and Searing Pain (5676, 17919, 17920, 17921, 17922, 17923) with
+// Decimation: on a target below $m3% health, +$m4% damage and 440873 (Soul Fire cast time -$m1%, no Soul Shard) on the warlock.
+class classic_spell_warl_decimation : public SpellScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellEffect({ { SPELL_CWD_DECIMATION, EFFECT_3 } }) && ValidateSpellInfo({ SPELL_CWD_DECIMATION_BUFF });
+    }
+
+    // the talent's health threshold, or 0 when the warlock does not have it
+    static int32 GetThreshold(Unit const* caster)
+    {
+        AuraEffect const* threshold = caster->GetAuraEffect(SPELL_CWD_DECIMATION, EFFECT_2);
+        return threshold ? threshold->GetAmountAsInt() : 0;
+    }
+
+    void HandleCalcDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod)
+    {
+        Unit* caster = GetCaster();
+        int32 const threshold = GetThreshold(caster);
+        if (!victim || threshold <= 0 || !victim->HealthBelowPct(threshold))
+            return;
+
+        // effect 3 of the talent at the warlock's rank (the aura itself is kept at 0)
+        SpellInfo const* talentInfo = sSpellMgr->AssertSpellInfo(SPELL_CWD_DECIMATION, DIFFICULTY_NONE);
+        AddPct(pctMod, talentInfo->GetEffect(EFFECT_3).CalcValue(caster));
+    }
+
+    void HandleBeforeHit(SpellMissInfo missInfo)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        int32 const threshold = GetThreshold(caster);
+        if (missInfo != SPELL_MISS_NONE || !target || threshold <= 0 || !target->HealthBelowPct(threshold))
+            return;
+
+        AuraEffect const* castTime = caster->GetAuraEffect(SPELL_CWD_DECIMATION, EFFECT_0);
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        if (castTime && castTime->GetAmount() > 0)
+            args.AddSpellBP0(-castTime->GetAmountAsInt());
+        caster->CastSpell(caster, SPELL_CWD_DECIMATION_BUFF, args);
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_warl_decimation::HandleCalcDamage);
+        BeforeHit += BeforeSpellHitFn(classic_spell_warl_decimation::HandleBeforeHit);
+    }
+};
+
 // 17877, 18867, 18868, 18869, 18870, 18871 - Shadowburn
 // 426316 - Shadow and Flame: "[...] hitting an enemy with Shadowburn increases all Fire damage you deal by $m4% for $426311d. [...]
 // Shadowburn has a $m2% chance to instantly refund a Soul Shard." (Shadowburn costs a Soul Shard)
@@ -1150,6 +1248,26 @@ static void UpdateHeartOfTheWild(Unit* druid, ShapeshiftForm form)
         druid->CastSpell(druid, wanted, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(amount));
 }
 
+// 17002 - Feral Swiftness (70532): "Increases your movement speed while in Cat Form by $m2%, and increases your chance to Dodge by $m1%."
+// Effect 0 is the dodge aura; effect 1 is the Cat Form speed as a dummy, so the speed never applied. Behaviour from vMaNGOS (GPL-2.0,
+// Aura::HandleAuraModShapeshift): the speed aura 24867 is cast in Cat Form and removed when the form ends; here with the talent amount.
+static void UpdateFeralSwiftness(Unit* druid, ShapeshiftForm form)
+{
+    AuraEffect const* talent = form == FORM_CAT_FORM ? druid->GetAuraEffect(SPELL_CWD_FERAL_SWIFTNESS, EFFECT_1) : nullptr;
+    int32 const amount = talent ? talent->GetAmountAsInt() : 0;
+    if (Aura* current = druid->GetAura(SPELL_CWD_FERAL_SWIFTNESS_CAT))
+    {
+        AuraEffect const* currentEffect = current->GetEffect(EFFECT_0);
+        if (amount > 0 && currentEffect && currentEffect->GetAmountAsInt() == amount)
+            return;
+
+        druid->RemoveAurasDueToSpell(SPELL_CWD_FERAL_SWIFTNESS_CAT);
+    }
+
+    if (amount > 0)
+        druid->CastSpell(druid, SPELL_CWD_FERAL_SWIFTNESS_CAT, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(amount));
+}
+
 // 768 - Cat Form, 5487 - Bear Form, 9634 - Dire Bear Form, 24858 - Moonkin Form
 // 16929 - Thick Hide: base armor while in these forms (UpdateThickHide).
 // 17056 - Furor: "Gives you a $m1% chance to gain 10 Rage when shapeshifting into Bear Form or Dire Bear Form." (17057: 10 rage), and the
@@ -1159,7 +1277,7 @@ class classic_talent_dru_form_talents : public AuraScript
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo({ SPELL_CWD_THICK_HIDE_ARMOR, SPELL_CWD_FUROR_RAGE, SPELL_CWD_LEADER_OF_THE_PACK_AURA,
-            SPELL_CWD_HEART_OF_THE_WILD_BEAR, SPELL_CWD_HEART_OF_THE_WILD_CAT });
+            SPELL_CWD_HEART_OF_THE_WILD_BEAR, SPELL_CWD_HEART_OF_THE_WILD_CAT, SPELL_CWD_FERAL_SWIFTNESS_CAT });
     }
 
     void HandleApply(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
@@ -1171,6 +1289,7 @@ class classic_talent_dru_form_talents : public AuraScript
         ShapeshiftForm const form = ShapeshiftForm(aurEff->GetMiscValue());
         UpdateLeaderOfThePack(druid, form);
         UpdateHeartOfTheWild(druid, form);
+        UpdateFeralSwiftness(druid, form);
         if (form == FORM_BEAR_FORM || form == FORM_DIRE_BEAR_FORM)
         {
             ClassicFurorCat::EnteredBearForm(druid);
@@ -1190,6 +1309,7 @@ class classic_talent_dru_form_talents : public AuraScript
         // the unit already stands in the next form (or none) when this runs
         UpdateLeaderOfThePack(druid, druid->GetShapeshiftForm());
         UpdateHeartOfTheWild(druid, druid->GetShapeshiftForm());
+        UpdateFeralSwiftness(druid, druid->GetShapeshiftForm());
 
         ShapeshiftForm const form = ShapeshiftForm(aurEff->GetMiscValue());
         if (form == FORM_CAT_FORM)
@@ -1254,6 +1374,58 @@ class classic_talent_dru_heart_of_the_wild : public AuraScript
     {
         AfterEffectApply += AuraEffectApplyFn(classic_talent_dru_heart_of_the_wild::HandleApply, EFFECT_2, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
         AfterEffectRemove += AuraEffectRemoveFn(classic_talent_dru_heart_of_the_wild::HandleRemove, EFFECT_2, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 417051 - Natural Reaction (70532): "Increases your dodge chance by $m1%, and gives you a $m2% chance to gain ${$417053m1/10} Rage each time you
+// dodge." Effect 0 is the dodge aura; the rage chance ($m2) is effect 1, a dummy aura with no proc data, so a dodge gave nothing. A dodged melee
+// attack rolls the chance and casts 417053.
+class classic_talent_dru_natural_reaction : public AuraScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellInfo({ SPELL_CWD_NATURAL_REACTION_RAGE }) && ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
+    }
+
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        return (eventInfo.GetHitMask() & PROC_HIT_DODGE) && roll_chance(aurEff->GetAmount());
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        GetTarget()->CastSpell(GetTarget(), SPELL_CWD_NATURAL_REACTION_RAGE, CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_talent_dru_natural_reaction::CheckProc, EFFECT_1, SPELL_AURA_DUMMY);
+        OnEffectProc += AuraEffectProcFn(classic_talent_dru_natural_reaction::HandleProc, EFFECT_1, SPELL_AURA_DUMMY);
+    }
+};
+
+// 17002 - Feral Swiftness: the talent learned or lost while in Cat Form
+class classic_talent_dru_feral_swiftness : public AuraScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellInfo({ SPELL_CWD_FERAL_SWIFTNESS_CAT }) && ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
+    }
+
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        UpdateFeralSwiftness(GetTarget(), GetTarget()->GetShapeshiftForm());
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetTarget()->RemoveAurasDueToSpell(SPELL_CWD_FERAL_SWIFTNESS_CAT);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_talent_dru_feral_swiftness::HandleApply, EFFECT_1, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_talent_dru_feral_swiftness::HandleRemove, EFFECT_1, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
@@ -1632,6 +1804,74 @@ class classic_spell_dru_rip : public AuraScript
     }
 };
 
+// Entangling Roots (339, 1062, 5195, 5196, 9852, 9853) with 17245 Overgrowth (70532): "You may $?s17245[have up to ${$17245m1+1} targets][only
+// have 1 target] Rooted at a time." Nothing limited the targets. Each druid's rooted targets are kept in order of rooting; when a new one is
+// rooted beyond 1 + the Overgrowth amount, the Roots on the oldest is removed. Nature's Grasp roots (19970-19975) do not have the limit.
+class classic_spell_dru_entangling_roots_limit : public AuraScript
+{
+    struct RootedTarget
+    {
+        ObjectGuid Target;
+        uint32 SpellId;
+    };
+
+    static std::mutex _lock;
+    static std::unordered_map<ObjectGuid, std::vector<RootedTarget>> _rootedByCaster;
+
+    void AfterApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* druid = GetCaster();
+        if (!druid)
+            return;
+
+        uint32 limit = 1;
+        if (AuraEffect const* overgrowth = druid->GetAuraEffect(SPELL_CWD_OVERGROWTH, EFFECT_0))
+            limit += uint32(std::max(overgrowth->GetAmountAsInt(), 0));
+
+        ObjectGuid const targetGuid = GetTarget()->GetGUID();
+        std::vector<RootedTarget> released;
+        {
+            std::lock_guard<std::mutex> guard(_lock);
+            std::vector<RootedTarget>& rooted = _rootedByCaster[druid->GetGUID()];
+            std::erase_if(rooted, [&](RootedTarget const& entry) { return entry.Target == targetGuid; });
+            rooted.push_back({ targetGuid, GetId() });
+            while (rooted.size() > limit)
+            {
+                released.push_back(rooted.front());
+                rooted.erase(rooted.begin());
+            }
+        }
+
+        // removing them runs their AfterRemove (which takes the lock), so outside of it
+        for (RootedTarget const& entry : released)
+            if (Unit* oldTarget = ObjectAccessor::GetUnit(*druid, entry.Target))
+                oldTarget->RemoveAurasDueToSpell(entry.SpellId, druid->GetGUID());
+    }
+
+    void AfterRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        ObjectGuid const targetGuid = GetTarget()->GetGUID();
+        uint32 const spellId = GetId();
+        std::lock_guard<std::mutex> guard(_lock);
+        auto itr = _rootedByCaster.find(GetCasterGUID());
+        if (itr == _rootedByCaster.end())
+            return;
+
+        std::erase_if(itr->second, [&](RootedTarget const& entry) { return entry.Target == targetGuid && entry.SpellId == spellId; });
+        if (itr->second.empty())
+            _rootedByCaster.erase(itr);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_spell_dru_entangling_roots_limit::AfterApply, EFFECT_0, SPELL_AURA_MOD_ROOT, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_dru_entangling_roots_limit::AfterRemove, EFFECT_0, SPELL_AURA_MOD_ROOT, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+std::mutex classic_spell_dru_entangling_roots_limit::_lock;
+std::unordered_map<ObjectGuid, std::vector<classic_spell_dru_entangling_roots_limit::RootedTarget>> classic_spell_dru_entangling_roots_limit::_rootedByCaster;
+
 // 18562 - Swiftmend: "Consumes a Rejuvenation or Regrowth effect on a friendly target to instantly heal them an amount equal to 12 sec of
 // Rejuvenation or 18 sec of Regrowth." The client spell is a plain heal of 1 and consumed nothing. The heal is now the periodic effect's
 // base amount times the ticks of 12 / 18 sec, the effect is removed, and the cast needs one of the two from the druid on the target.
@@ -1795,8 +2035,59 @@ public:
     }
 };
 
+// 1328621 - Bloom (Forever druid talent): "When your Rejuvenation or Regrowth spell expires due to its duration, the target is
+// instantly healed for an amount equal to $s1% of your Spirit. If either spell expires due to being dispelled, the target is healed
+// for $s2% of your Spirit instead." Bound to the Rejuvenation and Regrowth ranks; the heal is 1328622.
+class classic_spell_dru_bloom : public AuraScript
+{
+    static constexpr uint32 SPELL_DRU_BLOOM      = 1328621;
+    static constexpr uint32 SPELL_DRU_BLOOM_HEAL = 1328622;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellEffect({ { SPELL_DRU_BLOOM, EFFECT_1 } }) && ValidateSpellInfo({ SPELL_DRU_BLOOM_HEAL });
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        AuraRemoveMode const removeMode = GetTargetApplication()->GetRemoveMode();
+        SpellEffIndex talentEffect;
+        if (removeMode == AURA_REMOVE_BY_EXPIRE)
+            talentEffect = EFFECT_0;
+        else if (removeMode == AURA_REMOVE_BY_ENEMY_SPELL)
+            talentEffect = EFFECT_1;
+        else
+            return;
+
+        Unit* druid = GetCaster();
+        Unit* target = GetTarget();
+        if (!druid || !target->IsAlive())
+            return;
+
+        AuraEffect const* talent = druid->GetAuraEffect(SPELL_DRU_BLOOM, talentEffect);
+        if (!talent)
+            return;
+
+        int32 const amount = int32(CalculatePct(druid->GetStat(STAT_SPIRIT), talent->GetAmount()));
+        if (amount <= 0)
+            return;
+
+        // the heal spell targets its caster, so the target casts it on itself with the druid as the original caster
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        args.AddSpellMod(SPELLVALUE_BASE_POINT0, amount);
+        args.SetOriginalCaster(druid->GetGUID());
+        target->CastSpell(target, SPELL_DRU_BLOOM_HEAL, args);
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_dru_bloom::HandleRemove, EFFECT_ALL, SPELL_AURA_PERIODIC_HEAL, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 void AddSC_classic_talents_warlock_druid()
 {
+    RegisterSpellScript(classic_spell_dru_bloom);
     // warlock
     RegisterSpellScript(classic_talent_warl_life_tap);
     RegisterSpellScript(classic_talent_warl_demonic_energies);
@@ -1810,6 +2101,9 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_talent_warl_summon_demon);
     RegisterSpellScript(classic_talent_warl_demonic_sacrifice);
     RegisterSpellScript(classic_talent_warl_conflagrate);
+    RegisterSpellScript(classic_spell_warl_incinerate);
+    RegisterSpellScript(classic_talent_warl_decimation);
+    RegisterSpellScript(classic_spell_warl_decimation);
     RegisterSpellScript(classic_talent_warl_shadowburn);
     RegisterSpellScript(classic_talent_warl_bane_of_havoc_tracker);
     RegisterSpellScript(classic_talent_warl_bane_of_havoc);
@@ -1820,6 +2114,8 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_talent_dru_thick_hide);
     RegisterSpellScript(classic_talent_dru_leader_of_the_pack);
     RegisterSpellScript(classic_talent_dru_heart_of_the_wild);
+    RegisterSpellScript(classic_talent_dru_feral_swiftness);
+    RegisterSpellScript(classic_talent_dru_natural_reaction);
     RegisterSpellScript(classic_spell_dru_improved_starfire);
     RegisterSpellScript(classic_talent_dru_blood_frenzy);
     RegisterSpellScript(classic_talent_dru_eclipse);
@@ -1831,6 +2127,7 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_spell_dru_frenzied_regeneration);
     RegisterSpellScript(classic_spell_dru_swiftmend);
     RegisterSpellScript(classic_spell_dru_rip);
+    RegisterSpellScript(classic_spell_dru_entangling_roots_limit);
     RegisterSpellScript(classic_talent_dru_predatory_strikes);
 
     new classic_unit_talent_warlock_druid();

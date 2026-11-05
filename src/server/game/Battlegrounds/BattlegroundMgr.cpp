@@ -449,7 +449,10 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
         bgTemplate.BattlemasterEntry = bl;
         bgTemplate.MapIDs            = std::move(mapsByBattleground[bgTypeId]);
 
-        if (bgTemplate.MapIDs.size() == 1)
+        // Only a battleground that is played itself needs start points. "All Arenas" (6) and the random battlegrounds pick another
+        // template, even when they list just one map (Classic: "All Arenas" has only map 2995); with start points 0 they were dropped
+        // here and every arena join failed.
+        if (bgTemplate.MapIDs.size() == 1 && bgTypeId != BATTLEGROUND_AA && !IsRandomBattleground(bgTypeId))
         {
             uint32 startId = fields[1].GetUInt32();
             if (WorldSafeLocsEntry const* start = sObjectMgr->GetWorldSafeLoc(startId))

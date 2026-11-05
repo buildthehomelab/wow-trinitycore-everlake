@@ -117,7 +117,9 @@ $mine = "$server\worldserver.conf.d\zz-9-local.conf"
 $botLines = @("# Bots ($($p.Size)): the launcher's Bots button changes these four",
     "Bots.Reserve = $($p.Reserve)", "Bots.ActiveCap = $($p.Cap)", "Bots.PerZone = $($p.Zone)", "Bots.InCity = $($p.City)")
 if (-not (Test-Path $mine)) {
-    $tpl = Get-Content (Join-Path $PSScriptRoot 'templates\zz-9-local.conf')
+    $tplPath = Join-Path $PSScriptRoot 'templates\zz-9-local.template'   # the newest template (updates skip *.conf files)
+    if (-not (Test-Path $tplPath)) { $tplPath = Join-Path $PSScriptRoot 'templates\zz-9-local.conf' }
+    $tpl = Get-Content $tplPath
     $out = foreach ($l in $tpl) { if ($l -eq '#BOTS#') { $botLines } else { $l } }
     Set-Content -Path $mine -Value $out -Encoding ascii
     "Wrote server\worldserver.conf.d\zz-9-local.conf (your own settings, bots $($p.Size))."

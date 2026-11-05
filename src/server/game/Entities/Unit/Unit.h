@@ -1784,7 +1784,7 @@ class TC_GAME_API Unit : public WorldObject
 
         // reactive attacks
         void ClearAllReactives();
-        void StartReactiveTimer(ReactiveType reactive) { m_reactiveTimer[reactive] = REACTIVE_TIMER_START;}
+        void StartReactiveTimer(ReactiveType reactive, uint32 duration = REACTIVE_TIMER_START) { m_reactiveTimer[reactive] = duration; }
         void UpdateReactives(uint32 p_time);
 
         // group updates

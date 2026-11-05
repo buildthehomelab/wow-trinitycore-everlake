@@ -131,10 +131,44 @@ class classic_spell_pri_power_word_shield : public SpellScript
     }
 };
 
+// 1277370, 1277371, 1277372, 1277374, 1277376, 1277377, 1277378 - Divine Grace (70532): "Instantly heals a friendly target below $s2% Health
+// for $s1 and removes Weakened Soul from that target. Cannot be cast on self." Effect 1 is a script effect with the health threshold that
+// nothing handled: the heal landed at any health and Weakened Soul stayed. The self restriction is a spell attribute.
+class classic_spell_pri_divine_grace : public SpellScript
+{
+    static constexpr uint32 SPELL_WEAKENED_SOUL = 6788;
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellInfo({ SPELL_WEAKENED_SOUL }) && ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
+    }
+
+    SpellCastResult CheckCast()
+    {
+        Unit* target = GetExplTargetUnit();
+        if (target && !target->HealthBelowPct(GetEffectInfo(EFFECT_1).CalcValue(GetCaster())))
+            return SPELL_FAILED_TARGET_AURASTATE;
+        return SPELL_CAST_OK;
+    }
+
+    void HandleScript(SpellEffIndex /*effIndex*/)
+    {
+        if (Unit* target = GetHitUnit())
+            target->RemoveAurasDueToSpell(SPELL_WEAKENED_SOUL);
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(classic_spell_pri_divine_grace::CheckCast);
+        OnEffectHitTarget += SpellEffectFn(classic_spell_pri_divine_grace::HandleScript, EFFECT_1, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
 void AddSC_classic_spells_priest()
 {
     RegisterSpellScript(classic_spell_pri_touch_of_weakness);
     RegisterSpellScript(classic_spell_pri_shadowguard);
     RegisterSpellScript(classic_spell_pri_holy_nova);
     RegisterSpellScript(classic_spell_pri_power_word_shield);
+    RegisterSpellScript(classic_spell_pri_divine_grace);
 }

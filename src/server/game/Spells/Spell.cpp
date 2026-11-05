@@ -3306,6 +3306,16 @@ void Spell::DoSpellEffectHit(Unit* unit, SpellEffectInfo const& spellEffectInfo,
                         {
                             hitInfo.AuraDuration *= m_spellValue->DurationMul;
 
+                            // Classic 1.60 Legacy perk Better Living Through Chemistry 1225504: "Increases the duration of beneficial effects
+                            // from elixirs and flasks by $s1%" (the item cast is a consumable of the elixir or flask subclass)
+                            if (hitInfo.Positive && m_castItemEntry)
+                                if (Player const* targetPlayer = unit->ToPlayer())
+                                    if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(m_castItemEntry);
+                                        proto && proto->GetClass() == ITEM_CLASS_CONSUMABLE
+                                        && (proto->GetSubClass() == ITEM_SUBCLASS_ELIXIR || proto->GetSubClass() == ITEM_SUBCLASS_FLASK))
+                                        if (int32 pct = targetPlayer->GetClassicLegacyPerkAmount(1225504, EFFECT_0); pct > 0)
+                                            AddPct(hitInfo.AuraDuration, pct);
+
                             // Haste modifies duration of channeled spells
                             if (m_spellInfo->IsChanneled())
                                 caster->ModSpellDurationTime(m_spellInfo, hitInfo.AuraDuration, this);
@@ -5762,6 +5772,21 @@ void Spell::TakeReagents()
     if (p_caster->CanNoReagentCast(m_spellInfo))
         return;
 
+    // Classic 1.60 Legacy perk Optimization 1225460: "Materials used by your Engineering, Blacksmithing, Leatherworking, and Tailoring recipes
+    // have a $s1% chance per item to be refunded on completing the recipe." A refunded material is simply not taken.
+    int32 refundChance = p_caster->GetClassicLegacyPerkAmount(1225460, EFFECT_0);
+    if (refundChance > 0)
+    {
+        SkillLineAbilityMapBounds bounds = sSpellMgr->GetSkillLineAbilityMapBounds(m_spellInfo->Id);
+        bool const optimizedRecipe = std::any_of(bounds.first, bounds.second, [](auto const& pair)
+        {
+            uint32 const skill = pair.second->SkillLine;
+            return skill == SKILL_ENGINEERING || skill == SKILL_BLACKSMITHING || skill == SKILL_LEATHERWORKING || skill == SKILL_TAILORING;
+        });
+        if (!optimizedRecipe)
+            refundChance = 0;
+    }
+
     for (uint32 x = 0; x < MAX_SPELL_REAGENTS; ++x)
     {
         if (m_spellInfo->Reagent[x] <= 0)
@@ -5792,6 +5817,17 @@ void Spell::TakeReagents()
         // if GetItemTarget is also spell reagent
         if (m_targets.GetItemTargetEntry() == itemid)
             m_targets.SetItemTarget(nullptr);
+
+        if (refundChance > 0)
+        {
+            uint32 refunded = 0;
+            for (uint32 i = 0; i < uint32(m_spellInfo->ReagentCount[x]); ++i)
+                if (roll_chance(refundChance))
+                    ++refunded;
+            itemcount -= std::min(refunded, itemcount);
+            if (!itemcount)
+                continue;
+        }
 
         p_caster->DestroyItemCount(itemid, itemcount, true);
     }
@@ -8037,6 +8073,37 @@ SpellCastResult Spell::CheckItems(int32* param1 /*= nullptr*/, int32* param2 /*=
                     return SPELL_FAILED_CANT_BE_SALVAGED;
                 if (disenchantSkillRequired > player->GetSkillValue(SKILL_ENCHANTING))
                     return SPELL_FAILED_CANT_BE_SALVAGED_SKILL;
+                break;
+            }
+            case SPELL_EFFECT_SALVAGE_ITEM:
+            {
+                // Classic 1.60 (Forever) Stock Crate: the picked material must be one of the crate's bundles, in full
+                if (!sSpellMgr->IsClassicCrateSpell(m_spellInfo->Id))
+                    break;
+                Item* item = m_targets.GetItemTarget();
+                if (!item || item->GetOwnerGUID() != player->GetGUID())
+                    return SPELL_FAILED_BAD_TARGETS;
+                SpellMgr::ClassicCrateBundle const* bundle = sSpellMgr->GetClassicCrateBundle(m_spellInfo->Id, item->GetEntry());
+                if (!bundle)
+                    return SPELL_FAILED_BAD_TARGETS;
+                if (!player->HasItemCount(bundle->ItemId, bundle->Count))
+                {
+                    if (param1 && param2)
+                    {
+                        *param1 = bundle->ItemId;
+                        *param2 = bundle->Count;
+                    }
+                    return SPELL_FAILED_NEED_MORE_ITEMS;
+                }
+                if (!LootTemplates_Spell.HaveLootFor(m_spellInfo->Id))
+                    return SPELL_FAILED_BAD_TARGETS;
+                break;
+            }
+            case SPELL_EFFECT_LOOT:
+            {
+                // nothing to give: refuse an item's cast so the item (a Waylaid Crate, a sealed writ) is not used up for nothing
+                if (m_CastItem && !LootTemplates_Spell.HaveLootFor(m_spellInfo->Id))
+                    return SPELL_FAILED_BAD_TARGETS;
                 break;
             }
             case SPELL_EFFECT_PROSPECTING:

@@ -120,6 +120,10 @@ struct ScenarioDef
     // unattackable): when the attack is due the main tank uses the nearest one within 200 y, and the attack waits for the boss to become
     // attackable (up to 30 s). 0 = none.
     std::uint32_t start_object = 0;
+    // A game event the raid leader sends to bring the boss out (Gahz'ranka: event 9104, the Mudskunk Lure's; until it the instance
+    // script despawns him the moment he spawns): when the attack is due the main tank sends it, and the attack waits for the boss to
+    // be alive within 400 y (up to 30 s). 0 = none.
+    std::uint32_t start_event = 0;
     // FollowRoute: the points the stand-in walks, in order (on `map`, starting from x, y, z).
     std::vector<ScenarioRoutePoint> route;
     // Orders an owner gives that a bot-only squad has nobody to give. yes_fear: the squad was told "yes fear" (Fear and Scare Beast allowed
@@ -268,6 +272,7 @@ struct RaidBossRow
     std::uint8_t resist_school = 0;     // see ScenarioDef::resist_school
     std::uint32_t wear_entry = 0;       // see ScenarioDef::wear_entry
     std::uint32_t start_object = 0;     // see ScenarioDef::start_object
+    std::uint32_t start_event = 0;      // see ScenarioDef::start_event
 };
 
 // A row whose fight keeps two or three kinds of creature alive (the bug trio, the Four Horsemen): the extra ones, without spelling out
@@ -310,6 +315,13 @@ constexpr RaidBossRow Wears(RaidBossRow r, std::uint32_t entry)
 constexpr RaidBossRow StartsWith(RaidBossRow r, std::uint32_t object_entry)
 {
     r.start_object = object_entry;
+    return r;
+}
+
+// A row whose boss comes out on a game event the raid leader sends (ScenarioDef::start_event): Gahz'ranka's Mudskunk Lure.
+constexpr RaidBossRow StartsOnEvent(RaidBossRow r, std::uint32_t event_id)
+{
+    r.start_event = event_id;
     return r;
 }
 
@@ -378,6 +390,7 @@ inline ScenarioDef MakeRaidScenario(RaidBossRow const& r, RaidEntrance const& e,
     d.resist_school = r.resist_school;
     d.wear_entry = r.wear_entry;
     d.start_object = r.start_object;
+    d.start_event = r.start_event;
     d.order_attack = true;
     d.order_delay_ms = 20000;
     return d;
@@ -510,8 +523,8 @@ inline constexpr RaidBossRow kZgBosses[] = {
       11380, "Jin'do the Hexxer",     20 },
     { "zg_hakkar",    "Zul'Gurub: 20 level 60 raiders to Hakkar (Corrupted Blood carrier runs, Cause Insanity, Blood Siphon)",
       14834, "Hakkar",                25, 11357 },   // Son of Hakkar
-    { "zg_gahzranka", "Zul'Gurub: 20 level 60 raiders to Gahz'ranka (Frost Breath cone, Massive Geyser threat reset)",
-      15114, "Gahz'ranka",            15 },
+    StartsOnEvent({ "zg_gahzranka", "Zul'Gurub: 20 level 60 raiders to Gahz'ranka (Frost Breath cone, Massive Geyser threat reset)",
+      15114, "Gahz'ranka",            15 }, 9104),   // the Mudskunk Lure's event (classic_event_summon_gahzranka)
 };
 
 // Ruins of Ahn'Qiraj, 20 raiders. Buru's eggs stay (he must be led over them).
@@ -606,6 +619,7 @@ inline std::vector<ScenarioDef> MakeOtherRaidScenarios()
 // finisher_sweep_<class>  rogue, druid, warrior: every combo point or rage scaled spell at 1-5 points / rising rage, the damage must grow
 // threat_audit_<class>    rogue, priest, hunter, druid: the threat reducer's drop on a dummy's threat list against vanilla's
 // talent_audit_<class>    the class's key talents in the spellbook with their effects, and (warlock) Improved Shadow Bolt's +20 % after a crit
+// spell_check_<class>     the player spell check: key spells cast at the dummy, each must land and hit for at least its floor and half its spell data
 struct ParityRow
 {
     char const* cls_name;              // the scenario name suffix
@@ -921,6 +935,11 @@ inline std::vector<ScenarioDef> const& ScenarioCatalogue()
                 s_parity_names.push_back("trap_audit_hunter");
                 s_parity_names.push_back("Trap audit, hunter: Explosive, Immolation, Frost and Freezing Trap out of combat, a dummy walked onto each, the trap must fire and do its effect");
                 v.push_back(MakeParityScenario(r, s_parity_names[s_parity_names.size() - 2].c_str(), s_parity_names.back().c_str(), 6, 8));
+                // A dead pet whose body has gone comes back from Revive Pet as happy as it died, and the pet spells come with the pet
+                // (PetReviveCheck.h, parity value 11: the runner plays it, not Parity::Begin).
+                s_parity_names.push_back("pet_revive_hunter");
+                s_parity_names.push_back("Pet revive, hunter: the pet dies, its body goes, Revive Pet brings it back with the happiness and loyalty it died with; Revive/Feed/Dismiss Pet come with Tame Beast and Call Pet");
+                v.push_back(MakeParityScenario(r, s_parity_names[s_parity_names.size() - 2].c_str(), s_parity_names.back().c_str(), 11, 6));
             }
             if (r.cls == ScnClass::Rogue || r.cls == ScnClass::Priest || r.cls == ScnClass::Hunter || r.cls == ScnClass::Druid)
             {
@@ -928,6 +947,11 @@ inline std::vector<ScenarioDef> const& ScenarioCatalogue()
                 s_parity_names.push_back("Threat audit, " + std::string(r.cls_name) + ": the threat reducer (Feint, Fade, Disengage, Cower) cast with 500 and 5000 threat on a level 63 dummy, the drop measured against vanilla's");
                 v.push_back(MakeParityScenario(r, s_parity_names[s_parity_names.size() - 2].c_str(), s_parity_names.back().c_str(), 7, 6));
             }
+            // The player spell check: every key spell of the class cast the way a player casts it, each must land and hit for at least its floor
+            // and half of what the client's spell data says (Parity::Kind::SpellCheck). Runs on the server alone, no game client.
+            s_parity_names.push_back(std::string("spell_check_") + r.cls_name);
+            s_parity_names.push_back("Player spell check, " + std::string(r.cls_name) + ": each key spell cast at a level 63 dummy (heals on itself), PASS / FAIL / SKIP per spell against a floor and the client's spell data");
+            v.push_back(MakeParityScenario(r, s_parity_names[s_parity_names.size() - 2].c_str(), s_parity_names.back().c_str(), 10, 15));
             s_parity_names.push_back(std::string("talent_audit_") + r.cls_name);
             s_parity_names.push_back("Talent audit, " + std::string(r.cls_name) + ": key talents in the spellbook with their effects" +
                                      (r.cls == ScnClass::Warlock ? ", Improved Shadow Bolt +20 % after a crit" : ""));

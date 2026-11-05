@@ -99,7 +99,10 @@ if (-not (Test-Path "$stage\server\legacy.dll")) {
     Copy-Item $pick.FullName "$stage\server\legacy.dll" -Force
     "Added legacy.dll from $($pick.FullName)"
 }
-robocopy "$src\repack" "$stage\repack" /E /XF Install.cmd WoW-Forever-Bots.cmd Play-WoWForever.cmd Bug-Report.cmd Host-For-Others.cmd Check-Config.cmd build-package.ps1 package-data.ps1 package-source.ps1 build-launcher.ps1 README-TESTER.md SOURCE.txt NOTICE.txt UPDATER.md update.log clean-release.ps1 *.log *.bak* *.orig *~ /XD feedback-repo launcher /NFL /NDL /NJH /NJS | Out-Null
+robocopy "$src\repack" "$stage\repack" /E /XF Install.cmd WoW-Forever-Bots.cmd Play-WoWForever.cmd Bug-Report.cmd Host-For-Others.cmd Check-Config.cmd Uninstall.cmd build-package.ps1 package-data.ps1 package-source.ps1 build-launcher.ps1 README-TESTER.md SOURCE.txt NOTICE.txt UPDATER.md update.log clean-release.ps1 *.log *.bak* *.orig *~ /XD feedback-repo launcher /NFL /NDL /NJH /NJS | Out-Null
+# the player settings template again under a name updates copy (update.ps1 skips every *.conf, so an install would keep the old
+# template and the start would add nothing new to zz-9-local.conf; WorldUp.ps1 puts this copy back as templates\zz-9-local.conf)
+Copy-Item "$src\repack\templates\zz-9-local.conf" "$stage\repack\templates\zz-9-local.template" -Force
 # the ForeverBots addon is REQUIRED (whispering bots only works through it); always ship the copy from this commit
 robocopy "$src\src\modules\PlayerbotV2\Addon\ForeverBots" "$stage\addons\ForeverBots" /E /NFL /NDL /NJH /NJS | Out-Null
 if (-not (Test-Path "$stage\addons\ForeverBots\ForeverBots.toc")) { throw 'ForeverBots addon missing from the package' }
@@ -130,6 +133,7 @@ Copy-Item "$src\repack\Play-WoWForever.cmd" "$stage\Play-WoWForever.cmd" -Force
 Copy-Item "$src\repack\Bug-Report.cmd" "$stage\Bug-Report.cmd" -Force
 Copy-Item "$src\repack\Host-For-Others.cmd" "$stage\Host-For-Others.cmd" -Force
 Copy-Item "$src\repack\Check-Config.cmd" "$stage\Check-Config.cmd" -Force   # settings files check: file and line of a duplicate setting or a broken line
+Copy-Item "$src\repack\Uninstall.cmd" "$stage\Uninstall.cmd" -Force   # removes shortcuts, add-ons, certificates, hosts lines, firewall rules; asks about the folder
 & "$src\repack\build-launcher.ps1" -Out "$stage\WoWForeverLauncher.exe"   # the launcher window, compiled with the .NET Framework compiler that ships with Windows
 foreach ($f in 'README-TESTER.md:README.md', 'SOURCE.txt:SOURCE.txt', 'NOTICE.txt:NOTICE.txt') {
     $a, $b = $f -split ':'; Copy-Item "$src\repack\$a" "$stage\$b" -Force
@@ -183,7 +187,7 @@ foreach ($f in Get-ChildItem $stage -Recurse -File) {
 }
 if ($hits.Count) { throw ("Packed files still carry the build-tool words:`n  " + ($hits -join "`n  ")) }
 # Files the package must hold
-foreach ($need in 'server\worldserver.exe', 'server\bnetserver.exe', 'server\legacy.dll', 'server\worldserver.conf.d\zz-0-playerbot-defaults.conf', 'server\worldserver.conf.d\zz-1-wow-forever-realm.conf', 'Install.cmd', 'addons\ForeverBots\ForeverBots.toc', 'addons\ForeverDots\ForeverDots.toc') {
+foreach ($need in 'server\worldserver.exe', 'server\bnetserver.exe', 'server\legacy.dll', 'server\worldserver.conf.d\zz-0-playerbot-defaults.conf', 'server\worldserver.conf.d\zz-1-wow-forever-realm.conf', 'repack\templates\zz-9-local.template', 'Install.cmd', 'addons\ForeverBots\ForeverBots.toc', 'addons\ForeverDots\ForeverDots.toc') {
     if (-not (Test-Path (Join-Path $stage $need))) { throw "Package file missing: $need" }
 }
 # Every file of the full package with its size: before the install the launcher compares the folder with this list and asks the

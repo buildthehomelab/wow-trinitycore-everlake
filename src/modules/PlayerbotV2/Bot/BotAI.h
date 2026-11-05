@@ -623,6 +623,7 @@ public:
         orders_.last_ms  = now_ms;
         use_stay_.store(false, std::memory_order_relaxed);   // any new order replaces the use's Stay
         stay_return_set_.store(false, std::memory_order_relaxed);   // and the spot an old Stay walks back to
+        stay_return_pinned_.store(false, std::memory_order_relaxed);
     }
     // The Stay a "use <object>" leaves after the use: ends once the use is done (no channel 5 s after it, idle:owner_stay), when the
     // bot's or the group's fight starts (DispatchInCombat, idle:owner_stay), a two-minute backstop otherwise.
@@ -2727,6 +2728,8 @@ public:
         BgFormHold      = 57,  // target = 0. A bot clicking a battleground flag / banner: no druid shapeshift cast
                                // for 6s (the click leaves the form; the rotation shifted straight back in).
         AlwaysBuff      = 58,  // target = kAlwaysBuffLockKey. idle:always_buff (Playerbot.AlwaysBuffs): 10s between passes.
+        BgCaptureHold   = 59,  // target = the node key of BgTryUseObjectiveGo. A bot that started a banner capture stands still at the
+                               // banner for 7s, so the 5s channel completes on its next click instead of being broken by another rule's move.
     };
     static constexpr uint32 kActionRetryLockoutMs = 5u * 60u * 1000u;
     // Per-kind cooldown override — most actions use the 5 min default, but
@@ -2858,6 +2861,9 @@ public:
             case ActionKind::BgFormHold:
                 // Past the 3 s BgUseGo retry, so the second click lands out of form.
                 return 6u * 1000u;
+            case ActionKind::BgCaptureHold:
+                // The 5 s capture channel plus the 3 s click that completes it, less the click already made at its start.
+                return 7u * 1000u;
             case ActionKind::AlwaysBuff:
                 // The gate fires only when an aura is out of step with where the bot stands, so a short pace is enough. It shared the
                 // potion's 5 min lockout once: a bot that got its gold floor in the world and joined a raid group a few seconds later
@@ -3325,12 +3331,20 @@ public:
         x = stay_return_x_; y = stay_return_y_; z = stay_return_z_; map = stay_return_map_;
         return true;
     }
-    void set_stay_return(float x, float y, float z, uint32 map)
+    // pinned: a Positions tab spot (BotCommandParser::PlaceBots). It is kept on arrival, so the bot goes back to it after every fight
+    // until a new order (enter_manual) or the map changes.
+    void set_stay_return(float x, float y, float z, uint32 map, bool pinned = false)
     {
         stay_return_x_ = x; stay_return_y_ = y; stay_return_z_ = z; stay_return_map_ = map;
+        stay_return_pinned_.store(pinned, std::memory_order_relaxed);
         stay_return_set_.store(true, std::memory_order_relaxed);
     }
-    void clear_stay_return() { stay_return_set_.store(false, std::memory_order_relaxed); }
+    void clear_stay_return()
+    {
+        stay_return_set_.store(false, std::memory_order_relaxed);
+        stay_return_pinned_.store(false, std::memory_order_relaxed);
+    }
+    bool stay_return_pinned() const { return stay_return_pinned_.load(std::memory_order_relaxed); }
     // Game time of the last damage this bot itself dealt (world thread writes from the damage hook, the bot worker reads); 0 = none yet.
     void   note_damage_done(uint32 now_ms) { last_damage_done_ms_.store(now_ms ? now_ms : 1u, std::memory_order_relaxed); }
     uint32 last_damage_done_ms() const { return last_damage_done_ms_.load(std::memory_order_relaxed); }
@@ -3349,6 +3363,7 @@ private:
     std::vector<std::pair<ObjectGuid, uint32>> chase_unreachable_;   // target, until (ms)
     int32  rest_aura_left_ms_ = -1;
     std::atomic<bool> stay_return_set_{false};
+    std::atomic<bool> stay_return_pinned_{false};
     float  stay_return_x_ = 0.f, stay_return_y_ = 0.f, stay_return_z_ = 0.f;
     uint32 stay_return_map_ = 0;
     std::atomic<uint32> last_damage_done_ms_{0};

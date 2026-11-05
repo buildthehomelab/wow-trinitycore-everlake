@@ -31,7 +31,7 @@ Kept: your characters, accounts, bots, certificates, secrets, maps and your own 
 If something goes wrong: `repack\restore-backup.ps1` lists the backups and puts one back. Command line: `repack\update.ps1 -CheckOnly`, `repack\update.ps1`.
 
 ## Stop / remove
-`repack\Stop-WoWForever.ps1`. To remove the certificate and hosts line: Administrator PowerShell, `repack\uninstall.ps1`.
+`repack\Stop-WoWForever.ps1`. To remove it from the PC: double-click `Uninstall.cmd` (shortcuts, add-ons, certificates, hosts lines, firewall rules; it asks whether to delete the folder too).
 
 ## Community
 Discord: https://discord.gg/QJBM6tR3E4

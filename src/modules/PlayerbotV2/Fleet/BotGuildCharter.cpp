@@ -25,6 +25,9 @@
 #include "UnitDefines.h"
 #include "World.h"
 #include "WorldSession.h"
+#include "../Bot/BotRegistry.h"
+#include "../Services.h"
+#include "../Util/ConfigReader.h"
 
 // Petition item entry — copied from PetitionsHandler.cpp's #define.
 // Kept inline rather than as a header constant because the upstream
@@ -381,6 +384,17 @@ RecruitResult BotRecruitToGuild(
     // enforce a cap, so we gate here.
     if (g->GetMembersCount() >= /*per-bot-guild cap pulled from manager*/ 75u)
         return RecruitResult::GuildFull;
+
+    // A real player is never put into a bot guild without asking (this path used to add anyone guildless nearby, players
+    // included). PlayerbotV2.Guilds.InvitePlayers = 0 (default): bots only. 1: the player gets a normal guild invite.
+    if (!Services::Registry().has(target->GetGUID().GetCounter()))
+    {
+        if (!Services::Config().guilds_invite_players() || !recruiter->GetSession())
+            return RecruitResult::BadTarget;
+        g->HandleInviteMember(recruiter->GetSession(), target->GetName());
+        out_guild_id = gid;
+        return RecruitResult::Invited;
+    }
 
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
     const bool ok = g->AddMember(trans, target->GetGUID());

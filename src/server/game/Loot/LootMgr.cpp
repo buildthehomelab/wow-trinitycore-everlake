@@ -1133,6 +1133,10 @@ void LoadLootTemplates_Creature()
     // 1 means loot for player corpse
     lootIdSet.erase(PLAYER_CORPSE_LOOT_ENTRY);
 
+    // Classic 1.60: Alterac Valley player corpse loot per victim race
+    for (uint32 race = 1; race <= std::numeric_limits<uint8>::max(); ++race)
+        lootIdSet.erase(CLASSIC_AV_CORPSE_LOOT_ENTRY + race);
+
     // output error for any still listed (not referenced from appropriate table) ids
     LootTemplates_Creature.ReportUnusedIds(lootIdSet);
 
@@ -1441,6 +1445,15 @@ void LoadLootTemplates_Spell()
     // remove real entries and check existence loot
     sSpellMgr->ForEachSpellInfo([&](SpellInfo const* spellInfo)
     {
+        // SPELL_EFFECT_LOOT spells and the Classic 1.60 Stock Crate spells take their loot from here too; most SPELL_EFFECT_LOOT
+        // spells of the client have no rows (nothing to report), the ones that do are in use
+        if (spellInfo->HasEffect(SPELL_EFFECT_LOOT) || sSpellMgr->IsClassicCrateSpell(spellInfo->Id))
+        {
+            if (lootIdSet.contains(spellInfo->Id))
+                lootIdSetUsed.insert(spellInfo->Id);
+            return;
+        }
+
         // possible cases
         if (!spellInfo->IsLootCrafting())
             return;

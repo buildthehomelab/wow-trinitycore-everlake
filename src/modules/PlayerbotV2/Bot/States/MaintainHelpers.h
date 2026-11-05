@@ -133,8 +133,15 @@ GroupMemberSummary const* GroupAnchorTank(BotSnapshotView const& s, BotAI const&
 // group. Instances only, in and out of combat. Returns true when it emitted
 // or holds a step already under way (caller consumes the tick). Definition
 // in State_Idle.cpp.
+// traps_only: only when the zone the bot stands in is a trap game object.
 bool RaidHazardStepOut(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g,
-                       BotIntentEmitter& emit);
+                       BotIntentEmitter& emit, bool traps_only = false);
+
+// Ground-hazard detour ([raid_hazard_detour]). A melee bot outside every ground
+// hazard whose line to its victim crosses a trap zone walks to a point beside it first.
+// Instances only. Returns true when it emitted or holds that walk (caller
+// consumes the tick). Definition in State_Idle.cpp.
+bool RaidHazardDetour(BotSnapshotView const& s, BotAI& ai, BotIntentEmitter& emit);
 
 // The generic stand-point filter: (x, y, z) lies in a hostile ground hazard
 // (snapshot combat.ground_hazards, same floor) or in a raid-layer avoid circle

@@ -1,4 +1,5 @@
 #include "BotTradeShop.h"
+#include "BotLanguage.h"
 #include "BotItemScorer.h"
 #include "BotTrade.h"
 #include "PlayerbotAPI.h"
@@ -88,7 +89,7 @@ void Say(Player* bot, Player* to, BotTrade::Say what, uint64 money, std::string 
         if (last.first == key && now - last.second < kSayRepeatMs) return;
         last = { key, now };
     }
-    bot->Whisper(text, LANG_UNIVERSAL, to);
+    BotLanguage::Whisper(bot, to, text);   // in the buyer's language
 }
 
 } // namespace

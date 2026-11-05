@@ -86,6 +86,11 @@ class TC_GAME_API Pet final : public Guardian
         void SetPetExperience(uint32 xp) { SetUpdateFieldValue(m_values.ModifyValue(&Unit::m_unitData).ModifyValue(&UF::UnitData::PetExperience), xp); }
         void SetPetNextLevelExperience(uint32 xp) { SetUpdateFieldValue(m_values.ModifyValue(&Unit::m_unitData).ModifyValue(&UF::UnitData::PetNextLevelExperience), xp); }
         void SynchronizeLevelWithOwner();
+        // A pet that fell out of its owner's sight on the same map (stuck on the terrain, left at a fight) is set down next to the
+        // owner instead of being dismissed. False: it can't be (other map or phase, owner dead, flying, teleporting, on a boat, pet told to stay) and the
+        // caller dismisses it as before.
+        bool CatchUpWithOwner();
+        bool ParkForOwnerTravel();                          // owner on a boat, taxi or teleport: put away, back when the owner is on the ground
         bool HaveInDiet(ItemTemplate const* item) const;
 
         // Classic 1.60 hunter pet happiness (POWER_HAPPINESS, 0..1000000): vanilla rules

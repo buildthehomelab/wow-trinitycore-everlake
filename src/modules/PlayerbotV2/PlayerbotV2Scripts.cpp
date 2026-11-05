@@ -129,6 +129,12 @@ public:
     void OnSpellCast(Player* player, Spell* spell, bool /*skipCheck*/) override
     {
         using namespace Playerbot::Raid;
+        // A world marker a player puts on the ground (the Positions tab's "Place at cursor" button casts one): the marker's spot
+        // takes a waiting Positions order (BotCommandParser::TakePendingPlace); nothing happens without one.
+        if (player && spell && IsHuman(player) && spell->m_targets.HasDst())
+            if (SpellInfo const* mi = spell->GetSpellInfo(); mi && mi->HasEffect(SPELL_EFFECT_CHANGE_RAID_MARKER))
+                if (WorldLocation const* dst = spell->m_targets.GetDstPos())
+                    Module::instance().OnWorldMarkerPlaced(player, dst->GetPosition());
         if (!player || !spell || !ManaLedgerWatching(player->GetGUID().GetCounter()))
             return;
         SpellInfo const* si = spell->GetSpellInfo();

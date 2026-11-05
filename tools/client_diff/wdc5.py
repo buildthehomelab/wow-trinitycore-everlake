@@ -2,13 +2,16 @@
 
 Field layout and names come from our own server source (src/server/game/DataStores/DB2Metadata.h and DB2LoadInfo.h),
 so a table reads the same way the worldserver reads it. Encrypted sections (tact key set, data zeroed) are skipped and
-counted, so the caller can report them.
+counted, so the caller can report them. Sections the extractor decrypted carry the TRINITY marker and are read like plain ones.
 
     meta = Schemas('/path/to/repo')
     rows, info = read_db2('ItemSparse.db2', meta)   # rows: {id: {field: value}}
 """
 import re
 import struct
+
+# mapextractor writes this in place of the key name of a section it could decrypt (DUMMY_KNOWN_TACT_ID, DB2FileLoader.h)
+DECRYPTED_TACT_ID = 0x5452494E49545900
 
 # tables the server reads without a LoadInfo of their own
 FALLBACK_NAMES = {'Spell': ['ID', 'NameSubtext', 'Description', 'AuraDescription']}
@@ -113,7 +116,7 @@ def read_db2(path, sch, table=None):
 
     for sec in secs:
         tact, fo, nr, ssz, ore, idl, rel, omc, cc = sec
-        if tact:
+        if tact and tact != DECRYPTED_TACT_ID:
             # encrypted section: data is zero unless the key is known
             info['encrypted_sections'] += 1
             info['encrypted_records'] += nr

@@ -1466,7 +1466,6 @@ constexpr float kKindHelpRange = 35.0f;
 constexpr float kKindRezRange  = 28.0f;
 constexpr float kKindHealRange = 35.0f;   // heals reach 40: slack for the board's one-second cadence
 constexpr int32 kKindHealManaPct = 40;
-constexpr uint32 kKindHelpCooldownMs = 180000u;
 constexpr uint32 kKindRezCooldownMs  = 120000u;
 
 bool KindFree(BotSnapshotView const& s)
@@ -1602,6 +1601,7 @@ bool KindHealFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
 bool KindHelpGate(BotSnapshotView const& s, BotAI&, GroupSnapshotView const&, uint32)
 {
     if (!KindFree(s) || s.in_combat() || s.hp_pct() < 60) return false;
+    if (Services::Config().kindness_help_hp_pct() == 0) return false;   // HelpHpPct = 0: no help
     auto const list = V2::Strangers::Board::Get().Current();
     if (!list || list->empty()) return false;
     float bx, by, bz; s.position(bx, by, bz);
@@ -1624,7 +1624,7 @@ bool KindHelpFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
         if (u.guid.IsCreature() && u.victim == player && u.hp > 0 && !u.untargetable) { mob = &u; break; }
     if (!mob) return false;
     auto& board = V2::Strangers::Board::Get();
-    if (!board.cooldowns.Take(t->guid, V2::Strangers::Kind::Help, s.published_at_ms(), kKindHelpCooldownMs)) return false;
+    if (!board.cooldowns.Take(t->guid, V2::Strangers::Kind::Help, s.published_at_ms(), Services::Config().kindness_help_cd_ms())) return false;
     if (!emit.start_attack(mob->guid)) return false;
     board.helps.fetch_add(1, std::memory_order_relaxed);
     TC_LOG_INFO("playerbot.v2", "[kindness] {} helps a player (guid {}) at {}% against {}", s.name(), t->guid, t->hp_pct, mob->entry);

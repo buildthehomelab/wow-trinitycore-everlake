@@ -1,4 +1,5 @@
 ﻿#include "BotCommandParser.h"
+#include "Api/BotLanguage.h"
 #include "GroupControl.h"
 #include "BotIntent.h"
 #include "BotIntentEmitter.h"
@@ -864,7 +865,7 @@ void OrderMainTank(Player* sender, Player* bot, std::string const& name)
         {
             s_last_msg = now;
             if (sender->GetSession())
-                ChatHandler(sender->GetSession()).SendSysMessage("Main tank: needs a raid group (/raid to convert).");
+                Playerbot::BotLanguage::LocalizedHandler(sender->GetSession()).SendSysMessage("Main tank: needs a raid group (/raid to convert).");
         }
         return;
     }
@@ -1850,7 +1851,7 @@ bool BotCommandParser::ApplyCcOrder(Player* sender, std::string const& line, cha
     }
     TC_LOG_INFO("playerbot.v2", "[cc_order] {} ({}): {} {} for {}", sender->GetName(), via ? via : "?", order->deny ? "deny" : "allow",
                 what, who);
-    ChatHandler(sender->GetSession()).PSendSysMessage("%s", answer.c_str());
+    Playerbot::BotLanguage::LocalizedHandler(sender->GetSession()).PSendSysMessage("%s", answer.c_str());
     return true;
 }
 
@@ -1953,9 +1954,36 @@ bool PlaceWhoMatches(Player* m, Group* grp, std::string const& w)
 
 } // namespace
 
+// "Place at cursor": the order waits (per player, 30 s) for the next ground spot the player points at, a ping
+// (BotCommandParser::TakePendingPlace from Module::OnGroupPingPoint). World thread only.
+namespace {
+struct PendingPlace
+{
+    std::string shape, gap;
+    std::vector<std::string> who;
+    uint32 until_ms = 0;
+};
+std::unordered_map<uint64, PendingPlace> g_pending_place;
+constexpr uint32 kPendingPlaceMs = 30000;
+}
+
+bool BotCommandParser::TakePendingPlace(Player* sender, Position const& point)
+{
+    if (!sender) return false;
+    auto it = g_pending_place.find(sender->GetGUID().GetCounter());
+    if (it == g_pending_place.end()) return false;
+    PendingPlace const pp = it->second;
+    g_pending_place.erase(it);
+    if (GameTime::GetGameTimeMS() > pp.until_ms) return false;
+    PlaceResult const r = PlaceBots(sender, pp.shape, pp.gap, "cursor", pp.who, "ping", &point);
+    if (sender->GetSession())
+        ChatHandler(sender->GetSession()).PSendSysMessage("%s", r.line.c_str());
+    return true;
+}
+
 BotCommandParser::PlaceResult BotCommandParser::PlaceBots(Player* sender, std::string const& shape_word, std::string const& gap_word,
                                                           std::string const& anchor_word, std::vector<std::string> const& who_in,
-                                                          char const* via)
+                                                          char const* via, Position const* point)
 {
     PlaceResult res;
     auto lower = [](std::string s)
@@ -1986,25 +2014,51 @@ BotCommandParser::PlaceResult BotCommandParser::PlaceBots(Player* sender, std::s
         if (std::string lw = lower(w); !lw.empty())
             who.push_back(std::move(lw));
 
-    // The anchor: where the sender stands (facing his way), or his target (facing from it toward him).
+    // The anchor: in front of the sender (facing his way), his target (facing from it toward him), or a spot he points at (facing
+    // away from him; "cursor": the next ping).
     std::string const anchor_w = lower(anchor_word);
     float ax = sender->GetPositionX(), ay = sender->GetPositionY(), az = sender->GetPositionZ(), ao = sender->GetOrientation();
     float min_r = 3.0f;
-    char const* where = "where you stand";
-    if (!follow && (anchor_w == "target" || anchor_w == "my target"))
+    float clear_ahead = 4.0f;   // the nearest bot of a line, column, spear... stands this far in front of the anchor
+    char const* where = "in front of you";
+    bool const cursor = anchor_w == "cursor" || anchor_w == "point" || anchor_w == "ping";
+    if (!follow && cursor && !point)
+    {
+        PendingPlace& pp = g_pending_place[sender->GetGUID().GetCounter()];
+        pp.shape = shape_w; pp.gap = gap_w; pp.who = who;
+        pp.until_ms = GameTime::GetGameTimeMS() + kPendingPlaceMs;
+        res.line = "Now point at the ground where the bots should stand: ping it (G key, or the ping wheel: On my way) within 30 seconds.";
+        TC_LOG_INFO("playerbot.v2", "[place] {} ({}): {} waits for a ping", sender->GetName(), via ? via : "?", Placement::ShapeName(shape));
+        return res;
+    }
+    if (!follow && cursor && point)
+    {
+        if (point->GetPositionX() == 0.f && point->GetPositionY() == 0.f)
+        { res.line = "That ping had no spot on the ground."; return res; }
+        ax = point->GetPositionX(); ay = point->GetPositionY(); az = point->GetPositionZ();
+        if (sender->GetDistance2d(ax, ay) > 100.0f)
+        { res.line = "That spot is more than 100 yards away."; return res; }
+        ao = sender->GetDistance2d(ax, ay) > 1.0f ? sender->GetAbsoluteAngle(ax, ay) : sender->GetOrientation();   // facing away from you
+        clear_ahead = -1.0f;   // the shape is centred on the spot you pointed at
+        where = "where you pointed";
+    }
+    else if (!follow && (anchor_w == "target" || anchor_w == "my target"))
     {
         Unit* sel = sender->GetSelectedUnit();
         if (!sel || sel == sender || sel->GetMapId() != sender->GetMapId() || !sel->IsInWorld())
         { res.line = "Target the spot first (a mob, a player or an NPC), or use Here."; return res; }
+        if (Player* sp = sel->ToPlayer(); sp && sp->GetGroup() == grp)
+        { res.line = "Your target is in your group: target a mob or an NPC, or use Place at cursor."; return res; }
         if (sender->GetDistance2d(sel) > 100.0f)
         { res.line = "Your target is more than 100 yards away."; return res; }
         ax = sel->GetPositionX(); ay = sel->GetPositionY(); az = sel->GetPositionZ();
         ao = sel->GetAbsoluteAngle(sender);   // the shape's front faces the sender
         min_r = sel->GetCombatReach() + 2.0f;
-        where = "round your target";
+        clear_ahead = min_r;   // never inside the target
+        where = "at your target";
     }
     else if (!follow && !anchor_w.empty() && anchor_w != "here" && anchor_w != "me")
-    { res.line = "Unknown spot '" + anchor_w + "': here or target."; return res; }
+    { res.line = "Unknown spot '" + anchor_w + "': here, target or cursor."; return res; }
 
     // The chosen bots: the sender's bots (or the world bots he leads) in his group, alive, on his map.
     std::vector<Player*> bots;
@@ -2047,7 +2101,10 @@ BotCommandParser::PlaceResult BotCommandParser::PlaceBots(Player* sender, std::s
         if (ra != rb) return ra < rb;
         return a->GetGUID().GetCounter() < b->GetGUID().GetCounter();
     });
-    std::vector<Placement::Slot> const slots = Placement::Slots(shape, uint32(bots.size()), gap, min_r);
+    std::vector<Placement::Slot> slots = Placement::Slots(shape, uint32(bots.size()), gap, min_r);
+    // Here / target: a line, column, spear... starts in front of you (or of the target), never on your own spot.
+    if (clear_ahead >= 0.0f && !Placement::RingShape(shape))
+        Placement::PushAhead(slots, clear_ahead);
     uint32 const now = GameTime::GetGameTimeMS();
     uint32 pulled_in = 0;
     for (size_t i = 0; i < bots.size() && i < slots.size(); ++i)
@@ -2067,7 +2124,7 @@ BotCommandParser::PlaceResult BotCommandParser::PlaceBots(Player* sender, std::s
         }
         Push(m, MoveToIntent{x, y, z, /*run=*/true});
         ai->enter_manual(BotAI::OwnerCommand::Stay, ObjectGuid::Empty, now, BotAI::kHoldPositionTtlMs);
-        ai->set_stay_return(x, y, z, m->GetMapId());   // after a fight it walks back here (enter_manual cleared the old one)
+        ai->set_stay_return(x, y, z, m->GetMapId(), /*pinned*/ true);   // kept: after every fight it walks back here
         ai->set_owner_follow_order(false);
         ai->end_fallback();
         ai->end_pull_back();
@@ -2081,7 +2138,7 @@ BotCommandParser::PlaceResult BotCommandParser::PlaceBots(Player* sender, std::s
     for (std::string const& w : who)
         who_list += (who_list.empty() ? "" : ",") + w;
     char const* gap_name = gap <= 2.5f ? "tight" : gap >= 8.0f ? "wide" : "normal";
-    res.line = fmt::format("{} bot(s) in a {} ({} gap) {}. They stay there until you press Follow.", res.placed,
+    res.line = fmt::format("{} bot(s) in a {} ({} gap) {}. They stay there, and go back after a fight, until you press Follow.", res.placed,
                            Placement::ShapeName(shape), gap_name, where);
     if (pulled_in)
         res.line += fmt::format(" {} spot(s) were behind a wall or a drop, so those bots stand closer in.", pulled_in);
@@ -2110,7 +2167,7 @@ bool BotCommandParser::ApplyPlaceOrder(Player* sender, std::string const& line, 
     {
         float g = 0.f;
         if (gap.empty() && word != "close" && Placement::ParseGap(word, g)) { gap = word; continue; }
-        if (anchor.empty() && (word == "here" || word == "target")) { anchor = word; continue; }
+        if (anchor.empty() && (word == "here" || word == "target" || word == "cursor")) { anchor = word; continue; }
         who.push_back(word);
     }
     PlaceResult const r = PlaceBots(sender, shape, gap, anchor, who, via);
@@ -3106,7 +3163,7 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         if (std::string const why = Services::Population().BringToOwner(sender, bot, "come"); !why.empty())
         {
             if (why != "in combat with you")   // a bot in your own fight answers when it is over; no line per fighter
-                ChatHandler(sender->GetSession()).PSendSysMessage("%s cannot come: %s.", bot->GetName().c_str(), why.c_str());
+                Playerbot::BotLanguage::LocalizedHandler(sender->GetSession()).PSendSysMessage("%s cannot come: %s.", bot->GetName().c_str(), why.c_str());
             return true;
         }
         // After /come the owner usually wants the bot to stay nearby —

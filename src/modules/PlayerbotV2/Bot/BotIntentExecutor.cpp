@@ -634,6 +634,8 @@ struct IntentVisitor
                 if (!target) return Result::InvalidTarget;
                 uint64 gid = 0;
                 const auto r = V2::BotRecruitToGuild(bot, target, gid);
+                if (r == V2::RecruitResult::Invited)
+                    return Result::Ok;                  // a real player: invite sent, he is not a member yet
                 if (r != V2::RecruitResult::Ok)
                     return Result::ServerRefused;
                 // Stamp join-date for hygiene.

@@ -19,6 +19,8 @@
 // Scripts: instance_molten_core, go_rune_MC
 
 #include "ScriptMgr.h"
+#include "Config.h"
+#include "World.h"
 #include "Creature.h"
 #include "CreatureAI.h"
 #include "CreatureData.h"
@@ -397,26 +399,33 @@ public:
         }
 
         // Instance.MoltenCoreSkipRunes: the runes count as doused (their fire and stone are removed through the normal
-        // restart path), Majordomo stands in his hall and Ragnaros is up in his lair, attackable. Bosses already dead in the
-        // instance (raid lock) are left alone, and so is an encounter that is running.
-        void RaiseBosses(Player* player)
+        // restart path) and Majordomo stands in his hall. Instance.MoltenCoreRagnarosReady: Ragnaros is up in his lair,
+        // attackable (no Majordomo talk needed); when that line is missing it follows MoltenCoreSkipRunes, as before.
+        // Bosses already dead in the instance (raid lock) are left alone, and so is an encounter that is running.
+        static bool SkipRunes() { return sWorld->getBoolConfig(CONFIG_MC_SKIP_RUNES); }
+        static bool RagnarosReady() { return sConfigMgr->GetBoolDefault("Instance.MoltenCoreRagnarosReady", SkipRunes(), true); }
+
+        void RaiseBosses(Player* player, bool skipRunes, bool ragReady)
         {
             bool const domoDone = GetBossState(CLASSIC_MC_TYPE_MAJORDOMO) == DONE;
             bool const ragDone = GetBossState(CLASSIC_MC_TYPE_RAGNAROS) == DONE;
             if (ragDone)
                 return;
 
-            ObjectGuid* runeGuids[7] = { &m_uiRuneKoroGUID, &m_uiRuneZethGUID, &m_uiRuneMazjGUID, &m_uiRuneTheriGUID,
-                                         &m_uiRuneBlazGUID, &m_uiRuneKressGUID, &m_uiRuneMohnGUID };
-            for (uint8 i = 0; i < 7; ++i)
+            if (skipRunes)
             {
-                SetData(CLASSIC_MC_DATA_RUNE_ACTIVE_0 + i, DONE);
-                if (!runeGuids[i]->IsEmpty())
-                    m_GOUseGuidList[i] = *runeGuids[i];
+                ObjectGuid* runeGuids[7] = { &m_uiRuneKoroGUID, &m_uiRuneZethGUID, &m_uiRuneMazjGUID, &m_uiRuneTheriGUID,
+                                             &m_uiRuneBlazGUID, &m_uiRuneKressGUID, &m_uiRuneMohnGUID };
+                for (uint8 i = 0; i < 7; ++i)
+                {
+                    SetData(CLASSIC_MC_DATA_RUNE_ACTIVE_0 + i, DONE);
+                    if (!runeGuids[i]->IsEmpty())
+                        m_GOUseGuidList[i] = *runeGuids[i];
+                }
             }
 
             // Majordomo Executus, summoned where the last rune would have called him (an alive one is left as is)
-            if (!domoDone && m_dataDomoSpawned != DONE && !instance->GetCreature(m_uiMajorDomoGUID))
+            if (skipRunes && !domoDone && m_dataDomoSpawned != DONE && !instance->GetCreature(m_uiMajorDomoGUID))
             {
                 m_dataDomoSpawned = DONE;
                 player->SummonCreature(CLASSIC_MC_NPC_MAJORDOMO, 758.089f, -1176.71f, -118.640f, 3.12414f, TEMPSUMMON_MANUAL_DESPAWN,
@@ -424,7 +433,7 @@ public:
             }
 
             // Ragnaros in his lair, ready: the summoning event normally lifts these flags
-            if (!instance->GetCreature(m_uiRagnarosGUID))
+            if (ragReady && !instance->GetCreature(m_uiRagnarosGUID))
                 if (Creature* rag = player->SummonCreature(CLASSIC_MC_NPC_RAGNAROS, 838.308f, -831.466f, -232.185f, 2.19911f,
                         TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, Milliseconds(2 * HOUR * IN_MILLISECONDS)))
                 {
@@ -447,7 +456,7 @@ public:
         // update of an instance session far from the raid. A summoned creature in a grid nobody is near is unloaded with it and does not
         // come back, so by the time the raid walked to his hall Majordomo was gone and nothing summoned him again (MC 2026-10-13: "why
         // isn't Majordomo spawning"). Now each is put back while a player is within reach of his post, in a loaded grid, until he is dead.
-        void EnsureSkipRunesBosses(uint32 diff)
+        void EnsureSkipRunesBosses(uint32 diff, bool skipRunes, bool ragReady)
         {
             if (m_ensureTimer > diff)
             {
@@ -469,7 +478,7 @@ public:
                 return nullptr;
             };
 
-            if (GetBossState(CLASSIC_MC_TYPE_MAJORDOMO) != DONE && !instance->GetCreature(m_uiMajorDomoGUID))
+            if (skipRunes && GetBossState(CLASSIC_MC_TYPE_MAJORDOMO) != DONE && !instance->GetCreature(m_uiMajorDomoGUID))
                 if (Player* player = nearPlayer({ 758.089f, -1176.71f }))
                 {
                     TC_LOG_INFO("scripts", "[MoltenCore] Majordomo Executus is not in instance {}, summoning him in his hall", instance->GetInstanceId());
@@ -477,7 +486,7 @@ public:
                         Milliseconds(2 * HOUR * IN_MILLISECONDS));
                 }
 
-            if (!instance->GetCreature(m_uiRagnarosGUID))
+            if (ragReady && !instance->GetCreature(m_uiRagnarosGUID))
                 if (Player* player = nearPlayer({ 838.308f, -831.466f }))
                     if (Creature* rag = player->SummonCreature(CLASSIC_MC_NPC_RAGNAROS, 838.308f, -831.466f, -232.185f, 2.19911f,
                             TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, Milliseconds(2 * HOUR * IN_MILLISECONDS)))
@@ -489,6 +498,8 @@ public:
         }
 
         uint32 m_ensureTimer = 0;
+        bool m_skipRunes = false;
+        bool m_ragReady = false;
 
         void Update(uint32 uiDiff) override
         {
@@ -510,11 +521,13 @@ public:
             if (!m_bossesRaised)
             {
                 m_bossesRaised = true;
-                if (sWorld->getBoolConfig(CONFIG_MC_SKIP_RUNES))
-                    RaiseBosses(firstPlayer);
+                m_skipRunes = SkipRunes();          // read once per instance, not every update
+                m_ragReady = RagnarosReady();
+                if (m_skipRunes || m_ragReady)
+                    RaiseBosses(firstPlayer, m_skipRunes, m_ragReady);
             }
-            else if (sWorld->getBoolConfig(CONFIG_MC_SKIP_RUNES))
-                EnsureSkipRunesBosses(uiDiff);
+            else if (m_skipRunes || m_ragReady)
+                EnsureSkipRunesBosses(uiDiff, m_skipRunes, m_ragReady);
 
             for (ObjectGuid& guid : m_GOUseGuidList)
             {

@@ -351,7 +351,8 @@ Playerbot.World.Questing = 0
 # on a player who lacks it (one per player per BuffCooldownSec, whoever gives it), a heal from a passing priest, druid, paladin or
 # shaman for a player at or under HealHpPct health (one per player per HealCooldownSec, whoever gives it; the healer needs 40% mana,
 # never steps into a duel or a fight with a player, and heals a PvP-flagged player only when it is flagged itself; HealHpPct = 0 turns
-# the heals off), a hand against the mob of a player at or under HelpHpPct health (once per player per 3 minutes), and a resurrection
+# the heals off), a hand against the mob of a player at or under HelpHpPct health (once per player per HelpCooldownSec, whoever gives
+# it; 0 = every time a bot can; HelpHpPct = 0 turns the help off), and a resurrection
 # for a player lying dead, not released, next to a priest, paladin or shaman, in the open world and in the capitals alike. Lines in
 # Playerbot.log start with [kindness]; the [world] line counts them (kindness players= real players listed, buffs/heals/helps/rezzes
 # given, cooldown_skips, cast_fails). Enable = 0 switches all of it off.
@@ -359,7 +360,8 @@ Playerbot.World.Kindness.Enable = 1
 Playerbot.World.Kindness.BuffCooldownSec = 900
 Playerbot.World.Kindness.HealHpPct = 60
 Playerbot.World.Kindness.HealCooldownSec = 45
-Playerbot.World.Kindness.HelpHpPct = 40
+Playerbot.World.Kindness.HelpHpPct = 60
+Playerbot.World.Kindness.HelpCooldownSec = 180
 
 # Leave real players their mobs: a world bot (no owner, not led by a player) does not open on a mob within CampRadius yards of a real
 # player it is not grouped with, nor, while that player is within QuestRadius yards, on a mob his open kill or collect quests need. It
@@ -948,6 +950,14 @@ Playerbot.Behavior.Fidget = 1
 Playerbot.AddonHint.Enable = 0
 Playerbot.AddonHint.DelaySec = 30
 Playerbot.AddonHint.Url = "https://github.com/Karrz1/Karrz-playerbots-wow-forever/raw/main/addon/ForeverBots-addon.zip"
+
+#
+#  Playerbot.Language.Enable  (default 1, on) The bots answer each player in the language of that player's game client (Russian for
+#                             a ruRU client, English otherwise): whispers, party / raid chat, say, and the .bot command replies. A
+#                             line with no translation yet comes in English. A player can choose with .bot language auto|en|ru
+#                             (kept per account). 0: every reply in English, as before.
+#
+Playerbot.Language.Enable = 1
 #   SoloFlee          a solo open-world bot (no group, not in an instance or battleground) losing a fight (HP under 30%,
 #                     35% for casters / hunters / rogues, 25% for melee; the mob not nearly dead) uses its escape tools
 #                     (Disengage, Frost Nova + Blink, Fade / Psychic Scream, Death Coil, Vanish / Sprint, Intimidating
@@ -1306,6 +1316,10 @@ PlayerbotV2.Guilds.EventsEnabled = 1
 
 # Enable the bot guild recruitment channel behavior.
 PlayerbotV2.Guilds.RecruitmentChannelEnabled = 1
+
+# 1 = a bot guild officer may send a normal guild invite to a real player near it (the player accepts or
+# declines). 0 (default) = bot guilds only take in bots; a real player is never put into a bot guild.
+PlayerbotV2.Guilds.InvitePlayers = 0
 
 # Target number of bot-founded guilds to maintain per faction.
 PlayerbotV2.Guilds.TargetCountPerFaction = 6

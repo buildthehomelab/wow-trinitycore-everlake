@@ -1,4 +1,5 @@
 #include "BotPool.h"
+#include "Api/BotLanguage.h"
 #include "../Bot/Gear/WorldGearStart.h"
 #include "Creature.h"
 #include "../Util/SlowCall.h"
@@ -142,7 +143,7 @@ void WarnOversizedInstanceGroups(uint32 now_ms)
             if (it != warned.end() && it->second == key)
                 continue;
             warned[owner] = key;
-            ChatHandler(p->GetSession()).PSendSysMessage("Your group has %u members; %s holds %u.",
+            Playerbot::BotLanguage::LocalizedHandler(p->GetSession()).PSendSysMessage("Your group has %u members; %s holds %u.",
                                                         g->GetMembersCount(), name.c_str(), cap);
             TC_LOG_INFO("playerbot.v2", "[InstanceCap] {} group {} > {} holds {}", p->GetName(), g->GetMembersCount(), name, cap);
         }
@@ -178,7 +179,7 @@ void WarnOversizedInstanceGroups(uint32 now_ms)
         over_cap_since.erase(og.GetCounter());
         if (dismissed)
         {
-            ChatHandler(p->GetSession()).PSendSysMessage(
+            Playerbot::BotLanguage::LocalizedHandler(p->GetSession()).PSendSysMessage(
                 "%u of your companions were dismissed: outside an instance you can have %u bots out. Invite world bots for more, or call them again inside an instance.",
                 dismissed, cap);
             TC_LOG_INFO("playerbot.v2", "[InstanceCap] {} left the instance with {} companions out: {} dismissed (open world holds {})",
@@ -1837,7 +1838,7 @@ void BotPopulationManager::FinishCompanionSetup(Player* bot, Player* owner, uint
     if (instanceFull)
     {
         TC_LOG_INFO("playerbot.v2", "[Companion] {} not brought to {}: {}", bot->GetName(), owner->GetName(), capFull);
-        ChatHandler(owner->GetSession()).PSendSysMessage("%s stays behind: %s.", bot->GetName().c_str(), capFull.c_str());
+        Playerbot::BotLanguage::LocalizedHandler(owner->GetSession()).PSendSysMessage("%s stays behind: %s.", bot->GetName().c_str(), capFull.c_str());
         return;
     }
 
@@ -1864,7 +1865,7 @@ void BotPopulationManager::FinishCompanionSetup(Player* bot, Player* owner, uint
                 // The door refuses it (the instance holds its most players, another raid's save...): it stays outside, alive, and the
                 // rejoin rule asks again; the owner is told why instead of finding a bot missing.
                 TC_LOG_INFO("playerbot.v2", "[summon] {} stays outside map {}: {}", bot->GetName(), owner->GetMapId(), Fleet::TransferAbortName(door));
-                ChatHandler(owner->GetSession()).PSendSysMessage("%s cannot enter yet: %s.", bot->GetName().c_str(), Fleet::TransferAbortName(door));
+                Playerbot::BotLanguage::LocalizedHandler(owner->GetSession()).PSendSysMessage("%s cannot enter yet: %s.", bot->GetName().c_str(), Fleet::TransferAbortName(door));
             }
             else
                 ::Playerbot::BotMovement::SafeTeleport(bot, owner->GetMapId(), x, y, z, owner->GetOrientation(), 0);
@@ -1882,9 +1883,9 @@ void BotPopulationManager::FinishCompanionSetup(Player* bot, Player* owner, uint
                 bot->GetName(), owner->GetName(), uint32(old_level), uint32(bot->GetLevel()), spells, weapon_skills, riding,
                 uint32(talents), grouped, grouped ? "" : ": ", joinFailure);
     if (grouped)
-        ChatHandler(owner->GetSession()).PSendSysMessage("%s joined you: level %u.", bot->GetName().c_str(), uint32(bot->GetLevel()));
+        Playerbot::BotLanguage::LocalizedHandler(owner->GetSession()).PSendSysMessage("%s joined you: level %u.", bot->GetName().c_str(), uint32(bot->GetLevel()));
     else
-        ChatHandler(owner->GetSession()).PSendSysMessage("%s is level %u but not in your group: %s.", bot->GetName().c_str(),
+        Playerbot::BotLanguage::LocalizedHandler(owner->GetSession()).PSendSysMessage("%s is level %u but not in your group: %s.", bot->GetName().c_str(),
                                                           uint32(bot->GetLevel()), joinFailure.c_str());
 }
 

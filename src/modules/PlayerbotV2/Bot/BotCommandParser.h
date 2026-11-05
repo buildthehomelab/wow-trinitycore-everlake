@@ -12,6 +12,7 @@
 
 class Group;
 class Player;
+struct Position;
 
 namespace Playerbot {
 
@@ -52,7 +53,10 @@ public:
     // Returns how many were placed and the line to answer. World thread.
     struct PlaceResult { uint32 placed = 0; uint32 asked = 0; std::string line; };
     static PlaceResult PlaceBots(Player* sender, std::string const& shape, std::string const& gap, std::string const& anchor,
-                                 std::vector<std::string> const& who, char const* via);
+                                 std::vector<std::string> const& who, char const* via, Position const* point = nullptr);
+    // anchor "cursor" without a point arms the order for 30 s: the player's next ping (Module::OnGroupPingPoint) is the spot. Returns
+    // true when this ping was taken for it (the ping does nothing else then). World thread.
+    static bool TakePendingPlace(Player* sender, Position const& point);
     // "place <shape> [tight|normal|wide] [here|target] [who...]" / "place follow [who...]": PlaceBots once, answered as a system line.
     // Returns false for any other line.
     static bool ApplyPlaceOrder(Player* sender, std::string const& line, char const* via);

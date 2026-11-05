@@ -1,7 +1,8 @@
 # Keeps the server's game tables (server\data\dbc, the DB2 files) on the same build as the player's game client.
 # Battle.net patches the client (70532 -> 70630 changed spells and items); the server then has to read the new tables too, or it runs
 # the old spells while the game shows the new ones. Maps and pathfinding are not touched: only the DB2 files are extracted again,
-# which takes about a minute. The build they came from is kept in server\data\dbc\.client-build.
+# which takes about a minute. The build they came from is kept in server\data\dbc\.client-build (line 2: $TableKeysRevision, see
+# ClientBuild.ps1; tables made before a release that knows new keys are extracted once more on the same build).
 # Run with the server stopped (ensure-data.ps1 calls it before every start and after every update). Returns $true when the tables
 # match the client (or nothing could be checked), $false when a refresh was needed and failed.
 param([string]$Client)
@@ -33,21 +34,31 @@ if (-not $use) { return $true }               # not an accepted build: Test-Clie
 # read: keep the tables of the newest build this release knows until a release knows this one
 if (@(Get-KnownBuilds $root) -notcontains $use.Build) { return $true }
 $stamp = Join-Path $dbc '.client-build'
-$have = if (Test-Path $stamp) { (Get-Content $stamp -TotalCount 1).Trim() } else { '' }
-if ($have -eq "$($use.Build)") { return $true }
+$stampLines = @(if (Test-Path $stamp) { Get-Content $stamp -TotalCount 2 | ForEach-Object { $_.Trim() } })
+$have = if ($stampLines.Count) { $stampLines[0] } else { '' }
+# tables made before this release knew the keys of their locked records (no second line, or an older one) are extracted once more
+$keysOld = $stampLines.Count -lt 2 -or $stampLines[1] -ne $TableKeysRevision
+# the game's text language. English tables under a Russian (or other) game, made by 0.1.29 and older from the wrong .build.info row,
+# give English NPC and quest names: they are extracted again in the game's language (only when Battle.net has that language for it)
+$lang = Get-ClientLocale $use.Dir $use.Product
+$sets0 = @(Get-TableSets)
+$toNative = ($sets0.Count -eq 1 -and $sets0[0].Name -eq 'enUS' -and $lang.Locale -notin 'enUS', 'enGB' -and $lang.Installed -contains $lang.Locale)
+if ($have -eq "$($use.Build)" -and -not $toNative -and -not $keysOld) { return $true }
 if (Get-Process worldserver, bnetserver -ErrorAction SilentlyContinue) {
-    Write-Warning "The game client is build $($use.Build) but the server's game tables are $(if ($have) { "build $have" } else { 'from an older build' }). Shut the server down and start it again to update them."
+    if ($toNative -and $have -eq "$($use.Build)") { Write-Warning "Your game is in $($lang.Locale) but the server's game tables are English, so NPC and quest names come in English. Shut the server down and start it again to fix it." }
+    elseif ($have -eq "$($use.Build)") { Write-Warning "The server's game tables are missing records this release can read now (new Forever content). Shut the server down and start it again to update them." }
+    else { Write-Warning "The game client is build $($use.Build) but the server's game tables are $(if ($have) { "build $have" } else { 'from an older build' }). Shut the server down and start it again to update them." }
     return $true
 }
 $tool = Join-Path $root 'server\mapextractor.exe'
 if (-not (Test-Path $tool)) { Write-Warning 'server\mapextractor.exe is missing; the game tables were not updated.'; return $true }
 $base = Split-Path $use.Dir -Parent
-$locale = 'enUS'
-$bi = Get-Content (Join-Path $base '.build.info') -Raw -ErrorAction SilentlyContinue
-if ($bi -match '\b(enUS|enGB|deDE|esES|esMX|frFR|itIT|koKR|ptBR|ruRU|zhCN|zhTW)\b') { $locale = $Matches[1]; if ($locale -eq 'enGB') { $locale = 'enUS' } }
+$locale = $lang.Locale
 $infoLocale = $locale
 $have1 = @(Get-TableSets)
-if ($have1.Count -eq 1) { $locale = $have1[0].Name }   # the tables stay in the language they were made in
+if ($have1.Count -eq 1 -and -not $toNative) { $locale = $have1[0].Name }   # the tables stay in the language they were made in
+Write-Host "Client language: $infoLocale (from $($lang.Source); installed: $(if ($lang.Installed.Count) { $lang.Installed -join ', ' } else { 'not readable' }))"
+if ($toNative) { Write-Host "The server's game tables are English but your game is in $infoLocale; extracting them in $infoLocale so NPC and quest names come in your language." -ForegroundColor Yellow }
 Write-Host "Updating the server's game tables to your client's build $($use.Build) (about a minute)..." -ForegroundColor Yellow
 $work = Join-Path $root 'server\db2-refresh'
 Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
@@ -81,7 +92,8 @@ if ($LASTEXITCODE -ge 8) {
     return $false
 }
 foreach ($s in @(Get-TableSets | Where-Object { $_.Name -ne $locale })) { Remove-Item $s.FullName -Recurse -Force -ErrorAction SilentlyContinue }   # never two builds side by side
-Set-Content $stamp "$($use.Build)" -Encoding ascii
+Set-Content $stamp @("$($use.Build)", $TableKeysRevision) -Encoding ascii
+Set-Content (Join-Path $dbc '.client-locale') @("Client language: $infoLocale (from $($lang.Source))", "Extracted: $locale") -Encoding ascii
 Remove-Item $work, $old -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "The server's game tables are now build $($use.Build)." -ForegroundColor Green
 $true

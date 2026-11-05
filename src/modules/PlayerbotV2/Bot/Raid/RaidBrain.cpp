@@ -7,6 +7,7 @@
 // PvE coordinator already runs an interrupt rotation).
 
 #include "RaidBrain.h"
+#include "Api/BotLanguage.h"
 #include "DispelWorth.h"
 #include "RaidBrainInternal.h"
 #include "RaidEncounters.h"
@@ -3671,7 +3672,7 @@ void WarnOwners(Map* map, uint64_t groupLow, uint32_t bossEntry, std::string con
     for (MapReference const& ref : map->GetPlayers())
         if (Player* hp = ref.GetSource(); hp && hp->GetGroup() && hp->GetGroup()->GetGUID().GetCounter() == groupLow &&
             hp->GetSession() && !Services::Lifecycle().is_bot(hp->GetGUID().GetCounter()))
-            ChatHandler(hp->GetSession()).SendSysMessage(warning);
+            Playerbot::BotLanguage::LocalizedHandler(hp->GetSession()).SendSysMessage(warning);
 }
 
 // Before the pull: a human member targets a boss that is not in combat yet ("pull" and "attack" act on the owner's target, so
@@ -3883,7 +3884,7 @@ void EndQuietPulls(uint32_t now_ms)
                 for (MapReference const& ref : map->GetPlayers())
                     if (Player* hp = ref.GetSource(); hp && hp->GetGroup() && hp->GetGroup()->GetGUID().GetCounter() == pl.groupLow &&
                         hp->GetSession() && !Services::Lifecycle().is_bot(hp->GetGUID().GetCounter()))
-                        ChatHandler(hp->GetSession()).SendSysMessage(fmt::format("Wipe: {} lasted {} s, {} died, first down {}.",
+                        Playerbot::BotLanguage::LocalizedHandler(hp->GetSession()).SendSysMessage(fmt::format("Wipe: {} lasted {} s, {} died, first down {}.",
                             PullLabel(pl), (pl.lastSeenMs - pl.startMs) / 1000, pl.deaths,
                             pl.firstDead.empty() ? std::string("nobody seen") : pl.firstDead));
         // [raid_wipe] encounter end (playtest, MC Garr 2026-10-08: the whole raid dead and released, "A member of your group is in combat"

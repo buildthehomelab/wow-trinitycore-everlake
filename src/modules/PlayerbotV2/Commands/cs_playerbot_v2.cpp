@@ -74,6 +74,7 @@
 #include "Bot/BotRegistry.h"
 #include "Bot/BotPersonality.h"
 #include "Bot/BotTextMgr.h"
+#include "Api/BotLanguage.h"
 #include "Bot/BotRng.h"
 #include "Session/BotSessionMgr.h"
 #include "Threading/TickScheduler.h"
@@ -675,8 +676,9 @@ public:
             { "delete",        HandleBotDelete,     rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             { "list",          HandleBotList,       rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             { "hire",          HandleBotHire,       rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
+            { "language",      HandleBotLanguage,   rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             { "world",         HandleBotWorld,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
-            // GM only: how many world bots the realm has (Off / Low / Medium / High), the same as the ForeverBots panel's World tab.
+            // GM only: how many world bots the realm has (Off / Low / Medium / High), set in game until the next restart (the launcher's Bots setting decides at every start).
             { "population",    HandleBotPopulation, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "bgstress",      HandleBotBgStress,   rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "bgsoak",        HandleBotBgSoak,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
@@ -698,6 +700,7 @@ public:
 
     static bool HandleWhisperCmd(ChatHandler* handler, std::string name, Tail text)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         WorldSession* sess = handler->GetSession();
         if (!sess || !sess->GetPlayer())
             return false;
@@ -775,8 +778,38 @@ public:
     }
 
     // .bot about: the name of the bots, so it shows in the command list and `.bot` help
+    // .bot language [auto|en|ru]: the language your bots answer you in (whispers, group chat, these command replies). auto, the start
+    // setting, follows the game client's language; the choice is kept per account (Api/BotLanguage.h).
+    static bool HandleBotLanguage(ChatHandler* handler, Optional<std::string> word)
+    {
+        namespace Lang = Playerbot::BotLanguage;
+        WorldSession* sess = handler->GetSession();
+        Player* me = sess ? sess->GetPlayer() : nullptr;
+        if (!me)
+            return false;
+        if (word)
+        {
+            Lang::Pref pref = Lang::Pref::Auto;
+            if (!Lang::ParsePref(*word, pref))
+            {
+                Lang::LocalizedHandler localized(handler);
+                localized.Get()->SendSysMessage("Usage: .bot language auto|en|ru");
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+            Lang::SetPref(sess->GetAccountId(), pref);
+        }
+        // Taken after the change, so the answer is already in the language just chosen.
+        Lang::LocalizedHandler localized(handler); handler = localized.Get();
+        bool const russian = Lang::LangOf(me) == Playerbot::Locale::Lang::Ru;
+        handler->PSendSysMessage("Bot replies: %s (%s). .bot language auto|en|ru changes it.", russian ? "Russian" : "English",
+            Lang::GetPref(sess->GetAccountId()) == Lang::Pref::Auto ? "your client's language" : "your choice");
+        return true;
+    }
+
     static bool HandleBotAbout(ChatHandler* handler)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         handler->SendSysMessage("WoW Forever Bots by Karrz, based on agatho's PlayerbotV2 (GPL-2.0). .bot add <class> [tank|healer|dps], .bot call, .bot dismiss; all orders: BOT_COMMANDS.md");
         return true;
     }
@@ -874,6 +907,7 @@ public:
 
     static bool HandleBotLfg(ChatHandler* handler, Optional<std::string> ownRoleArg)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         WorldSession* sess = handler->GetSession();
         Player* me = sess ? sess->GetPlayer() : nullptr;
         if (!me || !Playerbot::Services::Initialized())
@@ -931,6 +965,7 @@ public:
     static bool HandleBotAdd(ChatHandler* handler, std::string const& class_arg, Optional<std::string> arg2,
                              Optional<std::string> arg3, Optional<std::string> arg4)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); return Refuse(handler); }
         WorldSession* sess = handler->GetSession();
@@ -1153,7 +1188,11 @@ public:
 
     // .bot call <name|all>: log your companions in (or fetch the ones already online), level, gear and group them.
     // "all" is your saved roster (`.bot save`) and the companions in your group, not every companion you ever made.
-    static bool HandleBotCall(ChatHandler* handler, std::string const& who) { return CallCompanions(handler, who, false); }
+    static bool HandleBotCall(ChatHandler* handler, std::string const& who)
+    {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
+        return CallCompanions(handler, who, false);
+    }
 
     // groupOnly (`.bot summon all`, Karrz 2026-10-08: in a 2-person party it brought the whole old raid back online): "all" is only the
     // companions in the caller's group right now, wherever they are. It never logs anyone in and never adds anyone.
@@ -1276,6 +1315,7 @@ public:
     // summoned with the GM `.summon`, which stays GM-only).
     static bool HandleBotSummon(ChatHandler* handler, Tail args)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         WorldSession* sess = handler ? handler->GetSession() : nullptr;
         if (!sess || !sess->GetPlayer())
             return false;
@@ -1351,6 +1391,7 @@ public:
     // "gear t3". Tier sets are worn at the level cap only; the server may disallow modes (Playerbot.OwnedGear.AllowedModes).
     static bool HandleBotGear(ChatHandler* handler, Optional<std::string> mode_arg)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); return false; }
         WorldSession* sess = handler->GetSession();
@@ -1379,6 +1420,7 @@ public:
     // Offline companions are skipped: `.bot call` them first.
     static bool HandleBotRegear(ChatHandler* handler, Optional<std::string> who_arg)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         std::string const who = who_arg ? *who_arg : std::string("all");   // bare `.bot regear` = every companion
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); return false; }
@@ -1430,6 +1472,7 @@ public:
     // it themselves without the bot logic attaching to it (Module::OnPlayerLogin drives every marked character).
     static bool HandleBotDismiss(ChatHandler* handler, Tail args)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); handler->SetSentErrorMessage(true); return false; }
         WorldSession* sess = handler->GetSession();
@@ -1492,6 +1535,7 @@ public:
     // .bot save <name|all>: put a companion, or every companion with you (online, in your group), on your roster.
     static bool HandleBotSave(ChatHandler* handler, std::string const& who)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); return false; }
         WorldSession* sess = handler->GetSession();
@@ -1571,6 +1615,7 @@ public:
     // .bot unsave <name|all>: take a companion, or all of them, off your roster. They stay yours; `.bot call <name>` still works.
     static bool HandleBotUnsave(ChatHandler* handler, std::string const& who)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); return false; }
         WorldSession* sess = handler->GetSession();
@@ -1590,6 +1635,7 @@ public:
     // .bot delete <name>: get rid of a companion for good (its character is deleted once it has logged out).
     static bool HandleBotDelete(ChatHandler* handler, std::string const& who)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); return false; }
         WorldSession* sess = handler->GetSession();
@@ -1632,7 +1678,7 @@ public:
         return true;
     }
 
-    // `.bot population [off|low|medium|high|file]`: the world bots of the whole realm, right away and kept over a restart. No word: what
+    // `.bot population [off|low|medium|high|file]`: the world bots of the whole realm, right away, until the next restart. No word: what
     // it is now. `file` hands the numbers back to the config files (Bots.Size and the other Bots.* lines, Playerbot.World.Enable).
     static bool HandleBotPopulation(ChatHandler* handler, Optional<std::string> word)
     {
@@ -1652,10 +1698,10 @@ public:
                 handler->SetSentErrorMessage(true);
                 return false;
             }
-            static char const* const kSaid[] = { "World bots: Off. The world bots online log out now.",
-                                                 "World bots: Low. Applies now and stays after a restart.",
-                                                 "World bots: Medium. Applies now and stays after a restart.",
-                                                 "World bots: High. Applies now and stays after a restart." };
+            static char const* const kSaid[] = { "World bots: Off until the next restart. The world bots online log out now.",
+                                                 "World bots: Low. Applies now, until the next restart (then the launcher's Bots setting decides).",
+                                                 "World bots: Medium. Applies now, until the next restart (then the launcher's Bots setting decides).",
+                                                 "World bots: High. Applies now, until the next restart (then the launcher's Bots setting decides)." };
             int const now = pop.WorldPopulation();
             handler->SendSysMessage(now >= 0 && now <= 3 ? kSaid[now] : "World bots: back to the config files (applies now).");
             return true;
@@ -1688,6 +1734,7 @@ public:
 
     static bool HandleBotList(ChatHandler* handler)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); return false; }
         WorldSession* sess = handler->GetSession();
@@ -5473,6 +5520,7 @@ public:
     // "no detailed usage information" (`.playerbot summon First Last`, Discord 2026-10-24).
     static bool HandleSummon(ChatHandler* handler, Tail args)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); handler->SetSentErrorMessage(true); return false; }
         std::string target_name(args);
@@ -5642,6 +5690,7 @@ public:
     // line as a secure macro, so it works in combat).
     static bool HandleLazy(ChatHandler* handler)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         WorldSession* sess = handler->GetSession();
         if (!sess || !sess->GetPlayer())
         {
@@ -5656,6 +5705,7 @@ public:
 
     static bool HandleSelf(ChatHandler* handler, std::string const& arg)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         if (!Playerbot::Services::Initialized())
         { handler->SendSysMessage("PlayerbotV2 not initialized."); return false; }
         WorldSession* sess = handler->GetSession();

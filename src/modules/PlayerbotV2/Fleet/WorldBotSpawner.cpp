@@ -405,12 +405,12 @@ void WorldBotSpawner::LoadConfig()
                 old.empty() ? "" : ". Not used any more (Bots.* lines win): ", old);
             if (file_off && !pop_level_)
                 c.plain_summary = "Bots: Off (Bots.Size = Off) - no world bots; own bots, dungeon finder and battleground bots still come "
-                                  "(the launcher's Bots window, or a GM in game with the ForeverBots panel, World tab, turns them on)";
+                                  "(the launcher's Bots window turns them on)";
             if (pop_level_ && *pop_level_ == F::PopLevel::Off)
-                c.plain_summary = "Bots: set in game: off - no world bots (a GM can turn them on with the ForeverBots panel, World tab, "
-                                  "or .bot population low|medium|high; .bot population file hands back to the config files)";
+                c.plain_summary = "Bots: set in game: off - no world bots until the next restart (a GM can turn them on with "
+                                  ".bot population low|medium|high; .bot population file hands back to the config files)";
             else if (pop_level_)
-                c.plain_summary += " (set in game with the ForeverBots panel; .bot population file hands back to the config files)";
+                c.plain_summary += " (set in game with .bot population until the next restart; .bot population file hands back to the config files)";
         }
     }
     if (c.plain && c.plain_summary != plain_logged_)
@@ -438,13 +438,17 @@ void WorldBotSpawner::LoadPopulationOnce()
     CharacterDatabase.DirectExecute("CREATE TABLE IF NOT EXISTS playerbot_v2_realm_setting ("
                                     "name VARCHAR(64) NOT NULL, value VARCHAR(64) NOT NULL DEFAULT '', PRIMARY KEY (name)"
                                     ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    // The world bots are set in the launcher before the start (owner decision 2026-11-04: "just on the launcher"; the add-on's World bots tab is
+    // gone). A pick an older build kept from the add-on would win over the launcher with no way left to undo it, so it is dropped here
+    // and the config files (Bots.Size, written by the launcher) decide at every start. .bot population still changes it until the
+    // next restart.
     if (QueryResult r = CharacterDatabase.Query(Trinity::StringFormat(
             "SELECT value FROM playerbot_v2_realm_setting WHERE name = '{}'", kPopSettingName).c_str()))
     {
-        pop_level_ = ::Playerbot::V2::Fleet::ParsePopLevel((*r)[0].GetString());
-        if (pop_level_)
-            TC_LOG_INFO("server.loading", "World bots: {} (picked in game with the ForeverBots panel; .bot population file hands back to the config files)",
-                        ::Playerbot::V2::Fleet::PopLevelWord(*pop_level_));
+        TC_LOG_INFO("server.loading", "World bots: the old in-game pick '{}' is dropped; the launcher's Bots setting (Bots.Size) decides",
+                    (*r)[0].GetString());
+        CharacterDatabase.DirectExecute(Trinity::StringFormat(
+            "DELETE FROM playerbot_v2_realm_setting WHERE name = '{}'", kPopSettingName).c_str());
     }
 }
 
@@ -468,12 +472,8 @@ void WorldBotSpawner::SetPopulation(std::optional<PopLevel> level)
             drain_requested_ = false;   // a step up while a step down is still logging bots out: let them come again
             drain_until_ms_ = 0;
         }
-        CharacterDatabase.Execute(Trinity::StringFormat(
-            "REPLACE INTO playerbot_v2_realm_setting (name, value) VALUES ('{}', '{}')", kPopSettingName, F::PopLevelWord(*level)).c_str());
     }
-    else
-        CharacterDatabase.Execute(Trinity::StringFormat(
-            "DELETE FROM playerbot_v2_realm_setting WHERE name = '{}'", kPopSettingName).c_str());
+    // Not saved: it lasts until the next restart, then the launcher's setting decides again (LoadPopulationOnce).
     TC_LOG_INFO("playerbot.v2", "[world] population choice: {}", level ? F::PopLevelWord(*level) : "the config files");
 }
 

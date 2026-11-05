@@ -147,8 +147,8 @@ inline std::vector<Slot> Slots(Shape shape, uint32_t n, float gap, float min_rad
         }
         case Shape::Circle:
         {
-            if (n == 1) { v.push_back(Slot{}); return v; }
-            float const r = RingRadius(n, gap, 2.0f * kPi, min_radius);
+            if (n == 1) { v.push_back(Slot{ std::max(min_radius, 4.0f), 0.0f }); return v; }
+            float const r = RingRadius(n, gap, 2.0f * kPi, std::max(min_radius, 3.0f));
             for (uint32_t k = 0; k < n; ++k)
             {
                 float const a = 2.0f * kPi * float(k) / float(n);   // slot 0 straight ahead
@@ -227,6 +227,22 @@ inline std::vector<Slot> Slots(Shape shape, uint32_t n, float gap, float min_rad
     }
     return v;
 }
+
+// Move the whole shape forward so its nearest slot is at least `clear` yards in front of the anchor (side offsets are kept): "Place
+// here" must never put a bot on the player's own spot, and a shape at a target must not stand inside it (owner report 2026-11-04: with one
+// bot every shape was its middle slot, his own spot, and the bot just ran onto him).
+inline void PushAhead(std::vector<Slot>& v, float clear)
+{
+    if (v.empty()) return;
+    float fmin = v[0].forward;
+    for (Slot const& s : v) fmin = std::min(fmin, s.forward);
+    if (fmin >= clear) return;
+    float const d = clear - fmin;
+    for (Slot& s : v) s.forward += d;
+}
+
+// The shapes that go round the anchor (a ring or a half ring) rather than in front of it.
+inline bool RingShape(Shape s) { return s == Shape::Circle || s == Shape::Arc; }
 
 // A local slot turned into a world spot round the anchor (ax, ay) facing `o` (radians).
 inline void ToWorld(Slot const& s, float ax, float ay, float o, float& x, float& y)

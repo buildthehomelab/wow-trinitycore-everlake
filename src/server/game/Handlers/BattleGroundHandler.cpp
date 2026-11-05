@@ -658,6 +658,7 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPackets::Battleground::Battl
     if (!bgTemplate)
     {
         TC_LOG_ERROR("network", "Battleground: template bg (all arenas) not found");
+        ChatHandler(this).PSendSysMessage(LANG_ARENA_DISABLED);
         return;
     }
 

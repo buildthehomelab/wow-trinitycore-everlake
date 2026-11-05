@@ -26,7 +26,7 @@ while (-not (Test-Path $flag)) {
         Log 'Starting worldserver...'
         Repair-ConfDir $server | ForEach-Object { Log $_ }
         Sync-NetworkKeys $server
-        Sync-HireSettings $server | ForEach-Object { Log $_ }
+        Sync-LocalSettings $server | ForEach-Object { Log $_ }
         Sync-BotClothesSettings $server | ForEach-Object { Log $_ }
         $cfg = Test-ServerConfig $server
         $cfg.Lines | ForEach-Object { Log $_ }

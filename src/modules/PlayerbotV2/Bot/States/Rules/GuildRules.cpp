@@ -27,6 +27,8 @@
 #include "Fleet/BotGuildMgr.h"
 #include "Fleet/BotGuildEvent.h"
 #include "Bot/BotArchetype.h"
+#include "Bot/BotRegistry.h"
+#include "Util/ConfigReader.h"
 #include "Config.h"
 #include "GameTime.h"
 #include "Log.h"
@@ -373,6 +375,8 @@ bool RecruitNearbyFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView co
     {
         if (!u.is_player) continue;
         if (u.guild_id != 0) continue;
+        // Real players only with PlayerbotV2.Guilds.InvitePlayers = 1 (owner decision 2026-11-03: a setting, off by default).
+        if (!Services::Config().guilds_invite_players() && !Services::Registry().has(u.guid.GetCounter())) continue;
         if (u.level < 10) continue;
         const uint64 tgt_low = u.guid.GetCounter();
         if (tgt_low == s.raw().guid.GetCounter()) continue;

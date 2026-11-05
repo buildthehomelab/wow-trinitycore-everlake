@@ -73,6 +73,8 @@ public:
     // ground is a fall back to that point.
     void OnGroupPingUnit(Player* sender, Group* group, Unit* target, uint8 type);
     void OnGroupPingPoint(Player* sender, Group* group, Position const& point, uint8 type);
+    // A player put a world marker on the ground: a waiting "Place at cursor" order takes the spot.
+    void OnWorldMarkerPlaced(Player* sender, Position const& point);
     // One line with the add-on's download link for a player whose client has not said hello (Playerbot.AddonHint.*).
     void SendDueAddonHints();
     // The ForeverBots add-on greeted the server (self-whisper or the silent `.bot addon` command): no download hint for this player.
@@ -237,6 +239,22 @@ private:
         bool   any_human_seen = false;   // sticky once a human is detected in-bg
     };
     std::unordered_map<uint32, BgInviteState> bg_invite_state_;
+
+    // A real party waiting in an arena queue (OnHumanArenaQueue): asked again for an opposing bot team every kArenaReaskMs
+    // until the arena starts, the party leaves the queue, or a team of the other faction waits in the same queue.
+    struct ArenaWait {
+        uint32 bg_type_id  = 0;
+        uint8  bracket     = 0;
+        uint32 next_ask_ms = 0;
+        uint32 asks        = 0;
+    };
+    static constexpr uint32 kArenaReaskMs = 30000;
+    std::unordered_map<ObjectGuid, ArenaWait> arena_waits_;
+    std::mutex arena_waits_mtx_;
+    // Publishes ArenaTeamForming for `player`'s arena queue; false when the player is not (or no longer) in one. `asks` > 0 is
+    // a repeat ask, skipped while a team of the other faction already waits in that queue.
+    bool AskArenaOpponents(Player* player, BattlegroundTemplate const* tmpl, uint8 bracket, uint32 asks);
+    void RecheckArenaWaits(uint32 now_ms);
     std::mutex                 pending_bg_ports_mtx_;
 
     // Deferred LFG-proposal accept queue. Mirror of pending_bg_ports_ but for

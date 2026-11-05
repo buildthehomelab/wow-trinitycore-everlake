@@ -30,15 +30,16 @@ Write-Host 'The server is started only after the data is finished.' -ForegroundC
 if ($freeGb -lt 45) { Write-Warning "Only $freeGb GB free; the intermediate files need about 45 GB. Free some space or this may fail part way (it can then be resumed)." }
 Write-Host ''
 
-# the client's own language (a French client has no enUS data); .build.info lists it in the Tags column
-$locale = 'enUS'
-$bi = Get-Content -LiteralPath (Join-Path $Client '.build.info') -Raw -ErrorAction SilentlyContinue
-if ($bi -match '\b(enUS|enGB|deDE|esES|esMX|frFR|itIT|koKR|ptBR|ruRU|zhCN|zhTW)\b') { $locale = $Matches[1]; if ($locale -eq 'enGB') { $locale = 'enUS' } }
-Write-Host "Client language: $locale"
 # extractors and generator live in server\; the tool writes dbc, maps, vmaps, mmaps ... next to them
 # only from a client build the server accepts (Battle.net can have the beta and the Forever release side by side)
 $wrong = Test-ClientFolder $root $Client
 if ($wrong) { throw $wrong }
+# the language the game shows its texts in (a French client has no enUS data; a Russian one needs ruRU tables for Russian names)
+$use = Select-ClientProduct $root $Client
+$locale = 'enUS'; $lang = $null
+if ($use -and $use.Dir) { $lang = Get-ClientLocale $use.Dir $use.Product; $locale = $lang.Locale }
+$langLine = "Client language: $locale" + $(if ($lang) { " (from $($lang.Source); installed: $(if ($lang.Installed.Count) { $lang.Installed -join ', ' } else { 'not readable' }))" } else { '' })
+Write-Host $langLine
 & $tool -ClientPath $Client -OutputPath $server -Resume -Locale $locale -Builds (Get-AcceptedBuilds $root)
 if ($LASTEXITCODE -ne 0) { throw "The game data step failed (exit code $LASTEXITCODE). Run Install.cmd again to continue; finished stages are kept." }
 foreach ($f in '.extract-maps.done', '.extract-vmaps.done', '.extract-mmaps.done') {
@@ -54,8 +55,14 @@ foreach ($d in 'dbc', 'gt', 'maps', 'vmaps', 'mmaps', 'Cameras') {
 }
 foreach ($m in '.extract-maps.done', '.extract-vmaps.done', '.extract-mmaps.done') { Remove-Item (Join-Path $server $m) -ErrorAction SilentlyContinue }
 # the client build the DB2 tables came from; refresh-db2.ps1 extracts them again when Battle.net patches the client
-$use = Select-ClientProduct $root $Client
-if ($use) { Set-Content (Join-Path $data 'dbc\.client-build') "$($use.Build)" -Encoding ascii }
+if ($use) { Set-Content (Join-Path $data 'dbc\.client-build') @("$($use.Build)", $TableKeysRevision) -Encoding ascii }
+# which language really landed (server\data\dbc\<language>), kept for the bug report next to the one asked for
+$landed = @(Get-ChildItem (Join-Path $data 'dbc') -Directory -ErrorAction SilentlyContinue | ForEach-Object Name)
+Set-Content (Join-Path $data 'dbc\.client-locale') @($langLine, "Extracted: $(if ($landed.Count) { $landed -join ', ' } else { 'none' })") -Encoding ascii
+Write-Host "Game tables extracted in: $(if ($landed.Count) { $landed -join ', ' } else { 'none' })"
+if ($locale -notin 'enUS', 'enGB' -and $landed -notcontains $locale) {
+    Write-Warning "Your game is in $locale, but the server's game tables came out in $($landed -join ', '). NPC and quest names will be in English. In Battle.net, check that the game's text language is $locale (Settings, Game Settings), let it download, then run Install.cmd again."
+}
 # the marker is written only when the files worldserver checks first are really there; without it the next Install.cmd or start
 # builds the data again (the stage markers are already removed, so every stage runs)
 $gone = @(Get-MissingStartZoneData $data)

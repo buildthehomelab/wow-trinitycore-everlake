@@ -20,9 +20,12 @@
 // so the scripts read aurEff->GetAmount() and never hardcode rank values.
 
 #include "ScriptMgr.h"
+#include "Containers.h"
 #include "Creature.h"
 #include "DB2Stores.h"
+#include "Formulas.h"
 #include "Item.h"
+#include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Log.h"
 #include "Pet.h"
@@ -58,6 +61,7 @@ enum ClassicWarriorRogueHunterTalents
     SPELL_WARRIOR_SWEEPING_STRIKES_NORMALIZED   = 26654,
     SPELL_WARRIOR_LAST_STAND_HEALTH             = 12976,    // +health aura, amount = 30% of the warrior's maximum health (set by the script)
     SPELL_WARRIOR_RETALIATION_STRIKE            = 20240,    // weapon strike on the attacker
+    SPELL_WARRIOR_IMPROVED_WHIRLWIND_CLASSIC    = 1310315,  // Forever talent (Fury row 6): effect 0 Whirlwind cooldown, effect 1 closest enemy bonus (dummy)
 
     // rogue
     SPELL_ROGUE_SETUP_COMBO_POINT               = 15250,
@@ -81,6 +85,11 @@ enum ClassicWarriorRogueHunterTalents
     SPELL_HUNTER_LACERATING_STRIKES_BLEED       = 1310536,
     SPELL_HUNTER_KILL_COMMAND_BUFF              = 409396,   // 3 stacks of +20% pet Claw / Bite damage (spell mod on the hunter)
     SPELL_HUNTER_KILL_COMMAND_PET               = 409418,   // on the pet: each Claw / Bite takes one stack
+    SPELL_HUNTER_RAPID_KILLING                  = 415405,   // effect 1: the next Shot bonus (dummy)
+    SPELL_HUNTER_RAPID_KILLING_BUFF             = 415407,   // next Shot damage, 1 charge
+    SPELL_HUNTER_EXPOSE_PREY_STATE              = 1310726,  // gives the defensive aura state (SpellInfo::_LoadAuraState): Mongoose Bite
+    SPELL_HUNTER_IMPROVED_MEND_PET              = 19572,    // effect 0: cleanse chance per heal (dummy)
+    SPELL_HUNTER_IMPROVED_MEND_PET_DISPEL       = 24406,    // dispel 1 Curse, Disease, Magic or Poison on the pet
 };
 
 // The client data of the talent spells these scripts read, once per spell at script validation: name, then per effect the effect,
@@ -560,6 +569,110 @@ class classic_spell_warr_victory_rush : public SpellScript
     }
 };
 
+// 1310222 - Spearing Strike (70532): "A brutal attack that deals $s2% weapon damage. Deals an additional ${$s2*$s3}% weapon damage against
+// Giants, Dragonkin, and mounted targets. Mounted targets are dismounted." Effect 2 is the multiplier as a dummy: against those targets the
+// weapon damage is $s2 x (1 + $s3) percent, and a mounted target is dismounted by the hit.
+class classic_spell_warr_spearing_strike : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_2 } });
+    }
+
+    static bool IsSpearingTarget(Unit const* victim)
+    {
+        uint32 const creatureType = victim->GetCreatureType();
+        return creatureType == CREATURE_TYPE_GIANT || creatureType == CREATURE_TYPE_DRAGONKIN || victim->IsMounted();
+    }
+
+    void CalculateDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod) const
+    {
+        if (victim && IsSpearingTarget(victim))
+            AddPct(pctMod, GetSpellInfo()->GetEffect(EFFECT_2).CalcValue(GetCaster()) * 100);
+    }
+
+    void HandleDismount(SpellEffIndex /*effIndex*/)
+    {
+        Unit* target = GetHitUnit();
+        if (!target || !target->IsMounted())
+            return;
+
+        target->RemoveAurasByType(SPELL_AURA_MOUNTED);
+        target->Dismount();
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_warr_spearing_strike::CalculateDamage);
+        OnEffectHitTarget += SpellEffectFn(classic_spell_warr_spearing_strike::HandleDismount, EFFECT_2, SPELL_EFFECT_DUMMY);
+    }
+};
+
+// 1680 - Whirlwind, with 1310315 - Improved Whirlwind (Forever talent, client 70790): "Reduces the cooldown of your Whirlwind ability by
+// ${$m1/-1000} sec and increases the damage it deals to the closest enemy by $s2%." Effect 0 (spell modifier on the cooldown) works by
+// itself; effect 1 is a dummy that nothing read, so the closest enemy took no extra damage. The talent aura's effect 1 amount is the rank
+// value (TraitDefinitionEffectPoints curve 128138). Whirlwind hits up to $i enemies, picked at random when more stand in reach; the
+// closest one is always among them here, and its hit gets the bonus.
+class classic_spell_warr_improved_whirlwind_closest : public SpellScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellEffect({ { SPELL_WARRIOR_IMPROVED_WHIRLWIND_CLASSIC, EFFECT_1 } });
+    }
+
+    bool Load() override
+    {
+        return GetCaster()->HasAura(SPELL_WARRIOR_IMPROVED_WHIRLWIND_CLASSIC);
+    }
+
+    void SelectClosest(std::list<WorldObject*>& targets)
+    {
+        _closest.Clear();
+        WorldObject const* caster = GetCaster();
+        WorldObject* closest = nullptr;
+        float closestDist = 0.0f;
+        for (WorldObject* target : targets)
+        {
+            if (!target->IsUnit())
+                continue;
+            float const dist = caster->GetExactDist(target);
+            if (!closest || dist < closestDist)
+            {
+                closest = target;
+                closestDist = dist;
+            }
+        }
+        if (!closest)
+            return;
+
+        // The core trims an area list to the spell's target cap at random after this hook; trim it here with the closest kept, so the core
+        // trim has nothing left to drop.
+        if (uint32 const maxTargets = GetSpellInfo()->MaxAffectedTargets; maxTargets && targets.size() > maxTargets)
+        {
+            targets.remove(closest);
+            Trinity::Containers::RandomResize(targets, maxTargets - 1);
+            targets.push_back(closest);
+        }
+        _closest = closest->GetGUID();
+    }
+
+    void CalculateDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod) const
+    {
+        if (!victim || victim->GetGUID() != _closest)
+            return;
+        if (AuraEffect const* talent = GetCaster()->GetAuraEffect(SPELL_WARRIOR_IMPROVED_WHIRLWIND_CLASSIC, EFFECT_1))
+            AddPct(pctMod, talent->GetAmount());
+    }
+
+    void Register() override
+    {
+        OnObjectAreaTargetSelect += SpellObjectAreaTargetSelectFn(classic_spell_warr_improved_whirlwind_closest::SelectClosest, EFFECT_0, TARGET_UNIT_SRC_AREA_ENEMY);
+        CalcDamage += SpellCalcDamageFn(classic_spell_warr_improved_whirlwind_closest::CalculateDamage);
+    }
+
+    ObjectGuid _closest;
+};
+
 // 1290261 - Weaponmaster (warrior) and 13960 - Hack and Slash (rogue), Forever talents: "Gives your melee weapon attacks a benefit
 // depending on the weapon." The client data has a hidden passive per weapon group with the weapon requirement (SpellEquippedItems):
 //   Weaponmaster:   $s1 crit    Axe/Polearm -> 12700 (aura 290)     $s2 armor ignored  Mace/Staff -> 12284 (aura 280)
@@ -1005,6 +1118,82 @@ class classic_spell_rog_offhand_poison : public SpellScript
     }
 };
 
+// Mutilate (70532): "Instantly attacks with both weapons ... Damage increased by $m4% against Poisoned targets." The cast spell (399956,
+// 1241582, 1241584, talent 1310707) holds the bonus as a dummy in effect 3 and triggers one strike per weapon; the strikes did the damage
+// without the bonus. Bound to the strikes, which read the bonus of their Mutilate. Poisoned: any poison effect on the target.
+class classic_spell_rog_mutilate_strike : public SpellScript
+{
+    static uint32 GetMutilateSpell(uint32 strikeId)
+    {
+        switch (strikeId)
+        {
+            case 399960: case 399961:   return 399956;
+            case 1241585: case 1241588: return 1241582;
+            case 1241586: case 1241590: return 1241584;
+            case 1310705: case 1310706: return 1310707;
+            default:                    return 0;
+        }
+    }
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { GetMutilateSpell(spellInfo->Id), EFFECT_3 } });
+    }
+
+    static bool IsPoisoned(Unit const* victim)
+    {
+        for (auto const& [spellId, application] : victim->GetAppliedAuras())
+            if (application->GetBase()->GetSpellInfo()->Dispel == DISPEL_POISON)
+                return true;
+        return false;
+    }
+
+    void CalculateDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod) const
+    {
+        if (!victim || !IsPoisoned(victim))
+            return;
+
+        if (SpellInfo const* mutilate = sSpellMgr->GetSpellInfo(GetMutilateSpell(GetSpellInfo()->Id), DIFFICULTY_NONE))
+            AddPct(pctMod, mutilate->GetEffect(EFFECT_3).CalcValue(GetCaster()));
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_rog_mutilate_strike::CalculateDamage);
+    }
+};
+
+// 14278 - Ghostly Strike (70532): "A strike that deals $s1% ($m4% if a Dagger is equipped in your Main Hand) weapon damage". Effect 0 is the
+// weapon damage percent and effect 3 the dagger percent as a dummy, so a dagger got the lower one.
+class classic_spell_rog_ghostly_strike : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_3 } });
+    }
+
+    void CalculateDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* /*victim*/, int32& /*damage*/, int32& /*flatMod*/, float& pctMod) const
+    {
+        Player* rogue = GetCaster()->ToPlayer();
+        if (!rogue)
+            return;
+
+        Item const* mainHand = rogue->GetWeaponForAttack(BASE_ATTACK, true);
+        if (!mainHand || mainHand->GetTemplate()->GetSubClass() != ITEM_SUBCLASS_WEAPON_DAGGER)
+            return;
+
+        float const normal = GetSpellInfo()->GetEffect(EFFECT_0).CalcValue(rogue);
+        float const dagger = GetSpellInfo()->GetEffect(EFFECT_3).CalcValue(rogue);
+        if (normal > 0.0f)
+            pctMod *= dagger / normal;
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_rog_ghostly_strike::CalculateDamage);
+    }
+};
+
 // 438040 - Redirect (rogue ability): "Removes all your existing combo points from your target and stores them for up to 15 sec. These
 // stored combo points will be transferred to the next non-player enemy you hit with a melee or ranged ability." The stored points are
 // kept in the self aura (effect 1, 1 proc charge); the transfer sets UnitData ClassicComboTarget like Spell::EffectEnergize.
@@ -1421,6 +1610,134 @@ class classic_spell_hun_refocus : public SpellScript
     }
 };
 
+// 415405 - Rapid Killing (70532): "when you kill a non-trivial enemy or it dies while afflicted by your Serpent Sting, you gain Rapid Killing,
+// increasing the damage of your next Shot ability within $415407d by $m2%." Effect 1 is that bonus as a dummy and nothing gave the buff
+// 415407, so it never happened. A kill by the hunter or the hunter's pet, or the death of a target with the hunter's Serpent Sting (hunter
+// family flag 0x4000), gives the buff with the talent amount. Non-trivial: a player, or a creature that gives the hunter experience.
+class classic_unit_hun_rapid_killing : public UnitScript
+{
+public:
+    classic_unit_hun_rapid_killing() : UnitScript("classic_unit_hun_rapid_killing") { }
+
+    static void TryGrant(Player* hunter, Unit* victim)
+    {
+        if (!hunter || hunter == victim)
+            return;
+
+        AuraEffect const* talent = hunter->GetAuraEffect(SPELL_HUNTER_RAPID_KILLING, EFFECT_1);
+        if (!talent || talent->GetAmountAsInt() <= 0)
+            return;
+
+        Creature* creature = victim->ToCreature();
+        if (!victim->IsPlayer() && (!creature || !Trinity::XP::Gain(hunter, creature)))
+            return;
+
+        hunter->CastSpell(hunter, SPELL_HUNTER_RAPID_KILLING_BUFF, CastSpellExtraArgs(talent).AddSpellBP0(talent->GetAmount()));
+    }
+
+    void OnUnitDeath(Unit* victim, Unit* killer) override
+    {
+        Player* killingHunter = killer ? killer->GetCharmerOrOwnerPlayerOrPlayerItself() : nullptr;
+        TryGrant(killingHunter, victim);
+
+        for (AuraEffect const* periodic : victim->GetAuraEffectsByType(SPELL_AURA_PERIODIC_DAMAGE))
+        {
+            SpellInfo const* sting = periodic->GetSpellInfo();
+            if (sting->SpellFamilyName != SPELLFAMILY_HUNTER || !(sting->SpellFamilyFlags[0] & 0x4000))
+                continue;
+
+            Player* stingHunter = ObjectAccessor::GetPlayer(*victim, periodic->GetCasterGUID());
+            if (stingHunter && stingHunter != killingHunter)
+                TryGrant(stingHunter, victim);
+        }
+    }
+};
+
+// 1310532 - Expose Prey (70532): "Grants your melee and ranged attacks against enemies afflicted by Hunter's Mark a $s1% chance to allow an
+// activation of Mongoose Bite. Lasts $1310726d." The talent triggers 1310726 on any hit; it now needs Hunter's Mark on the target (hunter
+// family flag 0x400, from any hunter) and rolls the talent amount (spell_proc chance 100). 1310726 gives the state Mongoose Bite needs.
+class classic_spell_hun_expose_prey : public AuraScript
+{
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        Unit* target = eventInfo.GetActionTarget();
+        if (!target || target == GetTarget())
+            return false;
+
+        if (!target->GetAuraEffect(SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS, SPELLFAMILY_HUNTER, flag128(0x400, 0, 0, 0)))
+            return false;
+
+        return roll_chance(float(aurEff->GetAmount()));
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_hun_expose_prey::CheckProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
+// Mongoose Bite (1495, 14269, 14270, 14271): uses the Expose Prey activation (1310726, "allow an activation of Mongoose Bite").
+class classic_spell_hun_mongoose_bite : public SpellScript
+{
+    void HandleCast()
+    {
+        GetCaster()->RemoveAurasDueToSpell(SPELL_HUNTER_EXPOSE_PREY_STATE);
+    }
+
+    void Register() override
+    {
+        OnCast += SpellCastFn(classic_spell_hun_mongoose_bite::HandleCast);
+    }
+};
+
+// Mend Pet (136, 3111, 3661, 3662, 13542, 13543, 13544) with 19572 Improved Mend Pet: "Gives your Mend Pet spell a $s1% chance of cleansing
+// $24406s1 Curse, Disease, Magic, or Poison effect from your pet each time it heals". The talent amount is a dummy. Behaviour from vMaNGOS
+// (GPL-2.0, periodic heal of Mend Pet): each heal tick rolls the amount and casts 24406 on the pet.
+class classic_spell_hun_mend_pet : public AuraScript
+{
+    void HandlePeriodic(AuraEffect const* aurEff)
+    {
+        Unit* hunter = GetCaster();
+        if (!hunter)
+            return;
+
+        AuraEffect const* talent = hunter->GetAuraEffect(SPELL_HUNTER_IMPROVED_MEND_PET, EFFECT_0);
+        if (talent && roll_chance(float(talent->GetAmount())))
+            hunter->CastSpell(GetTarget(), SPELL_HUNTER_IMPROVED_MEND_PET_DISPEL, CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        OnEffectPeriodic += AuraEffectPeriodicFn(classic_spell_hun_mend_pet::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_HEAL);
+    }
+};
+
+// 1293525, 1293526, 1293527, talent 1293241 - Summon Hawk (70532): "Command a hawk to dive-bomb your targeted enemy, dealing
+// ${$s1+($rap*($s4/100))} Physical damage". Effect 0 is the flat damage and effect 3 the percent of ranged attack power as a dummy that
+// nothing read, so the dive did only the flat damage.
+class classic_spell_hun_summon_hawk : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_3 } });
+    }
+
+    void CalculateDamage(SpellEffectInfo const& spellEffectInfo, Unit* /*victim*/, int32& /*damage*/, int32& flatMod, float& /*pctMod*/) const
+    {
+        if (spellEffectInfo.EffectIndex != EFFECT_0)
+            return;
+
+        Unit* hunter = GetCaster();
+        float const percent = float(GetSpellInfo()->GetEffect(EFFECT_3).CalcValue(hunter));
+        flatMod += int32(hunter->GetTotalAttackPowerValue(RANGED_ATTACK) * percent / 100.0f);
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_hun_summon_hawk::CalculateDamage);
+    }
+};
+
 /*######
 ## Damage done talents without a client aura effect
 ######*/
@@ -1735,6 +2052,8 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScript(classic_spell_warr_execute);
     RegisterSpellScript(classic_spell_warr_overpower_probe);
     RegisterSpellScript(classic_spell_warr_execute_damage_probe);
+    RegisterSpellScript(classic_spell_warr_spearing_strike);
+    RegisterSpellScript(classic_spell_warr_improved_whirlwind_closest);
 
     // rogue
     RegisterSpellScriptWithArgs(classic_spell_weapon_type_talent, "classic_spell_rog_hack_and_slash", 13706u, 13709u, 1290312u);
@@ -1744,6 +2063,8 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScript(classic_spell_rog_offhand_strike);
     RegisterSpellScript(classic_spell_rog_offhand_poison);
     RegisterSpellAndAuraScriptPair(classic_spell_rog_redirect, classic_spell_rog_redirect_aura);
+    RegisterSpellScript(classic_spell_rog_mutilate_strike);
+    RegisterSpellScript(classic_spell_rog_ghostly_strike);
 
     // hunter
     RegisterSpellScript(classic_spell_hun_entrapment_trap);
@@ -1756,6 +2077,11 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScript(classic_spell_hun_kill_command_pet);
     RegisterSpellScript(classic_spell_hun_readiness);
     RegisterSpellScript(classic_spell_hun_refocus);
+    RegisterSpellScript(classic_spell_hun_summon_hawk);
+    new classic_unit_hun_rapid_killing();
+    RegisterSpellScript(classic_spell_hun_expose_prey);
+    RegisterSpellScript(classic_spell_hun_mongoose_bite);
+    RegisterSpellScript(classic_spell_hun_mend_pet);
     RegisterSpellScript(classic_spell_rog_main_gauche);
     RegisterSpellScript(classic_spell_rog_improved_expose_armor);
     RegisterSpellScript(classic_spell_hun_lone_wolf);

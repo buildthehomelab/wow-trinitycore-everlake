@@ -63,14 +63,19 @@ regroup, formation and spacing, tanks and markers), Assign a bot to an icon, You
   face, line abreast behind you; tanks in front, healers at the back; slots are stable per bot and turn with you).
   None is the plain follow. It stays until you change it. In combat and in raid mechanics the raid plan's positions
   win; the spacing also scales the raid ranged / pre-pull spacing.
-- Positions tab (0.6.12, the last side tab, a Defensive Stance shield): pick a shape (Close, Circle, Arc, Far apart, Line,
-  Column, Spear, Arrow) and a gap (Tight about 2.5 yards, Normal 4, Wide 8), tick the bots (All, None, Tanks, Heals, Melee,
-  Ranged tick quickly; click a name to tick or untick it), then Place here (the shape centred where you stand, pointing the way
-  you face) or At target (round your target, facing you; Arc and Circle keep out of a boss's reach). The ticked bots run to
-  their spots and stay there; after a fight the group joined they walk back to their own spot. Tanks take the front (the tip
-  of a Spear or Arrow), healers the back. Follow lets the ticked bots follow you again. Sent as the hidden add-on message
-  `PLACE_REQ`; the same as a group order: `place <shape> [tight|normal|wide] [here|target] [names or all, tanks, healers,
-  melee, ranged, dps, group1..group8, a class]`, `place follow [who]`. The server answers in one system line.
+- No World bots tab (0.6.13): how many world bots the realm has is set in the launcher (Bots: Off, Low, Normal, High) before the
+  server starts, nowhere in game.
+- Positions tab (0.6.12, the last side tab, a Defensive Stance shield; 0.6.14 adds the mouse spot, 0.6.17 groups and the Set name): pick a shape (Close, Circle,
+  Arc, Far apart, Line, Column, Spear, Arrow) and a gap (Tight about 2.5 yards, Normal 4, Wide 8), tick the bots (All, None,
+  Tanks, Heals, Melee, Ranged tick by role; G1 to G8 tick a whole raid group, a second click unticks it; click a name to tick or
+  untick it, pages with < and >; all of these mix), then send them: Set (click it, then click
+  the ground in the client's green circle: a white skull world marker lands there and the bots form the shape on it, facing away
+  from you; a ping on the ground works too, within 30 seconds), Place here (just in front of you, pointing the way you face;
+  Circle and Arc go round you; never on your own spot) or At target (at a mob or NPC, facing you; never inside it). The ticked
+  bots stay on their spots and walk back to them after every fight until Follow. Tanks take the front, healers the back. Sent
+  as the hidden add-on message `PLACE_REQ` (fire and forget); the same as a group order: `place <shape> [tight|normal|wide]
+  [here|target|cursor] [names or all, tanks, healers, melee, ranged, dps, group1..group8, a class]`, `place follow [who]`. The
+  server answers in one system line.
 - Distance (the - / + stepper, 1 to 20 yards, one per click; `distance <n>` / `follow distance <n>` in party/raid chat, `/fb distance <n>`):
   how far the bots follow you out of combat; it also sets the formation spacing to the same yards. Saved in the addon
   (ForeverBotsDB.distance) and re-sent silently on login and when the group changes; the server keeps it per bot.
@@ -151,7 +156,7 @@ Attack (mouseover) key: hover a mob and press it; the mob becomes your target an
 
 ## 0.5.1 window
 
-Built on the client's own portrait window (the one its Raid and Looking For Group windows use): centred title, group icon in the portrait slot, dark inner panel, the client's own red buttons, fonts, and square icon tabs down the right edge (Orders, Bots, Form, Marks; hover for the name). Bots tab: class icons, then round role icons (shield, plus, sword) for the roles that class can do; click one to add that bot. A footer shows the group and stance with Call saved and Dismiss all. If the client has no such template the window falls back to a plain dialog frame with the same contents. The only own art is the minimap emblem (`Textures/mono_fb64.tga`); buttons are the Raid Info button template, role icons use the client's LFG art with its check box, switches are client check boxes, mark slots are the client's action-slot frame.
+Built on the client's own portrait window (the one its Raid and Looking For Group windows use): centred title, group icon in the portrait slot, dark inner panel, the client's own red buttons, fonts, and square icon tabs down the right edge (Orders, Bots, Form, Marks; hover for the name). Bots tab: class icons, then round role icons (shield, plus, sword) for the roles that class can do; click one to add that bot. A footer shows the group and stance; Call saved and Dismiss all sit in it on the Bots tab only (0.6.17). If the client has no such template the window falls back to a plain dialog frame with the same contents. The only own art is the minimap emblem (`Textures/mono_fb64.tga`); buttons are the Raid Info button template, role icons use the client's LFG art (no check box since 0.6.15: one click on the icon adds the bot), switches are client check boxes, mark slots are the client's action-slot frame.
 
 - `/fb scale <0.7-1.5>` sets the window size (default 1.2, saved).
 - `/fb minimap on|off|reset` shows, hides or re-centres the minimap button.

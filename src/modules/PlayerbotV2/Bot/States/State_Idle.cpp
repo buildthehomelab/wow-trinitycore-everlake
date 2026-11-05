@@ -274,6 +274,8 @@ bool MaintainPet(BotSnapshotView const& s, BotAI& ai, BotIntentEmitter& emit,
     if (s.has_pet()) { ai.clear_pet_summon_backoff(); return false; }
     // The owner keeps the pet away ("pet off", Bot/OwnerPicks.h).
     if (s.owner_pet_off()) return false;
+    // A Lone Wolf hunter plays without its pet in a raid (Bot/ClassicUpkeep.h).
+    if (Classic::LoneWolfKeepsPetAway(s)) return false;
     // Can't summon while mounted / on a transport / in a vehicle — the cast
     // is rejected NOT_MOUNTED and re-tried forever. Wait until settled.
     if (InTransitNoMaintenance(s)) return false;
@@ -3702,7 +3704,7 @@ static TankHazardStep RaidTankHazardStepOut(BotSnapshotView const& s, BotAI& ai,
 // a short walk that keeps its mobs' fronts off the raid, or no step at all.
 // With nothing on it, it steps out like everyone else.
 bool RaidHazardStepOut(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g,
-                       BotIntentEmitter& emit)
+                       BotIntentEmitter& emit, bool traps_only)
 {
     auto const& zones = s.raw().combat.ground_hazards;
     if (zones.empty()) return false;
@@ -3710,6 +3712,7 @@ bool RaidHazardStepOut(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView co
     float bx, by, bz; s.position(bx, by, bz);
     GroundHazard const* in = InGroundHazard(s, bx, by, bz, kHazardMargin);
     if (!in) return false;
+    if (traps_only && in->source != GroundHazardSource::GoTrap) return false;
     const uint32 now_ms = s.published_at_ms();
 
     if (ai.effective_role(s) == Role::Tank)
@@ -3843,6 +3846,107 @@ bool RaidHazardStepOut(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView co
             "rays beyond reach {}, in avoid circle {}]",
             s.name(), spell_name, in->spell_id, in->radius, kHazardMaxStep, nc, probes,
             bx, by, in->x, in->y, std::sqrt((bx - in->x) * (bx - in->x) + (by - in->y) * (by - in->y)), rays_too_far, rays_in_avoid);
+    return false;
+}
+
+// ---------- Ground-hazard detour ([raid_hazard_detour]) ----------
+// Shared (declared in MaintainHelpers.h). A melee bot outside every ground hazard whose way to its victim crosses one (the core chase and
+// the melee gap-close walk the navmesh's shortest line, and the navmesh knows no trap) walks round it: to a point beside the zone, on
+// the side the line passes, outside every zone and avoid circle. Each tick the line is tested again, so the bot goes round in a step
+// or two and the chase takes over once the line is clear. release-0130 mc_majordomo 8304ad94: three melee died in Majordomo's
+// Intense Heat pit (trap 20533, 10 y) 8.5-9.5 y from its centre under raid:switch_target, walking from one add to the next across it.
+// A victim inside a zone is not walked round (the bot has to reach it; the step-out and the raid's own rules own that case).
+// Trap zones only (GroundHazardSource::GoTrap): spell zones (Rain of Fire, a void zone) come and go in seconds and the raid layer moves
+// the bots out of the ones it knows; a trap is there for good and nothing else steers round it.
+bool RaidHazardDetour(BotSnapshotView const& s, BotAI& ai, BotIntentEmitter& emit)
+{
+    auto const& zones = s.raw().combat.ground_hazards;
+    if (zones.empty()) return false;
+    if (!s.is_alive() || !s.is_in_instance() || s.in_battleground() || s.is_rooted()) return false;
+    if (InstanceRangedOrHealer(s, ai)) return false;   // a caster stops at range: the line to its victim is not walked
+    auto const& cb = s.raw().combat;
+    if (s.victim().IsEmpty() || !cb.victim_pos_known) return false;
+    float bx, by, bz; s.position(bx, by, bz);
+    if (InGroundHazard(s, bx, by, bz, kHazardMargin)) return false;   // inside one: the step-out's case
+    const float vx = cb.victim_x, vy = cb.victim_y, vz = cb.victim_z;
+    if (InGroundHazard(s, vx, vy, vz, 0.0f)) return false;
+    const float lx = vx - bx, ly = vy - by;
+    const float len = std::sqrt(lx * lx + ly * ly);
+    constexpr float kNoTravel = 6.0f;   // in or near melee reach: nothing to walk
+    if (len < kNoTravel) return false;
+    const float ux = lx / len, uy = ly / len;
+    constexpr float kClear = kHazardMargin + kHazardExitPad;
+    GroundHazard const* cross = nullptr;
+    float cross_t = 1e9f;
+    for (GroundHazard const& h : zones)
+    {
+        if (h.source != GroundHazardSource::GoTrap || std::fabs(bz - h.z) > 10.0f) continue;   // traps only: see above
+        const float fx = h.x - bx, fy = h.y - by;
+        const float t = fx * ux + fy * uy;                 // along the line to the closest approach
+        if (t <= 0.0f || t >= len) continue;
+        const float px = fx - ux * t, py = fy - uy * t;    // centre to the line
+        const float R = h.radius + kHazardMargin;
+        if (px * px + py * py >= R * R) continue;
+        if (t < cross_t) { cross_t = t; cross = &h; }
+    }
+    if (!cross) return false;
+    const float R = cross->radius + kClear;
+    const float cbx = bx - cross->x, cby = by - cross->y;
+    const float dist_c = std::sqrt(cbx * cbx + cby * cby);
+    // The way round: far from the zone, the point beside it on the side the line passes (left of the heading when the centre lies
+    // exactly on it); close to it, the next 60 degrees of the circle toward the victim's side, so a second step goes on round
+    // instead of aiming at the spot the bot already stands on.
+    float pts[2][2];
+    if (dist_c > R + 3.0f)
+    {
+        float nx = (bx + ux * cross_t) - cross->x, ny = (by + uy * cross_t) - cross->y;
+        float nl = std::sqrt(nx * nx + ny * ny);
+        if (nl < 0.1f) { nx = -uy; ny = ux; nl = 1.0f; }
+        nx /= nl; ny /= nl;
+        pts[0][0] = cross->x + nx * R; pts[0][1] = cross->y + ny * R;
+        pts[1][0] = cross->x - nx * R; pts[1][1] = cross->y - ny * R;
+    }
+    else
+    {
+        const float ab = std::atan2(cby, cbx);
+        const float cvx = vx - cross->x, cvy = vy - cross->y;
+        float arc = std::atan2(cvy, cvx) - ab;   // to the victim's bearing, the short way first
+        while (arc > 3.14159265f) arc -= 6.2831853f;
+        while (arc < -3.14159265f) arc += 6.2831853f;
+        const float dir = arc >= 0.0f ? 1.0f : -1.0f;
+        const float step = std::min(1.0472f, std::fabs(arc));
+        for (int k = 0; k < 2; ++k)
+        {
+            const float a = ab + (k ? -dir : dir) * (k ? 1.0472f : step);
+            pts[k][0] = cross->x + std::cos(a) * R; pts[k][1] = cross->y + std::sin(a) * R;
+        }
+    }
+    const uint32 now_ms = s.published_at_ms();
+    for (int side = 0; side < 2; ++side)
+    {
+        const float wx = pts[side][0], wy = pts[side][1];
+        if ((wx - bx) * (wx - bx) + (wy - by) * (wy - by) < 1.5f * 1.5f) continue;   // already there: the chase takes over
+        if (RaidPointBlocked(s, wx, wy, bz, kHazardMargin)) continue;
+        // Already walking there: hold, so the gap-close below does not send the bot back onto the line.
+        if (s.is_moving() && s.has_path_destination())
+        {
+            float px, py, pz; s.path_destination(px, py, pz);
+            if ((px - wx) * (px - wx) + (py - wy) * (py - wy) < 2.0f * 2.0f)
+            {
+                ai.set_last_rule_fired("raid:hazard_detour_hold");
+                return true;
+            }
+        }
+        if (DungeonStepRefused(s, ai, wx, wy, bz, now_ms)) continue;
+        if (!emit.move_to(wx, wy, bz, /*run*/ true)) continue;
+        ai.note_move_commit(s.map_id(), wx, wy, bz, now_ms);
+        ai.set_last_rule_fired("raid:hazard_detour");
+        if (RaidLogDue(RaidLogKey(s, RaidLogKind::Hazard), now_ms, 2000u))
+            TC_LOG_INFO("playerbot.v2",
+                "[raid_hazard_detour] {} walks round {} zone (spell {} r={:.1f}) on the way to its target {:.0f} y off -> ({:.1f},{:.1f},{:.1f})",
+                s.name(), HazardSpellName(cross->spell_id), cross->spell_id, cross->radius, len, wx, wy, bz);
+        return true;
+    }
     return false;
 }
 
@@ -4658,12 +4762,31 @@ bool DungeonCombatPositioning(BotSnapshotView const& s, BotAI& ai,
             Trinity::CreatureListSearcher<PushBossCheck> pb_search(self_pb, pb_cre, pb_chk);
             Cell::VisitAllObjects(self_pb, pb_search, kPbScanR);
             Creature* pb_boss = nullptr;
-            for (uint32_t be : advice.bosses)
-            {
+            int pb_idx = -1;
+            for (int bi = 0; bi < static_cast<int>(advice.bosses.size()) && !pb_boss; ++bi)
                 for (Creature* bc : pb_cre)
-                    if (bc && bc->GetEntry() == be && bc->IsAlive())
-                    { pb_boss = bc; break; }
-                if (pb_boss) break;
+                    if (bc && bc->GetEntry() == advice.bosses[bi] && bc->IsAlive())
+                    { pb_boss = bc; pb_idx = bi; break; }
+            // Only the boss the tank owes, as the boss navigator below has it (bosses[bosses_done_count], raised by the owed-boss
+            // waiver). A later boss in the scan while the owed one is out of it is the navigator's case: it walks to the owed boss's
+            // waypoint and waives it there. Pushing to the later boss here pulled the tank the other way on every other tick
+            // (release-0130 uldaman_revelosh: Baelog, owed, cannot be attacked and is out of this scan; this push stepped east to
+            // Revelosh, the navigator west to Baelog's waypoint, and the tank paced 15 y between them from 584 s to the 1200 s
+            // timeout, never reaching the waypoint, with the group standing by it).
+            if (pb_boss)
+            {
+                uint32 const pb_raw_done = s.raw().dungeon_exec.bosses_done_count;
+                int pb_owed = static_cast<int>(pb_raw_done);
+                int const pb_floor = static_cast<int>(ai.dungeon_owed_floor(self_pb->GetMapId(), pb_raw_done));
+                if (pb_idx >= pb_floor)
+                    pb_owed = std::max(pb_owed, pb_floor);
+                if (pb_idx > pb_owed && pb_owed < static_cast<int>(advice.progression_waypoints.size()))
+                {
+                    if (RaidLogDue(RaidLogKey(s, RaidLogKind::Los) ^ 0x6f776564u, now_ms, 10000u))
+                        TC_LOG_INFO("playerbot.v2", "[boss_push] {} no push to boss {} (idx {}): owed boss idx {} (entry {}) is not in sight",
+                                    s.name(), pb_boss->GetEntry(), pb_idx, pb_owed, advice.bosses[pb_owed]);
+                    pb_boss = nullptr;
+                }
             }
             if (pb_boss)
             {
@@ -6321,8 +6444,15 @@ static void BgRouteMove(BotSnapshotView const& s, BotAI const& ai, BotIntentEmit
         // memory ages out after a few seconds, so the lane is tried again then. A ledge being approached or crossed is never skipped.
         if (!drop && !ledge_approach && ai.move_refused_recently(nx, ny, nz, GameTime::GetGameTimeMS()))
         {
-            TC_LOG_INFO("playerbot.v2", "[bg_route] bot={} wp=({:.0f},{:.0f},{:.0f}) refused, plain route to goal=({:.0f},{:.0f},{:.0f})",
-                        s.guid().GetCounter(), nx, ny, nz, x, y, z);
+            // One line per bot every 10 s: a stunned or rooted carrier reaches here on every tick, about 20 lines a second (WSG soak on 247).
+            thread_local std::unordered_map<uint64, uint32> s_refused_log_ms;
+            uint32& flast = s_refused_log_ms[s.guid().GetCounter()];
+            if (flast == 0 || rnow - flast >= 10000u)
+            {
+                flast = rnow;
+                TC_LOG_INFO("playerbot.v2", "[bg_route] bot={} wp=({:.0f},{:.0f},{:.0f}) refused, plain route to goal=({:.0f},{:.0f},{:.0f})",
+                            s.guid().GetCounter(), nx, ny, nz, x, y, z);
+            }
             emit.move_to(x, y, z, run);
             return;
         }
@@ -6566,12 +6696,37 @@ bool BgTryUseObjectiveGo(BotSnapshotView const& s, BotAI& ai,
         // as its aura). The cooldown is per NODE for those: per banner, the bot alternated between the two every 3 s and each switch
         // restarted its 5 s capture, so ~25 bots started 36 captures each and 9 finished (AB 2026-10-11).
         const uint64 go_low = matched_node >= 0 ? (0x4E4F4445ull << 32) | uint64(matched_node) : go->guid.GetCounter();
+        // A node banner (classic AB BUTTON / GOOBER) is a 5 s channel that a move of more than 3 y breaks. Between the click that
+        // starts it and the one that completes it the BgUseGo lockout used to hand the tick to the other rules, which walked the bot
+        // off the pole (soak on 246: 7 of 16 interrupts were "moved"). The bot that clicked stands still for the channel. Not in
+        // combat and not with an enemy player inside the 11 y the capture itself breaks on: the fight rules get the tick then.
+        bool const node_banner = go->go_type == /*GAMEOBJECT_TYPE_BUTTON*/ 1 || go->go_type == /*GAMEOBJECT_TYPE_GOOBER*/ 10;
+        bool capture_safe = node_banner && !s.in_combat();
+        if (capture_safe)
+            for (auto const& e : s.nearby_enemies())
+            {
+                if (!e.is_player || e.hp <= 0) continue;
+                float const edx = e.x - self_x, edy = e.y - self_y;
+                if (edx * edx + edy * edy < 11.0f * 11.0f) { capture_safe = false; break; }
+            }
         if (ai.action_recently_tried(BotAI::ActionKind::BgUseGo,
                                      go_low, bg_now_ms))
+        {
+            if (capture_safe && ai.action_recently_tried(BotAI::ActionKind::BgCaptureHold, go_low, bg_now_ms))
+            {
+                if (s.is_moving())
+                    emit.stop_movement();
+                ai.set_last_rule_fired("idle:bg_capture_hold");
+                return true;
+            }
             continue;
+        }
         emit.use_game_object(go->guid);
         ai.note_action_retry(BotAI::ActionKind::BgUseGo,
                              go_low, bg_now_ms);
+        // Armed by the click that starts the channel only; the completing click inside the window does not stretch it.
+        if (capture_safe && !ai.action_recently_tried(BotAI::ActionKind::BgCaptureHold, go_low, bg_now_ms))
+            ai.note_action_retry(BotAI::ActionKind::BgCaptureHold, go_low, bg_now_ms);
         ai.note_action_retry(BotAI::ActionKind::BgFormHold, 0, bg_now_ms);
         ai.set_last_rule_fired("idle:bg_use_objective_go");
         return true;
@@ -13095,6 +13250,8 @@ bool BgDispatch(BotSnapshotView const& s, BotAI& ai,
                 uint64 const mt_key = uint64(s.raw().bg.current_type_id);
                 if (!ai.action_recently_tried(BotAI::ActionKind::BgMount, mt_key, mt_now_ms))
                 {
+                    TC_LOG_INFO("playerbot.v2", "[bg_prep_mount] {} mounts at its gate spot ({} ms to the gates, spell {})", s.name(),
+                                s.bg_start_delay_ms(), s.best_mount_spell());
                     emit.emit(MountIntent{s.best_mount_spell()});
                     ai.note_action_retry(BotAI::ActionKind::BgMount, mt_key, mt_now_ms);
                     ai.set_last_rule_fired("idle:bg_prep_mount_up");

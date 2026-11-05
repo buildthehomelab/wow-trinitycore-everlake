@@ -135,6 +135,7 @@ enum class RecruitResult : uint8_t
     BadTarget    = 2,
     GuildFull    = 3,
     AddFailed    = 4,
+    Invited      = 5,   // a real player got a normal guild invite (accepts or declines himself)
 };
 
 RecruitResult BotRecruitToGuild(

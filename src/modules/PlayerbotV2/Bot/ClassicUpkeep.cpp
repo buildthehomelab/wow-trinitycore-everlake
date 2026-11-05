@@ -1445,6 +1445,16 @@ uint32 PickCombatManaItem(BotSnapshotView const& s, GroupSnapshotView const* g, 
     return 0;
 }
 
+// ======================= Lone Wolf (hunter) =======================
+
+bool LoneWolfKeepsPetAway(BotSnapshotView const& s)
+{
+    constexpr uint32 LONE_WOLF = 415370;
+    if (s.cls() != CLASS_HUNTER || s.in_battleground() || !s.knows_spell(LONE_WOLF))
+        return false;
+    return s.in_raid_group() || s.is_in_raid();
+}
+
 // ======================= Boss fights (major cooldowns) =======================
 
 bool IsBossUnit(NearbyUnit const& u)

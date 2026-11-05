@@ -455,6 +455,12 @@ bool IsBossUnit(NearbyUnit const& u);
 // or has 100k+ health (elites, world bosses).
 bool BossFight(BotSnapshotView const& s);
 
+// Lone Wolf (hunter talent 415370, Marksmanship row 3): +20% damage with every attack while no pet is out. A hunter that took it plays
+// without its pet in a raid (a raid group, or a raid map), as a player with the talent does: the pet's own damage is far below the 20%.
+// Outside a raid (levelling, dungeons, battlegrounds) the pet stays with it. The hunter APL dismisses the pet and every summon path
+// (Call Pet, Revive Pet, the idle pet upkeep) holds back while this is true.
+bool LoneWolfKeepsPetAway(BotSnapshotView const& s);
+
 // [raid_cd] log line for a major cooldown the bot uses inside an instance
 // (one per bot and spell per 10 s, so a retried cast logs once).
 void NoteCooldownUse(BotSnapshotView const& s, uint32 spell, char const* what);

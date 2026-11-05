@@ -31,6 +31,7 @@ P.GAPS = {
     { "wide", L["Wide"], L["About 8 yards between bots."] },
 }
 P.ROWS = 15            -- bot buttons on the page: 3 columns of 5
+P.GROUPS = 8           -- raid groups 1 to 8, one button each
 P.shape, P.gap = "circle", "normal"
 P.picked = {}          -- name -> true
 P.page = 1
@@ -48,7 +49,7 @@ function P.Members()
         local name = ns.SafeName and ns.SafeName(unit) or UnitName(unit)
         if not name then return end
         local _, cls = UnitClass(unit)
-        out[#out + 1] = { name = name, class = cls or "", sub = sub or 1 }
+        out[#out + 1] = { name = name, class = cls or "", sub = sub or 1, unit = unit }
     end
     if IsInRaid and IsInRaid() then
         local n = GetNumGroupMembers and GetNumGroupMembers() or 0
@@ -67,6 +68,11 @@ function P.Members()
 end
 
 local function RoleOf(m)
+    -- The raid Main Tank flag (Main tank button, Raid ready) wins: that bot tanks whatever its spec.
+    if m.unit and GetPartyAssignment then
+        local ok, mt = pcall(GetPartyAssignment, "MAINTANK", m.unit)
+        if ok and mt then return "tank" end
+    end
     local r = P.roles[m.name]
     if r then return r end
     if UnitGroupRolesAssigned then
@@ -106,6 +112,31 @@ local function Lit(list, word)
     end
 end
 
+-- Raid group g: how many members are in it and how many of them are ticked.
+function P.GroupCount(members, g)
+    local inG, ticked = 0, 0
+    for _, m in ipairs(members) do
+        if (m.sub or 1) == g then
+            inG = inG + 1
+            if P.picked[m.name] then ticked = ticked + 1 end
+        end
+    end
+    return inG, ticked
+end
+
+-- A group button: ticks the whole group, or unticks it when every bot in it is ticked already (owner request 2026-11-04: pick
+-- by role, by group and by name, all mixed).
+function P.ToggleGroup(g)
+    local members = P.Members()
+    local inG, ticked = P.GroupCount(members, g)
+    if inG == 0 then return end
+    local on = ticked < inG
+    for _, m in ipairs(members) do
+        if (m.sub or 1) == g then P.picked[m.name] = on or nil end
+    end
+    P.Refresh()
+end
+
 function P.Refresh()
     if not pane then return end
     Lit(pane.shapeButtons, P.shape)
@@ -128,10 +159,15 @@ function P.Refresh()
             b:SetEnabled(false)
         end
     end
+    for g, b in ipairs(pane.groupButtons or {}) do
+        local inG, ticked = P.GroupCount(members, g)
+        b:SetEnabled(inG > 0)
+        if inG > 0 and ticked == inG then b:LockHighlight() else b:UnlockHighlight() end
+    end
     pane.pageText:SetText(pages > 1 and (P.page .. "/" .. pages) or "")
     pane.prev:SetEnabled(P.page > 1)
     pane.next:SetEnabled(P.page < pages)
-    pane.count:SetText(#members == 0 and ("|cff9d9d9d" .. L["No group yet: add bots first."] .. "|r")
+    pane.count:SetText(#members == 0 and ("|cff9d9d9d" .. L["No bots"] .. "|r")
                        or L["%d of %d ticked"]:format(n, #members))
 end
 
@@ -140,22 +176,29 @@ function P.AskRoles()
     if not (Net and Net.Ready() and ns.Windows and ns.Windows.ParseRoster) then return end
     Net.Request("ROSTER_REQ", { "1" }, function(fields)
         if not fields then return end
-        -- roster role: 1 tank, 2 healer, 3 damage
-        local ROLE = { ["1"] = "tank", ["2"] = "healer", ["3"] = "dps" }
+        -- The roster's role field is a word: TANK, HEALER or DPS (AddonControl RoleToken). Matching it against "1"/"2"/"3" left
+        -- every bot a damage dealer, so Tanks and Heals ticked nobody (owner report 2026-11-04).
+        local ROLE = { TANK = "tank", HEALER = "healer", DPS = "dps" }
+        local roles = {}
         for _, b in ipairs(ns.Windows.ParseRoster(fields)) do
-            local r = ROLE[tostring(b.role or "")]
-            if r then P.roles[b.name] = r end
+            local r = ROLE[string.upper(tostring(b.role or ""))]
+            if r then roles[b.name] = r end
         end
+        P.roles = roles
         P.Refresh()
     end)
 end
 
-local function Said(line)
-    if line and line ~= "" and ns.Print then ns.Print(L[line]) end
-end
+P.MARKER = 8           -- the world marker the Set button puts down (8 = white skull); the server reads its spot
+P.lastSend = 0
 
--- anchor: "here", "target" or "follow" (let the ticked bots go).
+-- anchor: "here", "target", "cursor" (the next world marker or ping is the spot) or "follow" (let the ticked bots go).
+-- The server answers in a system line itself, so nothing here waits for a reply: with 39 bots and a busy PC the hidden reply came
+-- after the 6 s timeout and "no answer from the server (timeout)" showed although the bots had moved (owner report 2026-11-04).
 function P.Send(anchor)
+    local now = GetTime and GetTime() or 0
+    if now - P.lastSend < 1 then return end   -- a double click (or the down and up of the cursor button) sends once
+    P.lastSend = now
     local members = P.Members()
     if #members == 0 then
         if ns.Print then ns.Print(L["you have no group yet: add a bot first."]) end
@@ -168,9 +211,7 @@ function P.Send(anchor)
         return
     end
     if Net and Net.Ready() then
-        Net.Request("PLACE_REQ", fields, function(f, why)
-            if f then Said(f[3]) elseif ns.Print then ns.Print(L["no answer from the server (%s)."]:format(tostring(why))) end
-        end)
+        Net.Request("PLACE_REQ", fields)
         return
     end
     -- no add-on line: the group order (an add-on message holds about 250 letters, so a long list is cut to what fits)
@@ -209,8 +250,10 @@ function ns.BuildPlace(p, helpers)
 
     Section(p, 90, L["Bots"])
     p.count = p:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    p.count:SetPoint("TOPRIGHT", p, "TOPRIGHT", -2, -92)
-    p.count:SetJustifyH("RIGHT")
+    p.count:SetPoint("TOPLEFT", p, "TOPLEFT", 44, -93)
+    p.count:SetWidth(110)
+    p.count:SetJustifyH("LEFT")
+    if p.count.SetWordWrap then p.count:SetWordWrap(false) end   -- one line: the role buttons sit right below
     local QUICK = {
         { "all", L["All"], L["Tick every bot in your group."] },
         { "none", L["None"], L["Untick every bot."] },
@@ -230,12 +273,20 @@ function ns.BuildPlace(p, helpers)
         end)
         Tip(b, d[2], d[3])
     end
+    -- one button per raid group (a party is group 1)
+    p.groupButtons = {}
+    for g = 1, P.GROUPS do
+        local b = Btn(p, (g - 1) * 30, 130, 28, 18, L["short:G%d"]:format(g), { size = 9 })
+        b:SetScript("OnClick", function() P.ToggleGroup(g) end)
+        Tip(b, L["Group %d"]:format(g), L["Tick every bot in this raid group. Click again when they are all ticked to untick them."])
+        p.groupButtons[g] = b
+    end
     p.rows = {}
     for i = 1, P.ROWS do
         local col, row = (i - 1) % 3, math.floor((i - 1) / 3)
         local b = CreateFrame("Button", nil, p)
         b:SetSize(78, 15)
-        b:SetPoint("TOPLEFT", p, "TOPLEFT", col * 80, -(132 + row * 16))
+        b:SetPoint("TOPLEFT", p, "TOPLEFT", col * 80, -(151 + row * 15))
         b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
         local fs = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         fs:SetPoint("LEFT", b, "LEFT", 2, 0)
@@ -259,20 +310,39 @@ function ns.BuildPlace(p, helpers)
         b:SetScript("OnLeave", function() GameTooltip:Hide() end)
         p.rows[i] = b
     end
-    p.prev = Btn(p, 160, 212, 24, 18, "<", { size = 10 })
+    -- the pages of names: on the Bots heading line, right
+    p.prev = Btn(p, 160, 90, 24, 18, "<", { size = 10 })
     p.prev:SetScript("OnClick", function() P.page = math.max(1, P.page - 1); P.Refresh() end)
-    p.next = Btn(p, 214, 212, 24, 18, ">", { size = 10 })
+    p.next = Btn(p, 214, 90, 24, 18, ">", { size = 10 })
     p.next:SetScript("OnClick", function() P.page = P.page + 1; P.Refresh() end)
     p.pageText = p:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    p.pageText:SetPoint("CENTER", p, "TOPLEFT", 199, -221)
+    p.pageText:SetPoint("CENTER", p, "TOPLEFT", 199, -99)
 
-    local here = Btn(p, 0, 228, 78, 22, L["Place here"], { size = 10 })
+    -- Set: a secure world marker button. The click first tells the server to wait for a spot, then the client shows its
+    -- ground circle; where the player clicks the marker lands, and the server sends the bots there (also a ping on the ground works).
+    local okC, cur = pcall(CreateFrame, "Button", nil, p, "UIPanelButtonTemplate,SecureActionButtonTemplate")
+    if not (okC and cur) then cur = CreateFrame("Button", nil, p, "UIPanelButtonTemplate") end
+    cur:SetSize(58, 22)
+    cur:SetPoint("TOPLEFT", p, "TOPLEFT", 0, -228)
+    cur:SetText(L["short:Set"])
+    if cur:GetFontString() then cur:GetFontString():SetFontObject("GameFontNormalSmall") end
+    cur:RegisterForClicks("AnyUp", "AnyDown")
+    cur:SetAttribute("type", "worldmarker")
+    cur:SetAttribute("action", "set")
+    cur:SetAttribute("marker", P.MARKER)
+    cur:SetScript("PreClick", function()
+        if P.lastSend > 0 and (GetTime and GetTime() or 0) - P.lastSend < 1 then return end
+        P.Send("cursor")
+        if ns.Print then ns.Print(L["click the ground where the bots should stand (or ping the spot)."]) end
+    end)
+    Tip(cur, L["Set with the mouse"], L["Click this, then click the ground: the ticked bots stand in the shape on that spot, facing away from you, and stay there. A white skull marks the spot. You can also ping the spot instead."])
+    local here = Btn(p, 60, 228, 58, 22, L["Place here"], { size = 10 })
     here:SetScript("OnClick", function() P.Send("here") end)
-    Tip(here, L["Place here"], L["The ticked bots run to their spots in the shape, centred where you stand and pointing the way you face, and stay there. After a fight they walk back to their spot."])
-    local tgt = Btn(p, 80, 228, 78, 22, L["At target"], { size = 10 })
+    Tip(here, L["Place here"], L["The ticked bots stand in the shape just in front of you, pointing the way you face (Circle and Arc go round you), and stay there. After a fight they walk back to their spot."])
+    local tgt = Btn(p, 120, 228, 58, 22, L["At target"], { size = 10 })
     tgt:SetScript("OnClick", function() P.Send("target") end)
-    Tip(tgt, L["At target"], L["The same round your target (a boss, a player or an NPC), facing you. Arc and Circle keep out of the boss's reach."])
-    local back = Btn(p, 160, 228, 78, 22, L["Follow"], { size = 10 })
+    Tip(tgt, L["At target"], L["The same at your target (a mob or an NPC, not one of your group), facing you. No bot stands inside it; Arc and Circle keep out of a boss's reach."])
+    local back = Btn(p, 180, 228, 58, 22, L["Follow"], { size = 10 })
     back:SetScript("OnClick", function() P.Send("follow") end)
     Tip(back, L["Follow"], L["The ticked bots leave their spots and follow you again."])
 

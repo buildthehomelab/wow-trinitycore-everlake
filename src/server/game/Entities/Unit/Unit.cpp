@@ -19,6 +19,7 @@
 #include "ClassicRage.h"
 #include "ClassicArmor.h"
 #include "ClassicAutoShot.h"
+#include "ClassicLegacyPerks.h"
 #include "DeathRecap.h"
 #include "AbstractFollower.h"
 #include "Battlefield.h"
@@ -3887,7 +3888,8 @@ void Unit::_UnapplyAura(AuraApplicationMap::iterator& i, AuraRemoveMode removeMo
     // Remove aurastates only if needed and were not found
     if (auraState)
     {
-        if (!auraStateFound)
+        // Classic 1.60: the defensive state also comes from a recent dodge, parry or block (reactive timer), which keeps it
+        if (!auraStateFound && !(auraState == AURA_STATE_DEFENSIVE && m_reactiveTimer[REACTIVE_DEFENSE]))
             ModifyAuraState(auraState, false);
         else
         {
@@ -4692,12 +4694,22 @@ void Unit::RemoveAurasOnEvade()
 
 void Unit::RemoveAllAurasOnDeath()
 {
+    // Classic 1.60 Legacy perk Second Chance 1225508: "Effects gained from celebrating the defeat of bosses will not cancel the first time
+    // you die while they are active." 1262777 (death persistent) marks that they already survived one; the boss buffs' script removes it
+    // when the last of them is gone.
+    bool const keepBossBuffs = IsPlayer() && HasAura(ClassicLegacyPerks::SECOND_CHANCE) && !HasAura(ClassicLegacyPerks::SECOND_CHANCE_USED)
+        && std::ranges::any_of(m_ownedAuras, [](AuraMap::value_type const& pair) { return ClassicLegacyPerks::IsBossCelebrationBuff(pair.first); });
+    auto removedOnDeath = [keepBossBuffs](Aura const* aura)
+    {
+        return !aura->IsPassive() && !aura->IsDeathPersistent() && !(keepBossBuffs && ClassicLegacyPerks::IsBossCelebrationBuff(aura->GetId()));
+    };
+
     // used just after dieing to remove all visible auras
     // and disable the mods for the passive ones
     for (AuraApplicationMap::iterator iter = m_appliedAuras.begin(); iter != m_appliedAuras.end();)
     {
         Aura const* aura = iter->second->GetBase();
-        if (!aura->IsPassive() && !aura->IsDeathPersistent())
+        if (removedOnDeath(aura))
             _UnapplyAura(iter, AURA_REMOVE_BY_DEATH);
         else
             ++iter;
@@ -4706,11 +4718,14 @@ void Unit::RemoveAllAurasOnDeath()
     for (AuraMap::iterator iter = m_ownedAuras.begin(); iter != m_ownedAuras.end();)
     {
         Aura* aura = iter->second;
-        if (!aura->IsPassive() && !aura->IsDeathPersistent())
+        if (removedOnDeath(aura))
             RemoveOwnedAura(iter, AURA_REMOVE_BY_DEATH);
         else
             ++iter;
     }
+
+    if (keepBossBuffs)
+        AddAura(ClassicLegacyPerks::SECOND_CHANCE_USED, this);
 }
 
 void Unit::RemoveAllAurasRequiringDeadTarget()
@@ -10960,11 +10975,9 @@ void Unit::ProcSkillsAndReactives(bool isVictim, Unit* procTarget, ProcFlagsInit
                     StartReactiveTimer(REACTIVE_DEFENSE);
                 }
             }
-            // for attacker: a warrior whose target dodges has the combo point Overpower costs for the length of the reactive timer (VMaNGOS: Unit::ProcDamageAndSpell,
-            // REACTIVE_OVERPOWER). The point itself comes from the client's own proc aura 1282735 "Offensive State (DND)" -> 1282733, restricted to dodges by its
-            // spell_proc row; the timer only clears it again.
-            else if ((hitMask & PROC_HIT_DODGE) && GetClass() == CLASS_WARRIOR && IsPlayer())
-                StartReactiveTimer(REACTIVE_OVERPOWER);
+            // for attacker: a warrior whose target dodges gets the combo point Overpower costs from the client's own proc aura 1282735
+            // "Offensive State (DND)" -> 1282733 (restricted to dodges by its spell_proc row). The window that clears the point again starts
+            // where the point is given (Spell::EffectEnergize), so it also covers the Bloodthrill talent and lasts as long as 1282733 (5 s).
         }
     }
 }
@@ -11379,7 +11392,8 @@ void Unit::UpdateReactives(uint32 p_time)
             switch (reactive)
             {
                 case REACTIVE_DEFENSE:
-                    if (HasAuraState(AURA_STATE_DEFENSIVE))
+                    // Classic 1.60: an aura that gives the state (1310726 Expose Prey) keeps it after the reactive timer
+                    if (HasAuraState(AURA_STATE_DEFENSIVE) && !m_auraStateAuras.contains(AURA_STATE_DEFENSIVE))
                         ModifyAuraState(AURA_STATE_DEFENSIVE, false);
                     break;
                 case REACTIVE_DEFENSE_2:

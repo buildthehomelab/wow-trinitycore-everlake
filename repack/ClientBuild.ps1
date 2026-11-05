@@ -62,6 +62,10 @@ function Get-KnownBuilds([string]$Root) {
     if ($r) { return @($r) }
     @()
 }
+# Second line of server\data\dbc\.client-build. Some table records come locked (encrypted) in the game files until Blizzard releases
+# their key; the extractor then writes them empty. When a release builds new keys into mapextractor.exe (70790: two keys for the Forever
+# launch content), this changes, and refresh-db2.ps1 extracts the tables once more on the same client build.
+$TableKeysRevision = 'keys 2026-11-05'
 # The version (major, minor, bugfix) of the realm's build, from the newest build_info row of the shipped auth updates for it.
 function Get-RealmVersion([string]$Root) {
     $realm = Get-RealmBuild $Root
@@ -159,6 +163,49 @@ function Sync-AlsoAcceptBuilds([string]$Root) {
     }
 }
 # The installed product of $ClientDir to use: the one with the first accepted build that has its game folder, or $null.
+# The text languages Battle.net has downloaded for one game (its row in .build.info: Tags lists "ruRU text?" per language), or an
+# empty list when that is not readable. $GameDir is the game folder (_forever_ / _classic_beta_), $Product its .build.info product.
+function Get-ClientTextLocales([string]$GameDir, [string]$Product) {
+    $info = Join-Path (Split-Path $GameDir -Parent) '.build.info'
+    $lines = @(Get-Content -LiteralPath $info -ErrorAction SilentlyContinue)
+    if ($lines.Count -lt 2) { return @() }
+    $col = @(@($lines[0] -split '\|') | ForEach-Object { ($_ -split '!')[0] })
+    $it = [array]::IndexOf($col, 'Tags'); $ip = [array]::IndexOf($col, 'Product')
+    if ($it -lt 0) { return @() }
+    foreach ($l in @($lines | Select-Object -Skip 1 | Where-Object { $_.Trim() })) {
+        $f = $l -split '\|'
+        if ($f.Count -le $it) { continue }
+        if ($Product -and $ip -ge 0 -and $f.Count -gt $ip -and $f[$ip].Trim() -ne $Product) { continue }   # another game's row
+        return @([regex]::Matches($f[$it], '\b([a-z]{2}[A-Z]{2}) text\?') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+    }
+    @()
+}
+# The language the game shows its texts in, for the server's game tables (server\data\dbc\<language>) and the NPC and quest names.
+# 0.1.29 took the first language word anywhere in .build.info, which can be another game's row (an English retail row before the
+# Russian Forever one) or a speech language, so a Russian client got English tables. Now, in this order:
+#   1. textLocale in the game's WTF\ForeverLauncher.wtf (the file the launcher starts the game with), then WTF\Config.wtf,
+#      when Battle.net has that language for this game (or the list is not readable)
+#   2. the text language Battle.net downloaded for this game's own row: English when it is there, else the first one
+#   3. enUS
+# Returns Locale (enGB is read as enUS: the English tables are enUS), Source (where it came from, for the log), Installed (list).
+function Get-ClientLocale([string]$GameDir, [string]$Product) {
+    $installed = @(Get-ClientTextLocales $GameDir $Product)
+    $norm = { param($l) if ($l -eq 'enGB') { 'enUS' } else { $l } }
+    foreach ($w in 'ForeverLauncher.wtf', 'Config.wtf') {
+        $f = Join-Path (Join-Path $GameDir 'WTF') $w
+        $m = Select-String -LiteralPath $f -Pattern '^\s*SET\s+textLocale\s+"([a-zA-Z]{4})"' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $m) { continue }
+        $l = $m.Matches[0].Groups[1].Value
+        if (-not $installed.Count -or $installed -contains $l) {
+            return [pscustomobject]@{ Locale = (& $norm $l); Source = "textLocale in WTF\$w"; Installed = $installed }
+        }
+    }
+    if ($installed.Count) {
+        $l = if ($installed -contains 'enUS') { 'enUS' } elseif ($installed -contains 'enGB') { 'enGB' } else { $installed[0] }
+        return [pscustomobject]@{ Locale = (& $norm $l); Source = "the text languages installed for $Product"; Installed = $installed }
+    }
+    [pscustomobject]@{ Locale = 'enUS'; Source = 'nothing found, English'; Installed = $installed }
+}
 function Select-ClientProduct([string]$Root, [string]$ClientDir) {
     $rows = @(Get-ClientProducts $ClientDir | Where-Object { $_.Dir })
     foreach ($b in Get-AcceptedBuilds $Root) {

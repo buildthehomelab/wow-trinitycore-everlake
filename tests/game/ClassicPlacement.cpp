@@ -118,3 +118,25 @@ TEST_CASE("Local slots turn with the facing", "[ClassicPlacement]")
     ToWorld(Slot{ 0.0f, 3.0f }, 0.0f, 0.0f, 0.0f, x, y);   // left of a facing along +x is +y
     CHECK(x == Catch::Approx(0.0f).margin(1e-3)); CHECK(y == Catch::Approx(3.0f));
 }
+
+TEST_CASE("Place here never puts a bot on the player", "[ClassicPlacement]")
+{
+    // owner report 2026-11-04: one bot, Column, Place here: the only slot was the middle, his own spot, and the bot ran onto him.
+    for (Shape k : kAll)
+        for (uint32_t n : { 1u, 2u, 5u, 23u, 40u })
+        {
+            INFO(ShapeName(k) << " n " << n);
+            std::vector<Slot> v = Slots(k, n, 4.0f);
+            if (!RingShape(k))
+                PushAhead(v, 4.0f);
+            for (Slot const& s : v)
+                CHECK(std::hypot(s.forward, s.left) >= 2.99f);
+            if (!RingShape(k))
+                for (Slot const& s : v)
+                    CHECK(s.forward >= 3.99f);
+        }
+    // a shape already far enough ahead is not moved
+    std::vector<Slot> v = { Slot{ 10.0f, 1.0f } };
+    PushAhead(v, 4.0f);
+    CHECK(v[0].forward == 10.0f);
+}

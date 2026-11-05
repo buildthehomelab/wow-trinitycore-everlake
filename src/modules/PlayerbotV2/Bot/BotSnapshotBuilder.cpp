@@ -2790,7 +2790,14 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     // on InvalidTarget. Better to surface no victim and let the InCombat
     // dispatch retarget via highest_threat_attacker.
     if (Unit* victim = p->GetVictim(); victim && victim->IsAlive())
+    {
         snap->combat.victim = victim->GetGUID();
+        snap->combat.victim_pos_known = true;
+        snap->combat.victim_x = victim->GetPositionX();
+        snap->combat.victim_y = victim->GetPositionY();
+        snap->combat.victim_z = victim->GetPositionZ();
+        snap->combat.victim_reach = victim->GetCombatReach();
+    }
     if (ObjectGuid t = p->GetTarget(); !t.IsEmpty())
     {
         snap->combat.current_target = t;
@@ -8193,8 +8200,8 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
             // Hazard classification for TRAP-type GOs (bonfires, pyres,
             // lava grates). We mark a trap as a hazard when its trap
             // spell is hostile (SpellInfo::IsPositive() == false). The
-            // hazard_radius copies trap.radius/2 to mirror TC's legacy
-            // diameter quirk in GameObject.cpp:1466. idle:flee_hazard
+            // hazard_radius is the radius the core fires the trap at (see
+            // below). idle:flee_hazard
             // uses both fields to step the bot 5y past the radius so it
             // stops standing inside a bonfire and dying.
             else if (n.go_type == GAMEOBJECT_TYPE_TRAP)
@@ -8208,8 +8215,13 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                         {
                             if (!si->IsPositive())
                             {
+                                // The core halves the radius only for an owned trap (GameObject::Update, since 2026-10-16); a
+                                // world trap fires at the full radius. Halving every trap left bots 6-11 y from Majordomo's
+                                // Intense Heat pit (20533, radius 10) thinking they stood clear: 17 of the 43 deaths in
+                                // release-0130 mc_majordomo were that pit.
                                 n.is_hazard     = true;
-                                n.hazard_radius = tmpl->trap.radius / 2.0f;
+                                n.hazard_radius = go->GetOwnerGUID().IsEmpty() ? float(tmpl->trap.radius)
+                                                                               : tmpl->trap.radius / 2.0f;
                             }
                         }
                     }

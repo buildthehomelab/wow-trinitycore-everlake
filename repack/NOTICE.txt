@@ -11,6 +11,10 @@ This package is distributed under the GNU General Public License version 2 (the 
 - ike3 / cMaNGOS playerbots (Ike's mangosbot), VMaNGOS and cMaNGOS (all GPL-2.0): several behaviours and the vanilla
   encounter data follow these projects.
 - SimulationCraft (GPL-3.0 data used as reference for rotations and talent loadouts).
+- Questie / QuestieDB (https://github.com/Questie/QuestieDB, GPL-3.0): quest givers, drops, reputation rewards and the
+  Russian names of newer NPCs come from its Forever player trace data (never its Wowhead-derived files).
+- Wowhead (https://www.wowhead.com, Forever pages): Russian names of newer NPCs and a few English names that were
+  placeholders, fetched slowly by our own tool.
 - Host for friends can download Cloudflare's cloudflared (https://github.com/cloudflare/cloudflared, Apache-2.0) unchanged
   from its GitHub release when a host turns the tunnel on; it is not part of this package.
 - Third-party binaries in the package (MySQL, OpenSSL, Boost, zlib and others) keep their own licences; their licence

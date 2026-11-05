@@ -1379,6 +1379,11 @@ struct TankLos
 struct CombatTargetsState
 {
     ObjectGuid              victim;
+    // Where the victim stands, whatever its distance: the 40 y enemy scan (nearby_enemies) does not hold a victim further out, and an owner's
+    // Attack order on a mob 40-50 y off (a raid boss from the landing spot) is walked to from this (OwnerEngageFire).
+    bool                    victim_pos_known = false;
+    float                   victim_x = 0.0f, victim_y = 0.0f, victim_z = 0.0f;
+    float                   victim_reach = 0.0f;
     ObjectGuid              current_target;
     // True only when current_target resolves to a LIVE unit the bot could
     // legally attack (IsValidAttackTarget on the world thread). Autonomy

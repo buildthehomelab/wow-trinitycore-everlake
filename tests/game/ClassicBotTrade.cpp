@@ -260,6 +260,19 @@ TEST_CASE("TradeTalk: an order by number or by name", "[bottrade]")
     CHECK(o.name == "linen cloth");
 
     CHECK_FALSE(TT::ParseOrder("how are you").is_order);
+
+    // Russian: the client sends UTF-8 with capitals, only ASCII is lowered before this
+    CHECK(TT::IsInventoryQuestion("Что продаёшь"));
+    CHECK(TT::IsInventoryQuestion("привет что у тебя есть"));
+    CHECK_FALSE(TT::IsInventoryQuestion("как дела"));
+    o = TT::ParseOrder("Куплю 2");
+    CHECK(o.is_order);
+    CHECK(o.buy_verb);
+    CHECK(o.index == 2);
+    o = TT::ParseOrder("беру номер 3");
+    CHECK(o.is_order);
+    CHECK_FALSE(o.buy_verb);
+    CHECK(o.index == 3);
     CHECK_FALSE(TT::ParseOrder("buy").is_order);
 }
 

@@ -930,6 +930,10 @@ void HandlePlaceReq(uint32 client_seq, WorldSession* sess, std::vector<std::stri
         if (!fields[i].empty())
             who.push_back(fields[i]);
     BotCommandParser::PlaceResult const r = BotCommandParser::PlaceBots(me, field(0), field(1), field(2), who, "addon");
+    // The answer is a plain system line too: the add-on (0.6.14) no longer waits for PLACE_RESP, which came after its 6 s timeout on a
+    // busy PC with 39 bots (owner report 2026-11-04) although the bots had moved.
+    if (!r.line.empty())
+        ChatHandler(sess).PSendSysMessage("%s", r.line.c_str());
     SendFields(sess, client_seq, "PLACE_RESP", {std::to_string(r.placed), std::to_string(r.asked), Escape(r.line)});
 }
 

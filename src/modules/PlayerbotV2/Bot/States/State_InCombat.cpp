@@ -108,10 +108,23 @@ bool IsMeleeSpec(uint8 cls, uint32 spec)
 // cannot_reach covers the mob-cannot-reach-bot direction (the diagnosed
 // case); the asymmetric bot-cannot-reach-mob case is handled by the
 // pull-gate / disengage machinery, not here.
-bool IsAttackerFightable(NearbyUnit const& u)
+// "cannot_reach" only counts in a dungeon or raid (the WC corridor ledge pack it was made for) and never for a mob that is hitting this
+// bot. Out in the world the creature's flag goes stale: it is set when one chase path fails (a slope, shallow water, a rock) and is
+// not cleared while the mob stands in reach and hits, so the bot skipped its own attacker and stood taking damage without fighting
+// back (Discord 2026-11-05, 0.1.29.1: "in the open world some bots just stand and take damage").
+bool CannotReachCounts(BotSnapshotView const& s, NearbyUnit const& u)
+{
+    if (!u.cannot_reach)
+        return false;
+    if (!s.is_in_instance() || s.in_battleground())
+        return false;
+    return u.victim != s.guid();
+}
+
+bool IsAttackerFightable(BotSnapshotView const& s, NearbyUnit const& u)
 {
     // A boss pacified by its own spell (Geddon's Inferno) is the fight, not a prop; the builder's tally agrees.
-    return !u.untargetable && (!u.is_pacified || u.is_dungeon_boss || u.is_boss_rank) && u.hp > 0 && !u.cannot_reach;
+    return !u.untargetable && (!u.is_pacified || u.is_dungeon_boss || u.is_boss_rank) && u.hp > 0 && !CannotReachCounts(s, u);
 }
 
 // Names which fightable ingredient failed, for the [skip_unfightable] diag:
@@ -512,6 +525,37 @@ bool MaybeUseOffensiveRacial(BotSnapshotView const& s, Role role, BotIntentEmitt
             }
         } break;
         case RACE_DARK_IRON_DWARF: if (s.knows_spell(FIREBLOOD)      && s.is_ready(FIREBLOOD))      { emit.cast(FIREBLOOD);      return true; } break;
+        case RACE_NIGHTELF:
+        {
+            // Classic 1.60 (Forever): Elune's Light, +10% physical and spell critical strike chance for 15 s, taught to every Night Elf
+            // at character start (2026_10_06_00 start sniff). A burst cooldown like Berserking: the same boss gate. The wowsims/forever
+            // (MIT) warrior, rogue and druid lists fire it with the other cooldowns.
+            constexpr uint32 ELUNES_LIGHT = 1259799;
+            if (!burst_ok) break;
+            if (s.knows_spell(ELUNES_LIGHT) && s.is_ready(ELUNES_LIGHT))
+            {
+                emit.cast(ELUNES_LIGHT);
+                Classic::NoteCooldownUse(s, ELUNES_LIGHT, "Elune's Light");
+                return true;
+            }
+        } break;
+        case RACE_SKYBORNE_ALLIANCE:
+        {
+            // Classic 1.60 (Forever): High Order Skyborne Read Ley Line 1259705 (0.5 s cast, classic_spell_skyborne_read_ley_line):
+            // Energized 1270842, +50% health and mana regeneration for 15 s. A mana user that is running low uses it; never under
+            // Innervate (which replaces it), never while casting or moving.
+            constexpr uint32 READ_LEY_LINE = 1259705;
+            constexpr uint32 ENERGIZED     = 1270842;
+            constexpr uint32 INNERVATE     = 29166, INNERVATE_2 = 456195;
+            if (s.max_power(0) > 0 && s.power_pct(0) <= 50 && !s.is_casting() && !s.is_moving()
+                && !s.has_aura(ENERGIZED) && !s.has_aura(INNERVATE) && !s.has_aura(INNERVATE_2)
+                && s.knows_spell(READ_LEY_LINE) && s.is_ready(READ_LEY_LINE))
+            {
+                emit.cast(READ_LEY_LINE);
+                Classic::NoteCooldownUse(s, READ_LEY_LINE, "Read Ley Line");
+                return true;
+            }
+        } break;
         case RACE_VULPERA:         if (s.knows_spell(BAG_OF_TRICKS)  && s.is_ready(BAG_OF_TRICKS))  { emit.cast(BAG_OF_TRICKS,   s.victim()); return true; } break;
         default: break;
     }
@@ -2508,6 +2552,19 @@ void DispatchInCombat(BotAI& ai,
     // 0.1.28i: the stunned carriers stood in the breath).
     const bool cure_item_used = !survival_item_used && !resist_potion_used && MaybeUseCureItem(snapshot, emit);
 
+    // A trap zone (a game object the raid brain does not track: Majordomo's Intense Heat pit) before the raid orders: the orders own
+    // every tick a bot has a job or a target switch, so the step-out further down never ran for a bot the brain was busy with
+    // (release-0130 mc_majordomo 8304ad94: four raiders teleported into the pit by Majordomo died there under raid:switch_target /
+    // raid:drop_target, and three melee walked across it to their next add). A raid order with a move of its own (the brain's hazards)
+    // still goes first, and spell zones keep their old place below.
+    if (snapshot.is_in_instance() && !snapshot.in_battleground() && !snapshot.raw().raid_order.move)
+    {
+        if (RaidHazardStepOut(snapshot, ai, group, emit, /*traps_only*/ true))
+            return;
+        if (RaidHazardDetour(snapshot, ai, emit))
+            return;
+    }
+
     // Raid encounter orders (Bot/Raid): hazard moves, taunt swaps, dispels,
     // purges, crowd control and forbidden targets come before everything else.
     if (Raid::DispatchRaidOrder(ai, snapshot, emit))
@@ -4128,7 +4185,7 @@ void DispatchInCombat(BotAI& ai,
             // IsAttackerFightable test. Kill switch:
             // PlayerbotV2.Combat.SkipUnfightable.
             if (Services::Config().combat_skip_unfightable() &&
-                (a.is_pacified || a.cannot_reach))
+                (a.is_pacified || CannotReachCounts(snapshot, a)))
             {
                 DiagSkipUnfightable(snapshot, a.guid, UnfightableReason(a));
                 continue;
@@ -4530,7 +4587,7 @@ void DispatchInCombat(BotAI& ai,
                 // DungeonCombatPositioning (route-aware) keeps movement
                 // ownership and the mob is left to leash.
                 if (Services::Config().combat_skip_unfightable() &&
-                    !IsAttackerFightable(*vu))
+                    !IsAttackerFightable(snapshot, *vu))
                 {
                     DiagSkipUnfightable(snapshot, snapshot.victim(),
                                         UnfightableReason(*vu));

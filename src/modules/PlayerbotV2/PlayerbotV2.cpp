@@ -58,6 +58,7 @@
 #include "Util.h"
 #include "Bot/AddonHint.h"
 #include "Bot/BotTextMgr.h"
+#include "Api/BotLanguage.h"
 #include "Chat.h"
 #include "Bot/BotIntent.h"
 #include "Threading/IntentQueue.h"
@@ -891,6 +892,8 @@ void Module::Init()
     // The bots' speech lines (shared DB, migration 0019). Loaded before any bot can tick; read-only
     // afterwards, so bot workers and the world thread read it without a lock.
     BotTextMgr::instance().Load();
+    // Which language each player reads the bots' replies in (Api/BotLanguage.h).
+    BotLanguage::Load();
 
     // Bring up Services (SnapshotPublisher, IntentQueue, AiWorkerPool,
     // FleetThread, TickScheduler, BotRegistry). Adds threads.
@@ -1645,12 +1648,14 @@ void Module::OnWorldUpdate(std::chrono::milliseconds diff)
     static std::atomic<SnapshotVer> next_version{1};
     static TickId      next_tick    = 1;
     total += diff;
+    BotLanguage::Update();   // the login queries for the players' client language
     {
         static std::chrono::milliseconds last_hint_check{0};
         if (total - last_hint_check >= std::chrono::milliseconds(2000))
         {
             last_hint_check = total;
             SendDueAddonHints();
+            RecheckArenaWaits(GameTime::GetGameTimeMS());   // real parties in an arena queue with no team against them
         }
     }
     {
@@ -3149,6 +3154,7 @@ void Module::OnPlayerLogin(Player* p)
             sess && !sess->IsBot())
         {
             const uint32 owner_account = sess->GetAccountId();
+            BotLanguage::OnLogin(p);   // the language this client reported, for the bots' replies
             // Bots bound to the whole account treat this character as their owner while it is online.
             Services::Owners().NoteOwnerCharacterOnline(owner_account, id);
             if (Services::Config().addon_hint_enabled())
@@ -3950,7 +3956,7 @@ void Module::RouteGroupOrder(Player* sender, Group* group, std::string order)
         bool const on = word == "on";
         bool const changed = Services::Owners().SetCcEnabled(account, on);
         TC_LOG_INFO("playerbot.v2", "[cc_switch] {} turns crowd control {} ({})", sender->GetName(), word, changed ? "changed" : "already");
-        ChatHandler(sender->GetSession()).PSendSysMessage("Crowd control for your bots: %s.", on ? "on" : "off");
+        Playerbot::BotLanguage::LocalizedHandler(sender->GetSession()).PSendSysMessage("Crowd control for your bots: %s.", on ? "on" : "off");
         return;
     }
     uint32 tanks = 0;
@@ -4088,7 +4094,7 @@ void Module::RouteGroupOrder(Player* sender, Group* group, std::string order)
             ++owned_tanks;
             if (!m->IsAlive()) ++dead_tanks;
         }
-        ChatHandler(sender->GetSession()).PSendSysMessage(owned_tanks && dead_tanks == owned_tanks ?
+        Playerbot::BotLanguage::LocalizedHandler(sender->GetSession()).PSendSysMessage(owned_tanks && dead_tanks == owned_tanks ?
             "Your tank bots are all dead; use attack instead." :
             "No tank among your bots to pull; use attack instead.");
         TC_LOG_INFO("playerbot.v2", "[pull_back] {} '{}': no tank pulled (your tank bots in the group: {}, dead {}; flagged main tank skipped: {})",
@@ -4132,7 +4138,15 @@ void Module::OnGroupPingUnit(Player* sender, Group* group, Unit* target, uint8 t
 
 void Module::OnGroupPingPoint(Player* sender, Group* group, Position const& point, uint8 type)
 {
-    if (!initialized_ || !sender || !group || type != 3) return;   // 3 = PingSubjectType::OnMyWay
+    if (!initialized_ || !sender || !group) return;
+    // A "Place at cursor" from the Positions tab waits for this: any ping on the ground is the spot (BotCommandParser::TakePendingPlace).
+    if (BotCommandParser::TakePendingPlace(sender, point))
+    {
+        TC_LOG_INFO("playerbot.v2", "[ping] {} pings ({:.1f},{:.1f}) type {}: the Positions spot", sender->GetName(), point.GetPositionX(),
+                    point.GetPositionY(), type);
+        return;
+    }
+    if (type != 3) return;   // 3 = PingSubjectType::OnMyWay
     uint32 const account = sender->GetSession() ? sender->GetSession()->GetAccountId() : 0;
     if (account == 0) return;
     uint32 set = 0;
@@ -4154,6 +4168,14 @@ void Module::OnGroupPingPoint(Player* sender, Group* group, Position const& poin
     RouteGroupOrder(sender, group, "fallback");
 }
 
+void Module::OnWorldMarkerPlaced(Player* sender, Position const& point)
+{
+    if (!initialized_ || !sender) return;
+    if (BotCommandParser::TakePendingPlace(sender, point))
+        TC_LOG_INFO("playerbot.v2", "[world_marker] {} marks ({:.1f},{:.1f}): the Positions spot", sender->GetName(), point.GetPositionX(),
+                    point.GetPositionY());
+}
+
 void Module::NoteAddonHello(Player* p)
 {
     if (!initialized_ || !p) return;
@@ -4171,7 +4193,7 @@ void Module::SendDueAddonHints()
         Player* p = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(guid));
         if (!p || !p->IsInWorld() || !p->GetSession() || p->GetSession()->IsBot())
             continue;
-        ChatHandler(p->GetSession()).PSendSysMessage("WoW Forever Bots add-on (buttons for your bots, Raid ready): %s - unzip it into Interface\\AddOns and type /reload.",
+        Playerbot::BotLanguage::LocalizedHandler(p->GetSession()).PSendSysMessage("WoW Forever Bots add-on (buttons for your bots, Raid ready): %s - unzip it into Interface\\AddOns and type /reload.",
             Services::Config().addon_hint_url().c_str());
         TC_LOG_INFO("playerbot.v2", "[addon_hint] {} has no ForeverBots add-on: link sent", p->GetName());
     }
@@ -4331,23 +4353,48 @@ void Module::OnHumanArenaQueue(Player* player, BattlegroundTemplate const* tmpl,
         return;
     if (!sConfigMgr->GetBoolDefault("Playerbot.Arena.BotOpponents", true))
         return;
-    if (tmpl->MapIDs.empty())
+    if (!AskArenaOpponents(player, tmpl, bracket, 0))
         return;
 
-    // team size of the queue the party just joined (2, 3 or 5)
+    // Asked once; RecheckArenaWaits asks again every kArenaReaskMs while the party still waits with no team against it
+    // (2026-11-04 playtest: one ask found no free bots and the queue waited for ever).
+    std::lock_guard lock(arena_waits_mtx_);
+    ArenaWait& w = arena_waits_[player->GetGUID()];
+    w.bg_type_id  = uint32(tmpl->Id);
+    w.bracket     = bracket;
+    w.next_ask_ms = GameTime::GetGameTimeMS() + kArenaReaskMs;
+    w.asks        = 1;
+}
+
+bool Module::AskArenaOpponents(Player* player, BattlegroundTemplate const* tmpl, uint8 bracket, uint32 asks)
+{
+    if (tmpl->MapIDs.empty())
+        return false;
+
+    // team size of the queue the party is in (2, 3 or 5)
+    BattlegroundQueueTypeId queueId{};
     uint8 teamSize = 0;
     for (uint32 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
     {
         BattlegroundQueueTypeId const q = player->GetBattlegroundQueueTypeId(i);
         if (q.BattlemasterListId == uint16(tmpl->Id) && q.Type == uint8(BattlegroundQueueIdType::Arena) && q.TeamSize)
+        {
+            queueId = q;
             teamSize = q.TeamSize;
+        }
     }
     if (teamSize != 2 && teamSize != 3 && teamSize != 5)
-        return;
+        return false;
 
     PVPDifficultyEntry const* diff = DB2Manager::GetBattlegroundBracketById(tmpl->MapIDs.front(), BattlegroundBracketId(bracket));
     if (!diff)
-        return;
+        return false;
+
+    // A team of the other faction already waits in the same queue and bracket (a real party, or a bot team asked for before):
+    // the queue matches the two by itself, no further team is made.
+    TeamId const other = player->GetTeamId() == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
+    if (asks > 0 && sBattlegroundMgr->GetBattlegroundQueue(queueId).GetQueuedPlayersCount(other, BattlegroundBracketId(bracket)) >= teamSize)
+        return true;
 
     // Opponents of the other faction, in the party's level bracket. BotGroupBuilder takes idle, ungrouped bots of that band, forms
     // the party and its leader queues the same Arena queue (team size, rating 1) about 10 s later; the queue then matches the two.
@@ -4362,8 +4409,45 @@ void Module::OnHumanArenaQueue(Player* player, BattlegroundTemplate const* tmpl,
     ev.content_name = "Arena opponents";
     Services::Coordination().Publish(ev);
 
-    TC_LOG_INFO("playerbot.v2", "[arena] {} queued {}v{} (bracket {}-{}): asked for a bot team of the other faction",
-                player->GetName(), uint32(teamSize), uint32(teamSize), uint32(ev.level_min), uint32(ev.level_max));
+    TC_LOG_INFO("playerbot.v2", "[arena] {} queued {}v{} (bracket {}-{}): asked for a bot team of the other faction (ask {})",
+                player->GetName(), uint32(teamSize), uint32(teamSize), uint32(ev.level_min), uint32(ev.level_max), asks + 1);
+    return true;
+}
+
+void Module::RecheckArenaWaits(uint32 now_ms)
+{
+    std::vector<std::pair<ObjectGuid, ArenaWait>> due;
+    {
+        std::lock_guard lock(arena_waits_mtx_);
+        for (auto it = arena_waits_.begin(); it != arena_waits_.end();)
+        {
+            Player* p = ObjectAccessor::FindConnectedPlayer(it->first);
+            // gone, in the arena (or any battleground), or out of that arena queue: nothing more to ask
+            if (!p || p->InBattleground() || !p->InBattlegroundQueue(/*ignoreArena*/ false))
+            {
+                it = arena_waits_.erase(it);
+                continue;
+            }
+            if (int32(now_ms - it->second.next_ask_ms) >= 0)
+            {
+                due.emplace_back(it->first, it->second);
+                it->second.next_ask_ms = now_ms + kArenaReaskMs;
+                ++it->second.asks;
+            }
+            ++it;
+        }
+    }
+
+    for (auto const& [guid, w] : due)
+    {
+        Player* p = ObjectAccessor::FindConnectedPlayer(guid);
+        BattlegroundTemplate const* tmpl = sBattlegroundMgr->GetBattlegroundTemplateByTypeId(BattlegroundTypeId(w.bg_type_id));
+        if (!p || !tmpl || !AskArenaOpponents(p, tmpl, w.bracket, w.asks))
+        {
+            std::lock_guard lock(arena_waits_mtx_);
+            arena_waits_.erase(guid);
+        }
+    }
 }
 
 void Module::OnPlayerJoinedBgQueue(Player* player, uint32 bg_type_id, uint8 bracket)

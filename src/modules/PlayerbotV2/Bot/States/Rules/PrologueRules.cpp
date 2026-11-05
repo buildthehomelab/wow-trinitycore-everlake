@@ -157,11 +157,16 @@ bool OpenerGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g,
     // still for seconds before the pull (Deadmines 2026-10-15, 7 s from the order to the first step). Not only in a dungeon: a Protection
     // warrior ordered to attack in the open world stood still the same way while the Fury warriors beside him charged in (KailON,
     // Barrens, 30 Oct 2026, four warriors, Palli stood still on all three orders).
+    // Beyond the 40 y enemy scan the mob is not reached either: the opener found no victim there, dropped it as "lost" and the order
+    // with it (release-0130 zg_marli: the tank ordered onto Mar'li from 44 y never took a step, and the raid stood 120 s).
     if (ai.effective_role(s) == Role::Tank && ai.is_manual_mode(s.published_at_ms()) &&
         ai.owner_command() == BotAI::OwnerCommand::Engage && ai.owner_target() == s.victim())
+    {
+        bool in_scan = false;
         for (NearbyUnit const& u : s.nearby_enemies())
             if (u.guid == s.victim())
             {
+                in_scan = true;
                 float px, py, pz;
                 s.position(px, py, pz);
                 float const dx = u.x - px, dy = u.y - py;
@@ -169,6 +174,9 @@ bool OpenerGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g,
                     return false;
                 break;
             }
+        if (!in_scan && s.raw().combat.victim_pos_known)
+            return false;
+    }
     // ABSOLUTE opener ceiling inside a dungeon (2026-07-21). The per-victim
     // give-up (opener_victim_since_ms, 25s) is DEFEATED when the server-side
     // victim selection flips between GUIDs every tick: set_opener_victim
@@ -598,8 +606,12 @@ bool OwnerStayFire(BotSnapshotView const& s, BotAI& ai,
                 ai.clear_stay_return();
             else if (d <= 2.5f)
             {
-                ai.clear_stay_return();
-                TC_LOG_INFO("playerbot.v2", "[stay_return] {} is back on its Stay spot", s.name());
+                // A Positions tab spot stays: the bot comes back to it after every fight, not only the first.
+                if (!ai.stay_return_pinned())
+                {
+                    ai.clear_stay_return();
+                    TC_LOG_INFO("playerbot.v2", "[stay_return] {} is back on its Stay spot", s.name());
+                }
             }
             else if (!s.is_moving() && (emit.move_already_emitted(rx, ry, rz) || emit.move_to(rx, ry, rz, /*run*/ true)))
             {
@@ -715,6 +727,29 @@ bool OwnerEngageFire(BotSnapshotView const& s, BotAI& ai,
                 return true;
             }
             break;
+        }
+        // The ordered mob is the victim but stands beyond the 40 y enemy scan (a raid boss from its landing spot, 44 y): walk toward it
+        // on the victim's own position until it comes into the scan, where the walk above takes over. The opener yields meanwhile.
+        CombatTargetsState const& ct = s.raw().combat;
+        bool scanned = false;
+        for (NearbyUnit const& u : s.nearby_enemies())
+            if (u.guid == target) { scanned = true; break; }
+        if (!scanned && !target.IsEmpty() && s.victim() == target && ct.victim_pos_known)
+        {
+            float px, py, pz;
+            s.position(px, py, pz);
+            float const dx = ct.victim_x - px, dy = ct.victim_y - py;
+            float const dist = std::sqrt(dx * dx + dy * dy);
+            float const stand = std::max(ct.victim_reach, 4.0f) + 2.0f;
+            if (dist > stand + 1.5f)
+            {
+                float const gx = ct.victim_x - dx / dist * stand, gy = ct.victim_y - dy / dist * stand;
+                if (emit.move_already_emitted(gx, gy, ct.victim_z) || emit.move_to(gx, gy, ct.victim_z, /*run*/ true))
+                {
+                    ai.set_last_rule_fired("idle:owner_engage_close");
+                    return true;
+                }
+            }
         }
     }
     // A non-tank that did not open on the Attack order (a party's casters wait for the tank, BotCommandParser "attack") opens once
@@ -1467,10 +1502,21 @@ bool PullBackTick(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
     bool others = false;   // something besides the pull target is on us
     for (auto const& u : s.raw().combat.attackers)
         if (u.guid != p.target && u.hp > 0) { others = true; break; }
+    // A caster on the tank that stays where it stands (Deadmines' Defias Squallshaper up on the ship's deck) does not come to the return
+    // point: the tank waits here, still, so the line-of-sight pull can start (PveGroupCoordinator::PlanSightPull sees a mob of the fight
+    // stand off while the tank holds at its return point), and the 8 s cap below still hands the fight on. Handing it to the rotation at
+    // once walked the tank up after the caster (5079138c deadmines_full: 1 s after the hold, classic_prot:auto_attack up the gangplank,
+    // eight mobs of the deck with Mr. Smite on the group, the priest out of mana at 1401 s, the warrior dead at 1427 s).
+    PveOrder const& hpo = s.raw().pve_order;
+    bool const sight_pull_on = hpo.active && hpo.sight_pull;
+    bool const stands_off = tu->victim == s.guid() && td2 > 8.0f * 8.0f && !others && !sight_pull_on;
+    // The line-of-sight pull has its spot: its own rules walk the group, the tank with it, out of the caster's sight.
+    if (sight_pull_on && tu->victim == s.guid())
+        return false;
     // The mob is on the tank and the tank is fighting: the pull is over and the tank rules own the fight. The leash below only walks a
     // tank the mob has not taken yet; applied to an engaged boss it dragged the main tank off Baron Geddon toward the return point, inside
     // his Inferno circle (MC 2026-10-13: Devane died 20 y out, rule combat:pull_back_leash, no target for 12 s before).
-    if (tu->victim == s.guid() && s.in_combat() && now_ms - p.phase_ms > 3000u)
+    if (tu->victim == s.guid() && s.in_combat() && now_ms - p.phase_ms > 3000u && !stands_off)
         return false;
     if (d2xy(bx, by, p.rx, p.ry) > 12.0f * 12.0f)
     {
@@ -1480,8 +1526,10 @@ bool PullBackTick(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
         return true;
     }
     // It has arrived (or hits us, or something else does, or it stands off to cast: 8 s): the rotation tanks it here.
-    if (td2 <= 8.0f * 8.0f || others || tu->victim == s.guid() || now_ms - p.phase_ms > 8000u)
+    if (td2 <= 8.0f * 8.0f || others || (tu->victim == s.guid() && !stands_off) || now_ms - p.phase_ms > 8000u)
         return false;
+    if (stands_off && !s.victim().IsEmpty())
+        emit.stop_attack();   // the auto-attack's chase would walk the tank out to it
     tag("idle:pull_back_hold", "combat:pull_back_hold");
     return true;
 }

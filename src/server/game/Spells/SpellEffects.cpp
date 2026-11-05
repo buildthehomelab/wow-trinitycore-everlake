@@ -280,7 +280,7 @@ NonDefaultConstructible<SpellEffectHandlerFn> SpellEffectHandlers[TOTAL_SPELL_EF
     &Spell::EffectNULL,                                     //186 SPELL_EFFECT_186
     &Spell::EffectNULL,                                     //187 SPELL_EFFECT_RANDOMIZE_ARCHAEOLOGY_DIGSITES
     &Spell::EffectNULL,                                     //188 SPELL_EFFECT_SUMMON_STABLED_PET_AS_GUARDIAN
-    &Spell::EffectNULL,                                     //189 SPELL_EFFECT_LOOT
+    &Spell::EffectLoot,                                     //189 SPELL_EFFECT_LOOT
     &Spell::EffectNULL,                                     //190 SPELL_EFFECT_CHANGE_PARTY_MEMBERS
     &Spell::EffectNULL,                                     //191 SPELL_EFFECT_TELEPORT_TO_DIGSITE
     &Spell::EffectUncageBattlePet,                          //192 SPELL_EFFECT_UNCAGE_BATTLEPET
@@ -1399,6 +1399,21 @@ void Spell::DoCreateItem(uint32 itemId, ItemContext context /*= ItemContext::NON
             num_to_add = std::min<uint32>(num_to_add * 2, pProto->GetMaxStackSize());
     }
 
+    // Classic 1.60 Legacy perk Meticulous 1225465: "Grants a $s1% chance to gain extra results from First Aid recipes and from Alchemy
+    // Elixir, Potion, Draught, and Flask recipes." (draughts are potions in the item data)
+    if (int32 extraChance = player->GetClassicLegacyPerkAmount(1225465, EFFECT_0))
+    {
+        bool const alchemyConsumable = pProto->GetClass() == ITEM_CLASS_CONSUMABLE && (pProto->GetSubClass() == ITEM_SUBCLASS_POTION
+            || pProto->GetSubClass() == ITEM_SUBCLASS_ELIXIR || pProto->GetSubClass() == ITEM_SUBCLASS_FLASK);
+        SkillLineAbilityMapBounds bounds = sSpellMgr->GetSkillLineAbilityMapBounds(m_spellInfo->Id);
+        bool const meticulous = std::any_of(bounds.first, bounds.second, [alchemyConsumable](auto const& pair)
+        {
+            return pair.second->SkillLine == 129 /* First Aid */ || (pair.second->SkillLine == SKILL_ALCHEMY && alchemyConsumable);
+        });
+        if (meticulous && roll_chance(extraChance))
+            num_to_add = std::min<uint32>(num_to_add * 2, pProto->GetMaxStackSize());
+    }
+
     /* == gem perfection handling == */
     // this is bad, should be done using spell_loot_template (and conditions)
 
@@ -1669,6 +1684,15 @@ void Spell::EffectEnergize()
     }
 
     unitCaster->EnergizeBySpell(unitTarget, m_spellInfo, energizeAmount, power);
+
+    // Classic 1.60: a warrior's combo point is the Overpower window. It comes from 1282733 "Overpower" (after a dodge, or the Bloodthrill talent),
+    // whose own aura lasts 5 s; the point is cleared when that time is up (Unit::UpdateReactives). The window used to start only on a dodge and
+    // last 4 s, so the button went dark a second early, and a Bloodthrill point never went away.
+    if (power == POWER_COMBO_POINTS && unitTarget == unitCaster && unitCaster->GetClass() == CLASS_WARRIOR && unitCaster->IsPlayer())
+    {
+        int32 const window = m_spellInfo->GetDuration();
+        unitCaster->StartReactiveTimer(REACTIVE_OVERPOWER, window > 0 ? uint32(window) : 5000u);
+    }
 }
 
 void Spell::EffectEnergizePct()
@@ -2660,6 +2684,15 @@ void Spell::EffectEnchantItemTmp()
     if (!duration && effectValue > 0)
         duration = uint32(effectValue);
 
+    // Classic 1.60 rogue poisons: "$m2 charges" (or $m3) is the last dummy effect after this one whose value is not the duration; a charge
+    // is used by each application (Player::CastItemCombatSpell). vMaNGOS keeps the same charges in spell_enchant_charges.
+    uint32 charges = 0;
+    if (m_spellInfo->SpellFamilyName == SPELLFAMILY_ROGUE)
+        for (SpellEffectInfo const& spellEffectInfo : m_spellInfo->GetEffects())
+            if (spellEffectInfo.EffectIndex > effectInfo->EffectIndex && spellEffectInfo.IsEffect(SPELL_EFFECT_DUMMY))
+                if (int32 const value = int32(spellEffectInfo.CalcValue(m_caster)); value > 0 && uint32(value) != duration)
+                    charges = uint32(value);
+
     // item can be in trade slot and have owner diff. from caster
     Player* item_owner = itemTarget->GetOwner();
     if (!item_owner)
@@ -2676,7 +2709,7 @@ void Spell::EffectEnchantItemTmp()
     // remove old enchanting before applying new if equipped
     item_owner->ApplyEnchantment(itemTarget, TEMP_ENCHANTMENT_SLOT, false);
 
-    itemTarget->SetEnchantment(TEMP_ENCHANTMENT_SLOT, enchant_id, duration * 1000, 0, m_caster->GetGUID());
+    itemTarget->SetEnchantment(TEMP_ENCHANTMENT_SLOT, enchant_id, duration * 1000, charges, m_caster->GetGUID());
 
     // add new enchanting if equipped
     item_owner->ApplyEnchantment(itemTarget, TEMP_ENCHANTMENT_SLOT, true);
@@ -4713,6 +4746,13 @@ void Spell::EffectSalvageItem()
     if (!player || !itemTarget || itemTarget->GetOwnerGUID() != player->GetGUID())
         return;
 
+    // Classic 1.60 (Forever): a labeled Waylaid Crate's Stock Crate spell salvages the bundle the player picked into a Sealed crate
+    if (sSpellMgr->IsClassicCrateSpell(m_spellInfo->Id))
+    {
+        StockClassicCrate();
+        return;
+    }
+
     uint32 itemId = itemTarget->GetEntry();
     if (!LootTemplates_Item.HaveLootFor(itemId))
         return;
@@ -4734,6 +4774,69 @@ void Spell::EffectSalvageItem()
             if (LootItem* salvageLoot = loot.LootItemInSlot(i, player))
                 if (salvageLoot->type == LootItemType::Item && !salvageLoot->is_looted)
                     player->SendItemRetrievalMail(salvageLoot->itemid, salvageLoot->count, salvageLoot->context);
+    }
+}
+
+// SPELL_EFFECT_LOOT: the caster gets the spell's loot (MiscValue[0] is the client's loot id; the rows live in spell_loot_template
+// under the spell id, like every other loot-creating spell). Classic 1.60 (Forever): Read Label on a Waylaid Crate, Open Letter on
+// a sealed Craftsman's Writ. Spell::CheckCast refuses the cast when the spell has no loot, so the item is never used up for nothing.
+void Spell::EffectLoot()
+{
+    if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT)
+        return;
+
+    Player* player = m_caster->ToPlayer();
+    if (!player)
+        return;
+
+    // the client has some 40 such spells (area-trigger coins, Hybridize Seeds ...); only those with rows give anything
+    if (!LootTemplates_Spell.HaveLootFor(m_spellInfo->Id))
+    {
+        TC_LOG_DEBUG("spells", "Spell {} (SPELL_EFFECT_LOOT, loot id {}) has no rows in `spell_loot_template`.", m_spellInfo->Id, effectInfo->MiscValue);
+        return;
+    }
+
+    StoreClassicSpellLoot(player, m_spellInfo->Id);
+}
+
+// Classic 1.60 (Forever) Stock Crate: the picked bundle (classic_crate_bundle: the item and how many) leaves the bags and the spell's
+// loot (the Sealed crate) comes in. Spell::CheckCast has checked the bundle and the count, so the labeled crate is only used up here.
+void Spell::StockClassicCrate()
+{
+    Player* player = m_caster->ToPlayer();
+    if (!player || !itemTarget)
+        return;
+
+    SpellMgr::ClassicCrateBundle const* bundle = sSpellMgr->GetClassicCrateBundle(m_spellInfo->Id, itemTarget->GetEntry());
+    if (!bundle || !player->HasItemCount(bundle->ItemId, bundle->Count))
+        return;
+
+    // the target stack can be among the destroyed ones
+    itemTarget = nullptr;
+    m_targets.SetItemTarget(nullptr);
+    player->DestroyItemCount(bundle->ItemId, bundle->Count, true);
+
+    StoreClassicSpellLoot(player, m_spellInfo->Id);
+}
+
+// The spell's loot into the bags; what does not fit comes by mail, so nothing is lost with full bags.
+void Spell::StoreClassicSpellLoot(Player* player, uint32 lootId)
+{
+    if (!LootTemplates_Spell.HaveLootFor(lootId))
+    {
+        TC_LOG_ERROR("spells", "Spell {} creates loot but `spell_loot_template` has no rows for it.", lootId);
+        return;
+    }
+
+    ItemContext const context = m_spellInfo->HasAttribute(SPELL_ATTR0_IS_TRADESKILL) ? ItemContext::Trade_Skill : ItemContext::NONE;
+    Loot loot(player->GetMap(), ObjectGuid::Empty, LOOT_NONE, nullptr);
+    loot.FillLoot(lootId, LootTemplates_Spell, player, true, false, LOOT_MODE_DEFAULT, context);
+    if (!loot.AutoStore(player, NULL_BAG, NULL_SLOT, true))
+    {
+        for (uint32 i = 0; i < loot.items.size(); ++i)
+            if (LootItem* lootItem = loot.LootItemInSlot(i, player))
+                if (lootItem->type == LootItemType::Item && !lootItem->is_looted)
+                    player->SendItemRetrievalMail(lootItem->itemid, lootItem->count, lootItem->context);
     }
 }
 

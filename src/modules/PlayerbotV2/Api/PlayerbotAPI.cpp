@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include "Api/ForeignClassSpell.h"
 #include "PlayerbotAPI.h"
+#include "BotLanguage.h"
 #include "Bot/QuestLoot.h"
 #include "ClassicBotSkills.h"
 #include "Travel/ReachMemory.h"
@@ -831,6 +832,11 @@ char const* API::CastFailName(uint32 code)
         case CastRejectStunned:         return "API_STUNNED";
         case CastRejectSilenced:        return "API_SILENCED";
         case CastRejectBeyondRange:     return "API_BEYOND_RANGE";
+        case CastRejectTargetImmune:    return "API_TARGET_IMMUNE";
+        case CastRejectTargetAirborne:  return "API_TARGET_AIRBORNE";
+        case CastRejectInCombat:        return "API_PEACE_ONLY_IN_COMBAT";
+        case CastRejectNoEquippedItem:  return "API_NO_EQUIPPED_ITEM";
+        case CastRejectItemAtLimit:     return "API_ITEM_AT_LIMIT";
         default: break;
     }
     if (code < EnumUtils::Count<SpellCastResult>())
@@ -842,6 +848,98 @@ char const* API::CastFailName(uint32 code)
         return c;
     }
     return "UNKNOWN";
+}
+
+namespace
+{
+// Every effect of the spell only does damage (direct, weapon, periodic or leech), so a damage immunity stops all of it.
+bool SpellOnlyDamages(SpellInfo const* info)
+{
+    bool any = false;
+    for (SpellEffectInfo const& eff : info->GetEffects())
+    {
+        if (!eff.IsEffect())
+            continue;
+        switch (eff.Effect)
+        {
+            case SPELL_EFFECT_SCHOOL_DAMAGE:
+            case SPELL_EFFECT_WEAPON_DAMAGE:
+            case SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL:
+            case SPELL_EFFECT_NORMALIZED_WEAPON_DMG:
+            case SPELL_EFFECT_WEAPON_PERCENT_DAMAGE:
+            case SPELL_EFFECT_HEALTH_LEECH:
+                any = true;
+                continue;
+            case SPELL_EFFECT_APPLY_AURA:
+                if (eff.ApplyAuraName == SPELL_AURA_PERIODIC_DAMAGE || eff.ApplyAuraName == SPELL_AURA_PERIODIC_LEECH
+                    || eff.ApplyAuraName == SPELL_AURA_PERIODIC_DAMAGE_PERCENT)
+                {
+                    any = true;
+                    continue;
+                }
+                return false;
+            default:
+                return false;
+        }
+    }
+    return any;
+}
+
+// The target takes nothing from the spell: immune to every effect (or the spell / its mechanic), or immune to its damage
+// when damage is all the spell does.
+bool TargetShrugsOff(Player const* caster, Unit const* target, SpellInfo const* info)
+{
+    uint32 mask = 0;
+    for (SpellEffectInfo const& eff : info->GetEffects())
+        if (eff.IsEffect())
+            mask |= 1u << eff.EffectIndex;
+    if (!mask)
+        return false;
+    if (target->IsImmunedToSpell(info, mask, caster))
+        return true;
+    return SpellOnlyDamages(info) && target->IsImmunedToDamage(caster, info);
+}
+
+bool IsChargeSpell(SpellInfo const* info)
+{
+    return info->HasEffect(SPELL_EFFECT_CHARGE) || info->HasEffect(SPELL_EFFECT_CHARGE_DEST);
+}
+
+// Clear of the ground under it: more than 6 yd up, or flying (gravity off) more than 2.5 yd up. A floating mob that hovers at
+// head height (wisps, elementals with gravity off) and a mob under water are not airborne.
+bool TargetAirborne(Unit const* target)
+{
+    if (target->IsInWater())
+        return false;
+    float const floor = target->GetFloorZ();
+    if (floor <= INVALID_HEIGHT)
+        return false;
+    float const height = target->GetPositionZ() - floor;
+    return height > 6.0f || (target->IsFlying() && height > 2.5f);
+}
+
+// A CastReject code for a spell the bot's own state forbids (0 when the spell may go out). Mirrors Spell::CheckCast /
+// CheckItems for a plain cast from the spellbook.
+uint32 CastBlockedByOwnState(Player* p, SpellInfo const* info)
+{
+    if (p->IsInCombat() && !info->CanBeUsedInCombat(p))
+        return API::CastRejectInCombat;
+    if (info->EquippedItemClass >= 0 && !p->HasItemFitToSpellRequirements(info))
+        return API::CastRejectNoEquippedItem;
+    for (SpellEffectInfo const& eff : info->GetEffects())
+    {
+        if (eff.Effect != SPELL_EFFECT_CREATE_ITEM || !eff.ItemType)
+            continue;
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(eff.ItemType);
+        if (!proto)
+            continue;
+        uint32 const count = std::clamp<uint32>(eff.CalcValueAsInt(), 1u, proto->GetMaxStackSize());
+        ItemPosCountVec dest;
+        if (p->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, eff.ItemType, count) != EQUIP_ERR_OK)
+            return API::CastRejectItemAtLimit;
+    }
+    return 0;
+}
 }
 
 Result API::cast_spell(uint32 spell_id, ObjectGuid target, bool exact_rank)
@@ -1015,6 +1113,25 @@ Result API::cast_spell(uint32 spell_id, ObjectGuid target, bool exact_rank)
         return last_cast_fail_ = CastRejectTargetReflects, Result::InvalidTarget;
     }
 
+    // A hostile target that would shrug the spell off entirely (school or damage immunity, an immunity to every effect, a
+    // taunt-immune boss for Taunt) is not cast at: the cast itself succeeds and only the hit reads "Immune", so nothing else
+    // stops the rotation from spending every GCD and its mana on it. InvalidTarget arms the executor's per-spell back-off, so
+    // the rotation moves to its next spell (another school, melee) and tries this one again in 10 s.
+    if (tu != p_ && !info->IsPositive() && !info->HasAttribute(SPELL_ATTR0_NO_IMMUNITIES) && p_->IsValidAttackTarget(tu, info)
+        && TargetShrugsOff(p_, tu, info))
+    {
+        TC_LOG_DEBUG("playerbot.api", "[API::cast_spell] spell {} target {} rejected: target is immune", spell_id, target.ToString());
+        return last_cast_fail_ = CastRejectTargetImmune, Result::InvalidTarget;
+    }
+
+    // Charge-type spells (Charge, Intercept, Feral Charge) at a target in the air (a boss in its flying phase) can never land:
+    // the core either refuses the path or the bot leaps under the boss and loses its GCD. Refused like an immune target.
+    if (tu != p_ && IsChargeSpell(info) && TargetAirborne(tu))
+    {
+        TC_LOG_DEBUG("playerbot.api", "[API::cast_spell] spell {} target {} rejected: target is airborne", spell_id, target.ToString());
+        return last_cast_fail_ = CastRejectTargetAirborne, Result::InvalidTarget;
+    }
+
     // Stun gate. Stuns block EVERY cast (physical + spell). The
     // snapshot exposes is_stunned() but APL predicates don't gate
     // consistently. Reject early so a stunned bot doesn't spam
@@ -1045,6 +1162,16 @@ Result API::cast_spell(uint32 spell_id, ObjectGuid target, bool exact_rank)
             "[API::cast_spell] spell {} rejected: silenced",
             spell_id);
         return last_cast_fail_ = CastRejectSilenced, Result::Locked;
+    }
+
+    // Spells the core would refuse for the bot's own state, checked the way Spell::CheckCast does so the cast is never tried:
+    // a peace-only spell (Stealth, Prowl, conjuring, eating) in combat, a spell that needs an item the bot has not equipped
+    // (Shoot without a wand, Shield Bash without a shield) and a conjure whose item is already at its carry limit. ServerRefused
+    // arms the same 10 s back-off the core's own refusal would have, without building the spell first.
+    if (uint32 const own = CastBlockedByOwnState(p_, info))
+    {
+        TC_LOG_DEBUG("playerbot.api", "[API::cast_spell] spell {} rejected: {}", spell_id, CastFailName(own));
+        return last_cast_fail_ = own, Result::ServerRefused;
     }
 
     // Defensive range gate. Belt-and-suspenders for any rule whose target
@@ -1519,6 +1646,13 @@ Result API::move_to(float x, float y, float z, bool run, bool direct, bool drop,
         }
     }
 
+    // In the air after a battleground ledge drop (below) or a follow leap: no other move re-aims the bot until it lands. A pathed move
+    // issued mid-flight replaced the jump spline and left the bot hanging short of the landing, then walking back up to the ledge and
+    // dropping again (WSG soak on 247: Jacelia's drop off (1055,1397,339) ended at (1066,1396,331), hover_settle, a second drop 3 s later).
+    if (!drop)
+        if (auto it = s_followDropAir.find(p_->GetGUID().GetCounter()); it != s_followDropAir.end() && GameTime::GetGameTimeMS() < it->second)
+            return Result::Ok;
+
     // Already there. A rule holding a spot (raid/dungeon positioning, hold,
     // stand-at-NPC) keeps re-emitting the same destination after arrival; the
     // emitter dedup lets one through every ~1.5s and MovePoint then launches
@@ -1567,6 +1701,7 @@ Result API::move_to(float x, float y, float z, bool run, bool direct, bool drop,
         float const speed = dist3 / fall_s;
         uint32 const flight_ms = uint32(fall_s * 1000.0f) + 250u;
         s_dropUntil[dgl] = dnow + flight_ms + 500u;
+        s_followDropAir[dgl] = dnow + flight_ms;
         Position dest = p_->GetPosition();
         dest.Relocate(x, y, z);
         p_->SetFacingTo(std::atan2(y - sy, x - sx));
@@ -3294,6 +3429,10 @@ bool API::TryBgDescentCrawl(float x, float y, float z, bool run)
 Result API::stop_movement(bool clear_generators)
 {
     if (!p_) return Result::Other;
+    // Not in the air after a ledge drop or leap: a stop there halts the jump spline and leaves the bot hanging short of the landing
+    // (WSG soak on 247: the battleground mount rule stops a moving bot, and Jacelia's drop ended in hover_settle 2 s later, twice).
+    if (auto it = s_followDropAir.find(p_->GetGUID().GetCounter()); it != s_followDropAir.end() && GameTime::GetGameTimeMS() < it->second)
+        return Result::Ok;
     if (!clear_generators)
     {
         p_->StopMoving();
@@ -3914,6 +4053,9 @@ Result API::mount(uint32 mount_id)
     if (p_->IsInCombat()) return Result::Locked;
     if (p_->IsMounted())  return Result::Ok;
     if (p_->IsInWater() || p_->IsFlying()) return Result::Locked;
+    // In the air after a ledge drop or leap: the stop below would halt the jump spline mid-flight.
+    if (auto it = s_followDropAir.find(p_->GetGUID().GetCounter()); it != s_followDropAir.end() && GameTime::GetGameTimeMS() < it->second)
+        return Result::Locked;
     // The mount cast is refused while the bot moves (SPELL_FAILED_MOVING): a bot that walks or follows stands still for it.
     if (p_->isMoving())
         p_->StopMoving();
@@ -4062,9 +4204,8 @@ Result API::party_chat(std::string const& text)
     if (og) group = og;
     ChatMsg type = group->IsLeader(p_->GetGUID()) ? CHAT_MSG_PARTY_LEADER : CHAT_MSG_PARTY;
 
-    WorldPackets::Chat::Chat packet;
-    packet.Initialize(type, LANG_UNIVERSAL, p_, nullptr, text);
-    group->BroadcastPacket(packet.Write(), false, group->GetMemberGroup(p_->GetGUID()));
+    // Each member reads the line in their own language (BotLanguage.h).
+    BotLanguage::GroupChat(p_, group, type, text, group->GetMemberGroup(p_->GetGUID()));
     return Result::Ok;
 }
 
@@ -4559,9 +4700,7 @@ Result API::raid_warning(std::string const& text)
     {
         return Result::Locked;
     }
-    WorldPackets::Chat::Chat packet;
-    packet.Initialize(CHAT_MSG_RAID_WARNING, LANG_UNIVERSAL, p_, nullptr, text);
-    group->BroadcastPacket(packet.Write(), false);
+    BotLanguage::GroupChat(p_, group, CHAT_MSG_RAID_WARNING, text, -1);
     return Result::Ok;
 }
 
@@ -4573,9 +4712,7 @@ Result API::raid_chat(std::string const& text)
     Group* og = p_->GetOriginalGroup();
     if (og) group = og;
     ChatMsg type = group->IsLeader(p_->GetGUID()) ? CHAT_MSG_RAID_LEADER : CHAT_MSG_RAID;
-    WorldPackets::Chat::Chat packet;
-    packet.Initialize(type, LANG_UNIVERSAL, p_, nullptr, text);
-    group->BroadcastPacket(packet.Write(), false);
+    BotLanguage::GroupChat(p_, group, type, text, -1);
     return Result::Ok;
 }
 
@@ -4600,14 +4737,15 @@ inline Language RacialSpokenLanguage(Player const* p)
 Result API::say(std::string const& text)
 {
     if (!p_ || text.empty()) return Result::Other;
-    p_->Say(text, RacialSpokenLanguage(p_));
+    // Player::Say with each listener reading the line in their own language (BotLanguage.h).
+    BotLanguage::SayInRange(p_, CHAT_MSG_SAY, RacialSpokenLanguage(p_), text, sWorld->getFloatConfig(CONFIG_LISTEN_RANGE_SAY));
     return Result::Ok;
 }
 
 Result API::yell(std::string const& text)
 {
     if (!p_ || text.empty()) return Result::Other;
-    p_->Yell(text, RacialSpokenLanguage(p_));
+    BotLanguage::SayInRange(p_, CHAT_MSG_YELL, RacialSpokenLanguage(p_), text, sWorld->getFloatConfig(CONFIG_LISTEN_RANGE_YELL));
     return Result::Ok;
 }
 
@@ -4623,7 +4761,7 @@ Result API::whisper(std::string const& target_name, std::string const& text)
     if (!p_ || target_name.empty() || text.empty()) return Result::Other;
     Player* recipient = ObjectAccessor::FindConnectedPlayerByName(target_name);
     if (!recipient) return Result::InvalidTarget;
-    p_->Whisper(text, LANG_UNIVERSAL, recipient);
+    BotLanguage::Whisper(p_, recipient, text);   // in the recipient's language
     return Result::Ok;
 }
 
@@ -6396,6 +6534,12 @@ Result API::use_item_by_entry(uint32 item_entry, ObjectGuid target)
     Item* item = p_->GetItemByEntry(item_entry);
     if (!item && (target.IsEmpty() || target == p_->GetGUID()))
         return UseVirtualSupply(p_, item_entry);
+    // An item that starts a quest: a player right-clicks it and accepts the quest page that opens. Most of these items have
+    // no on-use spell, so casting one did nothing and the bot never got the quest; take the quest from the item instead.
+    if (item)
+        if (uint32 const startQuest = item->GetTemplate()->GetStartQuest())
+            if (p_->GetQuestStatus(startQuest) == QUEST_STATUS_NONE)
+                return accept_quest(item->GetGUID(), startQuest);
     return UseItemImpl(p_, item, target);
 }
 
@@ -6937,6 +7081,9 @@ Result API::use_game_object(ObjectGuid go_guid)
     {
         struct BannerCapture { ObjectGuid go; Position goPos; uint32 startMs = 0; Position pos; uint32 health = 0; uint32 lastDoneMs = 0; };
         static std::unordered_map<ObjectGuid, BannerCapture> s_bannerCapture;
+        // Bots in different battlegrounds run on different map threads.
+        static std::mutex s_bannerCaptureMutex;
+        std::lock_guard<std::mutex> bannerLock(s_bannerCaptureMutex);
         BannerCapture& cap = s_bannerCapture[p_->GetGUID()];
         uint32 const nowMs = GameTime::GetGameTimeMS();
         // A cast already running (the capture spell the object's Use() starts) must never be restarted by a second click: a
@@ -6970,6 +7117,28 @@ Result API::use_game_object(ObjectGuid go_guid)
         bool const sameGo = cap.startMs != 0 && (cap.go == go_guid || cap.goPos.GetExactDist2d(obj) < 3.0f);
         bool const moved = sameGo && p_->GetExactDist2d(cap.pos) > 3.0f;
         bool const hurt = sameGo && p_->GetHealth() < cap.health;
+        // One capper per banner: a team mate already channeling this banner (started under 6 s ago, alive, at the pole) keeps it,
+        // and this bot stays next to it as its guard instead of starting a second channel (soak on 246: three Alliance bots started
+        // the Stables together and broke each other off). The idle rule holds a bot whose click was refused here at the banner.
+        if (!sameGo)
+            for (auto const& [otherGuid, other] : s_bannerCapture)
+            {
+                if (otherGuid == p_->GetGUID() || other.startMs == 0 || nowMs - other.startMs >= 6000u ||
+                    other.goPos.GetExactDist2d(obj) >= 3.0f)
+                    continue;
+                Player const* capper = ObjectAccessor::GetPlayer(*p_, otherGuid);
+                if (!capper || !capper->IsAlive() || capper->GetBGTeam() != p_->GetBGTeam() || capper->GetExactDist2d(obj) > 6.0f)
+                    continue;
+                thread_local std::unordered_map<uint64, uint32> s_guardLogMs;
+                uint32& last = s_guardLogMs[p_->GetGUID().GetCounter()];
+                if (last == 0 || nowMs - last >= 10000u)
+                {
+                    last = nowMs;
+                    TC_LOG_INFO("playerbot.v2", "[bg_capture] {} guards entry={} while {} captures it", p_->GetName(), obj->GetEntry(),
+                                capper->GetName());
+                }
+                return Result::Locked;
+            }
         if (!sameGo || moved || hurt)
         {
             if (sameGo)

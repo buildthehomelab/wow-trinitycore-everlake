@@ -204,6 +204,11 @@ TEST_CASE("Warsong Gulch lanes: the last stretch to a ledge is walked straight, 
     CHECK(drop);
     CHECK(!approach);
     CHECK(std::fabs(nz - 324.0f) < 0.1f);
+
+    // landed short of the landing (1076.8,1396.0,324.0), down at its level (WSG soak on 247: (1066.3,1396.5,325.2)): the drop is over,
+    // no second drop to a landing 1 y below
+    CHECK(NextWaypointLane(2, 1066.3f, 1396.5f, 325.2f, kAlly[0], kAlly[1], kAlly[2], 28.0f, nx, ny, nz, 0, ridge, &drop, &approach) == true);
+    CHECK(!drop);
 }
 
 TEST_CASE("Warsong Gulch lanes: the middle of the field is a minority, the side lanes carry most bots", "[battleground][route]")

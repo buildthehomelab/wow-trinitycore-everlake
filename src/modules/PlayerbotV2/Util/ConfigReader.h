@@ -175,6 +175,9 @@ public:
     uint16 guilds_max_members_per_guild() const { return guilds_max_members_per_guild_; }
     bool   guilds_events_enabled() const { return guilds_events_enabled_; }
     bool   guilds_recruitment_channel_enabled() const { return guilds_recruitment_channel_enabled_; }
+    // PlayerbotV2.Guilds.InvitePlayers: 1 = a bot guild officer may send a guild invite to a real player near it (the player
+    // accepts or declines). 0 (default) = bot guilds only take in bots.
+    bool   guilds_invite_players() const { return guilds_invite_players_; }
     // Per-account cap on alts a player can summon as bots via the
     // `.playerbot summon` command. Default 5 matches a 5-man dungeon
     // group (tank + healer + 3 dps). Operators can lower for shared
@@ -452,6 +455,7 @@ public:
     uint32 kindness_help_hp_pct()       const { return kindness_help_hp_pct_; }
     uint32 kindness_heal_hp_pct()       const { return kindness_heal_hp_pct_; }   // 0 = no stranger heals
     uint32 kindness_heal_cd_ms()        const { return kindness_heal_cd_ms_; }
+    uint32 kindness_help_cd_ms()        const { return kindness_help_cd_ms_; }
     bool   share_mobs_enable()          const { return share_mobs_enable_; }
     float  share_mobs_camp_radius()     const { return share_mobs_camp_radius_; }
     float  share_mobs_quest_radius()    const { return share_mobs_quest_radius_; }
@@ -583,6 +587,7 @@ private:
     uint16 guilds_max_members_per_guild_             = 75;
     bool   guilds_events_enabled_                    = true;
     bool   guilds_recruitment_channel_enabled_       = true;
+    bool   guilds_invite_players_                    = false;
     uint8  max_alts_as_bots_                         = 5;
     uint32 wedge_watchdog_threshold_ms_              = 90000;
     uint32 wedge_watchdog_combat_threshold_ms_       = 180000;
@@ -706,9 +711,10 @@ private:
     bool   world_questing_           = false;
     bool   kindness_enable_          = true;
     uint32 kindness_buff_cd_ms_      = 900000u;
-    uint32 kindness_help_hp_pct_     = 40;
+    uint32 kindness_help_hp_pct_     = 60;
     uint32 kindness_heal_hp_pct_     = 60;
     uint32 kindness_heal_cd_ms_      = 45000u;
+    uint32 kindness_help_cd_ms_      = 180000u;
     bool   share_mobs_enable_        = true;
     float  share_mobs_camp_radius_   = 35.0f;
     float  share_mobs_quest_radius_  = 120.0f;

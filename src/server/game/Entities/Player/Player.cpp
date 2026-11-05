@@ -273,6 +273,8 @@ Player::Player(WorldSession* session) : Unit(true), m_sceneMgr(this)
 
     m_temporaryUnsummonedPetNumber = 0;
     m_petResummonDelay = 0;
+    m_petParkedForTravel = false;
+    m_petParkedCheckTimer = 0;
     //cache for CreatedBySpell to allow
     //returning reagents for temporarily removed pets
     //when dying/logging out
@@ -958,6 +960,8 @@ void Player::Update(uint32 p_time)
     Unit::Update(p_time);
     SetCanDelayTeleport(false);
 
+    UpdateParkedPet(p_time);
+
     // The pet remembered at login comes back a moment after the player is in the world, as a summon during play does. Created while the
     // Classic 1.60 client is still on its loading screen, the client froze on the pet (warlock demon out at logout, 20 Oct).
     if (m_petResummonDelay)
@@ -1149,9 +1153,14 @@ void Player::Update(uint32 p_time)
     UpdateHomebindTime(p_time);
 
     Pet* pet = GetPet();
-    if (pet && !pet->IsWithinDistInMap(this, GetMap()->GetVisibilityRange()) && !pet->isPossessed())
+    // A pet out of sight on the same map (stuck on the terrain, left at a fight) is set down next to its owner, the way a player's pet
+    // catches up in Classic; before, it was dismissed and a warlock's Imp just vanished while fighting or travelling (player report, 3 Nov).
+    if (pet && !pet->IsWithinDistInMap(this, GetMap()->GetVisibilityRange()) && !pet->isPossessed() && !pet->CatchUpWithOwner())
     //if (pet && !pet->IsWithinDistInMap(this, GetMap()->GetVisibilityDistance()) && (GetCharmGUID() && (pet->GetGUID() != GetCharmGUID())))
+    {
+        TC_LOG_INFO("entities.pet", "Pet {} ({}) of {} dismissed: out of its owner's sight", pet->GetName(), pet->GetEntry(), GetName());
         RemovePet(pet, PET_SAVE_NOT_IN_SLOT, true);
+    }
 
     if (IsAlive())
     {
@@ -9545,6 +9554,27 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
                             args.AddSpellMod(static_cast<SpellValueModFloat>(SPELLVALUE_BASE_POINT0 + AsUnderlyingType(spellEffectInfo.EffectIndex)), CalculatePct(spellEffectInfo.CalcValue(this), effectPct));
                 }
                 CastSpell(target, spellInfo->Id, args);
+
+                // Classic 1.60 poisons (vMaNGOS Player::CastItemCombatSpell): each application uses a charge, the last one removes the poison.
+                // 14113 Improved Poisons: "gives Poison applications a $m2% chance to not consume a charge" (effect 1, dummy).
+                if (e_slot == TEMP_ENCHANTMENT_SLOT)
+                {
+                    uint32 const charges = item->GetEnchantmentCharges(TEMP_ENCHANTMENT_SLOT);
+                    if (!charges)
+                        return;
+
+                    if (AuraEffect const* improvedPoisons = GetAuraEffect(14113, EFFECT_1))
+                        if (roll_chance(float(improvedPoisons->GetAmount())))
+                            return;
+
+                    if (charges > 1)
+                        item->SetEnchantmentCharges(TEMP_ENCHANTMENT_SLOT, charges - 1);
+                    else
+                    {
+                        ApplyEnchantment(item, TEMP_ENCHANTMENT_SLOT, false);
+                        item->ClearEnchantment(TEMP_ENCHANTMENT_SLOT);
+                    }
+                }
             });
         }
     }
@@ -9831,7 +9861,12 @@ void Player::RemovedInsignia(Player* looterPlr)
     if (Battleground* bg = GetBattleground())
     {
         if (bg->GetTypeID() == BATTLEGROUND_AV)
-            bones->m_loot->FillLoot(PLAYER_CORPSE_LOOT_ENTRY, LootTemplates_Creature, this, true);
+        {
+            // Classic 1.60: the AV turn-in items depend on the victim's race and team (Severed Night Elf Head, Stormpike Soldier's Blood).
+            // Loot conditions are checked against the looter, so each victim race has its own loot entry instead.
+            if (!bones->m_loot->FillLoot(CLASSIC_AV_CORPSE_LOOT_ENTRY + GetRace(), LootTemplates_Creature, this, true, true))
+                bones->m_loot->FillLoot(PLAYER_CORPSE_LOOT_ENTRY, LootTemplates_Creature, this, true);
+        }
     }
     // For wintergrasp Quests
     else if (GetZoneId() == AREA_WINTERGRASP)
@@ -12245,8 +12280,9 @@ Item* Player::StoreNewItem(ItemPosCountVec const& pos, uint32 itemId, bool updat
         if (item->GetTemplate()->GetInventoryType() != INVTYPE_NON_EQUIP)
             UpdateAverageItemLevelTotal();
 
-        // Classic 1.60: new ammo goes to the ammo slot when it is empty
-        if (item->GetTemplate()->GetClass() == ITEM_CLASS_PROJECTILE && !GetAmmoId())
+        // Classic 1.60: new ammo goes to the ammo slot when it is empty. The slot can also still name ammo the player no longer has
+        // (the last arrows sold, mailed or destroyed instead of shot), and then new ammo was never picked up until a relog.
+        if (item->GetTemplate()->GetClass() == ITEM_CLASS_PROJECTILE && (!GetAmmoId() || !HasItemCount(GetAmmoId())))
             AutoSelectAmmo();
     }
 
@@ -14831,6 +14867,14 @@ void Player::SendNewItem(Item* item, uint32 quantity, bool pushed, bool created,
 // Classic 1.60: gossip option ids of the trainer / vendor options added to menus that lack them (never used by DB options)
 static constexpr int32 CLASSIC_GOSSIP_OPTION_AUTO_TRAINER = 2146000001;
 static constexpr int32 CLASSIC_GOSSIP_OPTION_AUTO_VENDOR  = 2146000002;
+static constexpr int32 CLASSIC_GOSSIP_OPTION_AUTO_BANK    = 2146000003;
+
+// Legacy perk Personal Banking 1225493: an innkeeper (that is not a banker itself) gives the perk's owner access to the bank
+// (WorldSession::CanUseBank accepts such an innkeeper for the bank actions)
+static bool IsClassicPersonalBankingInnkeeper(Player const* player, Creature const* creature)
+{
+    return creature && creature->HasNpcFlag(UNIT_NPC_FLAG_INNKEEPER) && !creature->HasNpcFlag(UNIT_NPC_FLAG_BANKER) && player->HasAura(1225493);
+}
 
 void Player::PrepareGossipMenu(WorldObject* source, uint32 menuId, bool showQuests /*= false*/)
 {
@@ -14889,9 +14933,20 @@ void Player::PrepareGossipMenu(WorldObject* source, uint32 menuId, bool showQues
                     if (!HasPlayerFlag(PLAYER_FLAGS_NO_XP_GAIN) || IsMaxLevel())
                         canTalk = false;
                     break;
+                case GossipOptionNpc::Trainer:
+                {
+                    // A class trainer offers training to its own class only (classic: another class saw no train option, only the
+                    // trainer's talk). The trainer is the option's own, else the creature's, as when the option is picked.
+                    uint32 trainerId = sObjectMgr->GetCreatureTrainerForGossipOption(creature->GetEntry(), menuId, gossipMenuItem.OrderIndex);
+                    if (!trainerId)
+                        trainerId = creature->GetTrainerId();
+                    if (Trainer::Trainer const* trainer = sObjectMgr->GetTrainer(trainerId))
+                        if (!(trainer->GetClassMask() & GetClassMask()))
+                            canTalk = false;
+                    break;
+                }
                 case GossipOptionNpc::None:
                 case GossipOptionNpc::Vendor:
-                case GossipOptionNpc::Trainer:
                 case GossipOptionNpc::Binder:
                 case GossipOptionNpc::Banker:
                 case GossipOptionNpc::PetitionVendor:
@@ -14961,12 +15016,20 @@ void Player::PrepareGossipMenu(WorldObject* source, uint32 menuId, bool showQues
             return false;
         };
 
-        if (creature->HasNpcFlag(UNIT_NPC_FLAG_TRAINER) && creature->GetTrainerId() && !hasOption(GossipOptionNpc::Trainer))
+        Trainer::Trainer const* ownTrainer = creature->GetTrainerId() ? sObjectMgr->GetTrainer(creature->GetTrainerId()) : nullptr;
+        if (creature->HasNpcFlag(UNIT_NPC_FLAG_TRAINER) && ownTrainer && (ownTrainer->GetClassMask() & GetClassMask())
+            && !hasOption(GossipOptionNpc::Trainer))
             menu.AddMenuItem(CLASSIC_GOSSIP_OPTION_AUTO_TRAINER, menu.GetMenuItemCount(), GossipOptionNpc::Trainer, "Train me.", 0,
                 GossipOptionFlags::None, {}, 0, 0, false, 0, "", {}, {}, menuId, menu.GetMenuItemCount());
 
         if (creature->HasNpcFlag(UNIT_NPC_FLAG_VENDOR) && creature->GetVendorItems() && !hasOption(GossipOptionNpc::Vendor))
             menu.AddMenuItem(CLASSIC_GOSSIP_OPTION_AUTO_VENDOR, menu.GetMenuItemCount(), GossipOptionNpc::Vendor, "Let me browse your goods.", 0,
+                GossipOptionFlags::None, {}, 0, 0, false, 0, "", {}, {}, menuId, menu.GetMenuItemCount());
+
+        // Legacy perk Personal Banking 1225493: "All innkeepers can now also grant you access to your bank. This access has a $1261854d
+        // cooldown." (1261854 is the cooldown aura, cast when the bank is opened this way)
+        if (IsClassicPersonalBankingInnkeeper(this, creature) && !HasAura(1261854) && !hasOption(GossipOptionNpc::Banker))
+            menu.AddMenuItem(CLASSIC_GOSSIP_OPTION_AUTO_BANK, menu.GetMenuItemCount(), GossipOptionNpc::Banker, "I would like to check my deposit box.", 0,
                 GossipOptionFlags::None, {}, 0, 0, false, 0, "", {}, {}, menuId, menu.GetMenuItemCount());
     }
 }
@@ -15010,6 +15073,7 @@ void Player::OnGossipSelect(WorldObject* source, int32 gossipOptionId, uint32 me
         return;
 
     GossipOptionNpc gossipOptionNpc = item->OptionNpc;
+    Optional<int32> const optionSpellId = item->SpellID; // read now: an ActionMenuID below rebuilds the menu that holds item
     ObjectGuid guid = source->GetGUID();
 
     if (source->GetTypeId() == TYPEID_GAMEOBJECT)
@@ -15044,17 +15108,25 @@ void Player::OnGossipSelect(WorldObject* source, int32 gossipOptionId, uint32 me
     switch (gossipOptionNpc)
     {
         case GossipOptionNpc::None:
-            if (IsClassicDualSpecGossipOption(item->GossipOptionID))
+            if (IsClassicDualSpecGossipOption(gossipOptionId))
             {
                 PlayerTalkClass->SendCloseGossip();
                 Creature* creature = source->ToCreature();
                 if (!creature || !creature->CanResetTalents(this) || !PurchaseClassicDualSpec())
                     return;                                 // not charged
             }
-            else if (Pet::IsPetUntrainGossipOption(item->GossipOptionID))
+            else if (Pet::IsPetUntrainGossipOption(gossipOptionId))
             {
                 PlayerTalkClass->SendCloseGossip();
                 UntrainClassicPet(cost);
+            }
+            else if (optionSpellId)
+            {
+                // Options that hand out an item (quest reports and the like) carry the spell that makes it. Only spells
+                // that create an item are cast here, so options whose spell is just shown in the client stay as they were.
+                if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(*optionSpellId, DIFFICULTY_NONE))
+                    if (spellInfo->HasEffect(SPELL_EFFECT_CREATE_LOOT) || spellInfo->HasEffect(SPELL_EFFECT_CREATE_ITEM))
+                        CastSpell(this, spellInfo->Id, true);
             }
             break;
         case GossipOptionNpc::Vendor:
@@ -15075,6 +15147,16 @@ void Player::OnGossipSelect(WorldObject* source, int32 gossipOptionId, uint32 me
             break;
         case GossipOptionNpc::Taxinode:
             GetSession()->SendTaxiMenu(source->ToCreature());
+            break;
+        case GossipOptionNpc::Banker:
+            // Personal Banking through an innkeeper: the access cooldown starts
+            if (IsClassicPersonalBankingInnkeeper(this, source->ToCreature()))
+            {
+                if (HasAura(1261854))
+                    return;
+                CastSpell(this, 1261854, true);
+            }
+            handled = false;
             break;
         case GossipOptionNpc::Trainer:
         {
@@ -19442,6 +19524,34 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
                 }
                 else
                     transport = transportOnMap;
+            }
+        }
+
+        // A zeppelin or boat between two continents is on the other continent by the time the player logs in again,
+        // so it is not found on the saved map. Look for it on the other maps of its route before sending the player home.
+        if (!transport)
+        {
+            if (TransportSpawn const* transportSpawn = sTransportMgr->GetTransportSpawn(fields.transguid))
+            {
+                if (TransportTemplate const* transportTemplate = sTransportMgr->GetTransportTemplate(transportSpawn->TransportGameObjectId))
+                {
+                    for (uint32 routeMapId : transportTemplate->MapIds)
+                    {
+                        if (routeMapId == mapId)
+                            continue;
+
+                        if (Map* routeMap = sMapMgr->CreateMap(routeMapId, this))
+                        {
+                            if (Transport* transportOnRoute = routeMap->GetTransport(transGUID))
+                            {
+                                transport = transportOnRoute;
+                                mapId = routeMapId;
+                                instanceId = 0;
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -27505,6 +27615,15 @@ void Player::InitializeSelfResurrectionSpells()
     for (uint32 selfResSpell : spells)
         if (selfResSpell)
             AddSelfResSpell(selfResSpell);
+
+    // Classic 1.60 Legacy perk Play Dead 1225492: "Gives you a $s1% chance of being able to resurrect with $1261698s1% Health and Mana.
+    // Ineffective in dungeons, raids, and battlegrounds. This effect cannot trigger more often than once every $1261707d." 1261698 is the
+    // self resurrection, 1261707 (death persistent) the cooldown.
+    if (int32 chance = GetClassicLegacyPerkAmount(1225492, EFFECT_0); chance > 0 && !GetMap()->Instanceable() && !HasAura(1261707) && roll_chance(chance))
+    {
+        AddSelfResSpell(1261698);
+        CastSpell(this, 1261707, true);
+    }
 }
 
 // Used in triggers for check "Only to targets that grant experience or honor" req
@@ -29187,6 +29306,42 @@ void Player::UnsummonPetTemporaryIfAny()
     RemovePet(pet, PET_SAVE_AS_CURRENT);
 }
 
+void Player::ParkPetForTravel()
+{
+    UnsummonPetTemporaryIfAny();
+    if (m_temporaryUnsummonedPetNumber)
+    {
+        m_petParkedForTravel = true;
+        m_petParkedCheckTimer = 2000;
+    }
+}
+
+void Player::UpdateParkedPet(uint32 diff)
+{
+    if (!m_petParkedForTravel)
+        return;
+
+    // Someone else brought the pet back (dismount, teleport) or it was dropped (new summon, death of the pet): nothing left to do.
+    if (!m_temporaryUnsummonedPetNumber || !GetPetGUID().IsEmpty())
+    {
+        m_petParkedForTravel = false;
+        return;
+    }
+
+    if (m_petParkedCheckTimer > diff)
+    {
+        m_petParkedCheckTimer -= diff;
+        return;
+    }
+    m_petParkedCheckTimer = 2000;
+
+    if (!IsInWorld() || IsBeingTeleported() || IsInFlight() || GetTransport() || GetVehicle() || IsPetNeedBeTemporaryUnsummoned())
+        return;
+
+    m_petParkedForTravel = false;
+    ResummonPetTemporaryUnSummonedIfAny();
+}
+
 void Player::ResummonPetTemporaryUnSummonedIfAny()
 {
     if (!m_temporaryUnsummonedPetNumber)
@@ -29936,8 +30091,14 @@ void Player::_LoadTraits(PreparedQueryResult configsResult, PreparedQueryResult 
 
     for (WorldPackets::Traits::TraitConfig& traitConfig : loadedConfigs)
     {
-        if (TraitMgr::ValidateConfig(traitConfig, this, false, true) != TraitMgr::LearnResult::Ok)
+        if (TraitMgr::LearnResult validateResult = TraitMgr::ValidateConfig(traitConfig, this, false, true); validateResult != TraitMgr::LearnResult::Ok)
         {
+            // Players report talents reset after a restart or an alt login (player report, 3 Nov) and the cause is not known yet.
+            // Say which config was wiped and why, so the next report can be matched to a log line.
+            TC_LOG_WARN("entities.player.talents", "Player {} ({}): talent config {} (type {}, spec {}) did not pass the check at login (result {}), level {}, {} entries; it is reset.",
+                GetName(), GetGUID().ToString(), traitConfig.ID, AsUnderlyingType(traitConfig.Type), traitConfig.ChrSpecializationID,
+                AsUnderlyingType(validateResult), GetLevel(), traitConfig.Entries.size());
+
             traitConfig.Entries.clear();
             traitConfig.SubTrees.clear();
             for (UF::TraitEntry const& grantedEntry : TraitMgr::GetGrantedTraitEntriesForConfig(traitConfig, this))
@@ -33040,12 +33201,17 @@ static constexpr Milliseconds SPELL_QUEUE_TIME_WINDOW = 400ms;
 
 bool Player::CanRequestSpellCast(SpellInfo const* spellInfo, Unit const* castingUnit) const
 {
-    if (castingUnit->GetSpellHistory()->GetRemainingGlobalCooldown(spellInfo) > SPELL_QUEUE_TIME_WINDOW)
+    // The client queues a key press made in its last 400 ms of the cast, measured on its own clock. The request reaches us
+    // up to one trip later, when more of the cast seems to be left here, so it was refused with "Another action is in
+    // progress". The window grows by the player's measured latency (at most 250 ms more).
+    Milliseconds const queueWindow = SPELL_QUEUE_TIME_WINDOW + std::min(Milliseconds(GetSession()->GetLatency()), 250ms);
+
+    if (castingUnit->GetSpellHistory()->GetRemainingGlobalCooldown(spellInfo) > queueWindow)
         return false;
 
     for (CurrentSpellTypes spellSlot : { CURRENT_MELEE_SPELL, CURRENT_GENERIC_SPELL })
         if (Spell const* spell = GetCurrentSpell(spellSlot))
-            if (Milliseconds(spell->GetRemainingCastTime()) > SPELL_QUEUE_TIME_WINDOW)
+            if (Milliseconds(spell->GetRemainingCastTime()) > queueWindow)
                 return false;
 
     return true;

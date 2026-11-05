@@ -337,18 +337,21 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
     {
         uint32 savedhealth = petInfo->Health;
         uint32 savedmana = petInfo->Mana;
+        // Classic 1.60: hunter pets have no mana; their curmana column keeps the happiness (pets saved before: content).
+        // A dead pet gets it too: loaded without it (its corpse had gone, a relog, a mount or a teleport), Revive Pet brought
+        // it back at 0 happiness, it lost loyalty every tick and a new pet ran away for good soon after (player report, 5 Nov).
+        if (HasHappiness())
+        {
+            SetMaxPower(POWER_HAPPINESS, HAPPINESS_MAX);
+            SetPower(POWER_HAPPINESS, savedmana ? std::min<int32>(savedmana, HAPPINESS_MAX) : HAPPINESS_MAX / 2);
+        }
+
         if (!savedhealth && getPetType() == HUNTER_PET)
             setDeathState(JUST_DIED);
         else
         {
             SetHealth(savedhealth);
-            // Classic 1.60: hunter pets have no mana; their curmana column keeps the happiness (pets saved before: content)
-            if (HasHappiness())
-            {
-                SetMaxPower(POWER_HAPPINESS, HAPPINESS_MAX);
-                SetPower(POWER_HAPPINESS, savedmana ? std::min<int32>(savedmana, HAPPINESS_MAX) : HAPPINESS_MAX / 2);
-            }
-            else
+            if (!HasHappiness())
                 SetPower(POWER_MANA, savedmana);
         }
     }
@@ -665,9 +668,19 @@ void Pet::Update(uint32 diff)
         {
             // unsummon pet that lost owner
             Player* owner = GetOwner();
-            if ((!IsWithinDistInMap(owner, GetMap()->GetVisibilityRange()) && !isPossessed()) || (isControlled() && !owner->GetPetGUID()))
+            bool const outOfSight = !IsWithinDistInMap(owner, GetMap()->GetVisibilityRange()) && !isPossessed();
+            if (outOfSight && isControlled() && owner->GetPetGUID() == GetGUID() && CatchUpWithOwner())
+                break;
+            // The owner went where the pet could not follow (a boat or zeppelin, a taxi, a teleport): the pet was dismissed for good and
+            // a warlock found the Imp gone after the trip (player report, 3 Nov). Put it away like a mount-up does; it comes back once the
+            // owner stands on the ground again.
+            if (outOfSight && isControlled() && owner->GetPetGUID() == GetGUID() && ParkForOwnerTravel())
+                return;
+            if (outOfSight || (isControlled() && !owner->GetPetGUID()))
             //if (!owner || (!IsWithinDistInMap(owner, GetMap()->GetVisibilityDistance()) && (owner->GetCharmGUID() && (owner->GetCharmGUID() != GetGUID()))) || (isControlled() && !owner->GetPetGUID()))
             {
+                TC_LOG_INFO("entities.pet", "Pet {} ({}) of {} dismissed: {}", GetName(), GetEntry(), owner->GetName(),
+                    outOfSight ? "out of its owner's sight" : "owner has no pet");
                 Remove(PET_SAVE_NOT_IN_SLOT, true);
                 return;
             }
@@ -766,6 +779,45 @@ void Pet::Update(uint32 diff)
             break;
     }
     Creature::Update(diff);
+}
+
+bool Pet::CatchUpWithOwner()
+{
+    Player* owner = GetOwner();
+    if (!owner || !owner->IsInWorld() || !owner->IsAlive() || !IsInWorld() || !IsAlive() || m_removed || isPossessed())
+        return false;
+    if (owner->GetMap() != GetMap() || !InSamePhase(owner) || owner->GetTransport() != GetTransport())
+        return false;
+    if (owner->IsInFlight() || owner->IsBeingTeleported() || owner->IsPetNeedBeTemporaryUnsummoned())
+        return false;
+    if (GetCharmInfo() && GetCharmInfo()->HasCommandState(COMMAND_STAY))
+        return false;                                       // told to stay there: dismissed as before
+
+    // A fight it was left at stays behind, or the pet would run straight back to it and drop out of sight again.
+    CombatStop(true);
+    StopMoving();
+    float x, y, z;
+    owner->GetClosePoint(x, y, z, GetCombatReach(), PET_FOLLOW_DIST, GetFollowAngle());
+    NearTeleportTo(x, y, z, owner->GetOrientation());
+    TC_LOG_INFO("entities.pet", "Pet {} ({}) of {} fell out of sight, set down next to its owner at ({:.0f},{:.0f},{:.0f})",
+        GetName(), GetEntry(), owner->GetName(), x, y, z);
+    return true;
+}
+
+bool Pet::ParkForOwnerTravel()
+{
+    Player* owner = GetOwner();
+    if (!owner || !owner->IsInWorld() || !owner->IsAlive() || !IsInWorld() || !IsAlive() || m_removed || isPossessed() || isTemporarySummoned())
+        return false;
+    if (GetCharmInfo() && GetCharmInfo()->HasCommandState(COMMAND_STAY))
+        return false;                                       // told to stay there: dismissed as before
+    if (owner->GetMap() != GetMap())
+        return false;
+
+    TC_LOG_INFO("entities.pet", "Pet {} ({}) of {} could not follow its owner (transport, flight or teleport), put away until the owner is back on the ground",
+        GetName(), GetEntry(), owner->GetName());
+    owner->ParkPetForTravel();
+    return true;
 }
 
 void Pet::Remove(PetSaveMode mode, bool returnreagent)
@@ -963,6 +1015,8 @@ bool Pet::ModifyLoyalty(int32 addvalue)
             // vanilla: a Rebellious pet that keeps losing loyalty runs away for good
             m_loyaltyPoints = 0;
             Player* owner = GetOwner();
+            TC_LOG_INFO("entities.pet", "Pet {} ({}) of {} ran away: Rebellious and unhappy (happiness {})", GetName(), GetEntry(),
+                owner->GetName(), GetPower(POWER_HAPPINESS));
             ChatHandler(owner->GetSession()).SendSysMessage("Your pet has run away");
             Remove(PET_SAVE_AS_DELETED);
             return false;

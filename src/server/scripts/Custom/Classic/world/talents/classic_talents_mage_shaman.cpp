@@ -767,6 +767,73 @@ class classic_spell_mage_cone_of_cold_winters_chill : public SpellScript
     }
 };
 
+// 1326080, 1326081, 1326082 - Arcane Wrath (70532): "Launches a projectile of pure Arcane energy at the enemy target, causing $s1 Arcane
+// damage. This spell gains additional Spell Damage equal to $s2% of your maximum Mana." Effect 1 is the percentage as a dummy; the extra
+// spell damage counts like spell power, with the damage effect's coefficient.
+class classic_spell_mage_arcane_wrath : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
+    }
+
+    void HandleCalcDamage(SpellEffectInfo const& spellEffectInfo, Unit* /*victim*/, int32& /*damage*/, int32& flatMod, float& /*pctMod*/)
+    {
+        Unit* caster = GetCaster();
+        if (!caster)
+            return;
+
+        float const spellDamage = CalculatePct(float(caster->GetMaxPower(POWER_MANA)), GetEffectInfo(EFFECT_1).CalcValue(caster));
+        flatMod += int32(spellDamage * spellEffectInfo.BonusCoefficient);
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_mage_arcane_wrath::HandleCalcDamage);
+    }
+};
+
+// 400588 - Missile Barrage (70532): "Gives your Arcane Blast spell a $m1% chance, your Arcane Missile hits a ${$m1/4}% chance, and your Arcane
+// Wrath, Fireball, Frostbolt, and Frostfire Bolt spells a ${$m1/2}% chance to [give 400589]". The client proc data is a flat 50% on any
+// harmful spell. The spell_proc row sets the chance to 100 and lets the triggered missile hits proc; the chance per spell is rolled here.
+class classic_spell_mage_missile_barrage : public AuraScript
+{
+    static bool IsHalfChanceSpell(SpellInfo const* spellInfo)
+    {
+        switch (spellInfo->Id)
+        {
+            case 1326080: case 1326081: case 1326082:   // Arcane Wrath
+            case 401502: case 1237312: case 1237313:    // Frostfire Bolt
+                return true;
+            default:
+                break;
+        }
+        // Fireball (word 0 0x1), Frostbolt (0x20)
+        return spellInfo->SpellFamilyName == SPELLFAMILY_MAGE && (spellInfo->SpellFamilyFlags[0] & (0x1 | 0x20));
+    }
+
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        if (!spellInfo)
+            return false;
+
+        float const chance = float(aurEff->GetAmount());
+        if (spellInfo->SpellFamilyName == SPELLFAMILY_MAGE && (spellInfo->SpellFamilyFlags[0] & 0x20000000))  // Arcane Blast
+            return roll_chance(chance);
+        if (spellInfo->SpellFamilyName == SPELLFAMILY_MAGE && (spellInfo->SpellFamilyFlags[0] & 0x200000))    // Arcane Missiles hits
+            return roll_chance(chance / 4.0f);
+        if (IsHalfChanceSpell(spellInfo))
+            return roll_chance(chance / 2.0f);
+        return false;
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_mage_missile_barrage::CheckProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
 /*######
 ## Shaman
 ######*/
@@ -1165,8 +1232,9 @@ class classic_spell_sha_rockbiter_threat : public SpellScript
     }
 };
 
-// 408490, 1238299, 1238300 - Lava Burst: "Hurls molten lava at the target. Lava Burst will always critically strike if the target is
-// affected by Flame Shock." Flame Shock is told by the shaman family flag its periodic damage carries (8050, 8052, 8053, 10447, 10448, 29228).
+// 408490, 1238299, 1238300, 1326047 - Lava Burst: always a critical strike if the target carries the shaman's Flame Shock (as in 0.1.29).
+// The 70532 tooltip says "+$s2% damage with Flame Shock" instead; that change is held back until the owner decides (it would lower the
+// spell's damage). Flame Shock is told by the shaman family flag its periodic damage carries (8050, 8052, 8053, 10447, 10448, 29228).
 class classic_spell_sha_lava_burst : public SpellScript
 {
     void CalcCritChance(Unit const* victim, float& chance) const
@@ -1182,6 +1250,27 @@ class classic_spell_sha_lava_burst : public SpellScript
     void Register() override
     {
         OnCalcCritChance += SpellOnCalcCritChanceFn(classic_spell_sha_lava_burst::CalcCritChance);
+    }
+};
+
+// 1064, 10622, 10623 - Chain Heal, with Riptide 408521, 1239242, 1239243 (70532): "increases the effectiveness of your Chain Heal casts
+// directly on that target by $s3%." Riptide effect 2 is the bonus as a dummy aura; only the first target of the Chain Heal gets it.
+class classic_spell_sha_chain_heal_riptide : public SpellScript
+{
+    void HandleCalcHealing(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*healing*/, int32& /*flatMod*/, float& pctMod)
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !victim || victim != GetExplTargetUnit())
+            return;
+
+        // Riptide: shaman family flag 0x10 in the third word
+        if (AuraEffect const* riptide = victim->GetAuraEffect(SPELL_AURA_DUMMY, SPELLFAMILY_SHAMAN, flag128(0, 0, 0x10, 0), caster->GetGUID()))
+            AddPct(pctMod, riptide->GetAmount());
+    }
+
+    void Register() override
+    {
+        CalcHealing += SpellCalcHealingFn(classic_spell_sha_chain_heal_riptide::HandleCalcHealing);
     }
 };
 
@@ -1485,9 +1574,11 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_arcane_concentration);
     RegisterSpellScript(classic_spell_mage_frostbite);
     RegisterSpellAndAuraScriptPair(classic_spell_mage_fire_power, classic_spell_mage_fire_power_aura);
+    RegisterSpellScript(classic_spell_mage_arcane_wrath);
     RegisterSpellScript(classic_spell_mage_frost_ward_absorb);
     RegisterSpellScript(classic_spell_mage_winters_chill);
     RegisterSpellScript(classic_spell_mage_cone_of_cold_winters_chill);
+    RegisterSpellScript(classic_spell_mage_missile_barrage);
 
     // Shaman
     RegisterSpellScript(classic_spell_sha_flurry);
@@ -1500,6 +1591,7 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_sha_improved_stormstrike);
     RegisterSpellScript(classic_spell_sha_fire_nova);
     RegisterSpellScript(classic_spell_sha_lava_burst);
+    RegisterSpellScript(classic_spell_sha_chain_heal_riptide);
     RegisterSpellScript(classic_spell_sha_flametongue_proc);
     RegisterSpellScript(classic_spell_sha_sentry_totem);
     RegisterSpellScript(classic_spell_sha_rockbiter_threat);

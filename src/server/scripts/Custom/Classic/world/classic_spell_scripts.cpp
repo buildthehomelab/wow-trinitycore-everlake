@@ -20,8 +20,10 @@
 #include "ScriptMgr.h"
 #include "AreaTrigger.h"
 #include "CellImpl.h"
+#include "ClassicLegacyPerks.h"
 #include "Creature.h"
 #include "CreatureAI.h"
+#include "ConditionMgr.h"
 #include "Containers.h"
 #include "DatabaseEnv.h"
 #include "DB2Stores.h"
@@ -37,8 +39,10 @@
 #include "PhasingHandler.h"
 #include "Player.h"
 #include "QuestDef.h"
+#include "RestMgr.h"
 #include "Random.h"
 #include "SpellAuraEffects.h"
+#include "SpellHistory.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
@@ -260,6 +264,29 @@ class classic_spell_pal_seal_of_righteousness : public AuraScript
         }
     }
 
+public:
+    // One Seal of Righteousness hit from seal `sealId` with effect points `points` (also replayed by Unsealed Wrath)
+    static void Hit(Player* player, Unit* target, uint32 sealId, float points, CastSpellExtraArgs args)
+    {
+        uint32 const damageSpell = GetDamageSpell(sealId);
+        if (!player || !target || !damageSpell)
+            return;
+
+        Item* weapon = player->GetWeaponForAttack(BASE_ATTACK, true);
+        float const speed = (weapon ? weapon->GetTemplate()->GetDelay() : BASE_ATTACK_TIME) / 1000.0f;
+
+        float damage;
+        if (weapon && weapon->GetTemplate()->GetInventoryType() == INVTYPE_2HWEAPON)
+            damage = 1.2f * points * 1.2f * 1.03f * speed / 100.0f + 1.0f;
+        else
+            damage = 0.85f * std::ceil(points * 1.2f * 1.03f * speed / 100.0f) - 1.0f;
+        damage += 0.03f * (player->GetWeaponDamageRange(BASE_ATTACK, MINDAMAGE) + player->GetWeaponDamageRange(BASE_ATTACK, MAXDAMAGE)) / 2.0f;
+
+        // spell power is added by the damage spell itself (its bonus coefficient)
+        player->CastSpell(target, damageSpell, args.AddSpellMod(SPELLVALUE_BASE_POINT0, std::max(int32(damage) + 1, 1)));
+    }
+
+private:
     bool Validate(SpellInfo const* spellInfo) override
     {
         return ValidateSpellInfo({ GetDamageSpell(spellInfo->Id) });
@@ -274,22 +301,7 @@ class classic_spell_pal_seal_of_righteousness : public AuraScript
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
         PreventDefaultAction();
-
-        Player* player = GetTarget()->ToPlayer();
-        Item* weapon = player->GetWeaponForAttack(BASE_ATTACK, true);
-        float const speed = (weapon ? weapon->GetTemplate()->GetDelay() : BASE_ATTACK_TIME) / 1000.0f;
-        float const points = float(aurEff->GetAmount());
-
-        float damage;
-        if (weapon && weapon->GetTemplate()->GetInventoryType() == INVTYPE_2HWEAPON)
-            damage = 1.2f * points * 1.2f * 1.03f * speed / 100.0f + 1.0f;
-        else
-            damage = 0.85f * std::ceil(points * 1.2f * 1.03f * speed / 100.0f) - 1.0f;
-        damage += 0.03f * (player->GetWeaponDamageRange(BASE_ATTACK, MINDAMAGE) + player->GetWeaponDamageRange(BASE_ATTACK, MAXDAMAGE)) / 2.0f;
-
-        // spell power is added by the damage spell itself (its bonus coefficient)
-        player->CastSpell(eventInfo.GetActionTarget(), GetDamageSpell(GetId()), CastSpellExtraArgs(aurEff)
-            .AddSpellMod(SPELLVALUE_BASE_POINT0, std::max(int32(damage) + 1, 1)));
+        Hit(GetTarget()->ToPlayer(), eventInfo.GetActionTarget(), GetId(), float(aurEff->GetAmount()), CastSpellExtraArgs(aurEff));
     }
 
     void Register() override
@@ -955,6 +967,144 @@ class classic_spell_legacy_reagent_economy : public AuraScript
     }
 };
 
+// 1225505 - Fast Recovery (Legacy): "You recover an additional ${$m1/10}.1% of your Health and Mana every 5 sec while not in combat." Effect 0
+// is a periodic dummy (5 sec) without a trigger spell, so nothing was recovered. The amount is in tenths of a percent.
+class classic_spell_legacy_fast_recovery : public AuraScript
+{
+    void HandlePeriodic(AuraEffect const* aurEff)
+    {
+        PreventDefaultAction();
+
+        Unit* target = GetTarget();
+        if (target->IsInCombat() || !target->IsAlive() || aurEff->GetAmount() <= 0)
+            return;
+
+        float const pct = float(aurEff->GetAmount()) / 10.0f;
+        if (!target->IsFullHealth())
+            target->ModifyHealth(int32(CalculatePct(float(target->GetMaxHealth()), pct) + 0.5f));
+
+        if (target->GetMaxPower(POWER_MANA) && target->GetPower(POWER_MANA) < target->GetMaxPower(POWER_MANA))
+            target->ModifyPower(POWER_MANA, int32(CalculatePct(float(target->GetMaxPower(POWER_MANA)), pct) + 0.5f));
+    }
+
+    void Register() override
+    {
+        OnEffectPeriodic += AuraEffectPeriodicFn(classic_spell_legacy_fast_recovery::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_DUMMY);
+    }
+};
+
+// 1225494 - Second Home (Legacy): "Returns you to the rest area where you most recently set your Second Home. When used in a rest area,
+// makes that location your Second Home. This ability shares a cooldown with Hearthstones." The client spell is a dummy. The location is kept
+// in the client's Second Home aura 1262044 (infinite, death persistent, four dummy effects): map, then x, y and z in tenths of a yard, so it
+// is saved with the character. Setting the location does not start the shared cooldown; the return does (Hearthstone category).
+class classic_spell_legacy_second_home : public SpellScript
+{
+    static constexpr uint32 SPELL_SECOND_HOME_LOCATION = 1262044;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellEffect({ { SPELL_SECOND_HOME_LOCATION, EFFECT_3 } });
+    }
+
+    static bool IsInRestArea(Player const* player)
+    {
+        return player->GetRestMgr().HasRestFlag(REST_FLAG_IN_TAVERN) || player->GetRestMgr().HasRestFlag(REST_FLAG_IN_CITY);
+    }
+
+    SpellCastResult CheckCast()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        if (!player)
+            return SPELL_FAILED_BAD_TARGETS;
+
+        if (!IsInRestArea(player) && !player->HasAura(SPELL_SECOND_HOME_LOCATION))
+            return SPELL_FAILED_NOT_HERE;
+
+        return SPELL_CAST_OK;
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Player* player = GetCaster()->ToPlayer();
+        if (!player)
+            return;
+
+        if (IsInRestArea(player))
+        {
+            player->RemoveAurasDueToSpell(SPELL_SECOND_HOME_LOCATION);
+            CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+            args.AddSpellMod(SPELLVALUE_BASE_POINT0, player->GetMapId());
+            args.AddSpellMod(SPELLVALUE_BASE_POINT1, std::round(player->GetPositionX() * 10.0f));
+            args.AddSpellMod(SPELLVALUE_BASE_POINT2, std::round(player->GetPositionY() * 10.0f));
+            args.AddSpellMod(SPELLVALUE_BASE_POINT3, std::round(player->GetPositionZ() * 10.0f));
+            player->CastSpell(player, SPELL_SECOND_HOME_LOCATION, args);
+            _locationSet = true;
+            return;
+        }
+
+        Aura const* home = player->GetAura(SPELL_SECOND_HOME_LOCATION);
+        if (!home)
+            return;
+
+        auto coordinate = [home](SpellEffIndex effIndex) { return float(home->GetEffect(effIndex)->GetAmount()) / 10.0f; };
+        player->TeleportTo(uint32(home->GetEffect(EFFECT_0)->GetAmount()), coordinate(EFFECT_1), coordinate(EFFECT_2), coordinate(EFFECT_3),
+            player->GetOrientation(), TELE_TO_SPELL, {}, GetSpellInfo()->Id);
+    }
+
+    void HandleAfterCast()
+    {
+        if (_locationSet)
+            GetCaster()->GetSpellHistory()->ResetCooldown(GetSpellInfo()->Id, true);
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(classic_spell_legacy_second_home::CheckCast);
+        OnEffectHitTarget += SpellEffectFn(classic_spell_legacy_second_home::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+        AfterCast += SpellCastFn(classic_spell_legacy_second_home::HandleAfterCast);
+    }
+
+    bool _locationSet = false;
+};
+
+// 1262044 - Second Home (location): the amounts are the saved location and must never be recalculated.
+class classic_spell_legacy_second_home_location : public AuraScript
+{
+    void CalcAmount(AuraEffect const* /*aurEff*/, SpellEffectValue& /*amount*/, bool& canBeRecalculated)
+    {
+        canBeRecalculated = false;
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(classic_spell_legacy_second_home_location::CalcAmount, EFFECT_ALL, SPELL_AURA_DUMMY);
+    }
+};
+
+// Boss celebration buffs (ClassicLegacyPerks::IsBossCelebrationBuff) with 1225508 Second Chance: Unit::RemoveAllAurasOnDeath keeps them through
+// the first death and marks it with 1262777; when the last of them is gone the mark goes too, so the next ones get their own second chance.
+class classic_spell_legacy_boss_celebration_buff : public AuraScript
+{
+    void AfterRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* target = GetTarget();
+        if (!target->HasAura(ClassicLegacyPerks::SECOND_CHANCE_USED))
+            return;
+
+        for (auto const& [spellId, aura] : target->GetOwnedAuras())
+            if (aura != GetAura() && ClassicLegacyPerks::IsBossCelebrationBuff(spellId))
+                return;
+
+        target->RemoveAurasDueToSpell(ClassicLegacyPerks::SECOND_CHANCE_USED);
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_legacy_boss_celebration_buff::AfterRemove, EFFECT_FIRST_FOUND, SPELL_AURA_ANY,
+            AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 // 1225469 - Dedicated Study (Legacy, Professions tree 1187), a castable spell: "Increases your skill by 1 in your lowest tradeskill among
 // your Primary and Secondary tradeskills. If you have already reached 300 skill in your two current Primary Tradeskills and all three
 // Secondary Tradeskills, you will gain $s1 of a random Elemental Essence."
@@ -1134,6 +1284,191 @@ class classic_spell_pal_seal_of_fury_damage : public SpellScript
     {
         AfterHit += SpellHitFn(classic_spell_pal_seal_of_fury_damage::HandleAfterHit);
     }
+};
+
+// Well Fed from the Forever foods (1248406 1248420-1248422 1248688 1249519-1249521 1249523 1249907 1249926 1249927 1319310): "Experience
+// gained from kills increased by 5%" while the player meets the client's condition for the boost (PlayerCondition 142418: the world
+// state of the levelling event and the level range). Nothing applied Well Fed XP Boost (1243969), so the food never gave the extra
+// experience. It now comes and goes with the Well Fed aura and lasts as long.
+class classic_spell_well_fed_xp_boost : public AuraScript
+{
+    static constexpr uint32 SPELL_WELL_FED_XP_BOOST = 1243969;
+    static constexpr uint32 CONDITION_XP_BOOST = 142418;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_WELL_FED_XP_BOOST });
+    }
+
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Player* player = GetTarget()->ToPlayer();
+        if (!player || !ConditionMgr::IsPlayerMeetingCondition(player, CONDITION_XP_BOOST))
+            return;
+
+        player->CastSpell(player, SPELL_WELL_FED_XP_BOOST, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringAura(GetEffect(EFFECT_0)));
+        if (Aura* boost = player->GetAura(SPELL_WELL_FED_XP_BOOST))
+        {
+            boost->SetMaxDuration(GetMaxDuration());
+            boost->SetDuration(GetDuration());
+        }
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetTarget()->RemoveAurasDueToSpell(SPELL_WELL_FED_XP_BOOST);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_spell_well_fed_xp_boost::HandleApply, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_well_fed_xp_boost::HandleRemove, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// Unsealed Wrath (talent 1310735): "Your melee attacks store a copy of your active Seal for 15 sec, stacking up to 3 times. Landing an
+// attack with a different Seal consumes all stacks, giving the stored Seal its normal chance to activate once per stack." The stored copy is
+// the seal's Echo aura (Echo of Fury / Command / Righteousness / Justice / Light / Wisdom, 3 stacks). A replay does what the seal does on a
+// swing: Righteousness and Fury their scripted Holy hit, the others their triggered spell at the seal's own chance (Seal of Command's 7 per
+// minute). Seal of the Crusader has no Echo. The rank replayed is the one that was stored; after a relog, the paladin's best known rank.
+class classic_spell_pal_unsealed_wrath : public AuraScript
+{
+    enum SealKind : uint8 { SEAL_RIGHTEOUSNESS, SEAL_COMMAND, SEAL_JUSTICE, SEAL_LIGHT, SEAL_WISDOM, SEAL_FURY, SEAL_KIND_MAX };
+
+    struct SealKindInfo
+    {
+        uint32 echo;
+        std::initializer_list<uint32> ranks;   // lowest first
+    };
+
+    static SealKindInfo const& Info(uint8 kind)
+    {
+        static SealKindInfo const table[SEAL_KIND_MAX] =
+        {
+            { 1311704, { 20154, 21084, 20287, 20288, 20289, 20290, 20291, 20292, 20293 } },
+            { 1311703, { 20375, 20915, 20918, 20919, 20920 } },
+            { 1311705, { 20164 } },
+            { 1328198, { 20165, 20347, 20348, 20349 } },
+            { 1328206, { 20166, 20356, 20357 } },
+            { 1311701, { 1311649, 1311656, 20163, 20419, 20421, 20422, 20423 } },
+        };
+        return table[kind];
+    }
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        for (uint8 kind = 0; kind < SEAL_KIND_MAX; ++kind)
+            if (!ValidateSpellInfo({ Info(kind).echo }))
+                return false;
+        return true;
+    }
+
+    // The seal aura on the paladin, and its kind
+    static Aura const* ActiveSeal(Unit const* paladin, uint8& kindOut)
+    {
+        for (uint8 kind = 0; kind < SEAL_KIND_MAX; ++kind)
+            for (uint32 sealId : Info(kind).ranks)
+                if (Aura const* seal = paladin->GetAura(sealId))
+                {
+                    kindOut = kind;
+                    return seal;
+                }
+        return nullptr;
+    }
+
+    uint32 StoredRank(Player const* paladin, uint8 kind) const
+    {
+        if (_stored[kind] && paladin->HasSpell(_stored[kind]))
+            return _stored[kind];
+        uint32 best = 0;
+        for (uint32 sealId : Info(kind).ranks)
+            if (paladin->HasSpell(sealId))
+                best = sealId;
+        return best;
+    }
+
+    static void Replay(Player* paladin, Unit* victim, uint8 kind, uint32 sealId)
+    {
+        SpellInfo const* seal = sSpellMgr->GetSpellInfo(sealId, DIFFICULTY_NONE);
+        if (!seal)
+            return;
+
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        switch (kind)
+        {
+            case SEAL_RIGHTEOUSNESS:
+                classic_spell_pal_seal_of_righteousness::Hit(paladin, victim, sealId, float(seal->GetEffect(EFFECT_0).CalcValue(paladin)), args);
+                return;
+            case SEAL_FURY:
+                if (uint32 damageSpell = ClassicSealOfFuryDamageSpell(sealId))
+                    paladin->CastSpell(victim, damageSpell, args);
+                return;
+            default:
+                break;
+        }
+
+        SpellEffectInfo const& effect = seal->GetEffect(EFFECT_0);
+        if (effect.ApplyAuraName != SPELL_AURA_PROC_TRIGGER_SPELL || !effect.TriggerSpell)
+            return;
+
+        float chance = float(seal->ProcChance);
+        if (SpellProcEntry const* procEntry = sSpellMgr->GetSpellProcEntry(seal))
+        {
+            if (procEntry->ProcsPerMinute > 0.0f)
+                chance = paladin->GetPPMProcChance(paladin->GetBaseAttackTime(BASE_ATTACK), procEntry->ProcsPerMinute, seal);
+            else if (procEntry->Chance > 0.0f)
+                chance = procEntry->Chance;
+        }
+        if (!roll_chance(chance))
+            return;
+
+        paladin->CastSpell(victim, effect.TriggerSpell, args);
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        return GetTarget()->IsPlayer() && eventInfo.GetActionTarget() && eventInfo.GetActionTarget()->IsAlive() && eventInfo.GetDamageInfo()
+            && eventInfo.GetDamageInfo()->GetAttackType() == BASE_ATTACK && !eventInfo.GetSpellInfo();
+    }
+
+    void HandleProc(ProcEventInfo& eventInfo)
+    {
+        Player* paladin = GetTarget()->ToPlayer();
+        Unit* victim = eventInfo.GetActionTarget();
+
+        uint8 activeKind = SEAL_KIND_MAX;
+        Aura const* active = ActiveSeal(paladin, activeKind);
+        if (!active)
+            return;
+        uint32 const activeSealId = active->GetId();
+
+        // Other seals' stored copies go off, one replay per stack
+        for (uint8 kind = 0; kind < SEAL_KIND_MAX; ++kind)
+        {
+            if (kind == activeKind)
+                continue;
+            Aura* echo = paladin->GetAura(Info(kind).echo);
+            if (!echo)
+                continue;
+            uint8 const stacks = echo->GetStackAmount();
+            uint32 const sealId = StoredRank(paladin, kind);
+            paladin->RemoveAura(echo);
+            for (uint8 i = 0; i < stacks && sealId && victim->IsAlive(); ++i)
+                Replay(paladin, victim, kind, sealId);
+        }
+
+        // Store the active seal (stacks to 3 and refreshes on its own)
+        _stored[activeKind] = activeSealId;
+        paladin->CastSpell(paladin, Info(activeKind).echo, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_pal_unsealed_wrath::CheckProc);
+        OnProc += AuraProcFn(classic_spell_pal_unsealed_wrath::HandleProc);
+    }
+
+    std::array<uint32, SEAL_KIND_MAX> _stored = { };
 };
 
 // Judgement of Fury (20183 20411-20414 1311650 1311655): "Unleashing this Seal's energy causes Holy damage to an enemy and taunts the
@@ -1818,6 +2153,8 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_pal_consecration);
     RegisterSpellScript(classic_spell_pal_seal_of_fury);
     RegisterSpellScript(classic_spell_pal_seal_of_fury_damage);
+    RegisterSpellScript(classic_spell_pal_unsealed_wrath);
+    RegisterSpellScript(classic_spell_well_fed_xp_boost);
     RegisterSpellScript(classic_spell_pal_judgement_of_fury);
     RegisterSpellScript(classic_spell_legacy_high_alert);
     new classic_player_high_alert_map();
@@ -1825,6 +2162,10 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_recently_bandaged_field_medicine);
     new classic_player_thrill_of_adventure();
     RegisterSpellScript(classic_spell_legacy_reagent_economy);
+    RegisterSpellScript(classic_spell_legacy_fast_recovery);
+    RegisterSpellScript(classic_spell_legacy_second_home);
+    RegisterSpellScript(classic_spell_legacy_second_home_location);
+    RegisterSpellScript(classic_spell_legacy_boss_celebration_buff);
     RegisterSpellScript(classic_spell_profession_certification);
     RegisterSpellScript(classic_spell_executors_motivator);
     RegisterSpellScriptWithArgs(classic_spell_skyborne_racial_focus, "classic_spell_skyborne_read_ley_line", 2246, 1259691, 1271952, 100, true);

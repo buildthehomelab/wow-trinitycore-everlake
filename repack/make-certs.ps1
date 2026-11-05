@@ -1,6 +1,6 @@
 # One-time setup (run as Administrator): own name-constrained CA + certificate for trinity.actual.battle.net,
 # trusts the CA for this PC, adds the hosts entry. Keys stay on THIS PC; never share certs\ca.key.
-# Remove everything again with uninstall.ps1.
+# Remove everything again with Uninstall.cmd (repack\uninstall.ps1).
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $certs = Join-Path $root 'certs'

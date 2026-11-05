@@ -39,6 +39,9 @@ namespace
 // lfg_proposal_accept): the owner queued the group. Repairs and new trainer spells come free (BackfillOne).
 bool IsWorldErrand(std::string_view name)
 {
+    // Taking the quest from an item already in the bags goes nowhere, so a companion does it too.
+    if (name == "idle:quest_start_item")
+        return false;
     static constexpr std::string_view kPrefixes[] = {
         "idle:ah_", "idle:autoact_dispatch", "idle:bag_hearth", "idle:bags_full_recover", "idle:bank_deposit",
         "idle:calendar_", "idle:capital_bag_run", "idle:craft_order_", "idle:critical_repair", "idle:dual_spec_switch",

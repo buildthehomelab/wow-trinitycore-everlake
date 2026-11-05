@@ -1237,6 +1237,9 @@ bool WorldSession::CanUseBank(ObjectGuid bankerGUID) const
     if (!isUsingBankCommand)
     {
         Creature* creature = GetPlayer()->GetNPCIfCanInteractWith(bankerGUID, UNIT_NPC_FLAG_BANKER, UNIT_NPC_FLAG_2_NONE);
+        // Classic 1.60 Legacy perk Personal Banking 1225493: the bank opened through an innkeeper (Player::OnGossipSelect)
+        if (!creature && GetPlayer()->HasAura(1225493))
+            creature = GetPlayer()->GetNPCIfCanInteractWith(bankerGUID, UNIT_NPC_FLAG_INNKEEPER, UNIT_NPC_FLAG_2_NONE);
         if (!creature)
             return false;
     }

@@ -2,10 +2,15 @@
 # Package layout: <root>\{server\, mysql\, config\my.ini, repack\ (this script), certs\, data\}
 $root = Split-Path $PSScriptRoot -Parent
 Remove-Item (Join-Path $PSScriptRoot 'stop.flag') -ErrorAction SilentlyContinue
+. "$PSScriptRoot\mysql-helpers.ps1"
+# A folder moved or copied after the install (F:\Games2\wowforever to F:\wowforever, D:\forever to C:\forever: player reports
+# 11-01) still has the old place in its settings and shortcuts, and on another PC lacks the certificate trust and the hosts entry.
+# Only Install.cmd puts all of that right, so nothing is started until it ran once here.
+$movedFrom = Get-MovedFrom $root
+if ($movedFrom) { throw (Get-MovedMessage $root $movedFrom) }
 # the bots need the pathfinding data (mmaps); without it they walk in straight lines and fall through the ground.
 # If it is not finished, build it now (shows progress), then start the server.
 if (-not (& "$PSScriptRoot\ensure-data.ps1")) { throw 'The game data is not finished, so the server was not started. Start again (menu 1) to continue, or run Install.cmd.' }
-. "$PSScriptRoot\mysql-helpers.ps1"
 Start-OurMySql $root
 Sync-TrinityUser $root   # repairs an install whose first database step left the user without its password
 Sync-ConfDbPassword $root   # and the servers' settings log in with that same password
@@ -18,7 +23,7 @@ Set-ClientLanguageConf $dir
 . "$PSScriptRoot\WorldUp.ps1"
 Repair-ConfDir $dir
 Sync-NetworkKeys $dir
-Sync-HireSettings $dir
+Sync-LocalSettings $dir
 Sync-BotClothesSettings $dir
 . "$PSScriptRoot\ConfigCheck.ps1"
 # the same setting twice in one file (or a broken line) makes the server close at once with the reason only in its own window

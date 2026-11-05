@@ -64,6 +64,7 @@ CPUs: $([Environment]::ProcessorCount)
 Free GB on install drive: $([math]::Round((Get-PSDrive ($root.Substring(0, 1))).Free / 1GB))
 Install folder has spaces: $($root -match ' ')
 Game folder (config\client.txt): $client
+Game table languages: $((Get-ChildItem (Join-Path $data 'dbc') -Directory -ErrorAction SilentlyContinue | ForEach-Object Name) -join ', ') | $((Get-Content (Join-Path $data 'dbc\.client-locale') -ErrorAction SilentlyContinue) -join ' | ')
 server\data: dbc=$(& $count 'dbc' '*.db2') maps=$(& $count 'maps' '*.map') mmaps=$(& $count 'mmaps' '*.mmap') extract-complete=$(Test-Path (Join-Path $data '.extract-complete'))
 MySQL port $port is used by: $owner
 Running: $((Get-Process worldserver, bnetserver, mysqld -ErrorAction SilentlyContinue | ForEach-Object ProcessName) -join ', ')

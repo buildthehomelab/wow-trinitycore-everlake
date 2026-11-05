@@ -2880,6 +2880,8 @@ void SpellInfo::_LoadAuraState()
         {
             case 1064: // Dazed
                 return AURA_STATE_DAZED;
+            case 1310726: // Expose Prey (Classic 1.60): "allow an activation of Mongoose Bite", as after a dodge
+                return AURA_STATE_DEFENSIVE;
             case 32216: // Victorious
             case 402975: // Victorious, Classic 1.60: Victory Rush 402927 needs caster aura state 10 (32216 isn't in the 70707 client)
                 return AURA_STATE_VICTORIOUS;

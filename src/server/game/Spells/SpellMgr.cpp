@@ -35,6 +35,7 @@
 #include "SpellInfo.h"
 #include "StringConvert.h"
 #include <G3D/g3dmath.h>
+#include <algorithm>
 #include <boost/multi_index/composite_key.hpp>
 #include <boost/multi_index/hashed_index.hpp>
 #include <boost/multi_index/member.hpp>
@@ -3667,6 +3668,65 @@ ClassicSpellValue::Cost const* SpellMgr::GetClassicSpellCost(uint32 spellId) con
     return Trinity::Containers::MapGetValuePtr(mClassicSpellCosts, spellId);
 }
 
+// Classic 1.60 (Forever): the bundles a labeled Waylaid Crate takes. The client lists them only in the Stock Crate spell's text
+// ("$M3 Peacebloom ...") with the counts in its dummy effects, and offers the materials of its ItemSalvage list; the server needs
+// the pairs, so classic_crate_bundle holds them (one row per material, made from the client data).
+void SpellMgr::LoadClassicCrateBundles()
+{
+    uint32 oldMSTime = getMSTime();
+
+    mClassicCrateBundles.clear();
+
+    QueryResult result = WorldDatabase.Query("SELECT spell_id, item_id, count FROM classic_crate_bundle");
+    if (!result)
+    {
+        TC_LOG_INFO("server.loading", ">> Loaded 0 classic crate bundles. DB table `classic_crate_bundle` is empty.");
+        return;
+    }
+
+    uint32 count = 0;
+    do
+    {
+        Field* fields = result->Fetch();
+        uint32 spellId = fields[0].GetUInt32();
+        uint32 itemId = fields[1].GetUInt32();
+        uint32 itemCount = fields[2].GetUInt32();
+
+        SpellInfo const* spellInfo = GetSpellInfo(spellId, DIFFICULTY_NONE);
+        if (!spellInfo || !spellInfo->HasEffect(SPELL_EFFECT_SALVAGE_ITEM))
+        {
+            TC_LOG_ERROR("sql.sql", "Table `classic_crate_bundle`: spell {} does not exist or has no SPELL_EFFECT_SALVAGE_ITEM, skipped.", spellId);
+            continue;
+        }
+
+        if (!sObjectMgr->GetItemTemplate(itemId))
+        {
+            TC_LOG_ERROR("sql.sql", "Table `classic_crate_bundle`: item {} of spell {} does not exist, skipped.", itemId, spellId);
+            continue;
+        }
+
+        if (!itemCount)
+        {
+            TC_LOG_ERROR("sql.sql", "Table `classic_crate_bundle`: item {} of spell {} has count 0, skipped.", itemId, spellId);
+            continue;
+        }
+
+        mClassicCrateBundles[spellId].push_back({ itemId, itemCount });
+        ++count;
+    } while (result->NextRow());
+
+    TC_LOG_INFO("server.loading", ">> Loaded {} classic crate bundles of {} crates in {} ms", count, mClassicCrateBundles.size(), GetMSTimeDiffToNow(oldMSTime));
+}
+
+SpellMgr::ClassicCrateBundle const* SpellMgr::GetClassicCrateBundle(uint32 spellId, uint32 itemId) const
+{
+    std::vector<ClassicCrateBundle> const* bundles = Trinity::Containers::MapGetValuePtr(mClassicCrateBundles, spellId);
+    if (!bundles)
+        return nullptr;
+    auto itr = std::ranges::find(*bundles, itemId, &ClassicCrateBundle::ItemId);
+    return itr != bundles->end() ? &*itr : nullptr;
+}
+
 void SpellMgr::LoadSpellInfoCorrections()
 {
     uint32 oldMSTime = getMSTime();
@@ -3723,6 +3783,12 @@ void SpellMgr::LoadSpellInfoCorrections()
             });
         });
     }
+
+    // Forever priest Holy Binding: the self heal (1328570) generates no threat, as its talent says
+    ApplySpellFix({ 1328570 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->AttributesEx |= SPELL_ATTR1_NO_THREAT;
+    });
 
     // Classic 1.60 warrior Deep Wounds: the bleed tick (412613) never misses, never crits and ignores armor
     ApplySpellFix({ 412613 }, [](SpellInfo* spellInfo)

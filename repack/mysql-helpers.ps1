@@ -117,12 +117,57 @@ function Get-OurMySqlProcess([string]$Root) {
     }
     $null
 }
+function Get-SamePath([string]$A, [string]$B) {
+    $a = ($A -replace '\\', '/').TrimEnd('/'); $b = ($B -replace '\\', '/').TrimEnd('/')
+    [string]::Equals($a, $b, [StringComparison]::OrdinalIgnoreCase)
+}
+# true when $Path is $Folder or lies inside it
+function Test-PathUnder([string]$Path, [string]$Folder) {
+    $p = ($Path -replace '\\', '/').TrimEnd('/'); $f = ($Folder -replace '\\', '/').TrimEnd('/')
+    [string]::Equals($p, $f, [StringComparison]::OrdinalIgnoreCase) -or $p.StartsWith("$f/", [StringComparison]::OrdinalIgnoreCase)
+}
+# The folder this install was made in when that is not this folder (the folder was moved or copied after the install), else $null.
+# config\moved-from.txt is written by Repair-MovedFolder when it put this folder's paths back, and removed by Install.cmd: the
+# server's own paths can be repaired here, but the shortcuts, the certificate trust and the hosts entry (another PC) only by the
+# install, so a moved folder is reported until Install.cmd ran once in it.
+function Get-MovedFrom([string]$Root) {
+    # the server settings get the install folder's full path (make-tester-configs.ps1); the part in front of these endings is that folder
+    $endings = @{
+        'CertificatesFile' = '/certs/chain.pem'; 'PrivateKeyFile' = '/certs/server.key'; 'DataDir' = '/server/data'
+        'MySQLExecutable' = '/mysql/bin/mysql.exe'; 'SourceDirectory' = ''
+    }
+    $mark = Join-Path $Root 'config\moved-from.txt'
+    if (Test-Path -LiteralPath $mark) {
+        $m = @(Get-Content -LiteralPath $mark -ErrorAction SilentlyContinue | Where-Object { $_.Trim() }) | Select-Object -First 1
+        if ($m) { return $m.Trim() }
+    }
+    foreach ($c in 'bnetserver.conf', 'worldserver.conf') {
+        $cf = Join-Path (Join-Path $Root 'server') $c
+        if (-not (Test-Path -LiteralPath $cf)) { continue }
+        foreach ($l in @(Get-Content -LiteralPath $cf)) {
+            if ($l -notmatch '^\s*(\w+)\s*=\s*"?(.*?)"?\s*$' -or -not $endings.ContainsKey($Matches[1])) { continue }
+            $v = $Matches[2] -replace '\\', '/'
+            $end = $endings[$Matches[1]]
+            if (-not $v -or $v -notmatch '^[A-Za-z]:/' -or -not $v.EndsWith($end, [StringComparison]::OrdinalIgnoreCase)) { continue }
+            $was = $v.Substring(0, $v.Length - $end.Length)
+            if ($was -and -not (Get-SamePath $was $Root)) { return ($was -replace '/', '\') }
+        }
+    }
+    $null
+}
+# Plain words for a moved folder, with what to do.
+function Get-MovedMessage([string]$Root, [string]$From) {
+    "This folder was moved: it was installed in $From and is now in $Root. Please run Install.cmd once in this folder. It keeps your characters and bots, and puts the new place into the server settings, the shortcuts and the certificate the game checks. Then start the server again."
+}
 # The paths in config\my.ini and the server settings are written once, at install. A folder that was moved or renamed afterwards
 # keeps the old paths: mysqld then exits at once (no data folder there, or its log cannot be opened) and nothing listens on the port.
-# Puts this folder's paths back. Only values that point somewhere else are changed.
+# Puts this folder's paths back: a value under the folder the install was made in (Get-MovedFrom), or one that points nowhere,
+# when this folder has the file. Other values are the player's own and stay. The old folder is kept in config\moved-from.txt.
 function Repair-MovedFolder([string]$Root) {
     $ini = Join-Path $Root 'config\my.ini'
     if (-not (Test-Path $ini)) { return }
+    $from = Get-MovedFrom $Root
+    $moved = $false
     $fwd = ($Root -replace '\\', '/').TrimEnd('/')
     if ($fwd -match '[^\x20-\x7E]') {
         throw "MySQL cannot use this folder because its path has letters other than English ones: $Root. Move the whole WoW Forever Bots folder to a simple path such as C:\WoWForeverBots and start again. Your characters and bots move with it."
@@ -135,7 +180,7 @@ function Repair-MovedFolder([string]$Root) {
             if ($Matches[2].Trim('"') -ne $v) { $changed = $true; "$($Matches[1])=$v" } else { $l }
         } else { $l }
     }
-    if ($changed) { Set-Content $ini $out -Encoding ascii; Write-Host "The folder was moved: MySQL now uses $Root." }
+    if ($changed) { Set-Content $ini $out -Encoding ascii; Write-Host "The folder was moved: MySQL now uses $Root."; $moved = $true }
     $server = Join-Path $Root 'server'
     $paths = [ordered]@{
         'DataDir' = "$fwd/server/data"; 'SourceDirectory' = $fwd; 'MySQLExecutable' = "$fwd/mysql/bin/mysql.exe"
@@ -146,12 +191,17 @@ function Repair-MovedFolder([string]$Root) {
         if (-not (Test-Path $cf)) { continue }
         $lines = @(Get-Content $cf); $changed = $false
         $out = foreach ($l in $lines) {
-            if ($l -match '^\s*(DataDir|SourceDirectory|MySQLExecutable|CertificatesFile|PrivateKeyFile)\s*=\s*"?(.*?)"?\s*$' -and
-                $Matches[2] -and -not (Test-Path $Matches[2]) -and (Test-Path $paths[$Matches[1]])) {
+            if ($l -match '^\s*(DataDir|SourceDirectory|MySQLExecutable|CertificatesFile|PrivateKeyFile)\s*=\s*"?(.*?)"?\s*$' -and $Matches[2] -and
+                -not (Get-SamePath $Matches[2] $paths[$Matches[1]]) -and (Test-Path $paths[$Matches[1]]) -and
+                (-not (Test-Path $Matches[2]) -or ($from -and (Test-PathUnder $Matches[2] $from)))) {
                 $changed = $true; "$($Matches[1]) = `"$($paths[$Matches[1]])`""
             } else { $l }
         }
-        if ($changed) { Set-Content $cf $out -Encoding ascii }
+        if ($changed) { Set-Content $cf $out -Encoding ascii; $moved = $true }
+    }
+    if ($moved -and $from) {
+        $mark = Join-Path $Root 'config\moved-from.txt'
+        if (-not (Test-Path -LiteralPath $mark)) { Set-Content -LiteralPath $mark $from -Encoding utf8 }
     }
 }
 # Windows can reserve port ranges for Hyper-V, WSL or Docker (netsh interface ipv4 show excludedportrange). The reserved ranges can

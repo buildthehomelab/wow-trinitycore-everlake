@@ -1574,6 +1574,9 @@ bool World::SetInitialWorldSettings()
     TC_LOG_INFO("server.loading", "Loading Classic item durability...");      // must be after LoadItemTemplates
     sObjectMgr->LoadClassicItemDurability();
 
+    TC_LOG_INFO("server.loading", "Loading Classic crate bundles...");        // must be after LoadSpellInfoStore and LoadItemTemplates
+    sSpellMgr->LoadClassicCrateBundles();
+
     TC_LOG_INFO("misc", "Loading Item Scripts...");                 // must be after LoadItemPrototypes
     sObjectMgr->LoadItemScriptNames();
 

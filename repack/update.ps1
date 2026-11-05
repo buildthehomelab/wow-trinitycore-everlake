@@ -221,6 +221,14 @@ try {
     $skipFiles = @('*.conf', 'my.ini', 'version.json')
     $skipDirs = @('data', 'logs', 'Crashes', 'mysql', 'mysql-data', 'config', 'secrets', 'certs', 'backups', 'update-tmp')
     $count = Copy-Tree $new $Root $skipFiles $skipDirs
+    # The setting templates (repack\templates\*.conf) are ours, not the player's: the *.conf skip above left the old ones, and the
+    # start then had no new settings to add to zz-9-local.conf. Replace them with the new release's.
+    $newTpl = Join (Join $new 'repack') 'templates'
+    if (Test-Path $newTpl) {
+        $tplDir = Join (Join $Root 'repack') 'templates'
+        New-Item -ItemType Directory -Force $tplDir | Out-Null
+        foreach ($t in @(Get-ChildItem $newTpl -Filter '*.conf' -File)) { Copy-Item $t.FullName (Join $tplDir $t.Name) -Force }
+    }
     # The two managed settings files (ours, replaced by every release); zz-9-local.conf is the player's own and stays.
     foreach ($mf in 'zz-0-playerbot-defaults.conf', 'zz-1-wow-forever-realm.conf') {
         $managed = Join (Join (Join $new 'server') 'worldserver.conf.d') $mf

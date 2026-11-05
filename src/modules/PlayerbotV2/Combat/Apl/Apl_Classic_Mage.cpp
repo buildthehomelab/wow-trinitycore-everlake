@@ -14,8 +14,10 @@
 // Explosion on packs in melee, Fire Blast / nuke, wand when dry. Remove
 // Lesser Curse on the member the raid dispel plan gives the mage
 // (Classic::PickDispel: one bot per cursed member).
-// Polymorph on an add (PickGroupCC). Skipped: Blink, Mana Shield,
-// Pyroblast opener, Cone of Cold.
+// Polymorph on an add (PickGroupCC). Forever procs, in the order the
+// wowsims/forever (MIT) frost and fire lists use them: Ice Lance on the last
+// Fingers of Frost charge, Pyroblast at 3 Heating Up stacks. Skipped: Blink,
+// Mana Shield, Pyroblast opener, Cone of Cold.
 
 #include "../ApRegistry.h"
 #include "../ApRotation.h"
@@ -294,6 +296,28 @@ bool ShouldScorch(ApPredicateContext const& ctx)
 }
 void DoScorch(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(SCORCH, ctx.bot.victim()); }
 
+// Forever procs (server scripts classic_talents_mage_shaman.cpp). Fingers of Frost puts 2 charges (400670) on the mage; each cast
+// spends one and counts as hitting a Frozen target, and Ice Lance (400640, Forever trainer, level 28) then deals three times its
+// damage. Like the wowsims/forever frost list, the first charge goes to the Frostbolt and the last one to an Ice Lance.
+constexpr uint32 ICE_LANCE               = 400640;
+constexpr uint32 FINGERS_OF_FROST_STACKS = 400670;
+// Heating Up (400625): each stack takes 25% off the next Pyroblast's cast time, 3 stacks at most, 20 s. The wowsims/forever fire
+// list casts Pyroblast at 3 stacks; before that the bot never cast Pyroblast at all.
+constexpr uint32 HEATING_UP_BUFF         = 400625;
+
+bool ShouldIceLanceFingers(ApPredicateContext const& ctx)
+{
+    return ctx.bot.aura_stacks(FINGERS_OF_FROST_STACKS) == 1 && ctx.bot.current_cast_spell_id() == 0 && NukeUsable(ctx, ICE_LANCE);
+}
+void DoIceLanceFingers(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(ICE_LANCE, ctx.bot.victim()); }
+
+bool ShouldPyroblastHeatingUp(ApPredicateContext const& ctx)
+{
+    return FireBuild(ctx) && ctx.bot.aura_stacks(HEATING_UP_BUFF) >= 3 && !ctx.bot.is_moving()
+        && ctx.bot.current_cast_spell_id() == 0 && NukeUsable(ctx, PYROBLAST);
+}
+void DoPyroblastHeatingUp(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(PYROBLAST, ctx.bot.victim()); }
+
 bool ShouldSchoolNuke(ApPredicateContext const& ctx) { return SchoolHint::ShouldCast(ctx, kSchoolChoices); }
 void DoSchoolNuke(ApPredicateContext const& ctx, BotIntentEmitter& e) { SchoolHint::DoCast(ctx, e, kSchoolChoices); }
 
@@ -333,6 +357,8 @@ ApRule const kMageRules[] = {
     { ShouldCombustion,      DoCombustion,      "classic_mage:combustion" },
     { ShouldArcaneExplosion, DoArcaneExplosion, "classic_mage:arcane_explosion" },
     { ShouldScorch,          DoScorch,          "classic_mage:scorch" },
+    { ShouldIceLanceFingers, DoIceLanceFingers, "classic_mage:ice_lance_fingers" },
+    { ShouldPyroblastHeatingUp, DoPyroblastHeatingUp, "classic_mage:pyroblast_heating_up" },
     { ShouldSchoolNuke,      DoSchoolNuke,      "classic_mage:school_nuke" },
     { ShouldFireBlast,       DoFireBlast,       "classic_mage:fire_blast" },
     { ShouldNuke,            DoNuke,            "classic_mage:nuke" },

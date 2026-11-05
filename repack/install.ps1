@@ -117,6 +117,8 @@ try {
 
     Step 7 $total 'Creating Start Menu and Desktop shortcuts'
     & "$PSScriptRoot\make-shortcuts.ps1"
+    # settings (step 3), certificate and hosts entry (step 5) and shortcuts now all name this folder: a move is finished
+    Remove-Item (Join-Path $root 'config\moved-from.txt') -ErrorAction SilentlyContinue
 
     Step 8 $total 'Starting the server (in its own window; the first start applies database updates: several minutes)'
     if ($NoStart) { Write-Host 'Skipped (-NoStart).' }

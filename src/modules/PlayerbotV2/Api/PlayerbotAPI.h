@@ -158,6 +158,11 @@ public:
         CastRejectStunned,
         CastRejectSilenced,
         CastRejectBeyondRange,
+        CastRejectTargetImmune,               // hostile target immune to the whole spell
+        CastRejectTargetAirborne,             // charge-type spell at a flying target
+        CastRejectInCombat,                   // peace-only spell (Stealth, conjure) while in combat
+        CastRejectNoEquippedItem,             // needs a weapon/shield/wand the bot has not equipped
+        CastRejectItemAtLimit,                // conjured item already at its carry limit
     };
     uint32 last_cast_fail() const { return last_cast_fail_; }
     // The instance map the last teleport_to / enter_area_trigger was refused for because it holds its most players (0: none). The
