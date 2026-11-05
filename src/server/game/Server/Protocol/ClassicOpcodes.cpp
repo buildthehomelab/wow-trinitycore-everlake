@@ -146,6 +146,7 @@ struct BuildMessageChanges
     uint32 FirstBuild = 0;
     std::vector<uint32> ClientNew;   // sorted
     std::vector<uint32> ServerNew;   // sorted
+    std::vector<uint32> ServerRemoved;   // sorted, previous build's numbering
 };
 
 std::vector<uint32> ParseOpcodeList(std::string const& text)
@@ -180,7 +181,16 @@ BuildMessageChanges const& Build70755Changes()
 
 // Client 1.60.1.70790 (2026-11-04 18:49 UK, Battle.net update a few hours before the launch). Same idea one step further: a 70790
 // client's numbers are first mapped to 70755 numbers with Classic.Build70790.*, then to 70707 numbers with Classic.Build70755.*.
-// Both lists are empty by default (70790 then uses the 70755 numbers as they are); fill them from a login test without a rebuild.
+// Client messages: unchanged from 70755 (login, world, spells, quests on 70790 2026-11-04).
+// Server messages, main group: official 70532 vs 70790 sniffs (advocaite/TrinityCore b4e7b940, 49 messages) have one new message
+// against 70532: everything up to INSTANCE_INFO (wire 0x4700DE) unchanged, everything from ACHIEVEMENT_EARNED (0x4700ED) on one
+// higher (every message seen above it). Our 70755 rule (one higher from 0x470125 on) leaves wire
+// 0x4700DF..0x470124 one too low for 70790, and 2026-11-05 a 70790 ghost crashed reading our CORPSE_LOCATION (0x4700F8) as
+// SERVER_FIRST_ACHIEVEMENTS. So for 70790 the 70755 message at 0x470125 is taken out again (Classic.Build70790.ServerRemovedMessages)
+// and the new one goes in at 0x4700DF (Classic.Build70790.ServerNewMessages): base numbers from 0x4700DF on are one higher, as in
+// the sniffs. The sniffs place the new message in 0x4700DF..0x4700ED (nothing between was seen). Tested on a 70790 client
+// 2026-11-05: with 0x4700DF the mail result (0x4700E4) did not reach the client (mail window frozen), with 0x4700ED it did, so the
+// new message sits at 0x4700ED, right below ACHIEVEMENT_EARNED, and 0x4700DF..0x4700EC keep their numbers.
 BuildMessageChanges const& Build70790Changes()
 {
     static BuildMessageChanges const changes = []()
@@ -188,7 +198,8 @@ BuildMessageChanges const& Build70790Changes()
         BuildMessageChanges c;
         c.FirstBuild = uint32(sConfigMgr->GetIntDefault("Classic.Build70790.FirstBuild", 70790));
         c.ClientNew = ParseOpcodeList(sConfigMgr->GetStringDefault("Classic.Build70790.ClientNewMessages", ""));
-        c.ServerNew = ParseOpcodeList(sConfigMgr->GetStringDefault("Classic.Build70790.ServerNewMessages", ""));
+        c.ServerNew = ParseOpcodeList(sConfigMgr->GetStringDefault("Classic.Build70790.ServerNewMessages", "0x4700ED"));
+        c.ServerRemoved = ParseOpcodeList(sConfigMgr->GetStringDefault("Classic.Build70790.ServerRemovedMessages", "0x470125"));
         return c;
     }();
     return changes;
@@ -216,10 +227,15 @@ uint32 ClientToBaseBuild(uint32 opcode, BuildMessageChanges const& changes)
     return opcode - lower;
 }
 
-// 70707 server number -> 70755 server number
+// previous build's server number -> this build's server number (70707 -> 70755, 70755 -> 70790)
 uint32 ServerFromBaseBuild(uint32 opcode, BuildMessageChanges const& changes)
 {
     uint32 group = OpcodeGroup(opcode);
+    uint32 lower = 0;
+    for (uint32 removed : changes.ServerRemoved)   // gone in this build: everything after it is one lower
+        if (OpcodeGroup(removed) == group && opcode > removed)
+            ++lower;
+    opcode -= lower;
     for (uint32 added : changes.ServerNew)   // ascending: each new message pushes everything from its number on up by one
         if (OpcodeGroup(added) == group && opcode >= added)
             ++opcode;
@@ -322,9 +338,32 @@ uint32 ClassicOpcodes::TranslateServerOpcode70245(uint32 coreOpcode)
     return coreOpcode;
 }
 
-bool ClassicOpcodes::IsServerOpcodeBlocked(uint32 coreOpcode)
+// Server messages that are not sent to clients of Classic.Build70790.FirstBuild or newer. Their number in that build is not known yet,
+// and with the 70755 number the client reads them as a different message. 2026-11-05 client error file (70790, a ghost in
+// Hillsbrad): "Requested 66387465216 bytes" in JamServerFirstAchievement = 0xA4E00380 records of 24 bytes, and 0xA4E00380 is the
+// start of our CORPSE_LOCATION answer (80 = Valid bit, 03 E0 = packed guid masks, A4 = the player's own guid). So a 70790 client
+// expects SERVER_FIRST_ACHIEVEMENTS on the number we send CORPSE_LOCATION on, and the corpse query crashed the game.
+// Classic.Build70790.BlockedServerMessages takes core numbers (hex or decimal); empty by default since the 70790 server numbering
+// (Build70790Changes) sends CORPSE_LOCATION on its own 70790 number.
+std::vector<uint32> const& Build70790Blocked()
 {
-    return BlockedServerOpcodes.contains(coreOpcode);
+    static std::vector<uint32> const blocked = ParseOpcodeList(sConfigMgr->GetStringDefault("Classic.Build70790.BlockedServerMessages", ""));
+    return blocked;
+}
+
+bool ClassicOpcodes::IsServerOpcodeBlocked(uint32 coreOpcode, uint32 clientBuild)
+{
+    if (BlockedServerOpcodes.contains(coreOpcode))
+        return true;
+
+    if (AppliesTo(Build70790Changes(), clientBuild))
+    {
+        std::vector<uint32> const& blocked = Build70790Blocked();
+        if (std::binary_search(blocked.begin(), blocked.end(), coreOpcode))
+            return true;
+    }
+
+    return false;
 }
 
 std::vector<uint8> const* ClassicOpcodes::GetServerStubPayload(uint32 coreOpcode)

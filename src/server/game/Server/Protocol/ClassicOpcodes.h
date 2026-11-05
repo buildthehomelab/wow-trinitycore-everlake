@@ -45,7 +45,8 @@ namespace ClassicOpcodes
     TC_GAME_API bool IsBuild70425OrLater();
 
     /// server opcodes whose Classic number is not known yet and that crash the client when sent with the shifted retail number
-    TC_GAME_API bool IsServerOpcodeBlocked(uint32 coreOpcode);
+    /// (clientBuild: this connection's build; clients from Classic.Build70790.FirstBuild on also skip Classic.Build70790.BlockedServerMessages)
+    TC_GAME_API bool IsServerOpcodeBlocked(uint32 coreOpcode, uint32 clientBuild = 0);
 
     /// server opcodes whose Classic layout differs and for which a fixed placeholder payload is sent instead (nullptr if none)
     TC_GAME_API std::vector<uint8> const* GetServerStubPayload(uint32 coreOpcode);

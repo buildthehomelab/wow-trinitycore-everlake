@@ -2007,7 +2007,9 @@ class classic_spell_hun_lone_wolf : public AuraScript
 {
     void Update()
     {
-        Player* hunter = GetTarget()->ToPlayer();
+        // GetTarget() is empty in the heartbeat hook; the owner is valid in every hook.
+        Unit* owner = GetUnitOwner();
+        Player* hunter = owner ? owner->ToPlayer() : nullptr;
         AuraEffect* damage = GetEffect(EFFECT_0);
         AuraEffect const* marker = GetEffect(EFFECT_1);
         if (!hunter || !damage || !marker)

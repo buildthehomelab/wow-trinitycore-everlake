@@ -4908,12 +4908,30 @@ Classic.Build70790.FirstBuild = 70790
 
 Classic.Build70790.ClientNewMessages = ""
 
+#    Classic.Build70790.ServerRemovedMessages
+#        Description: Comma list of server message numbers (70755 numbering) that 70790 does not have. Server messages after a
+#                     listed one (same group) are sent one lower. 0x470125 = the 70755 new message: official 70790 sniffs show
+#                     only one new main-group message against 70532, placed lower (see ServerNewMessages). Tune with a restart.
+#        Default:     "0x470125"
+
+Classic.Build70790.ServerRemovedMessages = "0x470125"
+
 #    Classic.Build70790.ServerNewMessages
 #        Description: Comma list of server message numbers (70790 numbering) that are new in 70790. Server messages from a
-#                     listed number on (same group) are sent one higher. Empty = none moved. Tune with a restart.
+#                     listed number on (same group) are sent one higher. Official sniffs: INSTANCE_INFO (0x4700DE) unchanged,
+#                     ACHIEVEMENT_EARNED (0x4700ED) moved, so the new one is in 0x4700DF..0x4700ED. Tested on a 70790 client:
+#                     0x4700ED is right (the mail result at 0x4700E4 arrives). Tune with a restart.
+#        Default:     "0x4700ED"
+
+Classic.Build70790.ServerNewMessages = "0x4700ED"
+
+#    Classic.Build70790.BlockedServerMessages
+#        Description: Comma list of server messages (core numbers, hex or decimal) that are not sent to 70790 or newer clients
+#                     because that client reads them as a different message (a stopgap while a number is unknown). Empty =
+#                     send everything. Tune with a restart.
 #        Default:     ""
 
-Classic.Build70790.ServerNewMessages = ""
+Classic.Build70790.BlockedServerMessages = ""
 
 #    Classic.OfficialFeatureFlags
 #        Description: Send the client feature flags exactly as the official server does (sniffs 70205/70235).

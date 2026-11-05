@@ -512,7 +512,7 @@ void WorldSocket::SendPacket(WorldPacket const& packet)
     if (!IsOpen())
         return;
 
-    if (ClassicOpcodes::IsServerOpcodeBlocked(packet.GetOpcode()))
+    if (ClassicOpcodes::IsServerOpcodeBlocked(packet.GetOpcode(), _clientBuild))
     {
         TC_LOG_DEBUG("network.opcode", "S->C: {} {} not sent (blocked for Classic client)", GetRemoteIpAddress(), GetOpcodeNameForLogging(static_cast<OpcodeServer>(packet.GetOpcode())));
         return;
