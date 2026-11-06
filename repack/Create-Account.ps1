@@ -104,4 +104,6 @@ if ($GM) {
     if (-not $lvl) { Write-Host "The account exists but the GM level was not confirmed. In the worldserver window type:  account set gmlevel ${id}#1 3 -1" -ForegroundColor Yellow }
 }
 Write-Host "`nDone. Account created: $Name" -ForegroundColor Green
-Write-Host 'Start the game with Play-WoWForever.cmd (keep its window open), log in with this name and your password, realm Trinity.'
+# the login server adds @local to a name typed without an @, so a @local account logs in with the plain name too
+$typed = if ($Name -match '^(.+)@local$') { $Matches[1] } else { $Name }
+Write-Host "Start the game with Play-WoWForever.cmd (keep its window open), log in with $typed and your password, realm Trinity."

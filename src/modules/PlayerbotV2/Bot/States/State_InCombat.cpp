@@ -208,7 +208,14 @@ bool MaybeUseDefensiveRacial(BotSnapshotView const& s, BotIntentEmitter& emit)
     if (s.race() == RACE_DWARF)
     {
         constexpr uint32 STONEFORM = 20594;
-        if (s.knows_spell(STONEFORM) && s.is_ready(STONEFORM))
+        // Stoneform takes every poison, disease and bleed at once: not while the dwarf carries one the raid keeps on (Raid::KeepsAura,
+        // Poisonous Blood on Hakkar, which turns his Blood Siphon against him).
+        bool keeps = false;
+        for (auto const& a : s.raw().auras.own_auras)
+            if (a.is_harmful && Raid::KeepsAura(s.map_id(), a.spell_id))
+                keeps = keeps || a.dispel_type == DispelType::Bleed || a.dispel_type == DispelType::Poison
+                                || a.dispel_type == DispelType::Disease || (a.dispel_type == DispelType::Curse && !IsVanillaRealm());
+        if (!keeps && s.knows_spell(STONEFORM) && s.is_ready(STONEFORM))
         {
             for (auto const& a : s.raw().auras.own_auras)
             {

@@ -3,7 +3,7 @@
 A small Classic 1.60 addon with buttons for the server's `.bot` commands. It only sends ordinary chat, so it
 does not depend on the addon-message protocol PlayerbotControl uses.
 
-Install: copy this folder to `<client>\_classic_beta_\Interface\AddOns\ForeverBots` (the folder name must stay
+Install: copy this folder to `<client>\_forever_\Interface\AddOns\ForeverBots` (the folder name must stay
 `ForeverBots`). If the character screen's AddOns list marks it out of date, tick "Load out of date AddOns".
 
 Languages: the windows, menus, tooltips and chat lines follow the client language. `Locale_ruRU.lua` holds the Russian text

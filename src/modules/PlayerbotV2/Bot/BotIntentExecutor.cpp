@@ -10,6 +10,7 @@
 #include "../Util/ConfigReader.h"
 #include "../Fleet/BotGuildCharter.h"
 #include "../Fleet/BotGuildMgr.h"
+#include "GuildWhisperInvite.h"
 #include "../Fleet/BotPopulationManager.h"   // SwapResistGear
 #include "../Fleet/CraftOrderBoard.h"
 #include "../Fleet/JunkQuestResolver.h"
@@ -660,6 +661,8 @@ struct IntentVisitor
                     "<{}> recruiting all levels, friendly social guild — /w {} for invite",
                     g->GetName(), bot->GetName());
                 ch->Say(bot->GetGUID(), msg, /*lang*/ 0 /*LANG_UNIVERSAL — channel system overrides per-channel*/);
+                // "/w <name> for invite": a whispered "inv" / "invite pls" to this bot now gets the guild invite.
+                V2::GuildWhisperInvite::NoteOffer(bot->GetGUID().GetCounter(), 0);
                 return Result::Ok;
             }
             else

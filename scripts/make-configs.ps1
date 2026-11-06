@@ -36,6 +36,19 @@ function Set-Options($dist, $out, $options, $extra) {
 
 $db = { param($name) "`"127.0.0.1;3306;trinity;$pw;$name`"" }
 
+# Realm.AlsoAcceptBuilds must never be blanked by a re-run: the dev realm is on 70707 and the 70790/70755 clients only see it through this list
+# (a blank value gave "No realms are currently available" after the 0.1.31 install). Keep the value already in bnetserver.conf / worldserver.conf
+# when it has builds in it, otherwise use the full list. Both servers need it (worldserver builds the realm entry for character create).
+$defaultAlso = '70790,70755,70685,70658,70634,70630,70532'
+$alsoBuilds = $null
+foreach ($f in "$server\bnetserver.conf", "$server\worldserver.conf") {
+    if ((-not $alsoBuilds) -and (Test-Path $f)) {
+        $m = Select-String -Path $f -Pattern '^\s*Realm\.AlsoAcceptBuilds\s*=\s*"([\d,\s]+)"' | Select-Object -First 1
+        if ($m) { $alsoBuilds = $m.Matches[0].Groups[1].Value.Trim() }
+    }
+}
+if (-not $alsoBuilds) { $alsoBuilds = $defaultAlso }
+
 # BindIP 127.0.0.1: local only, so Windows never shows a firewall prompt.
 Set-Options "$server\worldserver.conf.dist" "$server\worldserver.conf" ([ordered]@{
     'RealmID'                               = '70'
@@ -49,6 +62,7 @@ Set-Options "$server\worldserver.conf.dist" "$server\worldserver.conf" ([ordered
     'SourceDirectory'                       = "`"$src`""
     'MySQLExecutable'                       = "`"$mysql`""
     'Expansion'                             = '0'
+    'Realm.AlsoAcceptBuilds'                = "`"$alsoBuilds`""
     'MaxPlayerLevel'                        = '60'
     'Classic.Hardcore'                      = '0'
     # enUS only (the client and the extracted data are enUS): the query cache and locale strings were built for all 13 locales (RAM)
@@ -100,13 +114,19 @@ Set-Options "$server\worldserver.conf.dist" "$server\worldserver.conf" ([ordered
         'AuctionHouseBot.Items.Amount.Blue'   = '1200'
         'AuctionHouseBot.Items.Amount.Purple' = '250'
         'AuctionHouseBot.Vanilla.ValueCurve'  = '1'
+        # Copper per item level squared by quality: level 60 blue ~40g, level 66 epic ~390g (vanilla-like)
+        'AuctionHouseBot.Vanilla.ValueCurve.Gray'  = '1'
+        'AuctionHouseBot.Vanilla.ValueCurve.White' = '2'
+        'AuctionHouseBot.Vanilla.ValueCurve.Green' = '28'
+        'AuctionHouseBot.Vanilla.ValueCurve.Blue'  = '110'
+        'AuctionHouseBot.Vanilla.ValueCurve.Epic'  = '900'
         'AuctionHouseBot.Items.Vendor'        = '1'
         'AuctionHouseBot.Items.Crafted'       = '1'
         'AuctionHouseBot.Items.Crafted.MinStock' = '1'
         # Buyer: bots buy player listings at fair prices, with a natural delay and a daily budget
         # Master buyer switch: without it the per-house buyer keys are ignored and nothing is ever bought
         'AuctionHouseBot.Buyer.Enabled'            = '1'
-        # Fair-price buying: always buys at or under fair value, tapering to 35% chance at the 4x cap; recheck every 5 min
+        # Fair-price buying: always buys at or under fair value, tapering to 35% chance at the 1.5x cap; recheck every 5 min
         'AuctionHouseBot.Buyer.FairPricing'        = '1'
         'AuctionHouseBot.Buyer.FairMinChance'      = '35'
         'AuctionHouseBot.Buyer.Recheck.Interval'   = '5'
@@ -115,7 +135,7 @@ Set-Options "$server\worldserver.conf.dist" "$server\worldserver.conf" ([ordered
         'AuctionHouseBot.Horde.Items.Amount.Ratio' = '0'
         'AuctionHouseBot.Neutral.Items.Amount.Ratio' = '100'
         'AuctionHouseBot.Buyer.Commodities'        = '1'
-        'AuctionHouseBot.Buyer.MaxPriceMultiplier' = '4.0'
+        'AuctionHouseBot.Buyer.MaxPriceMultiplier' = '1.5'
         'AuctionHouseBot.Buyer.MinDelay'           = '30'
         'AuctionHouseBot.Buyer.MaxDelay'           = '600'
         'AuctionHouseBot.Buyer.DailyBudgetGold'    = '5000'
@@ -158,6 +178,7 @@ Set-Options "$server\bnetserver.conf.dist" "$server\bnetserver.conf" ([ordered]@
     'LoginREST.ExternalAddress' = 'trinity.actual.battle.net'
     'LoginREST.LocalAddress'    = 'trinity.actual.battle.net'
     'Realm.CfgContentSetID'     = '137'
+    'Realm.AlsoAcceptBuilds'    = "`"$alsoBuilds`""
     # Cert for trinity.actual.battle.net signed by our local CA (secrets\tls, never committed)
     'CertificatesFile'          = "`"$(($root -replace '\\','/'))/secrets/tls/server.chain.pem`""
     'PrivateKeyFile'            = "`"$(($root -replace '\\','/'))/secrets/tls/server.key.pem`""

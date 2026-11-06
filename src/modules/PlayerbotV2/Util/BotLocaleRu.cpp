@@ -764,6 +764,19 @@ std::vector<Catalog::Entry> const& RussianEntries()
         { "currently in {}, come find me!", "сейчас в: {}, найдите меня!" },
         { "im in {} right now :)", "я сейчас в: {} :)" },
         { "you'll find me in {}", "ищите меня здесь: {}" },
+        // ---- guild invite by whisper (Bot/GuildWhisperInvite.cpp) ---------------------------------------------------------
+        { "sorry, i'm not in a guild", "извините, я не в гильдии" },
+        { "you're already in <{}> :)", "вы уже в <{}> :)" },
+        { "sorry, i can't invite people to <{}>, ask one of its officers", "извините, я не могу приглашать в <{}>, спросите кого-то из её офицеров" },
+        { "you're already in a guild, leave it first and ask me again", "вы уже в гильдии, сначала выйдите из неё и спросите меня снова" },
+        { "sorry, i can only invite players of my faction", "извините, я могу пригласить только игроков моей фракции" },
+        { "sorry, <{}> is full right now", "извините, в <{}> сейчас нет мест" },
+        { "i already sent you an invite, accept it on your screen", "приглашение уже у вас, примите его на экране" },
+        { "you have another guild invite open, answer that one first", "у вас открыто другое приглашение в гильдию, сначала ответьте на него" },
+        { "i can't invite, and none of our officers are online right now, try again later", "я не могу пригласить, а наших офицеров сейчас нет в сети, попробуйте позже" },
+        { "sorry, the invite didn't go through", "извините, приглашение не прошло" },
+        { "sure! invite to <{}> sent, welcome :)", "конечно! приглашение в <{}> отправлено, добро пожаловать :)" },
+        { "i can't invite myself, so {} sent you the invite to <{}>", "у меня нет права приглашать, поэтому {} отправляет вам приглашение в <{}>" },
     };
     return entries;
 }

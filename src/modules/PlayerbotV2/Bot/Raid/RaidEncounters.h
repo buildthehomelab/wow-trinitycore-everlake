@@ -387,6 +387,11 @@ RaidRules const* RulesForMap(uint32_t mapId);
 // controlledMember) or nobody may remove it (noDispel). The generic dispel assignment leaves these alone.
 bool OwnsAura(uint32_t mapId, uint32_t aura);
 
+// True when the map's rules say nobody removes <aura> (noDispel). A cure that takes every debuff of the type at once (a cleansing
+// totem's pulse, Stoneform) or keeps dispelling after its cast (Abolish Poison, Abolish Disease) must not reach its carrier either:
+// it would take the kept aura with the others (Hakkar: Poisonous Blood 24321 under a Poison Cleansing Totem).
+bool KeepsAura(uint32_t mapId, uint32_t aura);
+
 // True when the map's rules say this cast is kicked before any other cast in reach (an enemy heal, a polymorph). Rules are
 // static data, so the PvE coordinator may call it from its planning pass.
 bool InterruptFirst(uint32_t mapId, uint32_t spell);

@@ -15,7 +15,7 @@ else {
 $help = @"
 Next steps
 1. Start the game with Play-WoWForever.cmd (or P in the control panel; it applies the server key, keep its window open) and log in with
-   your account name plus @local (for example yourname@local) and your password. Realm: Trinity. In game, type /fb for the bots window.
+   your account name (for example yourname; yourname@local works too) and your password. Realm: Trinity. In game, type /fb for the bots window.
 2. Next time: Start Menu > WoW Forever Bots (or the Desktop shortcut) opens the control panel: 1 Start, 2 Stop, 3 Restart,
    T Restarter mode, A Create account, S Settings, B Backup, U Update.
 Help and news: https://discord.gg/QJBM6tR3E4

@@ -111,6 +111,7 @@ void ConfigReader::apply_from_loaded_config()
     guilds_events_enabled_                   = c.GetBoolDefault("PlayerbotV2.Guilds.EventsEnabled", true, true);
     guilds_recruitment_channel_enabled_      = c.GetBoolDefault("PlayerbotV2.Guilds.RecruitmentChannelEnabled", true, true);
     guilds_invite_players_                   = c.GetBoolDefault("PlayerbotV2.Guilds.InvitePlayers", false, true);
+    guilds_bank_deposit_                     = c.GetBoolDefault("PlayerbotV2.Guilds.BankDeposit", false, true);
 
     max_alts_as_bots_ = static_cast<uint8>(
         c.GetIntDefault("PlayerbotV2.MaxAltsAsBots", 5, true));

@@ -116,6 +116,8 @@ def main():
     ap.add_argument('--min-push', type=int, default=0, help='only records from this push on')
     ap.add_argument('--max-push', type=int, default=1000000, help='only records up to this push (the cache also holds per-item shop pushes above 16 million)')
     ap.add_argument('--tables', default='', help='only these tables (default: every spell or item table)')
+    ap.add_argument('--statuses', default='1,2,3,4', help='hotfix statuses to take (1 valid, 2 removed, 3 invalid, 4 not public); '
+                    '3 and 4 are records live hides from its clients (unreleased or gated content), not changes to them')
     ap.add_argument('--first-id', type=int, required=True)
     ap.add_argument('--last-id', type=int, required=True)
     ap.add_argument('--out', required=True)
@@ -124,6 +126,7 @@ def main():
     items = {int(x) for x in a.items.split(',') if x}
     only = {x for x in a.tables.split(',') if x}
     whole = {x for x in a.whole_tables.split(',') if x}
+    statuses = {int(x) for x in a.statuses.split(',') if x}
     skip = {(x.split(':')[0], int(x.split(':')[1])) for x in a.skip.split(',') if x}
     sch = wdc5.Schemas(a.repo)
     hashes = table_hashes(a.dbc, sch.meta.keys())
@@ -138,7 +141,7 @@ def main():
     for (t, rec), (push, status, data) in sorted(last.items()):
         if only and t not in only and t not in whole:
             continue
-        if not a.min_push <= push <= a.max_push or (t, rec) in skip:
+        if not a.min_push <= push <= a.max_push or (t, rec) in skip or status not in statuses:
             continue
         if t in whole and t not in SPELL_TABLES and t != 'Spell':
             pass  # every record, removed ones too (they become hotfix_data rows with live's status)

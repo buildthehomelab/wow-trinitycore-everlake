@@ -178,6 +178,9 @@ public:
     // PlayerbotV2.Guilds.InvitePlayers: 1 = a bot guild officer may send a guild invite to a real player near it (the player
     // accepts or declines). 0 (default) = bot guilds only take in bots.
     bool   guilds_invite_players() const { return guilds_invite_players_; }
+    // PlayerbotV2.Guilds.BankDeposit: 1 = bots put spare gold into their guild bank on their own. 0 (default) = they never do
+    // (vanilla had no guild bank, and a bank filled by bots is free gold for any player who can withdraw).
+    bool   guilds_bank_deposit() const { return guilds_bank_deposit_; }
     // Per-account cap on alts a player can summon as bots via the
     // `.playerbot summon` command. Default 5 matches a 5-man dungeon
     // group (tank + healer + 3 dps). Operators can lower for shared
@@ -588,6 +591,7 @@ private:
     bool   guilds_events_enabled_                    = true;
     bool   guilds_recruitment_channel_enabled_       = true;
     bool   guilds_invite_players_                    = false;
+    bool   guilds_bank_deposit_                      = false;
     uint8  max_alts_as_bots_                         = 5;
     uint32 wedge_watchdog_threshold_ms_              = 90000;
     uint32 wedge_watchdog_combat_threshold_ms_       = 180000;

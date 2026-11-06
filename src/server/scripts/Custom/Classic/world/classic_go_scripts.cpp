@@ -21,6 +21,7 @@
 #include "ScriptMgr.h"
 #include "AreaTrigger.h"
 #include "AreaTriggerAI.h"
+#include "Battleground.h"
 #include "GameObject.h"
 #include "GameObjectAI.h"
 #include "Player.h"
@@ -114,6 +115,14 @@ static constexpr CampFeature CampFeatures[] =
     { 651953, false, SPELL_BOOSTED_STAMINA },       // First Aid Kit
     { 651954, false, SPELL_BOOSTED_STATS_PCT },     // Fish Bowl
     { 651952, false, SPELL_BOOSTED_STATS_LUTE },    // Enchanted Lute
+    // tier 2/3 features that "provide all of the benefits of" the one they replace (70790 client texts of their placement spells;
+    // gameobjects from the spells' effect 50). Without these, placing one over the lower feature lost its buff.
+    { 612120, false, SPELL_BOOSTED_MANA_REGEN },    // Fermenter (1307242), over a Mana Well
+    { 612092, false, SPELL_BOOSTED_STATS_PCT },     // Fishing Hut (1307246), over a Fish Bowl
+    { 612090, false, SPELL_BOOSTED_STATS_PCT },     // Fishing Rack (1307247), over a Fish Bowl
+    { 612087, false, SPELL_BOOSTED_INTELLECT },     // Greenhouse (1307248), over an Incense Candle
+    { 612136, false, SPELL_EXTRA_STRENGTH },        // Master Forge (1307261), over a Sharpening Wheel
+    { 612110, false, SPELL_BOOSTED_STAMINA },       // Plague Doctor's Laboratory (1307265), over a First Aid Kit
 };
 
 // The buffs scale with level in steps (client tooltips: "$?$PL<12[3]?$PL<24[8]...[$1230124s1]"); the spell's own value is the
@@ -377,10 +386,15 @@ struct classic_go_camp_chair : public GameObjectAI
 // seconds and the maximum percent in effects 1 and 2; the speed is the stacking aura Plainsrunning (1299038, +2% per stack), so the
 // stack cap is the maximum divided by the step. How fast it decays is not in the spell data: here one stack per second standing still
 // and five stacks when hit.
+// Blizzard hotfix 2026-11-05: Plainsrunning no longer stacks, also not in a battleground's preparation, and carrying a flag cancels
+// its stacks. Here: no stacks are gained while the battleground waits for its start, and a flag carrier (Warsong Gulch Warsong Flag
+// 23333 / Silverwing Flag 23335) loses them all and gains none.
 enum Plainsrunning
 {
     SPELL_PLAINSRUNNING_SPEED       = 1299038,
-    PLAINSRUNNING_STACKS_LOST_ON_HIT = 5
+    PLAINSRUNNING_STACKS_LOST_ON_HIT = 5,
+    SPELL_WARSONG_FLAG              = 23333,
+    SPELL_SILVERWING_FLAG           = 23335
 };
 
 class classic_spell_plainsrunning : public AuraScript
@@ -411,6 +425,23 @@ class classic_spell_plainsrunning : public AuraScript
         uint64 health = target->GetHealth();
         bool hit = health < _lastHealth;
         _lastHealth = health;
+
+        if (target->HasAura(SPELL_WARSONG_FLAG) || target->HasAura(SPELL_SILVERWING_FLAG))
+        {
+            _movingSeconds = 0;
+            target->RemoveAurasDueToSpell(SPELL_PLAINSRUNNING_SPEED);
+            return;
+        }
+
+        if (Player* player = target->ToPlayer())
+        {
+            if (Battleground* bg = player->GetBattleground(); bg && bg->GetStatus() == STATUS_WAIT_JOIN)
+            {
+                _movingSeconds = 0;
+                return;
+            }
+        }
+
         if (hit)
         {
             _movingSeconds = 0;

@@ -16,7 +16,8 @@
 // (Classic::PickDispel: one bot per cursed member).
 // Polymorph on an add (PickGroupCC). Forever procs, in the order the
 // wowsims/forever (MIT) frost and fire lists use them: Ice Lance on the last
-// Fingers of Frost charge, Pyroblast at 3 Heating Up stacks. Skipped: Blink,
+// Fingers of Frost charge, Pyroblast at 3 Heating Up stacks, Arcane Wrath
+// (Arcane talent) on cooldown, right after Presence of Mind. Skipped: Blink,
 // Mana Shield, Pyroblast opener, Cone of Cold.
 
 #include "../ApRegistry.h"
@@ -274,6 +275,17 @@ bool NukeUsable(ApPredicateContext const& ctx, uint32 spell)
 {
     return HasLiveTarget(ctx) && ManaPct(ctx) >= NukeManaFloor(ctx) && (Ready(ctx, spell) && ctx.bot.victim_in_spell_range(spell));
 }
+// Arcane Wrath (Arcane talent 1326079, trainer ranks 1326080-1326082): 3.5 s cast, 6 s cooldown, extra spell damage of 5% of the
+// mage's maximum mana (classic_spell_mage_arcane_wrath). The wowsims/forever (MIT) arcane list casts it on cooldown, straight
+// after Presence of Mind, above its other spells. The hard cast waits while the bot moves; under Presence of Mind it is instant.
+constexpr uint32 ARCANE_WRATH = 1326079;
+bool ShouldArcaneWrath(ApPredicateContext const& ctx)
+{
+    return ctx.bot.current_cast_spell_id() == 0 && (!ctx.bot.is_moving() || ctx.bot.has_aura(PRESENCE_OF_MIND))
+        && NukeUsable(ctx, ARCANE_WRATH);
+}
+void DoArcaneWrath(ApPredicateContext const& ctx, BotIntentEmitter& e) { e.cast(ARCANE_WRATH, ctx.bot.victim()); }
+
 bool ShouldFrostboltNuke(ApPredicateContext const& ctx)      { return NukeUsable(ctx, FROSTBOLT); }
 bool ShouldFireballNuke(ApPredicateContext const& ctx)       { return NukeUsable(ctx, FIREBALL); }
 bool ShouldArcaneMissilesNuke(ApPredicateContext const& ctx) { return NukeUsable(ctx, ARCANE_MISSILES); }
@@ -282,6 +294,7 @@ SchoolHint::SchoolChoice const kSchoolChoices[] = {
     { FROSTBOLT,       ShouldFrostboltNuke },
     { FIRE_BLAST,      ShouldFireBlast },
     { FIREBALL,        ShouldFireballNuke },
+    { ARCANE_WRATH,    ShouldArcaneWrath },
     { ARCANE_MISSILES, ShouldArcaneMissilesNuke },
 };
 // A fire mage on a boss keeps Fire Vulnerability at 5 stacks with Scorch before it throws Fireballs (raid vanilla rule); the stacks are
@@ -360,6 +373,7 @@ ApRule const kMageRules[] = {
     { ShouldIceLanceFingers, DoIceLanceFingers, "classic_mage:ice_lance_fingers" },
     { ShouldPyroblastHeatingUp, DoPyroblastHeatingUp, "classic_mage:pyroblast_heating_up" },
     { ShouldSchoolNuke,      DoSchoolNuke,      "classic_mage:school_nuke" },
+    { ShouldArcaneWrath,     DoArcaneWrath,     "classic_mage:arcane_wrath" },
     { ShouldFireBlast,       DoFireBlast,       "classic_mage:fire_blast" },
     { ShouldNuke,            DoNuke,            "classic_mage:nuke" },
     { ShouldWand,            DoWand,            "classic_mage:wand" },

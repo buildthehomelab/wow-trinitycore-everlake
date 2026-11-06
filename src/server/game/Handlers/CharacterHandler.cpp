@@ -3357,7 +3357,7 @@ void WorldSession::SendCharRename(ResponseCodes result, WorldPackets::Character:
     WorldPackets::Character::CharacterRenameResult packet;
     packet.Result = result;
     packet.Name = renameInfo->NewName;
-    packet.Surname = renameInfo->NewSurname;
+    packet.Surname = CharacterCache::AreSurnamesEnabled() ? renameInfo->NewSurname : std::string();
     if (result == RESPONSE_SUCCESS)
         packet.Guid = renameInfo->Guid;
 
@@ -3390,7 +3390,7 @@ void WorldSession::SendCharFactionChange(ResponseCodes result, WorldPackets::Cha
     {
         packet.Display.emplace();
         packet.Display->Name = factionChangeInfo->Name;
-        packet.Display->Surname = factionChangeInfo->Surname;
+        packet.Display->Surname = CharacterCache::AreSurnamesEnabled() ? factionChangeInfo->Surname : std::string();
         packet.Display->SexID = factionChangeInfo->SexID;
         packet.Display->Customizations = &factionChangeInfo->Customizations;
         packet.Display->RaceID = factionChangeInfo->RaceID;

@@ -1319,7 +1319,12 @@ PlayerbotV2.Guilds.RecruitmentChannelEnabled = 1
 
 # 1 = a bot guild officer may send a normal guild invite to a real player near it (the player accepts or
 # declines). 0 (default) = bot guilds only take in bots; a real player is never put into a bot guild.
+# Either way a player who whispers a bot "invite me to your guild" (or "пригласи в гильдию") gets an invite: they asked for it.
 PlayerbotV2.Guilds.InvitePlayers = 0
+
+# 1 = bots standing at a Guild Vault put their spare gold into the guild bank (only gold above 250g; the free
+# 200g upkeep floor never goes in). 0 (default) = bots never put gold into a guild bank on their own.
+PlayerbotV2.Guilds.BankDeposit = 0
 
 # Target number of bot-founded guilds to maintain per faction.
 PlayerbotV2.Guilds.TargetCountPerFaction = 6

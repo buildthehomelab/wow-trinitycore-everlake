@@ -147,7 +147,7 @@ function Test-Done($name) { $Resume -and (Test-Path (Join-Path $OutputPath ".ext
 function Set-Done($name) { if ($Resume) { Set-Content (Join-Path $OutputPath ".extract-$name.done") (Get-Date -Format s) } }
 $clock = [Diagnostics.Stopwatch]::StartNew()
 
-# The CASC product the extractors open. The tools default to wow_classic_beta (the beta, _classic_beta_\WowB.exe); the downloadable
+# The CASC product the extractors open. The tools default to wowf since 70790 (wow_classic_beta, _classic_beta_\WowB.exe, before); the downloadable
 # WoW Forever client 70532 (_forever_\Wow.exe) is product wowf, and vmap4extractor opened with the wrong product failed at once on a fresh
 # install of kit 0.1.15. .build.info lists one row per installed product; take the one whose game folder is there.
 # The beta and the Forever release can both be installed, with different builds: with -Builds the product of the first listed

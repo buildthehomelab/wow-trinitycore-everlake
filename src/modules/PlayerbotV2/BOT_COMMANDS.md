@@ -310,6 +310,12 @@ World bots are ambient characters with no owner (`Playerbot.World.Enable = 1` sp
   25 yards (60 s per bot, 8 s global, 1-4 s delay). `WorldBotSayReply`, log `[say_reply]`. A bot waves back at
   `hi`/`hello` within 12 yards (`SocialEmotes`).
 - **Whispers**: bots answer a whisper from any player (`BotWhisperable`). Only the owner's orders are obeyed.
+- **Guild invite by whisper**: any player can whisper a bot "invite me to your guild", "can I join your guild", "ginv",
+  "пригласи в гильдию", "можно в гильдию" and gets a normal guild invite (whatever `Guilds.InvitePlayers` says). The
+  whispered bot invites when it is the guild master or an officer, else an online officer bot of its guild does. Only
+  bot-run guilds; the player must be guildless and of the same faction. A short "yes" / "inv" / "да" works for 3 minutes
+  after the bot talked about its guild to that player, and for 30 minutes after its "/w <name> for invite" Trade line.
+  When no invite can go out the bot says why. `Bot/GuildWhisperInvite.cpp`, log `[guild_whisper]`.
 - **Politeness** (`PoliteWorldBots`): a trade request is cancelled with "sorry, nothing to trade"; a group
   invite is declined with a short whisper unless the bot is free to group; a duel from a stranger is accepted about
   one time in three when the levels are within 5 and nothing is fighting, otherwise declined with a whisper.

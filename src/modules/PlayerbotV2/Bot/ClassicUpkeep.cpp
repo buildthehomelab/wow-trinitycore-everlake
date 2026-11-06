@@ -296,17 +296,23 @@ bool PartyMemberNear(BotSnapshotView const& s, GroupSnapshotView const& g, Pred&
 }
 
 // A member of the shaman's subgroup carries a debuff of `type`.
+// A cleansing totem is wanted when the bot or a party member in reach carries a debuff of `type`. Its pulse takes every debuff of
+// the type, so a carrier of one the raid keeps on (Raid::KeepsAura: Poisonous Blood on Hakkar) keeps the totem down for the party.
 bool PartyDispelCandidate(BotSnapshotView const& s, GroupSnapshotView const& g, DispelType type)
 {
-    if (s.self_dispellable(type))
-        return true;
-    return PartyMemberNear(s, g, [type](GroupMemberSummary const& m)
+    uint32 const map_id = s.map_id();
+    auto const carries = [map_id, type](std::vector<AuraEntry> const& auras, bool kept)
     {
-        for (AuraEntry const& a : m.debuffs)
-            if (a.is_harmful && a.dispel_type == type)
+        for (AuraEntry const& a : auras)
+            if (a.is_harmful && a.dispel_type == type && Raid::KeepsAura(map_id, a.spell_id) == kept)
                 return true;
         return false;
-    });
+    };
+    if (carries(s.raw().auras.own_auras, true)
+        || PartyMemberNear(s, g, [&carries](GroupMemberSummary const& m) { return carries(m.debuffs, true); }))
+        return false;
+    return carries(s.raw().auras.own_auras, false)
+        || PartyMemberNear(s, g, [&carries](GroupMemberSummary const& m) { return carries(m.debuffs, false); });
 }
 
 // This shaman's index among the bot shamans of its subgroup (by guid), so
@@ -1921,6 +1927,16 @@ uint8 TypeBit(DispelType t)
     }
 }
 
+// The debuff types of `auras` that hold an aura the raid keeps on (Raid::KeepsAura): no cure of these types goes to the carrier.
+uint8 KeptTypes(uint32 map_id, std::vector<AuraEntry> const& auras)
+{
+    uint8 kept = 0;
+    for (AuraEntry const& a : auras)
+        if (a.is_harmful && Raid::KeepsAura(map_id, a.spell_id))
+            kept |= TypeBit(a.dispel_type);
+    return kept;
+}
+
 struct CureSpell
 {
     uint8  cls;
@@ -2960,11 +2976,12 @@ static CastPick PickDispelImpl(BotSnapshotView const& s, GroupSnapshotView const
     auto const* members = g.members();
     if (!members || members->empty())
     {
+        uint8 const kept = KeptTypes(s.map_id(), s.raw().auras.own_auras);
         for (DispelType t : { DispelType::Curse, DispelType::Magic, DispelType::Poison, DispelType::Disease })
         {
             uint8 const bit = TypeBit(t);
             CureSpell const* c = (known & bit) ? spell_for(bit) : nullptr;
-            if (c && s.self_dispellable(t) && !(c->abolish_aura && s.has_aura(c->abolish_aura)) && s.is_ready(c->spell))
+            if (c && s.self_dispellable(t) && !(kept & bit) && !(c->abolish_aura && s.has_aura(c->abolish_aura)) && s.is_ready(c->spell))
                 return { c->spell, s.guid(), 0 };
         }
         return {};
@@ -2984,6 +3001,9 @@ static CastPick PickDispelImpl(BotSnapshotView const& s, GroupSnapshotView const
                 if (IsControlMechanic(a.mechanic))
                     control |= TypeBit(a.dispel_type);
             }
+        // A cure never goes to a member carrying a debuff of its type the raid keeps on (Raid::KeepsAura): Abolish keeps dispelling
+        // after the cast and a cure takes a random debuff of its type, so either could take Poisonous Blood off a raider on Hakkar.
+        types &= ~KeptTypes(s.map_id(), m.debuffs);
         if ((types & kPoison) && HasTracked(m, 2893, 0)) types &= ~kPoison;    // Abolish Poison already ticking
         if ((types & kDisease) && HasTracked(m, 552, 0)) types &= ~kDisease;   // Abolish Disease already ticking
         if (control_only)

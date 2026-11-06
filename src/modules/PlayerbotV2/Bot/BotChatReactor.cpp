@@ -5,6 +5,7 @@
 #include "BotChatReactor.h"
 #include "BotChatModel.h"
 #include "BotConversation.h"
+#include "GuildWhisperInvite.h"
 #include "../LfgBotFill.h"
 
 #include "BotAI.h"
@@ -1239,6 +1240,9 @@ void BotChatReactor::ReactWhisper(Player* sender, Player* bot, std::string const
     }
     TC_LOG_INFO("playerbot.v2", "[conv] {} <- {} whisper \"{}\": {} intent={} repeat={} -> \"{}\"", bot->GetName(), sender->GetName(), msg,
                 source, V2::ConvIntentName(V2::ConvClassify(V2::ConvNormalize(msg))), repeat, reply_str);
+    // The bot just talked about its guild ("<X> for me, are you looking for one?"): a "yes" in the next minutes gets the invite.
+    if (bot->GetGuildId() != 0 && sender->GetGuildId() == 0 && V2::ConvClassify(V2::ConvNormalize(msg)) == V2::ConvIntent::Guild)
+        V2::GuildWhisperInvite::NoteOffer(mid, sender->GetGUID().GetCounter());
     Intent it{};
     it.bot_id = mid;
     it.body   = ChatIntent{WhisperIntent{sender->GetName(), reply_str}};

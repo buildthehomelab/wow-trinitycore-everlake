@@ -347,6 +347,25 @@ namespace {
     // apart. WaypointMovementGenerator sent each one as its own spline, and a hop shorter than three seconds is only sent when the one
     // before has ended, so a bot walking a city street stopped and started at every point (two bots on one route showed it in
     // Ironforge, 132). Those routes go out as one spline through all points instead.
+    //
+    // A living bot is no longer given a WaypointMovementGenerator for these routes at all. That generator starts every new path
+    // with StopMoving() and a 1000 ms wait (WaypointMovementGenerator::DoInitialize), and a world bot walking toward a far goal
+    // asks for a new path every one to two seconds: ChunkedWalkToward aims each step 35 y ahead of where the bot stands now, so
+    // the goal is new each time and the same-goal skip in move_to never holds. The bot ran for half a second, stood for a second,
+    // ran again, all the way (Discord bug report 2026-11-06, "random bots move for half a second, stop, then go again"). The
+    // points now go out as one spline launched at once from where the bot is (LaunchMoveSpline), which replaces a running spline
+    // without a stop; the generator type stays WAYPOINT, so the same-goal skip and the stall breaker treat it as before. The
+    // authored road routes get the same: each road leg is pathed on the navmesh here, as the generator did between its nodes, and
+    // the legs go out as that one spline. A bot on a transport keeps the old generator, which knows transport offsets.
+    void LaunchRouteSpline(Player* p, std::vector<G3D::Vector3>&& pts, bool run)
+    {
+        p->GetMotionMaster()->LaunchMoveSpline([pts = std::move(pts), run](Movement::MoveSplineInit& init)
+        {
+            init.MovebyPath(pts);
+            init.SetWalk(!run);
+        }, 0, MOTION_PRIORITY_NORMAL, WAYPOINT_MOTION_TYPE);
+    }
+
     void MoveAlongRoute(Player* p, WaypointPath const& route, bool run, bool navmesh_points = false)
     {
         // The path generator's own cap is 74 points. A longer navmesh route is cut to its first 60 points and goes out as one spline all
@@ -370,6 +389,17 @@ namespace {
             }
             if (nodes.size() > kMaxSplinePoints)
                 nodes.erase(nodes.begin() + kMaxSplinePoints, nodes.end());
+            if (!nodes.empty() && !p->GetTransport())
+            {
+                // MoveSplineInit puts the bot's own place over point 0, so the bot's place goes first and every route point is kept.
+                std::vector<G3D::Vector3> pts;
+                pts.reserve(nodes.size() + 1);
+                pts.emplace_back(p->GetPositionX(), p->GetPositionY(), p->GetPositionZ());
+                for (WaypointNode const& n : nodes)
+                    pts.emplace_back(n.X, n.Y, n.Z);
+                LaunchRouteSpline(p, std::move(pts), run);
+                return;
+            }
             if (!nodes.empty())
             {
                 WaypointPath exact(0, std::move(nodes), run ? WaypointMoveType::Run : WaypointMoveType::Walk);
@@ -378,6 +408,43 @@ namespace {
                     run ? MovementWalkRunSpeedSelectionMode::ForceRun
                         : MovementWalkRunSpeedSelectionMode::ForceWalk,
                     {}, {}, {}, /*exactSplinePath*/ true, /*generatePath*/ false);
+                return;
+            }
+        }
+        if (p->IsAlive() && !navmesh_points && !p->GetTransport() && !route.Nodes.empty())
+        {
+            // Authored road nodes lie far apart: path each leg on the navmesh (as the generator did between nodes) and join the legs.
+            // Any leg without a full path keeps the old generator for the whole route.
+            std::vector<G3D::Vector3> pts;
+            pts.emplace_back(p->GetPositionX(), p->GetPositionY(), p->GetPositionZ());
+            bool legs_ok = true;
+            for (WaypointNode const& n : route.Nodes)
+            {
+                if (pts.size() >= kMaxSplinePoints)
+                    break;
+                G3D::Vector3 const from = pts.back();
+                if ((n.X - from.x) * (n.X - from.x) + (n.Y - from.y) * (n.Y - from.y) + (n.Z - from.z) * (n.Z - from.z) < 0.2f * 0.2f)
+                    continue;
+                PathGenerator leg(p);
+                if (!::Playerbot::BotMovement::SehSafeCalculatePathFrom(leg, from.x, from.y, from.z, n.X, n.Y, n.Z) ||
+                    leg.GetPathType() != PATHFIND_NORMAL || leg.GetPath().size() < 2)
+                {
+                    legs_ok = false;
+                    break;
+                }
+                for (G3D::Vector3 const& v : leg.GetPath())
+                {
+                    G3D::Vector3 const& last = pts.back();
+                    if ((v - last).squaredLength() < 0.2f * 0.2f)
+                        continue;
+                    if (pts.size() >= kMaxSplinePoints + 1)
+                        break;
+                    pts.push_back(v);
+                }
+            }
+            if (legs_ok && pts.size() >= 2)
+            {
+                LaunchRouteSpline(p, std::move(pts), run);
                 return;
             }
         }
@@ -394,11 +461,7 @@ namespace {
             pts.emplace_back(n.X, n.Y, n.Z);
         if (pts.size() < 2)
             return;
-        p->GetMotionMaster()->LaunchMoveSpline([pts = std::move(pts), run](Movement::MoveSplineInit& init)
-        {
-            init.MovebyPath(pts);
-            init.SetWalk(!run);
-        }, 0, MOTION_PRIORITY_NORMAL, WAYPOINT_MOTION_TYPE);
+        LaunchRouteSpline(p, std::move(pts), run);
     }
 
     inline uint64 PathDestKey(uint32 map_id, float x, float y, float z)
@@ -1917,19 +1980,29 @@ Result API::move_to(float x, float y, float z, bool run, bool direct, bool drop,
                     p_->GetPositionY(), (pr.key == move_goal_key) ? 1 : 0,
                     std::sqrt(pdx*pdx + pdy*pdy),
                     (uint32)(now_probe - pr.ms), (int)mtype);
-            if (pr.key != move_goal_key)
+            // The route spline keeps the speed it was launched with. A bot that mounts or dismounts on the way would keep the old
+            // speed while the same goal is asked for, so a speed change sends the route again (at once, without a stop).
+            bool speed_changed = false;
+            if (mtype == WAYPOINT_MOTION_TYPE && p_->movespline->Initialized() && !p_->movespline->Finalized() &&
+                !p_->IsInWater() && !p_->IsFlying() && !p_->GetTransport())
+            {
+                float const want = p_->GetSpeed(run ? MOVE_RUN : MOVE_WALK);
+                float const have = p_->movespline->Velocity();
+                speed_changed = want > 0.1f && std::fabs(have - want) > 0.15f * want;
+            }
+            if (!speed_changed && pr.key != move_goal_key)
             {
                 // New goal for the probe Ã¢Â€Â” start the progress clock here.
                 pr = { move_goal_key, p_->GetPositionX(), p_->GetPositionY(), now_probe };
                 return Result::Ok;
             }
-            if (pdx * pdx + pdy * pdy >= 4.0f * 4.0f)
+            if (!speed_changed && pdx * pdx + pdy * pdy >= 4.0f * 4.0f)
             {
                 // Advanced >=4y since the mark Ã¢Â€Â” progressing, refresh + keep running.
                 pr.x = p_->GetPositionX(); pr.y = p_->GetPositionY(); pr.ms = now_probe;
                 return Result::Ok;
             }
-            if (now_probe - pr.ms < 3000u)
+            if (!speed_changed && now_probe - pr.ms < 3000u)
                 return Result::Ok;   // within grace Ã¢Â€Â” let the spline keep trying
             // Stalled >3s within 4y: reset the clock and FALL THROUGH to re-issue.
             pr.x = p_->GetPositionX(); pr.y = p_->GetPositionY(); pr.ms = now_probe;
@@ -10361,6 +10434,11 @@ Result API::guild_bank_deposit_money(ObjectGuid banker, uint64 amount)
     Guild* guild = p_->GetGuild();
     if (!guild) return Result::InvalidTarget;
     if (!p_->HasEnoughMoney(amount)) return Result::NotEnoughResource;
+    // Gold under the always-repair floor is handed out for free (SetMoney back up to kAlwaysGoldFloor), so it never goes
+    // into a guild bank: an owner's "gbank deposit" or the idle rule would otherwise turn the top-up into endless bank gold.
+    uint64 const free_floor = uint64(kAlwaysGoldFloor) * 10000ull;   // copper per gold
+    if (p_->GetMoney() <= free_floor) return Result::NotEnoughResource;
+    amount = std::min<uint64>(amount, p_->GetMoney() - free_floor);
 
     // HandleMemberDepositMoney is void Ã¢Â€Â” it logs and broadcasts but doesn't
     // signal failure. Sample bot gold before/after to detect rank-permission

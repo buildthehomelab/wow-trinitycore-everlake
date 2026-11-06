@@ -52,6 +52,7 @@
 #include "Bot/BotCommandParser.h"
 #include "Bot/BotChatModel.h"
 #include "Bot/BotChatReactor.h"
+#include "Bot/GuildWhisperInvite.h"
 #include "Bot/ChannelChat.h"
 #include "Bot/GroupOrderText.h"
 #include "Bot/CcDeny.h"
@@ -3785,7 +3786,12 @@ void Module::OnWhisperReceived(Player* sender, Player* receiver, std::string con
     // so non-command whispers ("hi", "ty for the help") still get a
     // friendly reply. Without this fallthrough, strangers whispering a
     // bot get silence, which reads as broken.
+    // "can I join your guild" / "пригласи в гильдию": a guild invite (or why not). Ahead of the parser: the owner's own
+    // "invite" (a group invite) has no guild word, so it still reaches the parser.
+    if (GuildWhisperInvite::TryRequest(sender, receiver, msg)) return;
     if (BotCommandParser::Dispatch(sender, receiver, msg)) return;
+    // A short "yes" / "inv" right after the bot talked about its guild, or after its Trade recruiting line.
+    if (GuildWhisperInvite::TryFollowUp(sender, receiver, msg)) return;
     BotChatReactor::ReactWhisper(sender, receiver, msg);
 }
 

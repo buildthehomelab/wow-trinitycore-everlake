@@ -600,7 +600,7 @@ CharCustomizeSuccess::CharCustomizeSuccess(CharCustomizeInfo const* info)
     CharGUID = info->CharGUID;
     SexID = info->SexID;
     CharName = info->CharName;
-    CharSurname = info->CharSurname;
+    CharSurname = CharacterCache::AreSurnamesEnabled() ? info->CharSurname : std::string();
 }
 
 WorldPacket const* CharCustomizeSuccess::Write()
@@ -930,13 +930,20 @@ void SetPlayerDeclinedNames::Read()
 
     try
     {
+        // Classic 1.60 (captured on 1.60.1.70291 by MAXIMUS): each case carries the name and then the surname, lengths first
         for (uint8 i = 0; i < MAX_DECLINED_NAME_CASES; ++i)
+        {
             _worldPacket >> SizedString::BitsSize<7>(DeclinedNames.name[i]);
+            _worldPacket >> SizedString::BitsSize<7>(SurnameDeclinedNames.name[i]);
+        }
 
         for (uint8 i = 0; i < MAX_DECLINED_NAME_CASES; ++i)
+        {
             _worldPacket >> SizedString::Data(DeclinedNames.name[i]);
+            _worldPacket >> SizedString::Data(SurnameDeclinedNames.name[i]);
+        }
 
-        // the 1.60 layout with the surname can also read without running out of data, leaving the surname bytes behind
+        // a layout that does not use up the packet exactly is not trusted: nothing is saved and the start is logged
         Parsed = _worldPacket.rpos() == _worldPacket.size();
     }
     catch (ByteBufferException const&)

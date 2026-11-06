@@ -24,6 +24,9 @@ while (-not (Test-Path $flag)) {
     $w = Get-Process worldserver -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $w) {
         Log 'Starting worldserver...'
+        # same port check as Start-WoWForever.ps1, before every start: after a crash or a Windows change another program (or a range
+        # Windows keeps for Hyper-V/WSL) can hold 8085, and the worldserver then only logs "failed to bind socket acceptor" and closes
+        try { Test-GamePorts $root } catch { Log "Not starting: $_"; break }
         Repair-ConfDir $server | ForEach-Object { Log $_ }
         Sync-NetworkKeys $server
         Sync-LocalSettings $server | ForEach-Object { Log $_ }
@@ -59,6 +62,12 @@ while (-not (Test-Path $flag)) {
     }
     if ($code -eq 0) { Log 'worldserver shut down normally. Auto-restart ends.'; break }
     Log ("worldserver stopped unexpectedly (exit code {0}). A crash dump may be in server\Crashes." -f $code)
+    $tail = if (Test-Path (Join-Path $server 'logs\Server.log')) { Get-Content (Join-Path $server 'logs\Server.log') -Tail 5 -ErrorAction SilentlyContinue } else { @() }
+    if (@($tail) -match 'failed to bind socket acceptor') {
+        Log 'The world server could not open its port (8085): another program or Windows is using it. Restarting would fail the same way.'
+        try { Test-GamePorts $root; Log 'Port 8085 looks free now. If this happens again, restart the PC, or in Terminal (Admin) run: net stop winnat   then   net start winnat' } catch { Log "$_" }
+        break
+    }
     $now = Get-Date; $crashes.Add($now)
     $recent = @($crashes | Where-Object { ($now - $_).TotalMinutes -le 10 })
     if ($recent.Count -ge 5) { Log 'Crashed 5 times within 10 minutes: not restarting again. Use bug-bundle.ps1 and report it.'; break }
