@@ -157,6 +157,12 @@ public:
     // Returns the number of slots changed. World thread only.
     uint32 SwapResistGear(Player* p, uint8 school);
 
+    // Blackwing Lair's Onyxia Scale Cloak (Playerbot.Raid.OnyxiaCloak, Bot/ResistGear.h): with on, a grouped companion in the instance gets a
+    // free copy of the cloak in its back slot, its own cloak goes to the bags; with off, its own cloak is back on and the copy deleted. Never
+    // in combat, never with full bags (nothing is destroyed but the copy). A player's own character is never touched. Returns the slots
+    // changed (0 or 1). World thread only.
+    uint32 SwapFightCloak(Player* p, bool on);
+
     // One-step companion (`.bot add`). Once the newly created bot is in the world: level it to its owner, teach its
     // class trainer spells, set the requested role (a Role value; Role::Unknown keeps the class default), apply
     // talents and gear, bring it to the owner and put it in the owner's group (made a raid when full). Dropped if the

@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <deque>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Playerbot::Diagnostics {
@@ -124,6 +125,19 @@ struct ScenarioDef
     // script despawns him the moment he spawns): when the attack is due the main tank sends it, and the attack waits for the boss to
     // be alive within 400 y (up to 30 s). 0 = none.
     std::uint32_t start_event = 0;
+    // A fight the raid leader starts by talking to a creature (Vaelastrasz's gossip; Lord Victor Nefarius's "Attack them, minions!"): when the
+    // attack is due, the instance first gets start_instance_data (SetData type, value: the steps a raid has done before, which the runner
+    // skips - Razorgore dead, the Vaelastrasz room entered), then the main tank picks the first gossip option of start_npc
+    // start_gossip_steps times, as a player clicks through the menu, once the creature offers gossip (up to 60 s: Vaelastrasz's intro), or
+    // the creature's script gets start_npc_action (CreatureAI::DoAction, what the gossip option's DB script does). Then the attack waits
+    // for the boss to turn hostile and attackable (up to 60 s: Vaelastrasz's speech is 36 s). 0 = none.
+    std::uint32_t start_npc = 0;
+    std::uint8_t start_gossip_steps = 0;
+    std::int32_t start_npc_action = 0;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> start_instance_data;
+    // A goal boss the fight summons later (Nefarian, once 40 drakonids of Victor Nefarius's phase 1 are dead): after the start above the raid
+    // fights on its own, with no Hold, and the attack order waits up to this long for the boss to be alive. 0 = the boss is there at the order.
+    std::uint32_t goal_wait_ms = 0;
     // FollowRoute: the points the stand-in walks, in order (on `map`, starting from x, y, z).
     std::vector<ScenarioRoutePoint> route;
     // Orders an owner gives that a bot-only squad has nobody to give. yes_fear: the squad was told "yes fear" (Fear and Scare Beast allowed
@@ -460,11 +474,46 @@ inline ScenarioDef MakeBwlRazorgoreScenario()
     return MakeRaidScenario(kRaz, kBwlEntrance, RaidSquad(kMcRaid, sizeof(kMcRaid) / sizeof(kMcRaid[0])));
 }
 
+// ---- Blackwing Lair, Vaelastrasz the Corrupt: the fight his gossip starts, 40 level 60 raiders ----
+// He lies friendly at 30% health until a player talks him through his two gossip options (classic_boss_vaelastrasz.cpp), which needs
+// Razorgore dead and the room entered (the area trigger runs Lord Victor Nefarius's corruption intro, about 26 s, after which he offers
+// gossip). The runner sets those two instance steps (data 0 Razorgore = DONE 3, data 8 the Vaelastrasz event = DONE 3), the main tank clicks
+// through, his speech runs 36 s and he attacks the tank. Burning Adrenaline on a mana user every 15 s and on the tank every 45 s, Flame
+// Breath, Cleave, Fire Nova, Tail Sweep. Pass = Vaelastrasz killed. The raid wears fire resistance, as a vanilla raid did.
+inline ScenarioDef MakeBwlVaelScenario()
+{
+    static constexpr RaidBossRow kVael = Resist({ "bwl_vaelastrasz", "Blackwing Lair: 40 level 60 raiders to Vaelastrasz the Corrupt (his gossip starts it, Burning Adrenaline, Tail Sweep)",
+                                                  13020, "Vaelastrasz the Corrupt", 20 }, ScnSchool::Fire);
+    ScenarioDef d = MakeRaidScenario(kVael, kBwlEntrance, RaidSquad(kMcRaid, sizeof(kMcRaid) / sizeof(kMcRaid[0])));
+    d.start_npc = 13020;
+    d.start_gossip_steps = 2;
+    d.start_instance_data = { { 0u, 3u }, { 8u, 3u } };
+    return d;
+}
+
+// ---- Blackwing Lair, Nefarian: the whole fight from Lord Victor Nefarius's start, 40 level 60 raiders ----
+// The raid lands in sight of Lord Victor Nefarius (10162) on his throne. The runner starts his event as his gossip option "Attack them,
+// minions!" does (its DB script calls the creature's start: DoAction 1, classic_boss_victor_nefarius.cpp). Phase 1: two drakonid colours
+// every 6-7 s and a Chromatic Drakonid pair every 35 s; he sits behind his barrier casting Shadow Bolt, Fear, Silence and Shadow Command
+// (a raider charmed). The raid fights it on its own, no Hold. At 40 drakonids dead Nefarian flies in and lands; the order goes onto him.
+// Phase 2: Shadow Flame, Bellowing Roar, Veil of Shadow, Tail Lash, the class calls; at 20% the drakonids rise as Bone Constructs.
+// Pass = Nefarian killed. Every raider wears the Onyxia Scale Cloak (Shadow Flame).
+inline ScenarioDef MakeBwlNefarianScenario()
+{
+    static constexpr RaidBossRow kNef = Wears({ "bwl_nefarian", "Blackwing Lair: 40 level 60 raiders to Nefarian (Victor Nefarius's drakonid waves, then Nefarian, class calls, Bone Constructs)",
+                                                11583, "Nefarian", 35 }, ScnItem::OnyxiaScaleCloak);
+    ScenarioDef d = MakeRaidScenario(kNef, kBwlEntrance, RaidSquad(kMcRaid, sizeof(kMcRaid) / sizeof(kMcRaid[0])));
+    d.arrive_near_entry = 10162;   // Nefarian has no spawn row: Lord Victor Nefarius summons him
+    d.start_npc = 10162;
+    d.start_npc_action = 1;        // CLASSIC_BWL_ACTION_NEFARIUS_START
+    d.goal_wait_ms = 15u * 60u * 1000u;
+    return d;
+}
+
 // ---- The other raids, one boss at a time: Blackwing Lair, Zul'Gurub, the Ruins and the Temple of Ahn'Qiraj, Naxxramas ----
 // The same shape as the Molten Core rows: the squad enters at the instance entrance, staging kills the trash, places the raid in sight of
 // the boss and orders the attack. A boss kill passes the run; every death is a warning. Only bosses with a creature row of their own
-// are here. Left out, with the reason: Vaelastrasz (friendly until his gossip event starts the fight), Nefarian (Victor Nefarius' gossip
-// starts phase 1, Nefarian himself is summoned), Arlokk (the gong summons her), General Rajaxx (his seven waves come from Andorov's event),
+// are here (Vaelastrasz and Nefarian, whose fights a gossip starts, have their own scenarios above). Left out, with the reason: Arlokk (the gong summons her), General Rajaxx (his seven waves come from Andorov's event),
 // Ouro (a trigger summons him) and Sapphiron (the instance spawns him once the four wings are cleared).
 // Reading a run: the [raid] lines of the bots' decisions (Logger.playerbot.v2=3), [raid_death] (spell, position) and the fight hp in [raid_fight].
 
@@ -898,6 +947,8 @@ inline std::vector<ScenarioDef> const& ScenarioCatalogue()
         v.push_back(MakeOnyScenario());
         v.push_back(MakeOnyDodgeScenario());
         v.push_back(MakeBwlRazorgoreScenario());
+        v.push_back(MakeBwlVaelScenario());
+        v.push_back(MakeBwlNefarianScenario());
         v.push_back(MakeBrmFollowScenario());
         for (ScenarioDef& d : MakeOtherRaidScenarios())
             v.push_back(std::move(d));

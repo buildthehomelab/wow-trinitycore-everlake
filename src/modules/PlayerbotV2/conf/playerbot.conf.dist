@@ -29,8 +29,8 @@
 #   Bots.InCity    = 120     bots in a capital with a player in it
 #   Bots.LeaveZoneSec  = 20  a zone nobody is in logs its bots out after this
 #   Bots.LeaveWorldSec = 60  the same after a dungeon, battleground or logout
-#   Bots.HolidayClothes = 1  1 = bots may wear holiday items (Winter Veil hats...), 0 = never;
-#                            worn ones come off when the bot next logs in
+#   Bots.HolidayClothes = 1  1 = bots wear holiday items (Winter Veil hats...) only while that
+#                            holiday runs, 0 = never; worn ones come off when the bot next logs in
 #   Bots.DayRhythm = 0       1 = fewer bots at night, more in the evening
 #                            (0: the numbers above hold all day)
 #
@@ -1415,6 +1415,10 @@ Playerbot.Raid.ConsumablesInDungeons  = 1
 #   map, only where they add resistance, never in combat, nothing is destroyed. Tanks keep their armor pieces (head,
 #   shoulders, chest, legs, hands, feet). Molten Core and Onyxia are left alone. Default 0.
 Playerbot.Raid.ResistGear             = 0
+# Playerbot.Raid.OnyxiaCloak  in Blackwing Lair grouped level 60 bots wear an Onyxia Scale Cloak (a free copy; their own cloak
+#   goes to the bags and back on when they leave). Without it the Shadow Flame of Firemaw, Ebonroc, Flamegor and Nefarian
+#   burns the tank to death, as it did every vanilla raider who lacked one. Never in combat, nothing is destroyed. Default 1.
+Playerbot.Raid.OnyxiaCloak            = 1
 # Playerbot.Consumables.PvE / Playerbot.Consumables.PvP  server choice, separately for PvE (open world, dungeons,
 #   raids) and PvP (battlegrounds and arenas): whether bots use flasks, elixirs, buff food, combat healing and mana
 #   potions, healthstones and resistance potions on that kind of map. Off also stops ProvideConsumables stocking.

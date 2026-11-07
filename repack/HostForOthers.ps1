@@ -2,7 +2,8 @@
 # card instead of only this PC, the realm list hands out this PC's address, and Windows Firewall lets the three game ports in
 # (TCP 1119 login, 8081 login web page, 8085 world). MySQL stays on this PC only. Started by Host-For-Others.cmd.
 #   .\HostForOthers.ps1        -> asks: turns hosting on (asks for the address, restarts the server), or off when it is on
-#   .\HostForOthers.ps1 -On [-Address auto|<ip or name>] [-NoFirewall] [-NoRestart]   -> no questions (the launcher)
+#   .\HostForOthers.ps1 -On [-Address auto|<ip or name>] [-Vpn <ip>] [-NoFirewall] [-NoRestart]   -> no questions (the launcher)
+#   -Vpn: this PC's address in a shared network (Radmin VPN, ZeroTier) as well: players in that network get it, the others get -Address.
 #   .\HostForOthers.ps1 -Off [-NoFirewall] [-NoRestart]                               -> undo everything it changed, no questions
 # -On and -Off end with HOST_STATE= / HOST_PUBLIC= / HOST_LAN= / HOST_MASK= / HOST_CAFP= lines (fingerprint: SHA-256 of
 # certs\ca.pem, hex). -NoFirewall: the caller adds or removes the rule itself. -NoRestart: the caller restarts the server.
@@ -10,7 +11,7 @@
 # RAM preset rewrites the server settings, and a home internet address can change from day to day.
 # Windows PowerShell 5.1. Saved as UTF-8 with BOM (the Russian text needs it). Administrator rights only for the firewall rule
 # (one Windows prompt): the server itself must keep running as the normal user, or the launcher could not stop it.
-param([switch]$On, [switch]$Off, [string]$Address, [switch]$NoFirewall, [switch]$NoRestart, [string]$AllowBuild, [string]$DisallowBuild)
+param([switch]$On, [switch]$Off, [string]$Address, [string]$Vpn, [switch]$NoFirewall, [switch]$NoRestart, [string]$AllowBuild, [string]$DisallowBuild)
 
 $script:HostRule = 'WoW Forever Bots (friends)'   # the launcher's Host switch uses the same name, so either side can undo it
 $script:HostPorts = @(1119, 8081, 8085)
@@ -30,6 +31,12 @@ function Get-HostAddressSetting([string]$Root) {
     $f = Get-HostStateFile $Root
     $m = if (Test-Path $f) { Select-String -Path $f -Pattern '^address=(.+)$' | Select-Object -First 1 }
     if ($m) { $m.Matches[0].Groups[1].Value.Trim() } else { $null }
+}
+# this PC's address in a shared network (Radmin VPN, ZeroTier) handed out besides the main address, or $null
+function Get-HostVpnSetting([string]$Root) {
+    $f = Get-HostStateFile $Root
+    $m = if (Test-Path $f) { Select-String -Path $f -Pattern '^vpn=(.+)$' | Select-Object -First 1 }
+    if ($m -and (Test-Ipv4 $m.Matches[0].Groups[1].Value.Trim())) { $m.Matches[0].Groups[1].Value.Trim() } else { $null }
 }
 function Test-HostAddress([string]$A) { $A -match '^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$' }
 function Test-Ipv4([string]$A) {
@@ -91,10 +98,11 @@ function Test-HostBound([string]$Root) {
     $f = Join-Path $Root 'server\bnetserver.conf'
     (Test-Path $f) -and [bool](Select-String -Path $f -Pattern '^\s*BindIP\s*=\s*"?0\.0\.0\.0' -Quiet)
 }
-# The address the realm list gives the game: players in this PC's home network (and this PC itself) get localAddress, everyone
-# else gets address. MySQL must be running.
-function Set-HostRealm([string]$Root, [string]$Address, [string]$Local, [string]$Mask) {
-    $sql = "UPDATE realmlist SET address='$Address', localAddress='$Local', localSubnetMask='$Mask' WHERE id=70; SELECT COUNT(*) FROM realmlist WHERE id=70"
+# The address the realm list gives the game: players in this PC's home network (and this PC itself) get localAddress, players in
+# a shared network (Radmin VPN, ZeroTier) get address3 when it is set, everyone else gets address. MySQL must be running.
+function Set-HostRealm([string]$Root, [string]$Address, [string]$Local, [string]$Mask, [string]$Vpn) {
+    $third = if ($Vpn -and (Test-Ipv4 $Vpn)) { "'$Vpn'" } else { 'NULL' }
+    $sql = "UPDATE realmlist SET address='$Address', localAddress='$Local', localSubnetMask='$Mask', address3=$third WHERE id=70; SELECT COUNT(*) FROM realmlist WHERE id=70"
     $r = Invoke-HostNative (Join-Path $Root 'mysql\bin\mysql.exe') @("--defaults-file=$Root\config\my.ini", '-u', 'root', '-N', '-B', 'auth', '-e', $sql)
     if ($r.Code) { throw "MySQL (realmlist): $($r.Text)" }
     if (-not @($r.Lines | Where-Object { $_.Trim() -eq '1' })) { throw 'realmlist has no realm 70 (Trinity).' }
@@ -150,7 +158,8 @@ function Sync-HostForOthers([string]$Root) {
             $address = Get-HostPublicIp
             if (-not $address) { Write-Warning 'Hosting for others: could not look up your internet address, the realm keeps the last one.'; return }
         }
-        Set-HostRealm $Root $address $lan.Ip $lan.Mask
+        $vpn = Get-HostVpnSetting $Root
+        Set-HostRealm $Root $address $lan.Ip $lan.Mask $vpn
         "Hosting for others is on: players join at $address (in your home network: $($lan.Ip)). Host-For-Others.cmd turns it off."
     } catch { Write-Warning "Hosting for others: $($_.Exception.Message)" }
 }
@@ -264,6 +273,7 @@ if ($Off -or ($interactive -and ((Get-HostAddressSetting $root) -or (Test-HostBo
 # --- turn on ---------------------------------------------------------------------------------------------------------------------
 if (-not $lan) { throw (T 'No network card with a router was found. Connect this PC to your network and try again.' 'Не найдена сетевая карта с роутером. Подключите ПК к сети и попробуйте снова.') }
 if ($Address -and $Address -ne 'auto' -and -not (Test-HostAddress $Address)) { throw "Not an address: $Address" }
+if ($Vpn -and -not (Test-Ipv4 $Vpn)) { throw "Not an address: $Vpn" }
 $public = $null
 if ($interactive -or -not $Address -or $Address -eq 'auto') {
     Say 'Looking up your internet address...' 'Определяю ваш интернет-адрес...'
@@ -306,7 +316,7 @@ if ($restart) { Say 'Stopping the server...' 'Останавливаю серв�
 # BindIP first and the state file last: the state file is what says "on" (here, to the launcher and at every start), so it is
 # only written once the settings are in place. The realm address is set by Sync-HostForOthers at the start.
 Set-HostBindIp $root '0.0.0.0'
-Set-Content $state "address=$Address" -Encoding ascii
+Set-Content $state (@("address=$Address") + @(if ($Vpn) { "vpn=$Vpn" })) -Encoding ascii
 if ($restart -or ($interactive -and -not $wasUp)) {
     Say 'Starting the server (it sets the address and opens the ports)...' 'Запускаю сервер (он сам выставит адрес и откроет порты)...'
     Invoke-HostScript 'Start-WoWForever.ps1'

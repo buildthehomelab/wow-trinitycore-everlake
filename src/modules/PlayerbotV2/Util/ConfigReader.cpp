@@ -156,6 +156,7 @@ void ConfigReader::apply_from_loaded_config()
     raid_provide_consumables_ = c.GetBoolDefault("Playerbot.Raid.ProvideConsumables", true, true);
     raid_consumables_in_dungeons_ = c.GetBoolDefault("Playerbot.Raid.ConsumablesInDungeons", true, true);
     raid_resist_gear_         = c.GetBoolDefault("Playerbot.Raid.ResistGear", false, true);
+    raid_onyxia_cloak_        = c.GetBoolDefault("Playerbot.Raid.OnyxiaCloak", true, true);
     consumables_pve_          = c.GetBoolDefault("Playerbot.Consumables.PvE", true, true);
     consumables_pvp_          = c.GetBoolDefault("Playerbot.Consumables.PvP", false, true);
     {

@@ -3,25 +3,36 @@
 ## The easy way: a join code (launcher)
 
 **Host** (the one whose server it is): open the launcher, **Settings** > **Host for friends...** (also on the **Server** tab).
-Type a name for your server and press **Turn on**. The launcher opens a tunnel through Cloudflare and shows a **join code**
+Type a name for your server and press **Turn on**. One press sets up every way in at once and shows one **join code**
 (`WFB-...`). Press **Copy** and send it to your friend. Make an account for each friend: **Server** tab > **Create account**.
-**Turn off** closes the tunnel.
+**Turn off** closes all of it again.
+
+This all-ways **Turn on** is **beta** in 0.1.32: please tell us in #bug-report on Discord how it went (which way your friend got in, or what failed).
+
+What **Turn on** does (one Windows prompt, for the firewall):
+1. **Port forwarding**, the direct and fastest way: allows TCP 1119, 8081 and 8085 in Windows Firewall, lets the server
+   listen for other PCs, and asks your router to forward those three ports (UPnP). If the router does not allow that, the
+   window says so; forward the three ports to this PC by hand once and the direct way works from then on.
+2. **Radmin VPN / ZeroTier**, when one is on on this PC: its address goes in the code too, and friends in that network get in
+   through it (no router, no Cloudflare). This is the way for friends in Russia, or when your provider shares one internet
+   address between many homes (CGNAT).
+3. **Cloudflare tunnel** as a backup: for a friend the direct way cannot reach. It is skipped (the window says so) when
+   Cloudflare cannot be reached from your network. Cloudflare is slowed down in Russia, so Russian friends use 1 or 2.
+
+The code holds your internet address: give it only to people you trust. It changes when your internet address or the tunnel
+changes; the window then shows the new one. Nothing runs while hosting is off, and after a restart of the PC, turn hosting on
+again.
 
 How the tunnel works: the first time, the launcher downloads Cloudflare's free tunnel program `cloudflared` (version
 2026.10.3, about 55 MB, checked against its published SHA-256, kept in the `tunnel` folder). While hosting is on it runs
-hidden and connects out to Cloudflare, so nothing is opened in your router or Windows Firewall, no Windows prompt, no
-account, and your home address is not in the code. The server keeps its normal one-PC settings and is not restarted.
-Cloudflare gives the tunnel a new random name each time, so **the code changes every time you turn hosting on** (and if
-the tunnel has to reconnect: the window then shows the new code). Nothing runs while hosting is off, and nothing starts with
-Windows: after a restart of the PC, turn hosting on again. Cloudflare offers these tunnels for free without any promise of
-uptime; if it does not work for you, use **Port forwarding** below.
+hidden and connects out to Cloudflare. Cloudflare offers these tunnels for free without any promise of uptime.
 
-**Port forwarding** (the button in the same window, picked while hosting is off): for a host whose router forwards TCP
-1119, 8081 and 8085 to this PC. **Turn on** then opens those ports in Windows Firewall (one Windows prompt), asks your
-router to forward them (UPnP; if the router does not allow that, the window says which ports to forward by hand) and
-restarts the server. That code holds your internet address.
+**Other ways...** (in the same window, while hosting is off) picks just one of them: the tunnel alone (no Windows prompt,
+your home address not in the code, the server not restarted), Radmin VPN / ZeroTier alone, or port forwarding alone.
 
-**Friend**: open the launcher, **Server** tab > **Join a friend**, paste the code and press **Join**. The launcher finds the
+**Friend**: open the launcher, **Server** tab > **Join a friend**, paste the code and press **Join**. The launcher tries the
+ways in the code one after another (same home network, Radmin VPN / ZeroTier, the internet address, the Cloudflare tunnel)
+and uses the first that gets through; if none does, it says so and how to use Radmin VPN instead. It finds the
 server, checks its certificate against the code, asks once to trust it (Windows prompt; it is limited to names under
 `actual.battle.net`), adds the server to the list and picks it. Press **PLAY NOW** and log in with the account your friend made.
 Removing the server from the list later removes the certificate too. Through a tunnel your launcher carries the game's

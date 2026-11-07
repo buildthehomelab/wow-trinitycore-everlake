@@ -311,6 +311,8 @@ public:
     bool   raid_consumables_in_dungeons() const { return raid_consumables_in_dungeons_; }
     // Playerbot.Raid.ResistGear: a raid bot wears resistance gear for the boss it stands before (Bot/ResistGear.h). Default off.
     bool   raid_resist_gear() const            { return raid_resist_gear_; }
+    // Playerbot.Raid.OnyxiaCloak: a grouped level 60 bot wears an Onyxia Scale Cloak in Blackwing Lair (Bot/ResistGear.h). Default on.
+    bool   raid_onyxia_cloak() const           { return raid_onyxia_cloak_; }
     // Playerbot.Consumables.PvE / .PvP: whether bots use (and are stocked with) flasks, elixirs, buff food, combat
     // potions, healthstones and resistance potions in PvE (open world, dungeons, raids) or in PvP (battlegrounds, arenas).
     bool   consumables_pve() const             { return consumables_pve_; }
@@ -622,6 +624,7 @@ private:
     bool   raid_provide_consumables_     = false;
     bool   raid_consumables_in_dungeons_ = true;
     bool   raid_resist_gear_             = false;
+    bool   raid_onyxia_cloak_            = true;
     bool   consumables_pve_              = true;
     bool   always_[kAlwaysSwitchCount][kAlwaysPlaceCount] = {};   // loaded from Playerbot.AlwaysBuffs.<Switch>.<Place>
     bool   consumables_pvp_              = false;

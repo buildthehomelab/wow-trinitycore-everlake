@@ -35,6 +35,9 @@ namespace Playerbot::Raid {
         r.avoidFrontal.push_back({ 14020, 35.0f, 50.0f, Who::NonTank });
         // Vaelastrasz: his flame breath cleave chains through anyone near the front.
         r.avoidFrontal.push_back({ 13020, 20.0f, 60.0f, Who::NonTank });
+        // ... and his Tail Sweep 15847 every 4-6 s (classic_boss_vaelastrasz.cpp) is Onyxia's: the 120 degree arc behind him, knocking back.
+        // The same rear rule as hers (RaidEncounterData_ONY.cpp): the melee stand at his flanks, between the two arcs.
+        r.avoidFrontal.push_back({ 13020, 30.0f, kOnyTailHalfDeg, Who::NonTank, 180.0f, 100.0f, 0.0f, false, kOnyConeMarginDeg });
         // Broodlord Lashlayer (12017): Blast Wave 23331 is cast on himself (boss_broodlord_lashlayer.cpp:170-173) every 20-35s; it is a
         // point-blank AoE with knockback, 2,625-3,375 fire within 20 yards (vanilla data: radius index 9), so ranged and healers stay out of 22
         // (bwl_broodlord 2026-10-20: four casters died of it standing 10 y off).

@@ -2153,6 +2153,12 @@ uint8 PickResistGearSchool(BotSnapshotView const& s)
     return 0;
 }
 
+bool WantsFightCloak(BotSnapshotView const& s)
+{
+    return IsVanillaRealm() && Services::Config().raid_onyxia_cloak() && s.is_alive() && s.in_group() && s.is_in_raid()
+        && FightCloakMap(s.map_id()) && s.level() >= 60;
+}
+
 CastPick PickFearWard(BotSnapshotView const& s, GroupSnapshotView const& g)
 {
     constexpr uint32 FEAR_WARD = 6346;

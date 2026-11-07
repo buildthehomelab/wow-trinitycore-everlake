@@ -415,6 +415,9 @@ public:
     // Raid preparation: resistance gear for `school` on, or the bot's own back on (0) (EconomyOp::ResistGear).
     bool resist_gear(uint8 school)
     { return emit(EconomyIntent{EconomyOp::ResistGear{school}}); }
+    // Raid preparation: the Onyxia Scale Cloak on in Blackwing Lair, or the bot's own cloak back (EconomyOp::FightCloak).
+    bool fight_cloak(bool on)
+    { return emit(EconomyIntent{EconomyOp::FightCloak{on}}); }
 
     // Battleground / arena queue. `arena_type` 0 = battleground (solo or
     // group-leader), 2/3/5 = arena skirmish bracket (group-leader only).

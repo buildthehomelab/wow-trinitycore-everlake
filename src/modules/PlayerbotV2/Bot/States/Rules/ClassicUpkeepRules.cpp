@@ -621,6 +621,30 @@ bool ResistGearFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const
     return true;
 }
 
+// ---------- idle:classic_onyxia_cloak ----------
+// Playerbot.Raid.OnyxiaCloak: in Blackwing Lair the bot wears an Onyxia Scale Cloak, without which the drakes' and Nefarian's Shadow Flame
+// burns it to death (BotPopulationManager::SwapFightCloak); out of the instance its own cloak is back. Between pulls only.
+
+constexpr uint64 kFightCloakKeyBit = 1ull << 35;
+
+bool FightCloakGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, uint32 now_ms)
+{
+    if (!UpkeepWindow(s, g) || s.recently_in_combat(3000))
+        return false;
+    bool const want = Classic::WantsFightCloak(s);
+    return want != ai.fight_cloak() && !ai.action_recently_tried(BotAI::ActionKind::ClassUpkeep, uint64(want) | kFightCloakKeyBit, now_ms);
+}
+bool FightCloakFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, BotIntentEmitter& emit, uint32 now_ms)
+{
+    bool const want = Classic::WantsFightCloak(s);
+    if (!emit.fight_cloak(want))
+        return false;
+    ai.note_action_retry(BotAI::ActionKind::ClassUpkeep, uint64(want) | kFightCloakKeyBit, now_ms);
+    ai.set_fight_cloak(want);
+    ai.set_last_rule_fired("idle:classic_onyxia_cloak");
+    return true;
+}
+
 } // namespace
 
 void RegisterClassicUpkeepRules(IdleRuleRegistry& r)
@@ -649,6 +673,7 @@ void RegisterClassicUpkeepRules(IdleRuleRegistry& r)
     add("idle:classic_conjure", 992, &ConjureGate, &ConjureFire);
     add("idle:classic_fear_ward", 992, &FearWardGate, &FearWardFire);
     add("idle:classic_resist_gear", 993, &ResistGearGate, &ResistGearFire);
+    add("idle:classic_onyxia_cloak", 993, &FightCloakGate, &FightCloakFire);
     add("idle:classic_raid_consumables", 991, &RaidConsumablesGate, &RaidConsumablesFire);
 }
 

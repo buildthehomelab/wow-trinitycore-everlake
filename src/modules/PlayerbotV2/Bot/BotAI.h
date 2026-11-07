@@ -7,6 +7,7 @@
 #include "ClassicBuffLedger.h"
 
 #include "IdleWatch.h"
+#include "Dungeon/TankStill.h"
 #include "GroupFight.h"
 #include "WalkOrder.h"
 #include "TownErrand.h"
@@ -472,6 +473,10 @@ public:
     // equip-upgrade rule leaves the worn pieces alone (it would put the better scoring own piece straight back).
     uint8  resist_gear_school() const { return resist_gear_school_; }
     void   set_resist_gear_school(uint8 v) { resist_gear_school_ = v; }
+    // Whether this bot was last ordered to wear the Onyxia Scale Cloak of Blackwing Lair (idle:classic_onyxia_cloak). While set, the
+    // equip-upgrade rule leaves the worn pieces alone, as for the resistance gear.
+    bool   fight_cloak() const { return fight_cloak_; }
+    void   set_fight_cloak(bool v) { fight_cloak_ = v; }
 
     // Mailbox-open hesitation slot.
     uint32 pending_mail_open_at_ms() const { return pending_mail_open_at_ms_; }
@@ -3267,6 +3272,10 @@ private:
     void dispatch_layers(BotSnapshotView, GroupSnapshotView,
                          BotIntentEmitter&);
 
+    // [tank_still]: a bot tank standing in one place out of combat in a dungeon or raid logs why, once every 30 s
+    // (Dungeon/TankStill.h). Log only; it changes nothing the tank does.
+    void note_tank_still(BotSnapshotView, GroupSnapshotView);
+
     // Recompute raid_map_party_hold_ and release the owner follow order when the owner
     // engages a mob himself. Runs every tick before the state dispatch.
     void update_dungeon_autopilot_hold(BotSnapshotView, GroupSnapshotView);
@@ -3530,6 +3539,7 @@ private:
     // BG), so a fresh upgrade after exit gets a fresh window.
     uint32         pending_equip_upgrade_at_ms_ = 0;
     uint8          resist_gear_school_ = 0;
+    bool           fight_cloak_ = false;
     // Mailbox-open hesitation: real humans click the mailbox, see the
     // list, hover one row, click "Take All". 1.5–4s before the first
     // take packet lands. Reset when the bot walks out of mailbox range.
@@ -4269,6 +4279,7 @@ private:
     ::Playerbot::BgTactics::StallWatch bg_stall_;   // battleground stand-still watchdog (State_Idle bg_stall)
     ::Playerbot::V2::WalkOrder walk_order_;
     ::Playerbot::V2::IdleWatch idle_watch_;   // world-wide standing-still detector (DispatchIdle)
+    ::Playerbot::TankStill::Watch tank_still_;   // a dungeon tank standing out of combat: [tank_still] why (dispatch_layers)
     ::Playerbot::V2::TownErrand::State town_errand_;
     ::Playerbot::V2::GoalProgress goal_progress_;   // idle:town_errand (Bot/States/Rules/AmbientRules.cpp)
     // Cached corpse → graveyard distance. Recomputing every snapshot tick

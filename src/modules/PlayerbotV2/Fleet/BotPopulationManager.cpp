@@ -2173,6 +2173,9 @@ static uint32 RaidRegearPass(Player* p, bool& refused_any, bool only_over_cap = 
             Item* cur = p->GetItemByPos(INVENTORY_SLOT_BAG_0, g.slot);
             if (cur && cur->GetEntry() == g.item_entry)
                 continue;
+            // The Onyxia Scale Cloak a bot wears in Blackwing Lair (SwapFightCloak) stays on while it is there.
+            if (g.slot == EQUIPMENT_SLOT_BACK && cur && Services::Config().raid_onyxia_cloak() && Classic::KeepFightCloak(p->GetMapId(), cur->GetEntry()))
+                continue;
             // The offhand cannot be worn next to a two-hander that stayed.
             if (g.slot == EQUIPMENT_SLOT_OFFHAND)
             {
@@ -2337,6 +2340,13 @@ uint32 RestoreOwnGear(Player* p, ResistSwapState const& st)
         Item* own = p->GetItemByGuid(pc.own);
         if (!copy)
             continue;
+        // The copy went into an empty slot (SwapFightCloak on a bot with no cloak): it only comes off.
+        if (pc.own.IsEmpty() && copy->IsEquipped() && copy->GetSlot() == pc.slot)
+        {
+            p->DestroyItem(INVENTORY_SLOT_BAG_0, pc.slot, true);
+            ++changed;
+            continue;
+        }
         if (own && copy->IsEquipped() && copy->GetSlot() == pc.slot && !own->IsEquipped())
         {
             uint16 const src = (uint16(own->GetBagSlot()) << 8) | own->GetSlot();
@@ -2400,6 +2410,9 @@ uint32 BotPopulationManager::SwapResistGear(Player* p, uint8 school)
     {
         if (!Classic::ResistSwapSlot(g.slot, tank))
             continue;
+        // The Onyxia Scale Cloak of Blackwing Lair stays on (SwapFightCloak): Shadow Flame kills a tank without it, resistance or not.
+        if (g.slot == EQUIPMENT_SLOT_BACK && Services::Config().raid_onyxia_cloak() && Classic::FightCloakMap(map->GetId()))
+            continue;
         ItemTemplate const* gtpl = sObjectMgr->GetItemTemplate(g.item_entry);
         if (!gtpl)
             continue;
@@ -2436,6 +2449,77 @@ uint32 BotPopulationManager::SwapResistGear(Player* p, uint8 school)
     if (!st.pieces.empty())
         s_resist_swap[id] = std::move(st);
     return changed;
+}
+
+// ---- Blackwing Lair's Onyxia Scale Cloak (Playerbot.Raid.OnyxiaCloak) ----
+// The bot's own cloak and the copy it wears, kept like the resistance swap's pieces (in memory only).
+namespace {
+std::unordered_map<BotId, ResistSwapState> s_fight_cloak;   // under s_resist_swap_lock
+}
+
+uint32 BotPopulationManager::SwapFightCloak(Player* p, bool on)
+{
+    if (!p || !p->IsInWorld() || !p->IsAlive() || p->IsInCombat())
+        return 0;
+    BotId const id = p->GetGUID().GetCounter();
+    if (!Services::Lifecycle().is_bot(id) || Services::Owners().GetOwner(id).account_id == 0 || IsPlayersOwnCharacter(p))
+        return 0;
+    Map const* map = p->GetMap();
+    // Taking it off is allowed anywhere (a bot that left the raid wearing the copy still gets its own back).
+    if (on && (!map || !Classic::FightCloakMap(map->GetId())))
+        return 0;
+
+    std::lock_guard<std::mutex> lock(s_resist_swap_lock);
+    if (!on)
+    {
+        auto const it = s_fight_cloak.find(id);
+        if (it == s_fight_cloak.end())
+            return 0;
+        uint32 const changed = RestoreOwnGear(p, it->second);
+        TC_LOG_INFO("playerbot.v2", "[fight_cloak] {} own cloak back ({} slot(s))", p->GetName(), changed);
+        s_fight_cloak.erase(it);
+        return changed;
+    }
+    if (s_fight_cloak.count(id))
+        return 0;
+    Item* cur = p->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_BACK);
+    if (cur && cur->GetEntry() == Classic::kOnyxiaScaleCloak)
+        return 0;   // wears one already (its own, or the copy of a session before a relog)
+    ItemTemplate const* tpl = sObjectMgr->GetItemTemplate(Classic::kOnyxiaScaleCloak);
+    if (!tpl || p->CanUseItem(tpl) != EQUIP_ERR_OK)
+    {
+        TC_LOG_INFO("playerbot.v2", "[fight_cloak] {} cannot wear the Onyxia Scale Cloak {}: {}", p->GetName(), Classic::kOnyxiaScaleCloak,
+                    tpl ? "CanUseItem refuses it" : "no such item");
+        return 0;
+    }
+    uint16 eq_dest = 0;
+    ItemPosCountVec dest;
+    // The replaced cloak goes to the bag slot the copy came from: no free slot, no swap.
+    if (p->CanEquipNewItem(EQUIPMENT_SLOT_BACK, eq_dest, Classic::kOnyxiaScaleCloak, /*swap*/ cur != nullptr) != EQUIP_ERR_OK ||
+        p->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, Classic::kOnyxiaScaleCloak, 1) != EQUIP_ERR_OK)
+    {
+        TC_LOG_INFO("playerbot.v2", "[fight_cloak] {} cannot put the Onyxia Scale Cloak on (no bag room, or the slot refuses it)", p->GetName());
+        return 0;
+    }
+    Item* copy = p->StoreNewItem(dest, Classic::kOnyxiaScaleCloak, true);
+    if (!copy)
+        return 0;
+    ObjectGuid const own = cur ? cur->GetGUID() : ObjectGuid::Empty;
+    uint16 const src = (uint16(copy->GetBagSlot()) << 8) | copy->GetSlot();
+    uint16 const dst = (uint16(INVENTORY_SLOT_BAG_0) << 8) | EQUIPMENT_SLOT_BACK;
+    p->SwapItem(src, dst);
+    if (p->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_BACK) != copy)
+    {
+        p->DestroyItem(copy->GetBagSlot(), copy->GetSlot(), true);   // refused after all: no copy left behind
+        TC_LOG_INFO("playerbot.v2", "[fight_cloak] {} the Onyxia Scale Cloak was refused in the back slot", p->GetName());
+        return 0;
+    }
+    ResistSwapState st;
+    st.pieces.push_back({ uint8(EQUIPMENT_SLOT_BACK), own, copy->GetGUID() });
+    s_fight_cloak[id] = std::move(st);
+    TC_LOG_INFO("playerbot.v2", "[fight_cloak] {} wears the Onyxia Scale Cloak in Blackwing Lair{}", p->GetName(),
+                cur ? "" : " (no cloak of its own)");
+    return 1;
 }
 
 BotPopulationManager::RerollResult BotPopulationManager::RerollCompanionGear(Player* p, uint32& changed_slots)

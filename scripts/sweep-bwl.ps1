@@ -1,11 +1,12 @@
-# Raid sweep: by default the BWL bosses (Firemaw and Broodlord twice) and three MC/Onyxia regression checks. -Runs overrides the list.
+# Raid sweep: by default all eight BWL bosses in raid order (Vaelastrasz and Nefarian start from their gossip) and three MC/Onyxia
+# regression checks. -Runs overrides the list.
 # Run from the TrinityCore checkout's scripts\ folder with the realm up, SOAP on, and NOBODY logged in:
 #   powershell -ExecutionPolicy Bypass -File <path>\sweep-bwl.ps1 [-Out <folder>] [-Runs name1,name2,...]
 # Each run's new Playerbot.log and Scenario.log lines are saved as <n>-<scenario>-Playerbot.log / -Scenario.log, plus summary.txt.
 # Read-only for the server: it only sends `playerbot scenario run/status/result/abort` over SOAP (run-scenario.ps1).
 param([string]$Out = 'C:\Users\chris\wow forever\sweep-bwl',
-      [string[]]$Runs = @('bwl_firemaw', 'bwl_firemaw', 'bwl_broodlord', 'bwl_broodlord', 'bwl_razorgore',
-                          'bwl_ebonroc', 'bwl_flamegor', 'bwl_chromaggus', 'mc_ragnaros', 'mc_geddon', 'onyxia_full'))
+      [string[]]$Runs = @('bwl_razorgore', 'bwl_vaelastrasz', 'bwl_broodlord', 'bwl_firemaw', 'bwl_ebonroc', 'bwl_flamegor',
+                          'bwl_chromaggus', 'bwl_nefarian', 'mc_ragnaros', 'mc_geddon', 'onyxia_full'))
 . "$PSScriptRoot\common.ps1"
 $logs = Join-Path $root "$installFolder\logs"
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
@@ -28,7 +29,7 @@ foreach ($name in $runs) {
     $pb = Join-Path $logs 'Playerbot.log'; $sc = Join-Path $logs 'Scenario.log'
     $pb0 = Size $pb; $sc0 = Size $sc
     $t0 = Get-Date
-    & "$PSScriptRoot\run-scenario.ps1" -Name $name -WaitMinutes 30 | Tee-Object -FilePath (Join-Path $Out "$tag-console.txt")
+    & "$PSScriptRoot\run-scenario.ps1" -Name $name -WaitMinutes 40 | Tee-Object -FilePath (Join-Path $Out "$tag-console.txt")
     $code = $LASTEXITCODE
     Tail-Since $pb $pb0 (Join-Path $Out "$tag-Playerbot.log")
     Tail-Since $sc $sc0 (Join-Path $Out "$tag-Scenario.log")

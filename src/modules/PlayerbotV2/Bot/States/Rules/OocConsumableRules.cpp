@@ -543,8 +543,9 @@ bool LootRollFire(BotSnapshotView const& s, BotAI& ai,
 // ---------- idle:equip_upgrade ----------
 bool EquipUpgradeGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&, uint32 now_ms)
 {
-    // Raid resistance gear on (idle:classic_resist_gear): the own pieces score higher and would go straight back on.
-    if (ai.resist_gear_school() != 0)
+    // Raid resistance gear on (idle:classic_resist_gear) or the Onyxia Scale Cloak of Blackwing Lair (idle:classic_onyxia_cloak): the own
+    // pieces score higher and would go straight back on.
+    if (ai.resist_gear_school() != 0 || ai.fight_cloak())
         return false;
     if (s.in_combat() || s.is_casting())
     {

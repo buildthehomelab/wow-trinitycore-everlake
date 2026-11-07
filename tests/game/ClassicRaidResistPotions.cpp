@@ -25,6 +25,9 @@
 using namespace Playerbot::Raid;
 using Playerbot::Classic::ResistSwapMap;
 using Playerbot::Classic::ResistSwapSlot;
+using Playerbot::Classic::FightCloakMap;
+using Playerbot::Classic::KeepFightCloak;
+using Playerbot::Classic::kOnyxiaScaleCloak;
 
 namespace
 {
@@ -88,4 +91,15 @@ TEST_CASE("the gear swap skips the frozen Molten Core and Onyxia maps", "[Classi
     CHECK_FALSE(ResistSwapMap(249));
     for (std::uint32_t map : { 469u, 531u, 533u, 309u, 509u })
         CHECK(ResistSwapMap(map));
+}
+
+TEST_CASE("the Onyxia Scale Cloak is worn and kept only in Blackwing Lair", "[ClassicRaidResistPotions]")
+{
+    CHECK(kOnyxiaScaleCloak == 15138u);
+    CHECK(FightCloakMap(469));
+    for (std::uint32_t map : { 409u, 249u, 531u, 533u, 309u, 509u, 0u })
+        CHECK_FALSE(FightCloakMap(map));
+    CHECK(KeepFightCloak(469, kOnyxiaScaleCloak));
+    CHECK_FALSE(KeepFightCloak(469, 12345u));
+    CHECK_FALSE(KeepFightCloak(409, kOnyxiaScaleCloak));
 }

@@ -20,16 +20,21 @@ function Run-OpenSsl {
         throw "Could not create the certificate ($What failed). openssl said: $(($out | Out-String).Trim())"
     }
 }
+# Every install makes its own CA. A friend's PC trusts its own CA and the host's, so each CA gets this PC's name and the date in
+# its name (still starting "WoW Forever Local CA", which Uninstall looks for), and the server certificate names its CA by key
+# (authorityKeyIdentifier): Windows then never mixes up two CAs with the same name when it checks a friend's server.
+$caTag = (($env:COMPUTERNAME -replace '[^A-Za-z0-9-]', '') + ' ' + (Get-Date -Format 'yyyy-MM-dd')).Trim()
 @"
 [req]
 distinguished_name=dn
 x509_extensions=ca
 prompt=no
 [dn]
-CN=WoW Forever Local CA
+CN=WoW Forever Local CA $caTag
 [ca]
 basicConstraints=critical,CA:TRUE
 keyUsage=critical,keyCertSign,cRLSign
+subjectKeyIdentifier=hash
 nameConstraints=critical,permitted;DNS:actual.battle.net
 "@ | Set-Content ca.cnf -Encoding ascii
 @"
@@ -42,6 +47,7 @@ CN=trinity.actual.battle.net
 @"
 subjectAltName=DNS:trinity.actual.battle.net
 extendedKeyUsage=serverAuth
+authorityKeyIdentifier=keyid:always
 "@ | Set-Content leaf.ext -Encoding ascii
 # done only when the finished chain exists; a half-finished earlier try is thrown away and made again
 if (-not (Test-Path chain.pem)) {

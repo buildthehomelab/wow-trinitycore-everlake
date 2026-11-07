@@ -51,6 +51,15 @@ TEST_CASE("BotTrade: with no listing the price comes from the vendor value", "[b
     CHECK(FairUnitPrice({}) == 0);
 }
 
+TEST_CASE("BotTrade: a bot pays the market price only for gear it will wear", "[bottrade]")
+{
+    // A green the bot cannot use: market 4x vendor, but the bot can only sell it on to a vendor.
+    CHECK(PaidUnitPrice(400, 100, false) == 100);
+    CHECK(PaidUnitPrice(400, 100, true) == 400);         // an upgrade for it: worth the market price
+    CHECK(PaidUnitPrice(50, 100, false) == 50);          // never more than the market when the market is lower
+    CHECK(PaidUnitPrice(400, 0, false) == 0);            // no vendor value: worth nothing to it, refused
+}
+
 TEST_CASE("BotTrade: the market price is the median, so one absurd listing does not set it", "[bottrade]")
 {
     CHECK(MedianPrice({}) == 0);

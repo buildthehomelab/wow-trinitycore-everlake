@@ -2,7 +2,8 @@
 //
 // A bot trades in three ways:
 //   gift      - the owner or a group mate hands over gear that is an upgrade for the bot, or money: accepted for nothing.
-//   buy       - a player puts an item in and nothing else: the bot offers its fair price in gold and takes the item.
+//   buy       - a player puts an item in and nothing else: the bot offers gold and takes the item (the market price for gear
+//               that is an upgrade for it, the vendor price for anything else).
 //   sell      - a player ordered an item from the bot's list (whisper "what do you have", then "buy 2") and puts the price in:
 //               the bot adds that item to its side and accepts.
 // The live state (Player, TradeData, auction house) is read by BotTradeShop.cpp; this header only decides.
@@ -37,6 +38,14 @@ constexpr std::uint64_t FairUnitPrice(PriceInputs const& in)
     return in.vendor_sell * 4u;
 }
 
+// What a bot pays per unit for an item a player sells it. Gear that is an upgrade for the bot is worth its market price to it;
+// anything else it can only sell on to a vendor, so it pays what the vendor would. Otherwise a player farms gold by selling
+// bots greens they cannot use at four times the vendor price.
+constexpr std::uint64_t PaidUnitPrice(std::uint64_t fair_unit, std::uint64_t vendor_sell, bool upgrade)
+{
+    return upgrade ? fair_unit : std::min(fair_unit, vendor_sell);
+}
+
 // Median of the listings' unit prices; 0 for none. Resists the one absurd listing that a lowest-price rule would copy.
 inline std::uint64_t MedianPrice(std::vector<std::uint64_t> v)
 {
@@ -69,7 +78,7 @@ struct Line
 {
     std::uint32_t entry = 0;
     std::uint32_t count = 0;
-    std::uint64_t value = 0;     // fair price of the whole stack
+    std::uint64_t value = 0;     // fair price of the whole stack; on the player's side what the bot pays for it (PaidUnitPrice)
     bool upgrade = false;        // equippable and better than what the bot wears there (only meaningful on the player's side)
     bool reagent = false;        // a reagent of a recipe the bot knows: a gift from the owner or a group mate, so "trade them to me and ask again" works
 };

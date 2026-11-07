@@ -272,8 +272,10 @@ std::vector<BotTrade::Line> Lines(Player* bot, TradeData* side, bool mark_upgrad
         BotTrade::Line l = LineOf(bot, items[i], unit[i]);
         if (mark_upgrades)
         {
-            l.upgrade = IsUpgrade(bot, items[i]->GetTemplate());
+            ItemTemplate const* t = items[i]->GetTemplate();
+            l.upgrade = IsUpgrade(bot, t);
             l.reagent = IsRecipeReagent(bot, items[i]->GetEntry());
+            l.value = BotTrade::PaidUnitPrice(unit[i], t->GetSellPrice(), l.upgrade) * items[i]->GetCount();
         }
         out.push_back(l);
     }

@@ -566,6 +566,13 @@ struct IntentVisitor
                 Services::Population().SwapResistGear(bot, op.school);
                 return Result::Ok;
             }
+            else if constexpr (std::is_same_v<T, EconomyOp::FightCloak>)
+            {
+                Player* bot = api.player();
+                if (!bot || (op.on && !Services::Config().raid_onyxia_cloak())) return Result::ServerRefused;
+                Services::Population().SwapFightCloak(bot, op.on);
+                return Result::Ok;
+            }
             else                                                      return Result::Other;
         }, ei.op);
     }

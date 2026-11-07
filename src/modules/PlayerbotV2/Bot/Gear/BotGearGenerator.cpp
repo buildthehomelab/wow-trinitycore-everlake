@@ -13,6 +13,7 @@
 #include "World.h"
 #include "Config.h"
 #include "DatabaseEnv.h"         // the holiday loot conditions (Bots.HolidayClothes)
+#include "GameEventMgr.h"        // IsHolidayActive: holiday items only in their season
 #include "../BotSnapshot.h"          // PlanEquipOrder
 #include "../../Services.h"          // Services::Config(): Playerbot.Behavior.TankRangedWeapon
 #include "../../Fleet/OwnerRegistry.h"
@@ -246,37 +247,67 @@ uint16 TargetIlvlForLevel(uint8 level)
     return uint16((uint32(level) * kTwwIlvl) / kTwwCap);
 }
 
-// Bots.HolidayClothes = 0 (the player's file): bots wear no holiday items, such as the Red and Green Winter Hats that some
-// bosses drop only during Winter Veil. A holiday item is one the item data ties to a holiday, one whose loot rows drop it only
-// while a holiday event runs (conditions type 12 on a game_event with a holiday), or one a vendor sells only during a holiday.
-// Read once, at the first gear look-up after start; a change needs a restart. 1 (default) keeps today's behaviour.
-static std::unordered_set<uint32> const* HolidayClothesToSkip()
+// Bots.HolidayClothes (the player's file): 1 (default) = bots wear holiday items while that holiday runs, 0 = never.
+// Read once at start; a change needs a restart.
+static bool HolidayClothesAllowed()
 {
-    static std::unordered_set<uint32> const* const s_items = []() -> std::unordered_set<uint32> const*
+    static bool const allowed = sConfigMgr->GetBoolDefault("Bots.HolidayClothes", true, true);
+    return allowed;
+}
+
+// Holiday items, such as the Red and Green Winter Hats that some bosses drop only during Winter Veil: the holidays each one
+// belongs to. A holiday item is one the item data ties to a holiday, one whose loot rows drop it only while a holiday event
+// runs (conditions type 12 on a game_event with a holiday), or one a vendor sells only during a holiday. Read once, at the
+// first gear look-up after start.
+static std::unordered_map<uint32, std::vector<HolidayIds>> const& HolidayItems()
+{
+    static std::unordered_map<uint32, std::vector<HolidayIds>> const s_items = []
     {
-        if (sConfigMgr->GetBoolDefault("Bots.HolidayClothes", true, true))
-            return nullptr;
-        auto* items = new std::unordered_set<uint32>();
+        std::unordered_map<uint32, std::vector<HolidayIds>> items;
+        auto add = [&items](uint32 entry, uint32 holiday)
+        {
+            if (holiday == HOLIDAY_NONE) return;
+            std::vector<HolidayIds>& v = items[entry];
+            if (std::find(v.begin(), v.end(), HolidayIds(holiday)) == v.end()) v.push_back(HolidayIds(holiday));
+        };
         for (auto const& [entry, tpl] : sObjectMgr->GetItemTemplateStore())
-            if (tpl.GetHolidayID() != HOLIDAY_NONE)
-                items->insert(entry);
+            add(entry, tpl.GetHolidayID());
         // condition source types 1-12 are the loot tables; their SourceEntry is the item
-        if (QueryResult r = WorldDatabase.Query("SELECT DISTINCT c.SourceEntry FROM conditions c JOIN game_event e ON e.eventEntry = c.ConditionValue1 "
+        if (QueryResult r = WorldDatabase.Query("SELECT DISTINCT c.SourceEntry, e.holiday FROM conditions c JOIN game_event e ON e.eventEntry = c.ConditionValue1 "
                                                 "WHERE c.SourceTypeOrReferenceId BETWEEN 1 AND 12 AND c.ConditionTypeOrReference = 12 "
                                                 "AND c.NegativeCondition = 0 AND e.holiday <> 0"))
-            do items->insert((*r)[0].GetUInt32()); while (r->NextRow());
-        if (QueryResult r = WorldDatabase.Query("SELECT DISTINCT v.item FROM game_event_npc_vendor v JOIN game_event e ON e.eventEntry = v.eventEntry "
+            do add((*r)[0].GetUInt32(), (*r)[1].GetUInt32()); while (r->NextRow());
+        if (QueryResult r = WorldDatabase.Query("SELECT DISTINCT v.item, e.holiday FROM game_event_npc_vendor v JOIN game_event e ON e.eventEntry = v.eventEntry "
                                                 "WHERE e.holiday <> 0 AND v.type = 1"))
-            do items->insert((*r)[0].GetUInt32()); while (r->NextRow());
-        TC_LOG_INFO("playerbot.v2", "[BotGearGenerator] Bots.HolidayClothes = 0: bots wear none of {} holiday items", items->size());
+            do add((*r)[0].GetUInt32(), (*r)[1].GetUInt32()); while (r->NextRow());
+        TC_LOG_INFO("playerbot.v2", "[BotGearGenerator] {} holiday items: bots wear them {}", items.size(),
+                    HolidayClothesAllowed() ? "only while their holiday runs (Bots.HolidayClothes = 1)" : "never (Bots.HolidayClothes = 0)");
         return items;
     }();
     return s_items;
 }
 
-bool IsBotWearableItemId(uint32 entry)
+// Whether a bot may wear the item today: anything that is not a holiday item; a holiday item only while one of its holidays
+// runs, and never with Bots.HolidayClothes = 0. A hat put on during Winter Veil comes off at the next gear check after it.
+// World thread (game events change in World::Update, outside the map updates).
+static bool InSeason(uint32 entry)
 {
-    if (std::unordered_set<uint32> const* holiday = HolidayClothesToSkip(); holiday && holiday->count(entry))
+    auto const& items = HolidayItems();
+    auto it = items.find(entry);
+    if (it == items.end())
+        return true;
+    if (!HolidayClothesAllowed())
+        return false;
+    for (HolidayIds h : it->second)
+        if (IsHolidayActive(h))
+            return true;
+    return false;
+}
+
+// The item rules that do not change while the server runs; the gear pools are built from these at start.
+static bool IsBotWearableAnyDay(uint32 entry)
+{
+    if (!HolidayClothesAllowed() && HolidayItems().count(entry))
         return false;
 
     constexpr uint32 kClassicCap = 60, kFirstNonVanillaItemId = 25000;
@@ -288,6 +319,11 @@ bool IsBotWearableItemId(uint32 entry)
     // human warrior wore the Horde rank 14 set and drew like an orc (Testwar, 2026-10-05)
     ItemTemplate const* tpl = sObjectMgr->GetItemTemplate(entry);
     return !tpl || tpl->ExtendedData->RequiredPVPRank <= 0;
+}
+
+bool IsBotWearableItemId(uint32 entry)
+{
+    return IsBotWearableAnyDay(entry) && InSeason(entry);
 }
 
 // A whole word "Test" or "Deprecated" in the name, any case: developer items that ship in the item data. The same holds for the placeholders
@@ -360,7 +396,7 @@ void Initialize()
         // Internal items are never equippable by anyone - Player::CanUseItem
         // rejects them outright with EQUIP_ERR_CANT_EQUIP_EVER.
         if (tpl.HasFlag(ITEM_FLAG2_INTERNAL_ITEM)) continue;
-        if (!IsBotWearableItemId(entry)) continue;
+        if (!IsBotWearableAnyDay(entry)) continue;   // holiday items stay in the pools; GenerateGearFor checks the season
         // A developer test item ("Fast Test Thrown", item 5559) is not gear: bots wore it as their thrown weapon (PC 20 Oct).
         if (IsTestItemName(tpl.GetName(DEFAULT_LOCALE))) continue;
         // Skip items with too-high required level for our brackets
@@ -819,6 +855,7 @@ std::vector<GearItem> GenerateGearFor(GearGenerationContext const& ctx)
     // Companion below the cap: role-weighted best green / blue near its level (OwnedGearPolicy.h).
     bool const owned_lv = !raid && OwnedLevelGearActive(ctx.level, ctx.role);
     int32 const owned_band = OwnedIlvlBandCfg();
+    bool const classic_levelling = !raid && MaxPlayerLevel() <= 60 && ctx.level < MaxPlayerLevel();
     // Tier modes (an owner's "gear t3"): the tier set below, and the other slots up to that tier's item level.
     bool const tier_mode = raid && !ctx.world_bot() && Owned::IsTierMode(ctx.gear_mode);
     bool const bis_mode = raid && !ctx.world_bot() && ctx.gear_mode == Owned::GearMode::Bis;
@@ -892,6 +929,7 @@ std::vector<GearItem> GenerateGearFor(GearGenerationContext const& ctx)
         for (auto const* tpl : candidates)
         {
             if (tpl->GetBaseRequiredLevel() > ctx.level) continue;
+            if (!InSeason(tpl->GetId())) continue;
             if (raid)
             {
                 bool const prep_item = tpl->GetQuality() >= ITEM_QUALITY_RARE && tpl->GetBaseRequiredLevel() >= int32(kRaidMinRequiredLevel);
@@ -971,6 +1009,10 @@ std::vector<GearItem> GenerateGearFor(GearGenerationContext const& ctx)
             else
             {
                 if (ctx.world_bot() && WorldGearOver(tpl, ctx.level, ctx.bot_id, slot)) continue;
+                // Classic below the cap: the same ceiling as a companion's (Owned::PieceAllowed), at most the band above the
+                // wearer's level. The distance penalty alone let a piece with no required level and a strong stat fit through,
+                // so low-level world bots wore gear far above their level (player report, Discord 11-06).
+                if (classic_levelling && ilvl > int32(ctx.level) + owned_band) continue;
                 int32 dist = ilvl > target ? ilvl - target : target - ilvl;
                 int32 fit = ::Playerbot::Gear::ScoreItemForClass(
                     tpl, ctx.cls, ctx.spec, ctx.level);

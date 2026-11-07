@@ -900,6 +900,54 @@ void BotAI::dispatch_primary(BotSnapshotView s, GroupSnapshotView g,
     }
 }
 
+void BotAI::note_tank_still(BotSnapshotView s, GroupSnapshotView g)
+{
+    namespace TS = ::Playerbot::TankStill;
+    std::vector<GroupMemberSummary> const* members = g.exists() ? g.members() : nullptr;
+    bool const watching = members && s.is_alive() && (s.is_in_dungeon() || s.is_in_raid()) && !s.in_combat() &&
+                          dungeon_active() && effective_role(s) == Role::Tank;
+    float x, y, z;
+    s.position(x, y, z);
+    uint32 const stood_ms = TS::Due(tank_still_, watching, s.map_id(), x, y, z, s.published_at_ms());
+    if (!stood_ms)
+        return;
+
+    auto pct = [](int32 have, int32 most) { return most > 0 ? int(int64(have) * 100 / most) : -1; };
+    TS::Self self;
+    self.hp_pct = s.hp_pct();
+    self.mana_pct = s.max_power(POWER_MANA) > 0 ? s.power_pct(POWER_MANA) : -1;
+
+    std::vector<TS::Member> list;
+    list.reserve(members->size());
+    for (GroupMemberSummary const& m : *members)
+    {
+        if (m.guid == s.guid())
+            continue;
+        TS::Member t;
+        t.name = m.name;
+        t.online = m.online;
+        t.alive = m.is_alive;
+        t.ghost = m.is_ghost;
+        t.other_map = m.map_id != s.map_id();
+        t.healer = m.role == Role::Healer;
+        float const dx = m.x - x, dy = m.y - y, dz = m.z - z;
+        t.yards = std::sqrt(dx * dx + dy * dy + dz * dz);
+        t.hp_pct = m.max_hp > 0 ? pct(m.hp, m.max_hp) : 100;
+        t.mana_pct = pct(m.mana, m.max_mana);
+        list.push_back(std::move(t));
+    }
+
+    TS::Limits lim;
+    lim.healer_mana_pct = Classic::PullReadyHealerManaPct(s);
+    lim.other_mana_pct = Classic::kPullReadyDpsManaPct;
+    std::string why = TS::Reasons(self, list, lim);
+    if (why.empty())
+        why = "nothing to wait for: nobody hurt, dry, dead or far";
+    char const* rule = last_rule_fired();
+    TC_LOG_INFO("playerbot.v2", "[tank_still] {} has stood {}s at ({:.1f}, {:.1f}, {:.1f}) map {} (last rule {}): {}",
+        s.name(), stood_ms / 1000u, x, y, z, s.map_id(), rule ? rule : "none", why);
+}
+
 void BotAI::dispatch_layers(BotSnapshotView s, GroupSnapshotView g,
                              BotIntentEmitter& em)
 {
@@ -1017,6 +1065,8 @@ void BotAI::dispatch_layers(BotSnapshotView s, GroupSnapshotView g,
         last_bag_room_ms_ = s.published_at_ms();
         em.make_bag_room(Playerbot::BotTrade::kKeepFreeSlots);
     }
+
+    note_tank_still(s, g);
 
     if (s.in_group())
         States::DispatchInGroup(*this, s, g, em);

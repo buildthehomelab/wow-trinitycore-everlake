@@ -536,6 +536,9 @@ namespace EconomyOp {
     // Raid preparation: wear the vanilla resistance pieces of `school` (a SpellSchools value) in place of the bot's own, or put its own
     // back (school 0). BotPopulationManager::SwapResistGear; gated by Playerbot.Raid.ResistGear.
     struct ResistGear { uint8 school; };
+    // Raid preparation: wear the Onyxia Scale Cloak in Blackwing Lair (on), or put the bot's own cloak back (off).
+    // BotPopulationManager::SwapFightCloak; gated by Playerbot.Raid.OnyxiaCloak.
+    struct FightCloak { bool on; };
 }
 
 struct EconomyIntent
@@ -551,7 +554,8 @@ struct EconomyIntent
         EconomyOp::CraftClaim,
         EconomyOp::RestockClassSupplies,
         EconomyOp::StockRaidConsumable,
-        EconomyOp::ResistGear
+        EconomyOp::ResistGear,
+        EconomyOp::FightCloak
     > op;
 };
 

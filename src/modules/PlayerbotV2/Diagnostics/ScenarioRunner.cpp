@@ -31,8 +31,10 @@
 #include "CharacterCache.h"
 #include "Creature.h"
 #include "CreatureGroups.h"
+#include "CreatureAI.h"
 #include "GameObject.h"
 #include "GameTime.h"
+#include "GossipDef.h"
 #include "Group.h"
 #include "GroupMgr.h"
 #include "Log.h"
@@ -184,6 +186,9 @@ struct Run
     std::uint32_t landing_resend_ms = 0;  // phase_ms of the last landing teleport resend round
     std::uint32_t start_object_used_ms = 0;   // run_ms the main tank used ScenarioDef::start_object (0: not yet)
     std::uint32_t start_event_sent_ms = 0;    // run_ms the main tank sent ScenarioDef::start_event (0: not yet)
+    std::uint32_t start_npc_wait_ms = 0;      // run_ms ScenarioDef::start_instance_data was set and the wait for start_npc began (0: not yet)
+    std::uint32_t start_npc_done_ms = 0;      // run_ms the main tank talked to ScenarioDef::start_npc (0: not yet)
+    std::uint32_t goal_wait_log_ms = 0;       // run_ms of the last 'waiting for the summoned boss' line
     std::uint32_t landing_log_ms = 0;     // game time of the last landing position round
     std::uint32_t landing_rounds = 0;     // rounds logged (capped)
     std::uint32_t mana_wait_log_ms = 0;   // run_ms of the last 'waiting for the healers' mana' line
@@ -3475,6 +3480,125 @@ static void TickRun(Run& run, std::uint32_t diff_ms)
                                     dry.empty() ? "-" : dry);
                     }
                     attack_due = false;
+                }
+            }
+            // A fight the leader starts by talking to a creature (ScenarioDef::start_npc: Vaelastrasz's gossip, Lord Victor Nefarius's): the
+            // instance gets the earlier steps the runner skips, the main tank talks once the creature offers it, then the attack waits for the
+            // boss to turn hostile (Vaelastrasz), or for the boss the fight summons later (Nefarian) while the raid fights on its own.
+            if (attack_due && run.def->start_npc)
+            {
+                Player* tank = MainTank(run);
+                auto const hold = [&run](std::uint32_t ms)
+                {
+                    for (Member const& m : run.members)
+                        if (BotAI* ai = ::Playerbot::Services::Registry().ai(m.id))
+                            ai->enter_manual(BotAI::OwnerCommand::Hold, ObjectGuid::Empty, GameTime::GetGameTimeMS(), ms);
+                    run.monitor->NoteDeliberateWait(run.run_ms);
+                };
+                if (!run.start_npc_done_ms && tank)
+                {
+                    if (!run.start_npc_wait_ms)
+                    {
+                        run.start_npc_wait_ms = run.run_ms ? run.run_ms : 1u;
+                        InstanceScript* is = tank->GetInstanceScript();
+                        std::string set;
+                        if (is)
+                            for (auto const& [type, value] : run.def->start_instance_data)
+                            {
+                                is->SetData(type, value);
+                                set += fmt::format(" {}={}", type, value);
+                            }
+                        TC_LOG_INFO("playerbot.v2", "[scenario] {} instance data set before the start:{}", run.def->name,
+                                    !set.empty() ? set : is ? std::string(" none") : std::string(" none (no instance script)"));
+                    }
+                    Creature* npc = tank->FindNearestCreature(run.def->start_npc, 200.0f, true);
+                    bool const offers = npc && (!run.def->start_gossip_steps || npc->HasNpcFlag(UNIT_NPC_FLAG_GOSSIP));
+                    if (!offers && run.run_ms - run.start_npc_wait_ms < 60000u)
+                    {
+                        hold(5000u);
+                        attack_due = false;
+                    }
+                    else
+                    {
+                        run.start_npc_done_ms = run.run_ms ? run.run_ms : 1u;
+                        std::string how;
+                        if (!npc)
+                            how = "none alive within 200 y";
+                        else if (!npc->AI())
+                            how = "it has no script";
+                        else
+                        {
+                            if (!offers)
+                                how = "no gossip offered after 60 s, talked anyway; ";
+                            if (run.def->start_gossip_steps)
+                            {
+                                bool const hello = npc->AI()->OnGossipHello(tank);
+                                how += fmt::format("gossip {}", hello ? "opened" : "refused by the script");
+                                for (std::uint8_t step = 0; hello && step < run.def->start_gossip_steps; ++step)
+                                {
+                                    GossipMenu& menu = tank->PlayerTalkClass->GetGossipMenu();
+                                    if (menu.Empty())
+                                    {
+                                        how += fmt::format(", no option at step {}", step + 1);
+                                        break;
+                                    }
+                                    std::uint32_t const index = menu.GetMenuItems().front().OrderIndex;
+                                    std::uint32_t const menu_id = menu.GetMenuId();
+                                    npc->AI()->OnGossipSelect(tank, menu_id, index);
+                                    how += fmt::format(", option {} of menu {}", index, menu_id);
+                                }
+                            }
+                            if (run.def->start_npc_action)
+                            {
+                                npc->AI()->DoAction(run.def->start_npc_action);
+                                how += fmt::format("{}script action {}", how.empty() ? "" : ", ", run.def->start_npc_action);
+                            }
+                        }
+                        // A boss that comes later: the raid fights what the start brings (the drakonids) on its own from here, as a raid does
+                        // before its leader's Attack on the boss.
+                        if (run.def->goal_wait_ms)
+                            for (Member const& m : run.members)
+                                if (BotAI* ai = ::Playerbot::Services::Registry().ai(m.id))
+                                    if (ai->holding_position(GameTime::GetGameTimeMS()))
+                                        ai->exit_manual();
+                        TC_LOG_INFO("playerbot.v2", "[scenario] {} {} talks to creature {} to start the fight: {}", run.def->name, tank->GetName(),
+                                    run.def->start_npc, how);
+                    }
+                }
+                if (attack_due && run.start_npc_done_ms)
+                {
+                    Creature* boss = FindBoss(run);
+                    std::uint32_t const since = run.run_ms - run.start_npc_done_ms;
+                    if (run.def->goal_wait_ms)
+                    {
+                        if (!boss && since < run.def->goal_wait_ms)
+                        {
+                            run.monitor->NoteDeliberateWait(run.run_ms);
+                            if (!run.goal_wait_log_ms || run.run_ms - run.goal_wait_log_ms >= 30000u)
+                            {
+                                run.goal_wait_log_ms = run.run_ms ? run.run_ms : 1u;
+                                TC_LOG_INFO("playerbot.v2", "[scenario] {} the raid fights the start of the encounter; creature {} ({}) is not out yet, {} s after the start",
+                                            run.def->name, run.def->goal_entry, run.def->goal_name, since / 1000u);
+                            }
+                            attack_due = false;
+                        }
+                        else if (!boss)
+                            TC_LOG_WARN("playerbot.v2", "[scenario] {} creature {} is still not out {} s after the start", run.def->name,
+                                        run.def->goal_entry, since / 1000u);
+                    }
+                    else
+                    {
+                        bool const ready = boss && tank && boss->IsHostileTo(tank) && !boss->IsImmuneToPC() && !boss->IsUninteractible() &&
+                                           !boss->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE);
+                        if (!ready && since < 60000u)
+                        {
+                            hold(5000u);
+                            attack_due = false;
+                        }
+                        else if (!ready)
+                            TC_LOG_WARN("playerbot.v2", "[scenario] {} creature {} is still not hostile and attackable 60 s after the start", run.def->name,
+                                        run.def->goal_entry);
+                    }
                 }
             }
             // A fight the leader starts with a game object (Chromaggus' lever): the main tank uses it, then the attack waits until the boss

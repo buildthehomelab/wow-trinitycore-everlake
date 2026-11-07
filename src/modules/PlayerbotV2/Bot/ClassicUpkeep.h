@@ -110,6 +110,10 @@ uint32 PickCureItem(BotSnapshotView const& s);
 // (Bot/ResistGear.h). 0 = none: the bot wears its own gear.
 uint8 PickResistGearSchool(BotSnapshotView const& s);
 
+// Blackwing Lair's Onyxia Scale Cloak (Playerbot.Raid.OnyxiaCloak, Bot/ResistGear.h): true while a grouped level 60 bot is in the instance,
+// so it wears the cloak there; false elsewhere, so its own cloak goes back on.
+bool WantsFightCloak(BotSnapshotView const& s);
+
 // Dwarf priest: Fear Ward (6346) on the tank the raid plan gave it
 // (PveOrder::fear_ward_target) while that tank is in range. spell 0 = nothing.
 CastPick PickFearWard(BotSnapshotView const& s, GroupSnapshotView const& g);

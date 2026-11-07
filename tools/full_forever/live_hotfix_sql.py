@@ -98,7 +98,7 @@ def decode(sch, table, data, rec):
 
 def lit(v):
     if isinstance(v, str):
-        return "'" + v.replace('\\', '\\\\').replace("'", "''") + "'"
+        return "'" + v.replace('\\', '\\\\').replace("'", "''").replace('\r', '\\r').replace('\n', '\\n') + "'"
     if isinstance(v, float):
         return str(int(v)) if v == int(v) else repr(float('%.7g' % v))
     return str(v)
@@ -111,6 +111,8 @@ def main():
     ap.add_argument('--dbc', default='', help='.db2 folder of the build (optional: table hashes are also computed from the names)')
     ap.add_argument('--spells', default='')
     ap.add_argument('--items', default='')
+    ap.add_argument('--records', default='', help='file of "Table id" lines: take exactly these records (any table the server reads), '
+                    'e.g. the records a new build added or changed')
     ap.add_argument('--whole-tables', default='', help='take every live record of these tables (e.g. the Trait tables)')
     ap.add_argument('--skip', default='', help='records to leave out, as Table:id,Table:id (e.g. records our own hotfixes own)')
     ap.add_argument('--min-push', type=int, default=0, help='only records from this push on')
@@ -126,6 +128,12 @@ def main():
     items = {int(x) for x in a.items.split(',') if x}
     only = {x for x in a.tables.split(',') if x}
     whole = {x for x in a.whole_tables.split(',') if x}
+    records = set()
+    if a.records:
+        for line in open(a.records):
+            if line.split():
+                t, r = line.split()[:2]
+                records.add((t, int(r)))
     statuses = {int(x) for x in a.statuses.split(',') if x}
     skip = {(x.split(':')[0], int(x.split(':')[1])) for x in a.skip.split(',') if x}
     sch = wdc5.Schemas(a.repo)
@@ -139,14 +147,16 @@ def main():
             last[(t, rec)] = (push, status, data)
     rows, blobs, data_rows = {}, [], []
     for (t, rec), (push, status, data) in sorted(last.items()):
-        if only and t not in only and t not in whole:
+        if only and t not in only and t not in whole and (t, rec) not in records:
             continue
         if not a.min_push <= push <= a.max_push or (t, rec) in skip or status not in statuses:
             continue
-        if t in whole and t not in SPELL_TABLES and t != 'Spell':
+        if (t, rec) in records and t != 'Spell':
+            pass  # listed record: taken as it is
+        elif t in whole and t not in SPELL_TABLES and t != 'Spell':
             pass  # every record, removed ones too (they become hotfix_data rows with live's status)
         elif t == 'Spell':
-            if rec not in spells:
+            if rec not in spells and (t, rec) not in records:
                 continue
             if status == 1:
                 blobs.append((hashes[t], rec, data))
