@@ -39,7 +39,7 @@ $db = { param($name) "`"127.0.0.1;3306;trinity;$pw;$name`"" }
 # Realm.AlsoAcceptBuilds must never be blanked by a re-run: the dev realm is on 70707 and the 70790/70755 clients only see it through this list
 # (a blank value gave "No realms are currently available" after the 0.1.31 install). Keep the value already in bnetserver.conf / worldserver.conf
 # when it has builds in it, otherwise use the full list. Both servers need it (worldserver builds the realm entry for character create).
-$defaultAlso = '70790,70755,70685,70658,70634,70630,70532'
+$defaultAlso = '70840,70790,70755,70685,70658,70634,70630,70532'
 $alsoBuilds = $null
 foreach ($f in "$server\bnetserver.conf", "$server\worldserver.conf") {
     if ((-not $alsoBuilds) -and (Test-Path $f)) {

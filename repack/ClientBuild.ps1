@@ -64,8 +64,8 @@ function Get-KnownBuilds([string]$Root) {
 }
 # Second line of server\data\dbc\.client-build. Some table records come locked (encrypted) in the game files until Blizzard releases
 # their key; the extractor then writes them empty. When a release builds new keys into mapextractor.exe (70790: two keys for the Forever
-# launch content), this changes, and refresh-db2.ps1 extracts the tables once more on the same client build.
-$TableKeysRevision = 'keys 2026-11-05'
+# launch content; 70840: three more), this changes, and refresh-db2.ps1 extracts the tables once more on the same client build.
+$TableKeysRevision = 'keys 2026-11-07'
 # The version (major, minor, bugfix) of the realm's build, from the newest build_info row of the shipped auth updates for it.
 function Get-RealmVersion([string]$Root) {
     $realm = Get-RealmBuild $Root

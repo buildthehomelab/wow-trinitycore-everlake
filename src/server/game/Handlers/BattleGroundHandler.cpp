@@ -693,7 +693,7 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPackets::Battleground::Battl
         WorldPackets::Battleground::BattlefieldStatusFailed battlefieldStatus;
         BattlegroundMgr::BuildBattlegroundStatusFailed(&battlefieldStatus, bgQueueTypeId, _player, 0, ERR_ARENA_TEAM_PARTY_SIZE);
         SendPacket(battlefieldStatus.Write());
-        ChatHandler(this).PSendSysMessage("A {}v{} arena needs a party of exactly {} (you have {}).", uint32(arenatype), uint32(arenatype), uint32(arenatype), partySize);
+        ChatHandler(this).PSendSysMessage("A %uv%u arena needs a party of exactly %u (you have %u).", uint32(arenatype), uint32(arenatype), uint32(arenatype), partySize);
         return;
     }
 

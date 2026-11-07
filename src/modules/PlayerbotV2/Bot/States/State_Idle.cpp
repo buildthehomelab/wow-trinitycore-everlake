@@ -16610,6 +16610,17 @@ bool DriveRecommendedTaxi(BotSnapshotView const& s, BotAI& ai, BotIntentEmitter&
                     // up, and idle:elevator_step_off drops the bot on the upper
                     // floor next to the FM — then walk_to_taxi/fly_to_taxi resume.
                     float tgt_x = fm_x, tgt_y = fm_y, tgt_z = fm_z;
+                    // From afar, walk to the taxi node like idle:walk_to_flightmaster below does when the FM is not in the scan.
+                    // In a crowded capital the FM drops in and out of the nearest-units scan, and the two goals (FM / node, a few
+                    // yards apart) took turns every tick: each new goal restarted the path, so the bot stood still (Kalev, Stormwind
+                    // 2026-11-06, 80 s at one spot). One goal until it is close; the FM itself only for the last yards.
+                    constexpr float kFmNearYards = 15.0f;
+                    if (dist > kFmNearYards && (s.recommended_taxi_start_x() != 0.f || s.recommended_taxi_start_y() != 0.f))
+                    {
+                        tgt_x = s.recommended_taxi_start_x();
+                        tgt_y = s.recommended_taxi_start_y();
+                        tgt_z = s.recommended_taxi_start_z();
+                    }
                     constexpr float kFmAboveBot = 15.0f;
                     if (fm_z - bz >= kFmAboveBot)
                     {
