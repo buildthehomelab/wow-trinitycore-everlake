@@ -37,17 +37,20 @@ function Set-Options($dist, $out, $options, $extra) {
 $db = { param($name) "`"127.0.0.1;3306;trinity;$pw;$name`"" }
 
 # Realm.AlsoAcceptBuilds must never be blanked by a re-run: the dev realm is on 70707 and the 70790/70755 clients only see it through this list
-# (a blank value gave "No realms are currently available" after the 0.1.31 install). Keep the value already in bnetserver.conf / worldserver.conf
-# when it has builds in it, otherwise use the full list. Both servers need it (worldserver builds the realm entry for character create).
-$defaultAlso = '70840,70790,70755,70685,70658,70634,70630,70532'
-$alsoBuilds = $null
+# (a blank value gave "No realms are currently available" after the 0.1.31 install). Merge the value already in bnetserver.conf / worldserver.conf
+# with the full list below: every default build plus any extra build the user added, newest first, each once. Keeping only the saved value
+# left a new client out (70862 on 7 November 2026: the saved 70840 list stayed). Both servers need it (worldserver builds the realm entry for
+# character create).
+$defaultAlso = '70862,70840,70790,70755,70685,70658,70634,70630,70532'
+$savedAlso = $null
 foreach ($f in "$server\bnetserver.conf", "$server\worldserver.conf") {
-    if ((-not $alsoBuilds) -and (Test-Path $f)) {
+    if ((-not $savedAlso) -and (Test-Path $f)) {
         $m = Select-String -Path $f -Pattern '^\s*Realm\.AlsoAcceptBuilds\s*=\s*"([\d,\s]+)"' | Select-Object -First 1
-        if ($m) { $alsoBuilds = $m.Matches[0].Groups[1].Value.Trim() }
+        if ($m) { $savedAlso = $m.Matches[0].Groups[1].Value.Trim() }
     }
 }
-if (-not $alsoBuilds) { $alsoBuilds = $defaultAlso }
+$alsoBuilds = (@(("$defaultAlso,$savedAlso" -split '[,\s]+') | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ } |
+    Sort-Object -Descending -Unique) -join ',')
 
 # BindIP 127.0.0.1: local only, so Windows never shows a firewall prompt.
 Set-Options "$server\worldserver.conf.dist" "$server\worldserver.conf" ([ordered]@{
