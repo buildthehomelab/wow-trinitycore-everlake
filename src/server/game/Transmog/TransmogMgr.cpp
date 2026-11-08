@@ -18,6 +18,7 @@
 #include "TransmogMgr.h"
 #include "DB2Stores.h"
 #include "FlatSet.h"
+#include "Log.h"
 #include "MapUtils.h"
 #include "ObjectMgr.h"
 #include "Player.h"

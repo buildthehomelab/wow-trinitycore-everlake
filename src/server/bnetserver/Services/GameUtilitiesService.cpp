@@ -26,6 +26,7 @@
 #include "RealmList.pb.h"
 #include "Session.h"
 #include "Types.h"
+#include "Util.h"
 #include <zlib.h>
 
 namespace Battlenet::Services
