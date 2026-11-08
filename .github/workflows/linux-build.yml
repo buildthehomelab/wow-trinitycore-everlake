@@ -32,8 +32,9 @@ jobs:
             pch: 0
             launcher: ccache
           # Everlake: the same build with AddressSanitizer, and again with UndefinedBehaviorSanitizer, without jemalloc;
-          # the unit tests stop at the first error. Two builds, because the bundled protobuf crashes at start-up with
-          # both at once (FileOptions::Clear, as in MySQL bug 87201). Keep the compiler in step with the entry above.
+          # the unit tests stop at the first error. Two builds, so a finding says which sanitizer saw it. (The bundled
+          # protobuf trips UBSan's vptr check at start-up; dep/protobuf/CMakeLists.txt turns that one check off there.)
+          # Keep the compiler in step with the entry above.
           - cc: clang-17
             cxx: clang++-17
             pch: 0
