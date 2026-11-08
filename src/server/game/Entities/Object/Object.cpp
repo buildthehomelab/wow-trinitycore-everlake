@@ -262,13 +262,7 @@ void WorldObject::SetIsStoredInWorldObjectGridContainer(bool on)
 
 bool WorldObject::IsStoredInWorldObjectGridContainer() const
 {
-    if (m_isStoredInWorldObjectGridContainer)
-        return true;
-
-    if (ToCreature() && ToCreature()->m_isTempWorldObject)
-        return true;
-
-    return false;
+    return m_isStoredInWorldObjectGridContainer || m_isTempWorldObject;
 }
 
 void WorldObject::setActive(bool on)

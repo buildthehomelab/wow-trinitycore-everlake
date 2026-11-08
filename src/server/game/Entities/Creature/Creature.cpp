@@ -336,7 +336,6 @@ Creature::Creature(bool isWorldObject) : Unit(isWorldObject), MapObject(), m_Pla
     m_CombatDistance = 0;//MELEE_RANGE;
 
     ResetLootMode(); // restore default loot mode
-    m_isTempWorldObject = false;
 }
 
 Creature::~Creature() = default;
