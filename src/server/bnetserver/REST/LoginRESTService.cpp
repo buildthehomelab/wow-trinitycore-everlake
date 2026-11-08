@@ -490,7 +490,7 @@ namespace
         return out;
     }
 
-    void SendJson(LoginHttpSession& session, Trinity::Net::Http::RequestContext& context, std::string body, boost::beast::http::status status = boost::beast::http::status::ok)
+    void SendJson(LoginHttpSession& /*session*/, Trinity::Net::Http::RequestContext& context, std::string body, boost::beast::http::status status = boost::beast::http::status::ok)
     {
         context.response.result(status);
         context.response.set(boost::beast::http::field::content_type, "application/json;charset=utf-8");
