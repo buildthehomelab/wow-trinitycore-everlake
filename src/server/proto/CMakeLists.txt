@@ -30,6 +30,11 @@ target_link_libraries(proto
     common
     protobuf)
 
+# Add /FS flag for Windows to enable synchronous PDB writes (prevents C1041 errors with parallel compilation)
+if(MSVC)
+  target_compile_options(proto PRIVATE /FS)
+endif()
+
 # Everlake: the generated .pb.cc files find field offsets through a made-up object at address 16, which UBSan's vptr
 # check reads and crashes on at start-up (see dep/protobuf/CMakeLists.txt).
 # Set on the source files, not the target: target options come before the -fsanitize=undefined it inherits, which

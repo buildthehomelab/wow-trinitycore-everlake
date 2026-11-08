@@ -692,7 +692,10 @@ void Pet::Update(uint32 diff)
             // Classic 1.60: hunter pets slowly lose happiness, 1.5 times as fast in combat (VMaNGOS Pet::LooseHappiness)
             if (HasHappiness())
             {
-                if (m_happinessTimer > diff)
+                // A bot hunter has no client to feed its pet: the pet of a bot stays content.
+                if (Player const* owner = GetOwner(); owner && owner->GetSession() && owner->GetSession()->IsBot())
+                    SetPower(POWER_HAPPINESS, HAPPINESS_MAX);
+                else if (m_happinessTimer > diff)
                     m_happinessTimer -= diff;
                 else
                 {
@@ -853,7 +856,11 @@ bool Pet::CreateBaseAtCreature(Creature* creature)
     SetDisplayId(creature->GetDisplayId());
 
     if (CreatureFamilyEntry const* cFamily = sCreatureFamilyStore.LookupEntry(cinfo->family))
-        SetName(cFamily->Name[GetOwner()->GetSession()->GetSessionDbcLocale()]);
+    {
+        WorldSession const* osess = GetOwner() ? GetOwner()->GetSession() : nullptr;
+        LocaleConstant loc = osess ? osess->GetSessionDbcLocale() : DEFAULT_LOCALE;
+        SetName(cFamily->Name[loc]);
+    }
     else
         SetName(creature->GetNameForLocaleIdx(sObjectMgr->GetDBCLocaleIndex()));
 
@@ -1718,7 +1725,9 @@ void Pet::learnSpells(std::vector<uint32> const& spellIds)
     }
 
     if (!m_loading)
-        GetOwner()->GetSession()->SendPacket(packet.Write());
+        if (Player* o = GetOwner())
+            if (WorldSession* sess = o->GetSession())
+                sess->SendPacket(packet.Write());
 }
 
 void Pet::InitLevelupSpellsForLevel()
@@ -1791,7 +1800,9 @@ void Pet::unlearnSpells(std::vector<uint32> const& spellIds, bool learn_prev, bo
 
     if (!m_loading)
     {
-        GetOwner()->GetSession()->SendPacket(packet.Write());
+        if (Player* o = GetOwner())
+            if (WorldSession* sess = o->GetSession())
+                sess->SendPacket(packet.Write());
         UpdateTrainingPoints();
     }
 }
@@ -2166,7 +2177,9 @@ void Pet::SetSpecialization(uint16 spec)
 
     WorldPackets::Pet::SetPetSpecialization setPetSpecialization;
     setPetSpecialization.SpecID = m_petSpecialization;
-    GetOwner()->GetSession()->SendPacket(setPetSpecialization.Write());
+    if (Player* o = GetOwner())
+        if (WorldSession* sess = o->GetSession())
+            sess->SendPacket(setPetSpecialization.Write());
 }
 
 std::string Pet::GenerateActionBarData() const
