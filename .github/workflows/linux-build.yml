@@ -66,6 +66,7 @@ jobs:
         restore-keys: |
           ${{ steps.strings.outputs.ccache-key-prefix }}-${{ github.ref_name }}-
           ${{ steps.strings.outputs.ccache-key-prefix }}-
+    # Everlake: the realm runs the bots, so every entry builds the PlayerbotV2 module (-DBUILD_PLAYERBOT_V2=1)
     - name: Setup
       env:
         CMAKE_BUILD_TYPE: Debug
@@ -79,6 +80,7 @@ jobs:
         -DCMAKE_C_FLAGS_DEBUG="-DNDEBUG -g0" -DCMAKE_CXX_FLAGS_DEBUG="-DNDEBUG -g0"
         -DCMAKE_INSTALL_PREFIX=check_install -DBUILD_TESTING=1
         -DASAN=${{ matrix.sanitize == 'address' && 1 || 0 }} -DUBSAN=${{ matrix.sanitize == 'undefined' && 1 || 0 }}
+        -DBUILD_PLAYERBOT_V2=1
     - name: Build
       env:
         CCACHE_BASEDIR: ${{ github.workspace }}
