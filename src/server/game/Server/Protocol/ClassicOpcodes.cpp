@@ -76,7 +76,7 @@ constexpr uint32 WithOpcodeGroup(uint32 opcode, uint32 group) { return (group <<
 
 // Hypothesis under test: every opcode group is shifted by +1 in Classic (verified for the connection groups 0x44/0x4C)
 constexpr uint32 FirstRetailClientGroup = 0x2A;
-constexpr uint32 LastRetailClientGroup = RetailClientConnectionGroup;
+[[maybe_unused]] constexpr uint32 LastRetailClientGroup = RetailClientConnectionGroup; // not used yet
 constexpr uint32 FirstRetailServerGroup = 0x45;
 constexpr uint32 LastRetailServerGroup = 0x6A;
 constexpr uint32 ChatRetailServerGroup = 0x4A;
