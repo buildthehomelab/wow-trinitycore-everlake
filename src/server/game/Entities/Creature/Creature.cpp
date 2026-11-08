@@ -17,6 +17,7 @@
 
 #include "Creature.h"
 #include "BattlegroundMgr.h"
+#include "BotGroupRules.h"
 #include "CellImpl.h"
 #include "CharmInfo.h"
 #include "CombatPackets.h"
@@ -52,6 +53,7 @@
 #include "TemporarySummon.h"
 #include "Vehicle.h"
 #include "World.h"
+#include "WorldSession.h"
 #include "ZoneScript.h"
 #include <G3D/g3dmath.h>
 #include <sstream>
@@ -640,6 +642,17 @@ bool Creature::UpdateEntry(uint32 entry, CreatureData const* data /*= nullptr*/,
     SetBaseAttackTime(BASE_ATTACK,   cInfo->BaseAttackTime);
     SetBaseAttackTime(OFF_ATTACK,    cInfo->BaseAttackTime);
     SetBaseAttackTime(RANGED_ATTACK, cInfo->RangeAttackTime);
+    // Classic 1.60 (vanilla): the VMaNGOS swing times
+    if (ObjectMgr::CreatureClassicMelee const* classicMelee = IsPet() || IsGuardian() ? nullptr : sObjectMgr->GetCreatureClassicMelee(GetEntry()))
+    {
+        if (classicMelee->AttackMs)
+        {
+            SetBaseAttackTime(BASE_ATTACK, classicMelee->AttackMs);
+            SetBaseAttackTime(OFF_ATTACK, classicMelee->AttackMs);
+        }
+        if (classicMelee->RangedAttackMs)
+            SetBaseAttackTime(RANGED_ATTACK, classicMelee->RangedAttackMs);
+    }
 
     if (updateLevel)
         SelectLevel();
@@ -1393,10 +1406,17 @@ void Creature::SetTappedBy(Unit const* unit, bool withGroup)
 
     m_tapList.insert(player->GetGUID());
     if (withGroup)
+    {
         if (Group const* group = player->GetGroup())
+        {
+            // with bots in the group its players share every tap, whatever subgroup tagged first (BotGroupRules::SharesTap)
+            bool const groupHasBot = group->HasBotMember();
             for (GroupReference const& itr : group->GetMembers())
-                if (GetMap()->IsRaid() || group->SameSubGroup(player, itr.GetSource()))
+                if (BotGroupRules::SharesTap(GetMap()->IsRaid(), group->SameSubGroup(player, itr.GetSource()), groupHasBot,
+                    itr.GetSource()->GetSession()->IsBot()))
                     m_tapList.insert(itr.GetSource()->GetGUID());
+        }
+    }
 
     if (m_tapList.size() >= CREATURE_TAPPERS_SOFT_CAP)
         SetDynamicFlag(UNIT_DYNFLAG_TAPPED);
@@ -2290,6 +2310,10 @@ void Creature::setDeathState(DeathState s)
             else
                 m_respawnTime = GameTime::GetGameTime() + respawnDelay;
         }
+
+        // Instance.PersistRaidTrash: inside a locked raid, killed spawns stay dead until the lockout resets
+        if (m_spawnId && !IsSummon() && m_respawnDelay && GetMap()->IsRaid() && GetMap()->PersistsRespawnTimes())
+            m_respawnTime = std::numeric_limits<time_t>::max();
 
         SaveRespawnTime();
 
