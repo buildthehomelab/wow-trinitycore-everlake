@@ -79,7 +79,7 @@ namespace
         for (int i = 1; i < argc; ++i)
         {
             std::string_view a = argv[i];
-            auto val = [&](char const* f) -> std::string {
+            auto val = [&](char const* /*flag*/) -> std::string {
                 if (i + 1 >= argc) Usage(1);
                 return argv[++i];
             };
