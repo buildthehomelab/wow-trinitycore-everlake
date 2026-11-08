@@ -80,7 +80,7 @@ jobs:
         CCACHE_CPP2: 1
       run: |
         ccache -z
-        cmake --build ${{ steps.strings.outputs.build-output-dir }}
+        cmake --build ${{ steps.strings.outputs.build-output-dir }} -- -k 0
         ccache -s
         ccache --evict-older-than $(($EPOCHSECONDS - ${{ steps.strings.outputs.build-start }}))s
     - name: Unit tests
