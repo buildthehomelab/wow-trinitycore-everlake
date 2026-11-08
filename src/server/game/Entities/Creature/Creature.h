@@ -434,8 +434,6 @@ class TC_GAME_API Creature : public Unit, public GridObject<Creature>, public Ma
 
         float m_SightDistance, m_CombatDistance;
 
-        bool m_isTempWorldObject; //true when possessed
-
         // Handling caster facing during spellcast
         void SetTarget(ObjectGuid const& guid) override;
         void DoNotReacquireSpellFocusTarget();
