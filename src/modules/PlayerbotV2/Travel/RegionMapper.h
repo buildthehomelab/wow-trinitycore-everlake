@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include "Define.h"
+
 #include <cstdint>
 
 namespace Playerbot::V2::Travel {

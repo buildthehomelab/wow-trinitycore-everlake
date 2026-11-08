@@ -30,6 +30,8 @@
 
 #pragma once
 
+#include "Define.h"
+
 #include <cstdint>
 #include <shared_mutex>
 #include <string>
