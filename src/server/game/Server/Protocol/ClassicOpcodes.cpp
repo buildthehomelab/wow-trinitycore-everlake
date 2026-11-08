@@ -30,8 +30,8 @@ namespace
 //  - server group 0x4D (retail 0x4C, assumed by symmetry)
 constexpr uint32 ClassicClientConnectionGroup = 0x45;
 constexpr uint32 RetailClientConnectionGroup = 0x44;
-constexpr uint32 ClassicServerConnectionGroup = 0x4D;
-constexpr uint32 RetailServerConnectionGroup = 0x4C;
+[[maybe_unused]] constexpr uint32 ClassicServerConnectionGroup = 0x4D; // not mapped yet
+[[maybe_unused]] constexpr uint32 RetailServerConnectionGroup = 0x4C; // not mapped yet
 
 // explicit Classic 1.60.1.70009 client opcode -> retail core opcode overrides
 std::unordered_map<uint32, uint32> const ClientOpcodes =

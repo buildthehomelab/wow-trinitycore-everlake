@@ -48,7 +48,7 @@ namespace
             bool native = true, uint32 family = SPELLFAMILY_PALADIN)
         {
             Name.ID = id;
-            Misc.Attributes[15] = native ? SPELL_ATTR15_UNK13 : 0;
+            Misc.Attributes[15] = native ? int32(SPELL_ATTR15_UNK13) : 0;
             ClassOptions.SpellClassSet = family;
             Effect.Effect = effect;
             Effect.EffectAura = SPELL_AURA_MOD_RESISTANCE;

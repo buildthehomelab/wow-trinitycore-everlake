@@ -66,11 +66,6 @@ ClassicAQ20EncounterId const ClassicAQ20EncounterIds[] =
     { CLASSIC_AQ20_TYPE_OSSIRIAN,  723 }
 };
 
-bool ClassicAQ20IsBossType(uint32 type)
-{
-    return type < CLASSIC_AQ20_MAX_ENCOUNTER && type != CLASSIC_AQ20_TYPE_GENERAL_ANDOROV;
-}
-
 struct ClassicAQ20SpawnLocation
 {
     float x, y, z;
@@ -822,10 +817,10 @@ public:
                 helpersAlive++;
 
             // Rep gain was buffed in patch 1.10.
-            int32 const repForKill = 50;
-            int32 const repPerHelper = 45;
+            constexpr int32 repForKill = 50;
+            constexpr int32 repPerHelper = 45;
 
-            auto GiveRep = [factionEntry, helpersAlive, repForKill, repPerHelper](Player* pPlayer)
+            auto GiveRep = [factionEntry, helpersAlive](Player* pPlayer)
             {
                 if (pPlayer->GetReputationMgr().GetRank(factionEntry) <= REP_EXALTED)
                 {
