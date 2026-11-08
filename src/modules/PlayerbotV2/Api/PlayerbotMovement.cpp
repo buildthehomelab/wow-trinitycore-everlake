@@ -22,6 +22,7 @@
 #include "Config.h"
 #include "GameTime.h"
 #include "Fleet/CityLayer.h"
+#include "BotSwim.h"
 #include <unordered_map>
 
 #include "DetourCommon.h"
@@ -656,6 +657,10 @@ bool SettleToGround(Player* p, float minGap, float maxGap)
     float const gap = z - ground;
     if (gap < minGap || gap > maxGap)
         return false;
+    // On deep water a bot's z is the surface (WATER_WALK: IsInWater() is false there), and the floor is the lake bed: that is a swim,
+    // not a fall (a BG river: the bot sank to the bed and drowned).
+    if (float swimZ = 0.f; SwimLevel(p, x, y, z, swimZ))
+        return false;
     // A real player falls client-side; a bot has no client, so nothing ever moves it down. Launch the fall as a spline
     // (the same as MotionMaster::MoveFall does for creatures) so it drops to the floor and every viewer sees it land.
     Movement::MoveSplineInit init(p);
@@ -664,6 +669,91 @@ bool SettleToGround(Player* p, float minGap, float maxGap)
     init.Launch();
     p->SetFallInformation(0, ground);
     return true;
+}
+
+// ---- SwimLevel / UpdateSwimState -------------------------------------------
+
+bool SwimLevel(Player* p, float x, float y, float zHint, float& swimZ)
+{
+    if (!p || !p->IsInWorld())
+        return false;
+    Map* m = p->GetMap();
+    if (!m)
+        return false;
+    // The floor under the asked point, searched from a little above it: from the surface this finds the lake bed, from a bridge
+    // the bridge (no water under the bridge's own floor, so no swim).
+    float floor_z = INVALID_HEIGHT;
+    try
+    {
+        floor_z = m->GetHeight(p->GetPhaseShift(), x, y, zHint + 2.0f, /*vmap*/ true, 100.0f);
+    }
+    catch (...)
+    {
+        return false;   // BIH churn race (see SnapToGround)
+    }
+    if (floor_z <= INVALID_HEIGHT)
+        return false;
+    LiquidData ld{};
+    ZLiquidStatus const st = m->GetLiquidStatus(p->GetPhaseShift(), x, y, floor_z, map_liquidHeaderTypeFlags::AllLiquids, &ld,
+                                                p->GetCollisionHeight());
+    if (st == LIQUID_MAP_NO_WATER || st == LIQUID_MAP_ABOVE_WATER)
+        return false;
+    // Lava and slime are not swum: the flee and refuse rules deal with them.
+    if (ld.type_flags.HasFlag(map_liquidHeaderTypeFlags::Magma) || ld.type_flags.HasFlag(map_liquidHeaderTypeFlags::Slime))
+        return false;
+    if (!Swim::IsDeep(ld.level, floor_z, p->GetCollisionHeight()) || Swim::AskedFromAbove(zHint, ld.level))
+        return false;
+    swimZ = Swim::SwimZ(ld.level, p->GetCollisionHeight());
+    return true;
+}
+
+void UpdateSwimState(Player* p)
+{
+    if (!p || !p->IsInWorld() || p->IsBeingTeleported())
+        return;
+    bool const flagged = p->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+    // Cheap first: no liquid at all here (the status the core keeps from the last relocation) and not swimming.
+    if (!flagged && p->GetLiquidStatus() == LIQUID_MAP_NO_WATER)
+        return;
+
+    // Twice a second per bot is enough: the flag only changes the animation and the speed of the next spline. World thread only.
+    static std::unordered_map<uint64, uint32> s_swimCheckAt;
+    uint32 const now = GameTime::GetGameTimeMS();
+    uint32& at = s_swimCheckAt[p->GetGUID().GetCounter()];
+    if (at != 0 && now - at < 500u)
+        return;
+    at = now ? now : 1u;
+
+    float const x = p->GetPositionX(), y = p->GetPositionY(), z = p->GetPositionZ();
+    float swimZ = 0.f;
+    // A ghost walks the lake bed to its corpse (no breath, no drowning); flying, a taxi, a ship, a vehicle and water walking keep
+    // their own movement.
+    bool const deep = p->IsAlive() && !p->IsFlying() && !p->IsInFlight() && !p->GetTransport() && !p->GetVehicle() &&
+        !p->HasAuraType(SPELL_AURA_WATER_WALK) && !p->HasAuraType(SPELL_AURA_HOVER) && SwimLevel(p, x, y, z, swimZ);
+    if (p->SetSwim(deep))
+    {
+        static uint32 s_flagLogged = 0;
+        if (s_flagLogged++ < 500)
+            TC_LOG_INFO("playerbot.v2", "[swim] {} {} swimming at ({:.1f},{:.1f},{:.1f})", p->GetName(), deep ? "starts" : "stops", x, y, z);
+    }
+    if (!deep)
+        return;
+
+    // Standing still in deep water: float at the swim z. A bot that walked down to the lake bed (a goal's ground z) comes up before it
+    // drowns, and one left on top of the water by a path along the navmesh's water polygons sinks in to swim. Never while a move,
+    // a cast or a root is running: the next spline starts from where the bot is. A follower standing by its leader settles too (the
+    // follow generator waits while the leader stands, and paths again from the swim z when he moves).
+    MovementGeneratorType const gen = p->GetMotionMaster()->GetCurrentMovementGeneratorType();
+    if (p->isMoving() || p->IsFalling() || (gen != IDLE_MOTION_TYPE && gen != FOLLOW_MOTION_TYPE) ||
+        p->HasUnitState(UNIT_STATE_NOT_MOVE) || p->IsNonMeleeSpellCast(false) || !Swim::NeedsSettle(z, swimZ))
+        return;
+    Movement::MoveSplineInit init(p);
+    init.MoveTo(x, y, swimZ, /*generatePath*/ false);
+    init.Launch();
+    static uint32 s_settleLogged = 0;
+    if (s_settleLogged++ < 500)
+        TC_LOG_INFO("playerbot.v2", "[swim_settle] {} at ({:.1f},{:.1f}) z {:.1f} -> {:.1f} ({})", p->GetName(), x, y, z, swimZ,
+                    z < swimZ ? "up from the floor" : "down from the surface");
 }
 
 // ---- PostTeleportSnap -------------------------------------------------------

@@ -81,6 +81,7 @@ if (-not $core -or -not $sums) { throw 'The release has no update zip or no SHA2
 
 # --- single instance + log ----------------------------------------------------------------------------------------
 $tmp = Join $Root 'update-tmp'
+$dl = Join $Root 'update-download'   # keeps a broken-off download for the next run (Get-Download)
 $lock = Join $Root 'update.lock'
 if (Test-Path $lock) {
     $age = (Get-Date) - (Get-Item $lock).LastWriteTime
@@ -95,7 +96,14 @@ function Stop-Servers {
         $p = Get-Process $name -ErrorAction SilentlyContinue
         if (-not $p) { continue }
         Say "Stopping $name (saves characters; can take a minute)..."
-        $null = $p | ForEach-Object { $_.CloseMainWindow() }
+        # worldserver: the "server exit" console command, which saves every character. Closing its window let Windows end it
+        # before anything was saved (see Stop-WorldserverSaved in console-send.ps1).
+        $sent = $false
+        if ($name -eq 'worldserver') {
+            try { . (Join $PSScriptRoot 'console-send.ps1'); Send-WorldserverCommand 'server exit'; $sent = $true }
+            catch { Say "Could not reach the worldserver console ($($_.Exception.Message)); closing its window instead." }
+        }
+        if (-not $sent) { $null = $p | ForEach-Object { $_.CloseMainWindow() } }
         # never kill it: a hard kill can lose the last minutes of characters. Give it 10 minutes, then give up and change nothing.
         $deadline = (Get-Date).AddMinutes(10)
         while ((Get-Process $name -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep 2 }
@@ -134,6 +142,64 @@ function Copy-Tree($src, $dst, $skipFiles, $skipDirs) {
     return $n
 }
 
+# Downloads $url to $dest through $dest.part. GitHub's file servers drop long downloads when they are busy (players 11-08:
+# "(504) Gateway Timeout" from DownloadFile), so a drop is tried again a few times, and every try, also the next press of
+# Update, carries on from the bytes already in the .part instead of starting over. The server's ETag is kept next to it and
+# sent as If-Range, so a file that changed on the server is fetched from the start. The checksum check after it catches the rest.
+function Get-Download($url, $dest, [long]$size) {
+    $part = "$dest.part"; $tagFile = "$dest.etag"
+    $waits = 3, 8, 15, 30, 60
+    for ($try = 1; ; $try++) {
+        try {
+            $have = 0L
+            if (Test-Path $part) { $have = (Get-Item $part).Length }
+            $tag = ''
+            if ($have -gt 0 -and (Test-Path $tagFile)) { $tag = ([string](Get-Content $tagFile -Raw)).Trim() }
+            if ($have -gt 0 -and (-not $tag -or ($size -gt 0 -and $have -gt $size))) { Remove-Item $part -Force; $have = 0L }
+            if ($size -gt 0 -and $have -eq $size) { Move-Item $part $dest -Force; Remove-Item $tagFile -Force -ErrorAction SilentlyContinue; return }
+            $rq = [Net.HttpWebRequest]::Create($url)
+            $rq.UserAgent = 'wow-forever-updater'; $rq.Timeout = 30000; $rq.ReadWriteTimeout = 120000
+            if ($have -gt 0) { $rq.AddRange($have); $rq.Headers['If-Range'] = $tag; Say ("Carrying on from {0} MB..." -f [math]::Round($have / 1MB)) }
+            try { $rsp = $rq.GetResponse() }
+            catch {
+                $wex = $_.Exception; if ($wex.InnerException) { $wex = $wex.InnerException }   # PowerShell wraps the WebException
+                $er = if ($wex -is [Net.WebException]) { $wex.Response } else { $null }
+                if ($er -and [int]$er.StatusCode -eq 416) { $er.Close(); Remove-Item $part -Force -ErrorAction SilentlyContinue }
+                throw
+            }
+            try {
+                $resumed = $have -gt 0 -and $rsp.StatusCode -eq [Net.HttpStatusCode]::PartialContent
+                if (-not $resumed) { $have = 0L }
+                Set-Content $tagFile ([string]$rsp.Headers['ETag']) -Encoding ascii
+                $mode = if ($resumed) { [IO.FileMode]::Append } else { [IO.FileMode]::Create }
+                $in = $rsp.GetResponseStream()
+                $out = New-Object IO.FileStream($part, $mode, [IO.FileAccess]::Write)
+                try {
+                    $buf = New-Object byte[] 262144
+                    $got = $have; $next = $got + 100MB
+                    while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
+                        $out.Write($buf, 0, $n); $got += $n
+                        if ($got -ge $next) { $next = $got + 100MB; if ($size -gt 0) { Say ("  {0} of {1} MB" -f [math]::Round($got / 1MB), [math]::Round($size / 1MB)) } }
+                    }
+                }
+                finally { $out.Close(); $in.Close() }
+            }
+            finally { $rsp.Close() }
+            if ($size -gt 0 -and $got -ne $size) { throw ("the download stopped at {0} of {1} MB" -f [math]::Round($got / 1MB), [math]::Round($size / 1MB)) }
+            Move-Item $part $dest -Force
+            Remove-Item $tagFile -Force -ErrorAction SilentlyContinue
+            return
+        }
+        catch {
+            $why = $_.Exception.Message
+            if ($try -gt $waits.Count) { throw "Download failed after $try tries: $why Press Update again later; it carries on where it stopped." }
+            $w = $waits[$try - 1]
+            Say ("Download broke off ({0}). Trying again in {1} s (try {2} of {3})..." -f $why, $w, ($try + 1), ($waits.Count + 1))
+            Start-Sleep -Seconds $w
+        }
+    }
+}
+
 function Set-ConfLine($file, $key, $value) {
     if (-not (Test-Path $file)) { return }
     $lines = @(Get-Content $file)
@@ -154,11 +220,16 @@ try {
     if ($drive -and $drive.Free -and $drive.Free -lt ($core.size * 4)) { throw "Not enough free disk space: about $needGb GB needed on $($drive.Name):." }
     if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
     New-Item -ItemType Directory -Force $tmp | Out-Null
+    # the download itself lives in its own folder that survives a failed run, so the next run carries on; a part left by an
+    # older release (another file name) is cleared out first
+    New-Item -ItemType Directory -Force $dl | Out-Null
+    Get-ChildItem $dl -File | Where-Object { -not $_.Name.StartsWith($core.name) } | Remove-Item -Force -ErrorAction SilentlyContinue
+    $zip = Join $dl $core.name
+    if (Test-Path $zip) { Remove-Item $zip -Force }
     Say ("Downloading {0} ({1} MB)..." -f $core.name, [math]::Round($core.size / 1MB))
-    $wc = New-Object System.Net.WebClient
-    $wc.Headers.Add('User-Agent', 'wow-forever-updater')
-    $wc.DownloadFile($core.browser_download_url, (Join $tmp 'core.zip'))
-    $wc.DownloadFile($sums.browser_download_url, (Join $tmp 'SHA256SUMS.txt'))
+    Get-Download $core.browser_download_url $zip $core.size
+    Move-Item $zip (Join $tmp 'core.zip')
+    Get-Download $sums.browser_download_url (Join $tmp 'SHA256SUMS.txt') 0
     $want = $null
     foreach ($l in Get-Content (Join $tmp 'SHA256SUMS.txt')) { $t = $l.Trim() -split '\s+', 2; if ($t.Count -eq 2 -and $t[1].TrimStart('*') -eq $core.name) { $want = $t[0] } }
     if (-not $want) { throw "SHA256SUMS.txt has no entry for $($core.name)" }
@@ -275,6 +346,7 @@ try {
     }
     ($rel.body | Out-String) | Set-Content (Join $Root 'last-update-notes.txt') -Encoding utf8
     $ok = $true
+    if (Test-Path $dl) { Remove-Item $dl -Recurse -Force -ErrorAction SilentlyContinue }
 }
 catch {
     Write-Host "`nUpdate stopped: $($_.Exception.Message)" -ForegroundColor Red

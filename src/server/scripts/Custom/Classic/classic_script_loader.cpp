@@ -173,6 +173,7 @@ void AddSC_classic_instance_ragefire_chasm();
 void AddSC_classic_instance_ruins_of_lordaeron();
 void AddSC_classic_instance_hall_of_thanes();
 void AddSC_classic_instance_excavation_site_wetlands();
+void AddSC_classic_instance_city_of_dalaran();
 void AddSC_classic_instance_the_stockade();
 void AddSC_classic_moonglade();
 void AddSC_classic_feralas();
@@ -379,6 +380,7 @@ void AddClassicScripts()
     AddSC_classic_instance_ruins_of_lordaeron();
     AddSC_classic_instance_hall_of_thanes();
     AddSC_classic_instance_excavation_site_wetlands();
+    AddSC_classic_instance_city_of_dalaran();
     AddSC_classic_instance_the_stockade();
     AddSC_classic_moonglade();
     AddSC_classic_feralas();

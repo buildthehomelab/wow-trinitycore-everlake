@@ -1037,3 +1037,71 @@ TEST_CASE("ScenarioMonitor: a non-healer idle more than 5 s in the group's fight
         }
     CHECK(n == 1);
 }
+
+TEST_CASE("ScenarioMonitor: water checks find a bot under the water, one that bobs, and one that does not swim", "[scenariomonitor]")
+{
+    ScenarioLimits l = Limits();
+    l.water_under_ms = 15000;
+    l.water_flips = 6;
+    l.water_noswim_ms = 5000;
+
+    SECTION("swimming bots pass")
+    {
+        ScenarioMonitor m(l);
+        for (std::uint32_t t = 0; t <= 120000; t += 1000)
+        {
+            auto squad = Squad(-100.f + float(t) * 0.001f, -500.f);
+            for (auto& s : squad) { s.deep_water = true; s.swim_flag = true; }
+            m.Feed(t, squad, true);
+        }
+        REQUIRE_FALSE(Has(m, ScenarioFailKind::Water));
+    }
+    SECTION("head under water for 15 s")
+    {
+        ScenarioMonitor m(l);
+        for (std::uint32_t t = 0; t <= 20000; t += 1000)
+        {
+            auto squad = Squad(-100.f + float(t) * 0.001f, -500.f);
+            for (auto& s : squad) { s.deep_water = true; s.swim_flag = true; }
+            squad[2].head_under = true;
+            m.Feed(t, squad, true);
+        }
+        REQUIRE(Has(m, ScenarioFailKind::Water, "Mage"));
+        REQUIRE_FALSE(Has(m, ScenarioFailKind::Water, "Tank"));
+    }
+    SECTION("under and back up again and again")
+    {
+        ScenarioMonitor m(l);
+        for (std::uint32_t t = 0; t <= 30000; t += 1000)
+        {
+            auto squad = Squad(-100.f + float(t) * 0.001f, -500.f);
+            for (auto& s : squad) { s.deep_water = true; s.swim_flag = true; }
+            squad[3].head_under = (t / 3000) % 2 == 1;   // 3 s down, 3 s up
+            m.Feed(t, squad, true);
+        }
+        REQUIRE(Has(m, ScenarioFailKind::Water, "Rogue"));
+    }
+    SECTION("in deep water without swimming")
+    {
+        ScenarioMonitor m(l);
+        for (std::uint32_t t = 0; t <= 8000; t += 1000)
+        {
+            auto squad = Squad(-100.f + float(t) * 0.001f, -500.f);
+            for (auto& s : squad) { s.deep_water = true; s.swim_flag = true; }
+            squad[4].swim_flag = false;
+            m.Feed(t, squad, true);
+        }
+        REQUIRE(Has(m, ScenarioFailKind::Water, "Hunter"));
+    }
+    SECTION("off unless the scenario asks")
+    {
+        ScenarioMonitor m(Limits());
+        for (std::uint32_t t = 0; t <= 30000; t += 1000)
+        {
+            auto squad = Squad(-100.f + float(t) * 0.001f, -500.f);
+            for (auto& s : squad) { s.deep_water = true; s.head_under = true; }
+            m.Feed(t, squad, true);
+        }
+        REQUIRE_FALSE(Has(m, ScenarioFailKind::Water));
+    }
+}

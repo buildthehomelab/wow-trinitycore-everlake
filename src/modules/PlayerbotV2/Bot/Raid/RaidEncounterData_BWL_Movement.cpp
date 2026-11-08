@@ -50,6 +50,16 @@ namespace Playerbot::Raid {
         // Corrupted Infernal (14668, warlock call): Immolation 20153 burns everything close; casters and healers stay off it (ike3).
         r.avoidEnemy.push_back({ 14668, 10.0f, Who::Ranged });
         r.avoidEnemy.push_back({ 14668, 10.0f, Who::Healer });
-        // Victor Nefarius' Drakonid packs are handled by the data file (priorities, dispels).
+        // Victor Nefarius' drakonids: every Brood Power hits all enemies within 15 yards of the drakonid (70532 client data, SpellAudit.tsv:
+        // radius 15 on every effect): Black 22560 1,250 fire, Red 22558 a 300 a tick fire DoT stacking to 5, Blue 22559 a mana burn, Bronze
+        // 22642 900 arcane and a slow, Green 22561 a stun. bwl_nefarian 2026-11-08: healers and casters stood within it beside the tanks'
+        // pile, 37 of 43 deaths were Brood Power (27 of them casters, hunters and healers), a healer burned to 3% mana. Casters and
+        // healers keep 18 yards from every drakonid; the melee stand in it as a raid's melee do.
+        for (uint32_t drakonid : { 14261u, 14262u, 14263u, 14264u, 14265u, 14302u })
+        {
+            r.avoidEnemy.push_back({ drakonid, 18.0f, Who::Ranged });
+            r.avoidEnemy.push_back({ drakonid, 18.0f, Who::Healer });
+        }
+        // Their priorities and dispels are in the data file.
     }
 } // namespace Playerbot::Raid

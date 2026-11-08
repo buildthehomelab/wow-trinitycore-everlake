@@ -19,6 +19,9 @@
 //   boss_reset    the goal boss was engaged and then evaded / reset
 //   dps_hold      a DPS bot sat in a threat hold for dps_hold_ms while the raid was fighting
 //   group_idle    a non-healer did nothing for more than group_idle_ms while its group fought (Bot/GroupFight.h; the bot measures it)
+//   water         in deep water: the head under water for water_under_ms, under and back up water_flips times in a minute, or
+//                 no swimming flag for water_noswim_ms (standing on top of the water or on the lake bed). Off unless the scenario
+//                 sets the limits (lake_swim).
 
 #pragma once
 
@@ -50,9 +53,12 @@ struct ScenarioSample
     std::uint32_t group_size = 0;          // members of the group this bot is in; 0 = in none
     std::string rule;                      // the rule the bot logic fired last (BotAI::last_rule_fired); empty = none
     std::uint32_t group_idle_ms = 0;       // how long it has been idle in its group's fight (BotAI::group_idle_ms); 0 = acting / no fight
+    bool deep_water = false;               // over water deeper than its height (BotMovement::SwimLevel)
+    bool head_under = false;               // its head is under the water (LIQUID_MAP_UNDER_WATER)
+    bool swim_flag = false;                // it has the swimming movement flag
 };
 
-enum class ScenarioFailKind : std::uint8_t { Idle, Stray, OutOfBounds, WrongMap, HealerOom, Death, GroupStalled, Wipe, Timeout, SetupFailed, GroupBroken, BossReset, DpsHold, HealerNoRest, SupportMissing, GroupIdle, FollowLost };
+enum class ScenarioFailKind : std::uint8_t { Idle, Stray, OutOfBounds, WrongMap, HealerOom, Death, GroupStalled, Wipe, Timeout, SetupFailed, GroupBroken, BossReset, DpsHold, HealerNoRest, SupportMissing, GroupIdle, FollowLost, Water };
 
 inline char const* ToString(ScenarioFailKind k)
 {
@@ -75,6 +81,7 @@ inline char const* ToString(ScenarioFailKind k)
         case ScenarioFailKind::SupportMissing: return "support_missing";
         case ScenarioFailKind::GroupIdle:    return "group_idle";
         case ScenarioFailKind::FollowLost:   return "follow_lost";
+        case ScenarioFailKind::Water:        return "water";
     }
     return "?";
 }
@@ -152,6 +159,12 @@ struct ScenarioLimits
     // Tranquilizing Shots on an enrage, curse removals by mages / druids.
     std::uint32_t min_tranq_shots = 0;
     std::uint32_t min_decurses = 0;
+    // Water (lake_swim): the head under water this long in one go; this many changes between under and not under in
+    // water_flip_window_ms; in deep water without the swimming flag this long. 0 = that check is off.
+    std::uint32_t water_under_ms = 0;
+    std::uint32_t water_flips = 0;
+    std::uint32_t water_flip_window_ms = 60000;
+    std::uint32_t water_noswim_ms = 0;
 };
 
 class ScenarioMonitor
@@ -287,6 +300,8 @@ public:
                 b.group_reported = true;
                 Fail(ScenarioFailKind::GroupBroken, s.name, "sees a group of " + std::to_string(s.group_size) + ", expected " + std::to_string(limits_.expected_group), now_ms);
             }
+
+            CheckWater(s, b, now_ms);
 
             // idle
             bool const recovering = !s.in_combat && (s.hp_pct < limits_.recover_hp_pct || (s.mana_pct >= 0.f && s.mana_pct < limits_.recover_mana_pct));
@@ -601,6 +616,12 @@ private:
         bool hold_active = false;
         bool hold_reported = false;
         bool group_idle_reported = false;
+        bool was_under = false;
+        std::uint32_t under_since_ms = 0;
+        std::vector<std::uint32_t> water_flips;   // run_ms of each change between under and not under, within the window
+        std::uint32_t noswim_since_ms = 0;
+        bool noswim_active = false;
+        bool water_reported = false;              // once per bot per run
         std::string name;
         std::vector<std::pair<std::uint32_t, std::string>> trace;   // (ms, rule) at each change
 
@@ -618,6 +639,47 @@ private:
     static constexpr std::uint32_t kBossResetMs = 5000;
     static constexpr std::uint32_t kEffectiveWipeMs = 15000;
     static constexpr std::uint32_t kFewAliveMs = 30000;
+
+    void CheckWater(ScenarioSample const& s, BotState& b, std::uint32_t now_ms)
+    {
+        if (!limits_.water_under_ms && !limits_.water_flips && !limits_.water_noswim_ms)
+            return;
+        bool const under = s.head_under;
+        if (under != b.was_under)
+        {
+            b.water_flips.push_back(now_ms);
+            b.was_under = under;
+            if (under)
+                b.under_since_ms = now_ms;
+        }
+        while (!b.water_flips.empty() && now_ms - b.water_flips.front() > limits_.water_flip_window_ms)
+            b.water_flips.erase(b.water_flips.begin());
+        if (s.deep_water && !s.swim_flag)
+        {
+            if (!b.noswim_active) { b.noswim_active = true; b.noswim_since_ms = now_ms; }
+        }
+        else
+            b.noswim_active = false;
+        if (b.water_reported)
+            return;
+        if (limits_.water_under_ms && under && now_ms - b.under_since_ms >= limits_.water_under_ms)
+        {
+            b.water_reported = true;
+            Fail(ScenarioFailKind::Water, s.name, "head under water for " + std::to_string((now_ms - b.under_since_ms) / 1000u) + " s at " + Pos(s), now_ms);
+        }
+        else if (limits_.water_flips && b.water_flips.size() >= limits_.water_flips)
+        {
+            b.water_reported = true;
+            Fail(ScenarioFailKind::Water, s.name, "went under the water and back up " + std::to_string(b.water_flips.size()) + " times in " +
+                 std::to_string(limits_.water_flip_window_ms / 1000u) + " s, at " + Pos(s), now_ms);
+        }
+        else if (limits_.water_noswim_ms && b.noswim_active && now_ms - b.noswim_since_ms >= limits_.water_noswim_ms)
+        {
+            b.water_reported = true;
+            Fail(ScenarioFailKind::Water, s.name, "in deep water without swimming for " + std::to_string((now_ms - b.noswim_since_ms) / 1000u) +
+                 " s at " + Pos(s) + " (on top of the water or on the lake bed)", now_ms);
+        }
+    }
 
     static bool IsThreatHold(std::string const& rule)
     {

@@ -61,7 +61,21 @@ if (-not (Test-Path chain.pem)) {
 }
 Import-Certificate -FilePath "$certs\ca.pem" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
 $hosts = "$env:SystemRoot\System32\drivers\etc\hosts"
+# An antivirus that guards the hosts file (Kaspersky, some others) refuses the write. That used to stop the whole install at
+# this step (krabov0690, 2026-11-07): now it is tried a few times, and if it still fails the install goes on and says how to add
+# the line by hand. Without the line the login server cannot start.
 if (-not (Select-String $hosts -Pattern 'trinity.actual.battle.net' -Quiet)) {
-    Add-Content $hosts "`n127.0.0.1 trinity.actual.battle.net # wow-forever-local"
+    $hostsLine = "127.0.0.1 trinity.actual.battle.net # wow-forever-local"
+    $written = $false; $why = ''
+    for ($try = 1; $try -le 3 -and -not $written; $try++) {
+        try { Add-Content -LiteralPath $hosts "`n$hostsLine" -ErrorAction Stop; $written = $true }
+        catch { $why = $_.Exception.Message; Start-Sleep -Seconds 2 }
+    }
+    if (-not $written) {
+        Write-Warning "Windows did not let us write the hosts file ($why). Usually an antivirus protects it."
+        Write-Host "Fix: allow the WoW Forever Bots folder in your antivirus (or turn its hosts file protection off for a minute) and run" -ForegroundColor Yellow
+        Write-Host "Install.cmd again, or add this line yourself at the end of $hosts (Notepad, run as administrator):" -ForegroundColor Yellow
+        Write-Host "    127.0.0.1 trinity.actual.battle.net" -ForegroundColor Yellow
+    }
 }
 "Done. bnetserver.conf must point CertificatesFile at $certs\chain.pem and PrivateKeyFile at $certs\server.key (the package's bnetserver.conf.dist uses these relative paths)."

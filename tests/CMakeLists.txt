@@ -36,6 +36,7 @@ if(NOT BUILD_PLAYERBOT_V2)
     ClassicMeleeReach.cpp
     ClassicFalseCombatEscape.cpp
     ClassicFollowDrop.cpp
+    ClassicBotSwim.cpp
     ClassicGroupControl.cpp
     ClassicGroupFight.cpp
     ClassicGroupOrderText.cpp

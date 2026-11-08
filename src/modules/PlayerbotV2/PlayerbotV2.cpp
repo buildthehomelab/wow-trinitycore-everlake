@@ -2159,6 +2159,10 @@ void Module::OnWorldUpdate(std::chrono::milliseconds diff)
                 // a no-op for bots not in an orphaned BG map.
                 RescueOrphanedBgBot(p);
                 SnapToGroundIfDrifted(p);
+                // Deep water: the swimming flag and the swim depth a player's client would give it (Api/BotSwim.h). Headless bots
+                // only: a client moves its own player.
+                if (Services::SessionMgr().IsHeadless(p->GetGUID()))
+                    ::Playerbot::BotMovement::UpdateSwimState(p);
                 // Resolve the bot's bot logic ONCE here on the world thread (registry
                 // quiescent under for_each's shared_lock) and thread it through
                 // the BuiltSlot. Build workers MUST NOT call Registry().ai()

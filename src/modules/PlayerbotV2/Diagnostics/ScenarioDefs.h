@@ -46,6 +46,10 @@ struct ScenarioRoutePoint
 {
     char const* label;
     float x, y, z;
+    // water: the point is the nearest deep water (deeper than a bot is tall) within 150 y of (x, y) that he can walk to, found when the
+    // leg begins; he goes there at the swim z (lake_swim). hold_s: once the squad is with him he stays this long before going on.
+    bool water = false;
+    std::uint32_t hold_s = 0;
 };
 
 struct ScenarioCheckpoint
@@ -192,6 +196,10 @@ inline constexpr DungeonRow kDungeons[] = {
     { "smgraveyard_vishas",   "Scarlet Monastery Graveyard: level 30 party to Vishas",     189,  1687.27f,   1050.09f,    18.6773f,  90.f, 30,  3983, "Interrogator Vishas",15 },
     { "rfk_aggem",            "Razorfen Kraul: level 31 party to Aggem Thorncurse",        47,   1942.27f,   1544.23f,    83.3055f,  75.f, 31,  4424, "Aggem Thorncurse",   20 },
     { "gnomeregan_electrocutioner", "Gnomeregan: level 32 party to Electrocutioner 6000", 90, -329.098f, -3.20722f, -152.851f, 170.f, 32, 6235, "Electrocutioner 6000", 30 },
+    // City of Dalaran (Forever, map 2959): the Sewer Grate lands the party at the sewer start next to Rexxie Copperclutch
+    // (classic_instance_city_of_dalaran.cpp CodSewerLanding); the two sewer bosses first, the city opens after both.
+    { "cod_atrexis",          "City of Dalaran: level 33 party to Atrexis the Grave Knight", 2959, 309.8f, 384.0f, 67.5f, 223.f, 33, 247126, "Atrexis the Grave Knight", 25 },
+    { "cod_lyn",              "City of Dalaran: level 33 party to Lyn the Ignored", 2959, 309.8f, 384.0f, 67.5f, 223.f, 33, 247032, "Lyn the Ignored", 25 },
     { "smlibrary_loksey",     "Scarlet Monastery Library: level 33 party to Houndmaster Loksey", 189, 253.672f, -206.624f, 18.6773f, 270.f, 33, 3974, "Houndmaster Loksey", 20 },
     // The same run at level 36, the Library's own level: a failure at 33 that passes here is the low end of the level range, not a bot bug.
     { "smlibrary_loksey36",   "Scarlet Monastery Library: level 36 party to Houndmaster Loksey", 189, 253.672f, -206.624f, 18.6773f, 270.f, 36, 3974, "Houndmaster Loksey", 20 },
@@ -857,6 +865,44 @@ inline ScenarioDef MakeBrmFollowScenario()
     return d;
 }
 
+// ---- lake_swim: field bots in a lake (Discord 2026-11-08: bots on top of the water, then under it, forever; some drown) ----
+// The rogue leads like a player from Goldshire to the deep water of Crystal Lake, stays there two minutes (longer than a bot's breath),
+// swims to a second deep spot and walks back. The squad follows him into the water and waits around him. Every bot must swim: the
+// water check fails a bot whose head stays under for 15 s, that goes under and back up 6 times in a minute, or that is in deep water
+// without the swimming flag for 5 s (standing on top of the water or on the lake bed). A drowning is a death, which fails the run.
+// The [swim] and [swim_settle] lines in Server.log show each bot start, stop and settle. The deep spots are searched for when the leg
+// begins, around the given points (Crystal Lake, east of Goldshire), so no exact water coordinate is needed.
+inline ScenarioDef MakeLakeSwimScenario()
+{
+    ScenarioDef d{};
+    d.name = "lake_swim";
+    d.summary = "Crystal Lake: level 60 party led into deep water, two minutes in it, then out: every bot swims, none sinks, bobs or drowns";
+    d.level = 60;
+    d.squad = StandardParty();
+    d.map = 0;
+    d.x = -9464.f; d.y = 62.f; d.z = 56.f;   // Goldshire
+    d.o = 0.f;
+    d.goal = ScenarioGoalKind::FollowRoute;
+    d.goal_name = "";
+    d.timeout_ms = 15u * 60u * 1000u;
+    d.limits.expected_map = 0;
+    d.limits.bounds = { true, d.x - 600.f, d.x + 600.f, d.y - 800.f, d.y + 400.f, -50.f, 200.f };
+    // The squad stands in the water around him on purpose: the stand-still rules are widened past the hold.
+    d.limits.stray_yards = 200.f;
+    d.limits.idle_ms = 180000;
+    d.limits.stall_ms = 240000;
+    d.limits.water_under_ms = 15000;
+    d.limits.water_flips = 6;
+    d.limits.water_noswim_ms = 5000;
+    d.stand_in = "Scnrogue";
+    d.player_lead = true;
+    // Crystal Lake on the Elwynn map is about (51, 66): (-9467, -235) in world yards.
+    d.route = { { "the deep water of Crystal Lake", -9467.f, -235.f, 50.f, true, 120 },
+                { "a second deep spot in the lake", -9440.f, -270.f, 50.f, true, 30 },
+                { "Goldshire", -9464.f, 62.f, 56.f } };
+    return d;
+}
+
 inline std::vector<ScenarioDef> const& ScenarioCatalogue()
 {
     static std::vector<ScenarioDef> const defs = []
@@ -950,6 +996,7 @@ inline std::vector<ScenarioDef> const& ScenarioCatalogue()
         v.push_back(MakeBwlVaelScenario());
         v.push_back(MakeBwlNefarianScenario());
         v.push_back(MakeBrmFollowScenario());
+        v.push_back(MakeLakeSwimScenario());
         for (ScenarioDef& d : MakeOtherRaidScenarios())
             v.push_back(std::move(d));
         // The names are built once and kept: ScenarioDef carries char const*.

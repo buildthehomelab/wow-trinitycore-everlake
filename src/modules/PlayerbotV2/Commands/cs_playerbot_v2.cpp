@@ -1036,11 +1036,20 @@ public:
                 continue;   // (a Group Finder loan bot only plays inside the group it was made for)
             if (Player const* online = ObjectAccessor::FindConnectedPlayer(guid); online && online->GetGroup())
                 continue;   // out with someone else of the account
+            // A companion bound to another character of the account stays with that character: called for this one it joined, the
+            // group check (CompanionGroupHygiene) found its owner character missing and sent it away a second later, and it came at
+            // that character's level (the owner 2026-11-07: his main's level 60 companions for his level 33 alt).
+            if (uint64 const ownerChar = Playerbot::Services::Owners().GetOwner(id).player_guid; ownerChar != 0 && ownerChar != me->GetGUID().GetCounter())
+                continue;
             Playerbot::Role const declared = Playerbot::Services::Owners().DeclaredRole(id);
             if (role != Playerbot::Role::Unknown && declared != role)
                 continue;
             CharacterCacheEntry const* entry = sCharacterCache->GetCharacterCacheByGuid(guid);
             if (!entry)
+                continue;
+            // A companion above the caller's level would come at its own level (bots are levelled up to the owner, never down): a
+            // fitting one is hired instead (the owner 2026-11-07: an account-wide level 60 companion joined his level 33 character).
+            if (entry->Level > me->GetLevel())
                 continue;
             if (entry->Class == cls)
                 return id;

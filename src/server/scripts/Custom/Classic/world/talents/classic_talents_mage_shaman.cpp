@@ -1232,24 +1232,29 @@ class classic_spell_sha_rockbiter_threat : public SpellScript
     }
 };
 
-// 408490, 1238299, 1238300, 1326047 - Lava Burst: always a critical strike if the target carries the shaman's Flame Shock (as in 0.1.29).
-// The 70532 tooltip says "+$s2% damage with Flame Shock" instead; that change is held back until the owner decides (it would lower the
-// spell's damage). Flame Shock is told by the shaman family flag its periodic damage carries (8050, 8052, 8053, 10447, 10448, 29228).
+// 408490, 1238299, 1238300, 1326047 - Lava Burst (70532, the same in 70790): "You hurl molten lava at the target, dealing $s1 Fire damage.
+// If your Flame Shock is on the target, Lava Burst deals $s2% increased damage." Effect 1 is the bonus as a dummy (20 on all four ranks).
+// Flame Shock is told by the shaman family flag its periodic damage carries (8050, 8052, 8053, 10447, 10448, 29228).
 class classic_spell_sha_lava_burst : public SpellScript
 {
-    void CalcCritChance(Unit const* victim, float& chance) const
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
+    }
+
+    void HandleCalcDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod)
     {
         Unit* caster = GetCaster();
         if (!caster || !victim)
             return;
 
         if (victim->GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_SHAMAN, flag128(0x10000000, 0, 0, 0), caster->GetGUID()))
-            chance = 100.0f;
+            AddPct(pctMod, GetEffectInfo(EFFECT_1).CalcValue(caster));
     }
 
     void Register() override
     {
-        OnCalcCritChance += SpellOnCalcCritChanceFn(classic_spell_sha_lava_burst::CalcCritChance);
+        CalcDamage += SpellCalcDamageFn(classic_spell_sha_lava_burst::HandleCalcDamage);
     }
 };
 

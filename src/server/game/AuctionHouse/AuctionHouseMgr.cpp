@@ -1457,16 +1457,18 @@ void AuctionHouseObject::BuildReplicate(WorldPackets::AuctionHouse::AuctionRepli
     if (throttleItr != _replicateThrottleMap.end())
     {
         bool const sameScan = throttleItr->second.Global == global && throttleItr->second.Cursor == cursor && throttleItr->second.Tombstone == tombstone;
-        // Classic 1.60: a full scan from the start (all change numbers 0, as add-ons like Auctionator ask) after an earlier scan
-        // got an empty answer until the cooldown ran out, so the add-on saw 0 items. A new scan may start again once the last
-        // one has finished and the cooldown is over; an unfinished scan is simply restarted from the beginning.
+        // Classic 1.60: a full scan from the start (all change numbers 0, as add-ons like Auctionator ask) may start again once
+        // the cooldown of the last one is over. A scan that asks for everything at once (count 0) may never send the follow-up
+        // request that marks it finished, so "restart an unfinished scan at once" let every new request rebuild the whole
+        // auction list, item data included, with no cooldown at all; with the auction house bot's thousands of listings that
+        // can slow the auction house down for everyone. The cooldown now holds for every new scan.
         bool const freshScan = !global && !cursor && !tombstone;
         if (!sameScan && !freshScan)
             return;
 
         if (freshScan && !sameScan)
         {
-            if (!throttleItr->second.IsReplicationInProgress() && throttleItr->second.NextAllowedReplication > curTime)
+            if (throttleItr->second.NextAllowedReplication > curTime)
                 return;
 
             throttleItr->second = PlayerReplicateThrottleData{};

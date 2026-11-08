@@ -49,15 +49,29 @@ function Test-Ipv4([string]$A) {
 # VPN's address and logins broke as soon as the VPN was turned off. Real network cards (Ethernet, Wi-Fi) win; a virtual one is
 # used only when it is the only card with a router (Radmin VPN / ZeroTier setups type their own address anyway).
 function Get-HostLan {
+    # Among the cards that qualify, the one Windows itself sends internet traffic through wins (lowest route + interface metric),
+    # not just the first one listed: a PC with two network cards handed out the wrong home address (assistof, 2026-11-07, whose
+    # own fix this follows). Addresses 127.x, 169.254.x and 0.x are skipped.
     try {
         $cards = @(Get-NetIPConfiguration -ErrorAction Stop | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' })
         $real = @($cards | Where-Object { $_.NetAdapter.HardwareInterface -and -not $_.NetAdapter.Virtual })
-        $c = if ($real.Count) { $real | Select-Object -First 1 } else { $cards | Select-Object -First 1 }
-        $a = $c.IPv4Address | Select-Object -First 1
-        if (-not $a) { return $null }
-        $bits = ('1' * $a.PrefixLength).PadRight(32, '0')
+        $pool = if ($real.Count) { $real } else { $cards }
+        $routes = @(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue)
+        $ifs = @(Get-NetIPInterface -AddressFamily IPv4 -ErrorAction SilentlyContinue)
+        $best = $null; $bestMetric = [long]::MaxValue
+        foreach ($c in $pool) {
+            $a = @($c.IPv4Address | Where-Object { $_.IPAddress -and $_.IPAddress -notmatch '^(127\.|169\.254\.|0\.)' }) | Select-Object -First 1
+            if (-not $a) { continue }
+            $idx = $c.InterfaceIndex
+            $r = @($routes | Where-Object { $_.InterfaceIndex -eq $idx } | Sort-Object RouteMetric) | Select-Object -First 1
+            $i = @($ifs | Where-Object { $_.InterfaceIndex -eq $idx }) | Select-Object -First 1
+            $m = [long]$(if ($r) { $r.RouteMetric } else { 100000 }) + [long]$(if ($i) { $i.InterfaceMetric } else { 100000 })
+            if ($m -lt $bestMetric) { $best = $a; $bestMetric = $m }
+        }
+        if (-not $best) { return $null }
+        $bits = ('1' * $best.PrefixLength).PadRight(32, '0')
         $mask = (0..3 | ForEach-Object { [Convert]::ToInt32($bits.Substring($_ * 8, 8), 2) }) -join '.'
-        @{ Ip = $a.IPAddress; Mask = $mask }
+        @{ Ip = $best.IPAddress; Mask = $mask }
     } catch { $null }
 }
 # The internet address the router has, as seen from outside; $null when no service answers.

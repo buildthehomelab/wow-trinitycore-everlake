@@ -135,6 +135,9 @@ namespace Playerbot::Raid {
         r.priority.push_back({ 14264, 5 });                                       // Red Drakonid (:60)
         r.priority.push_back({ 14262, 5 });                                       // Green Drakonid (:61)
         r.priority.push_back({ 14265, 5 });                                       // Black Drakonid (:62)
+        // The waves never stop until 40 are dead: the raid finishes the drakonid a tank holds and is most hurt, then the next
+        // (RaidRules::focusHeldLowest), instead of spreading over every new one that runs in loose.
+        r.focusHeldLowest.push_back(10162);
 
         // NEFARIAN (11583)
         // Shadow Flame 22539 cone, Bellowing Roar 22686 fear, Veil of Shadow 22687 on the tank, Tail Lash 23364, class calls every 25-35s

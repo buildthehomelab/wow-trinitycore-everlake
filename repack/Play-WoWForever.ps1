@@ -91,6 +91,12 @@ if (-not $NoUpdateCheck) {
 }
 
 # --- memory access -----------------------------------------------------------------------------------------------------------------
+# Add-Type runs the C# compiler, which reads the LIB variable: a folder in LIB that no longer exists (an old FFmpeg or
+# WinGet entry) makes it warn, and with ErrorActionPreference Stop that ends the script. Only existing folders are kept
+# while it compiles (xtension9696, 2026-11-07).
+$wfLib = $env:LIB
+$env:LIB = (@($env:LIB -split ';') | Where-Object { $_ -and (Test-Path -LiteralPath $_) }) -join ';'
+try {
 Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -189,6 +195,7 @@ public static class KeyStore
     }
 }
 '@
+} finally { $env:LIB = $wfLib }
 
 function Say($m, $c = 'Gray') { Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $m) -ForegroundColor $c }
 

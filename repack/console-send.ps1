@@ -3,6 +3,12 @@
 #   Send-WorldserverCommand "bnetaccount create name@local password"
 # Windows only. Nothing is written to the database by this script: the server itself carries the command out.
 if (-not ('WfConsoleSend' -as [type])) {
+    # Add-Type runs the C# compiler, which reads the LIB variable: a folder in LIB that no longer exists (an old FFmpeg or
+    # WinGet entry) makes it warn, and with ErrorActionPreference Stop that ends the script. Only existing folders are kept
+    # while it compiles (xtension9696, 2026-11-07).
+    $wfLib = $env:LIB
+    $env:LIB = (@($env:LIB -split ';') | Where-Object { $_ -and (Test-Path -LiteralPath $_) }) -join ';'
+    try {
     Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -69,6 +75,7 @@ public static class WfConsoleSend
     }
 }
 '@
+    } finally { $env:LIB = $wfLib }
 }
 
 function Send-WorldserverCommand([string]$Line) {
@@ -76,4 +83,21 @@ function Send-WorldserverCommand([string]$Line) {
     if (-not $p) { throw 'The server is not running.' }
     $err = [WfConsoleSend]::Send([uint32]$p.Id, $Line)
     if ($err) { throw "Could not reach the server console: $err" }
+}
+
+# Stops the worldserver the way the "server exit" console command does: the server leaves its update loop, saves and logs out
+# every player and bot, and lets the database finish writing before it closes. Closing its window instead (what Stop did
+# before) only looks clean: Windows ends a console program as soon as it has been told about the close, so nothing was saved
+# and everything since the last autosave was lost (a player rollback report, 2026-11-07). The window is only closed when the
+# console cannot be reached. Returns 'not running', 'stopped' or 'timeout' (the server is still running after $TimeoutSec).
+function Stop-WorldserverSaved([int]$TimeoutSec = 600) {
+    $p = Get-Process worldserver -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $p) { return 'not running' }
+    try { Send-WorldserverCommand 'server exit' }
+    catch {
+        Write-Warning "$($_.Exception.Message) Closing the worldserver window instead; characters may not be saved."
+        $null = $p.CloseMainWindow()
+    }
+    if ($p.WaitForExit($TimeoutSec * 1000)) { return 'stopped' }
+    return 'timeout'
 }

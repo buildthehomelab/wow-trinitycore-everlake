@@ -19,6 +19,7 @@
 #include "Battleground/BattlegroundScript.h"  // BattlegroundAdvice — bg_advice_cache_ member needs full type
 #include "Formation.h"
 #include "PackPullGate.h"
+#include "RecoverRules.h"   // Classic::LeaderStillTracker (the rest rule's "has the player stopped")
 #include "BotPersonality.h"
 #include "BotArchetype.h"
 #include "BotRng.h"
@@ -5434,6 +5435,7 @@ private:
     uint32 hub_walk_id_ = 0, hub_walk_since_ms_ = 0, hub_walk_seen_ms_ = 0;
     float  hub_walk_x_ = 0.f, hub_walk_y_ = 0.f;
     uint32 anchor_seen_ms_ = 0, anchor_move_ms_ = 0;
+    Classic::LeaderStillTracker leader_still_;
     float  anchor_x_ = 0.f, anchor_y_ = 0.f;
 public:
     void   note_path_blocked(uint32 now_ms)
@@ -5621,9 +5623,16 @@ public:
     // full recall slack (13-15 yd for a caster) before it starts runs 2-4 s behind a leader who sets off; while he moves it starts at the
     // follow distance instead.
     // How long ago the follow anchor last moved (~0u: not seen moving); read by the rest rule (Classic::LedMaySitDown).
+    // The more recent of the follow's anchor and the player who leads the bot (Classic::LeaderStillTracker, noted every tick).
     uint32 since_anchor_moved_ms(uint32 now_ms) const
     {
-        return anchor_move_ms_ != 0 && now_ms >= anchor_move_ms_ ? now_ms - anchor_move_ms_ : ~0u;
+        uint32 const anchor = anchor_move_ms_ != 0 && now_ms >= anchor_move_ms_ ? now_ms - anchor_move_ms_ : ~0u;
+        return Classic::SinceLeaderMovedMs(anchor, leader_still_.since_moved_ms(now_ms));
+    }
+    // Every tick (BotAI::update): where the player leading the bot is now (0: no such player on its map).
+    void note_leader_position(uint64 leader_counter, float x, float y, uint32 now_ms)
+    {
+        leader_still_.note(leader_counter, x, y, now_ms);
     }
     // Rest tracking for the rest rule (Classic::LedMaySitDown), noted every tick (BotAI::update): whether the bot was eating / drinking at
     // the last look, how long its aura still had, and when it last got up from a rest it broke off. A rest whose aura ran out ended on its

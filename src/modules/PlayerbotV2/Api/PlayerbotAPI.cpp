@@ -54,6 +54,7 @@
 #include "DetourNavMeshQuery.h"
 #include "PlayerbotV2.h"     // path-outcome telemetry, bot-leader battleground queue
 #include "PlayerbotMovement.h"  // unified bot-movement helpers
+#include "BotSwim.h"
 #include "FollowDrop.h"          // follow_drop: ledge plan toward an owner who dropped or jumped down
 #include "Fleet/CityLayer.h"      // same-level moves across a drop, NoPath storm
 #include "Fleet/BotPool.h"        // Pool::IsScenarioBot: a test character trades with nobody
@@ -347,6 +348,24 @@ namespace {
     // apart. WaypointMovementGenerator sent each one as its own spline, and a hop shorter than three seconds is only sent when the one
     // before has ended, so a bot walking a city street stopped and started at every point (two bots on one route showed it in
     // Ironforge, 132). Those routes go out as one spline through all points instead.
+    //
+    // A living bot off a transport gets those navmesh points straight as a spline launched at once from where it stands, not through a
+    // WaypointMovementGenerator: that generator starts every new path with StopMoving() and a 1000 ms wait (DoInitialize), and a bot
+    // on a far walk asks for a new path every one to two seconds (ChunkedWalkToward aims each step 35 y ahead of where it stands, so
+    // the goal is new each time and the same-goal skip in move_to never holds). The bot ran for half a second, stood for a second and
+    // ran again, the whole way (Discord bug reports 6 and 8 Nov, "random bots move for half a second, stop, then repeat in a loop").
+    // A new spline replaces a running one without a stop. The motion type stays WAYPOINT, so the same-goal skip and the stall breaker
+    // treat it as before. A navmesh path starts at the bot, so this never turns it back. Authored road routes keep the generator: their
+    // first node can lie behind the bot, and sent at once that turned city bots back and forth (0.1.31, Stormwind, undone in 76287b12).
+    void LaunchRouteSpline(Player* p, std::vector<G3D::Vector3>&& pts, bool run)
+    {
+        p->GetMotionMaster()->LaunchMoveSpline([pts = std::move(pts), run](Movement::MoveSplineInit& init)
+        {
+            init.MovebyPath(pts);
+            init.SetWalk(!run);
+        }, 0, MOTION_PRIORITY_NORMAL, WAYPOINT_MOTION_TYPE);
+    }
+
     void MoveAlongRoute(Player* p, WaypointPath const& route, bool run, bool navmesh_points = false)
     {
         // The path generator's own cap is 74 points. A longer navmesh route is cut to its first 60 points and goes out as one spline all
@@ -370,6 +389,17 @@ namespace {
             }
             if (nodes.size() > kMaxSplinePoints)
                 nodes.erase(nodes.begin() + kMaxSplinePoints, nodes.end());
+            if (!nodes.empty() && !p->GetTransport())
+            {
+                // MoveSplineInit puts the bot's own place over point 0, so the bot's place goes first and every route point is kept.
+                std::vector<G3D::Vector3> pts;
+                pts.reserve(nodes.size() + 1);
+                pts.emplace_back(p->GetPositionX(), p->GetPositionY(), p->GetPositionZ());
+                for (WaypointNode const& n : nodes)
+                    pts.emplace_back(n.X, n.Y, n.Z);
+                LaunchRouteSpline(p, std::move(pts), run);
+                return;
+            }
             if (!nodes.empty())
             {
                 WaypointPath exact(0, std::move(nodes), run ? WaypointMoveType::Run : WaypointMoveType::Walk);
@@ -394,11 +424,7 @@ namespace {
             pts.emplace_back(n.X, n.Y, n.Z);
         if (pts.size() < 2)
             return;
-        p->GetMotionMaster()->LaunchMoveSpline([pts = std::move(pts), run](Movement::MoveSplineInit& init)
-        {
-            init.MovebyPath(pts);
-            init.SetWalk(!run);
-        }, 0, MOTION_PRIORITY_NORMAL, WAYPOINT_MOTION_TYPE);
+        LaunchRouteSpline(p, std::move(pts), run);
     }
 
     inline uint64 PathDestKey(uint32 map_id, float x, float y, float z)
@@ -1802,6 +1828,16 @@ Result API::move_to(float x, float y, float z, bool run, bool direct, bool drop,
         z = z_ask;
     if (!asked_on_mesh)
         BotMovement::SnapToGround(p_, x, y, z);
+    // A goal in deep water is swum to, at the swim z (Api/BotSwim.h): the ground probe above put it on the lake bed (the bot walked
+    // down and stood under the water until idle:surface_to_breathe lifted it, then the next step took it down again) and a surface
+    // ask kept it on top of the water. A dive the caller asked for, to something on the floor, keeps its depth.
+    if (p_->IsAlive() && !p_->IsFlying() && !p_->IsInFlight() && !p_->GetTransport())
+    {
+        float swim_z = 0.f;
+        if (BotMovement::SwimLevel(p_, x, y, z_ask, swim_z) &&
+            !BotMovement::Swim::IsPurposefulDive(z_ask, p_->GetPositionZ(), swim_z))
+            z = swim_z;
+    }
 
     // Battleground start room (STATUS_WAIT_JOIN): the gates are shut and the bots only mill about their start area, so a
     // destination whose ground is far above or below the bot is off the platform (a gate-wait spot spread over the edge of
@@ -1917,19 +1953,29 @@ Result API::move_to(float x, float y, float z, bool run, bool direct, bool drop,
                     p_->GetPositionY(), (pr.key == move_goal_key) ? 1 : 0,
                     std::sqrt(pdx*pdx + pdy*pdy),
                     (uint32)(now_probe - pr.ms), (int)mtype);
-            if (pr.key != move_goal_key)
+            // A route spline (MoveAlongRoute) keeps the speed it was launched with. A bot that mounts or dismounts on the way would keep
+            // the old speed while the same goal is asked for, so a speed change sends the route again (at once, without a stop).
+            bool speed_changed = false;
+            if (mtype == WAYPOINT_MOTION_TYPE && p_->movespline->Initialized() && !p_->movespline->Finalized() &&
+                !p_->IsInWater() && !p_->IsFlying() && !p_->GetTransport())
+            {
+                float const want = p_->GetSpeed(run ? MOVE_RUN : MOVE_WALK);
+                float const have = p_->movespline->Velocity();
+                speed_changed = want > 0.1f && std::fabs(have - want) > 0.15f * want;
+            }
+            if (!speed_changed && pr.key != move_goal_key)
             {
                 // New goal for the probe Ã¢Â€Â” start the progress clock here.
                 pr = { move_goal_key, p_->GetPositionX(), p_->GetPositionY(), now_probe };
                 return Result::Ok;
             }
-            if (pdx * pdx + pdy * pdy >= 4.0f * 4.0f)
+            if (!speed_changed && pdx * pdx + pdy * pdy >= 4.0f * 4.0f)
             {
                 // Advanced >=4y since the mark Ã¢Â€Â” progressing, refresh + keep running.
                 pr.x = p_->GetPositionX(); pr.y = p_->GetPositionY(); pr.ms = now_probe;
                 return Result::Ok;
             }
-            if (now_probe - pr.ms < 3000u)
+            if (!speed_changed && now_probe - pr.ms < 3000u)
                 return Result::Ok;   // within grace Ã¢Â€Â” let the spline keep trying
             // Stalled >3s within 4y: reset the clock and FALL THROUGH to re-issue.
             pr.x = p_->GetPositionX(); pr.y = p_->GetPositionY(); pr.ms = now_probe;
@@ -6505,7 +6551,10 @@ static Result UseVirtualSupply(Player* p, uint32 item_entry)
         }
     if (!spellId || !sSpellMgr->GetSpellInfo(spellId, DIFFICULTY_NONE))
         return Result::Other;
-    SpellCastResult const res = p->CastSpell(p, spellId, CastSpellExtraArgs(TRIGGERED_NONE));
+    // A bottle or a loaf has no lockout of its own: a player who is stood up drinks again at once. The food / drink spell cast without
+    // the item kept a cooldown of about a minute, so a drink broken by a step or a pull left the bot unable to drink again for that long
+    // (Violet Hold 2026-11-08: Askara said "need to drink", then failed with NOT_READY every 10 s at 30 % mana and stood about).
+    SpellCastResult const res = p->CastSpell(p, spellId, CastSpellExtraArgs(TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD));
     if (res != SPELL_CAST_OK)
     {
         // Why a drink without the item did not start (Thorium Point 2026-10-29: two mages logged a drink every 10 s for a minute and

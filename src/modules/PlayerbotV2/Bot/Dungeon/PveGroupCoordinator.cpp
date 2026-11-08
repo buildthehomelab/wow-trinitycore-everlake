@@ -380,6 +380,7 @@ void PveGroupCoordinator::Update(uint32 now_ms)
                 {
                     if (u.hp <= 0 || u.is_player || u.untargetable || u.is_pacified || !u.unit_in_combat) continue;
                     if (Raid::NoTank(b.map_id, u.entry)) continue;   // a summoned add the DPS burn down
+                    if (Raid::GetBrain().AllSchoolsAvoided(b.group_low, b.map_id, u.guid)) continue;   // immune to everything: no tank needed
                     ThreatVictim const k = ThreatVictim(u.victim_kind);
                     if (k != ThreatVictim::Me && k != ThreatVictim::Tank &&
                         k != ThreatVictim::Member && k != ThreatVictim::MemberPet)
@@ -1786,6 +1787,10 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
                 k != ThreatVictim::Member && k != ThreatVictim::MemberPet)
                 continue;
             if (u.is_cc_locked && member_of(u.cc_caster)) continue;
+            // A mob immune to every school (Lord Victor Nefarius behind Nefarius Barrier 22663, a banished mob) is nothing to hold: nothing
+            // the tank does reaches it. bwl_nefarian 2026-11-07: the main tank was assigned to the rooted, immune Victor for the whole
+            // drakonid phase, the "boss is never left without a tank" pass gave him back every time, and the raid fell to the waves.
+            if (Raid::GetBrain().AllSchoolsAvoided(group_low, map_id, u.guid)) continue;
             if (find_mob(u.guid)) continue;
             Member const* v = member_of(u.victim);
             mobs.push_back({ &u, v && !v->tank });

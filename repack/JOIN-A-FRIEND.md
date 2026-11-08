@@ -31,7 +31,7 @@ hidden and connects out to Cloudflare. Cloudflare offers these tunnels for free 
 your home address not in the code, the server not restarted), Radmin VPN / ZeroTier alone, or port forwarding alone.
 
 **Friend**: open the launcher, **Server** tab > **Join a friend**, paste the code and press **Join**. The launcher tries the
-ways in the code one after another (same home network, Radmin VPN / ZeroTier, the internet address, the Cloudflare tunnel)
+ways in the code one after another (same home network, the internet address, the Cloudflare tunnel, then Radmin VPN / ZeroTier)
 and uses the first that gets through; if none does, it says so and how to use Radmin VPN instead. It finds the
 server, checks its certificate against the code, asks once to trust it (Windows prompt; it is limited to names under
 `actual.battle.net`), adds the server to the list and picks it. Press **PLAY NOW** and log in with the account your friend made.

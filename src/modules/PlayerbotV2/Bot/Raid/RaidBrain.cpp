@@ -3066,6 +3066,69 @@ void ElectControlledMembers(Election& e)
         }
 }
 
+// A school whose resistance costs a caster of the raid at least this share of every hit on average is avoided. The Classic formula
+// (Unit::CalculateAverageResistReduction: resistance * 0.75 / (5 * caster level), at most 75%) puts the phase 1 drakonids' 400 in
+// their colour's school at the 75% cap, and nothing a raid fights in MC, Onyxia or BWL otherwise comes close: the MC bosses' 200 fire
+// is 55% for a level 60 caster on a level 63 boss, the Chromatic Drakonid's 250 in every school 68%, an Onyxian Warder's 250 fire 66%.
+constexpr float kAvoidResistShare = 0.70f;
+
+// The schools to prefer / avoid on an enemy: its live immunities, damage-taken auras, spell reflection, and resistances high
+// enough that <caster> (a raid member, for its level and penetration; nullptr = resistances are not read) loses most of each hit.
+void EnemySchoolMasks(Unit* enemy, Unit const* caster, uint8_t& prefer, uint8_t& avoid)
+{
+    prefer = 0;
+    avoid = 0;
+    for (uint32_t school = SPELL_SCHOOL_MASK_NORMAL; school <= SPELL_SCHOOL_MASK_ARCANE; school <<= 1)
+    {
+        if (enemy->IsImmunedToDamage(SpellSchoolMask(school)))
+        {
+            avoid |= uint8_t(school);
+            continue;
+        }
+        float const taken = enemy->GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN, school);
+        if (taken >= 1.5f)
+            prefer |= uint8_t(school);
+        else if (taken <= 0.5f)
+            avoid |= uint8_t(school);
+        // Armor is no resistance and holy has none in PvE (CalculateAverageResistReduction ignores it): magic schools only.
+        else if (caster && (school & SPELL_SCHOOL_MASK_MAGIC) && !(school & SPELL_SCHOOL_MASK_HOLY) &&
+                 taken * (1.0f - Unit::CalculateAverageResistReduction(caster, SpellSchoolMask(school), enemy)) <= 1.0f - kAvoidResistShare)
+            avoid |= uint8_t(school);
+    }
+    // Spell reflection (an Anubisath Sentinel's Fire/Arcane or Shadow/Frost Reflect): those schools come back at the caster.
+    for (AuraEffect const* eff : enemy->GetAuraEffectsByType(SPELL_AURA_REFLECT_SPELLS_SCHOOL))
+        avoid |= uint8_t(eff->GetMiscValue() & SPELL_SCHOOL_MASK_MAGIC);
+    if (enemy->HasAuraType(SPELL_AURA_REFLECT_SPELLS))
+        avoid |= uint8_t(SPELL_SCHOOL_MASK_MAGIC);
+    prefer &= uint8_t(~avoid);
+}
+
+// The raid member whose level and penetration stand for the raid's casters in EnemySchoolMasks: the first caster, else anyone.
+Unit const* SchoolReferenceCaster(Plan const& plan)
+{
+    for (Member const& m : plan.members)
+        if (m.p && Matches(Who::Caster, m, plan.mainTank))
+            return m.p;
+    return plan.members.empty() ? nullptr : plan.members.front().p;
+}
+
+// The schools a member deals its damage in, by class and role: a member whose every school an enemy avoids does nothing to it.
+uint8_t MemberDamageSchools(Member const& m, Player* mainTank)
+{
+    bool const caster = Matches(Who::Caster, m, mainTank);
+    switch (m.p->GetClass())
+    {
+        case CLASS_WARLOCK: return uint8_t(SPELL_SCHOOL_MASK_FIRE | SPELL_SCHOOL_MASK_SHADOW);
+        case CLASS_MAGE:    return uint8_t(SPELL_SCHOOL_MASK_FIRE | SPELL_SCHOOL_MASK_FROST | SPELL_SCHOOL_MASK_ARCANE);
+        // Shadowform 15473 locks out holy (BotIntentEmitter::LockedSchools).
+        case CLASS_PRIEST:  return m.p->HasAura(15473) ? uint8_t(SPELL_SCHOOL_MASK_SHADOW) : uint8_t(SPELL_SCHOOL_MASK_SHADOW | SPELL_SCHOOL_MASK_HOLY);
+        case CLASS_SHAMAN:  return uint8_t(SPELL_SCHOOL_MASK_NATURE | SPELL_SCHOOL_MASK_FIRE | SPELL_SCHOOL_MASK_FROST | (caster ? 0u : uint32_t(SPELL_SCHOOL_MASK_NORMAL)));
+        case CLASS_DRUID:   return caster ? uint8_t(SPELL_SCHOOL_MASK_NATURE | SPELL_SCHOOL_MASK_ARCANE) : uint8_t(SPELL_SCHOOL_MASK_NORMAL);
+        case CLASS_PALADIN: return uint8_t(SPELL_SCHOOL_MASK_NORMAL | SPELL_SCHOOL_MASK_HOLY);
+        default:            return uint8_t(SPELL_SCHOOL_MASK_NORMAL);
+    }
+}
+
 // Forbidden targets and the fallback a DPS bot attacks instead.
 void PublishTargets(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& orders, ObjectGuid coordFocus)
 {
@@ -3185,21 +3248,72 @@ void PublishTargets(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& orders,
         auto const in = [&](std::vector<ObjectGuid> const& v) { return std::find(v.begin(), v.end(), enemy->GetGUID()) != v.end(); };
         return (melee && in(forbiddenMelee)) || (caster && in(forbiddenCasters));
     };
+    // The schools each candidate avoids (immunity, half damage or less, reflection, a resistance that eats most of a hit).
+    Unit const* const schoolCaster = SchoolReferenceCaster(plan);
+    std::vector<uint8_t> candidateAvoid(candidates.size(), 0);
+    for (size_t i = 0; i < candidates.size(); ++i)
+    {
+        // An evading creature reads immune to every school while it resets (SchoolHints below): no verdict on it.
+        if (Creature const* c = candidates[i]->ToCreature(); c && c->IsInEvadeMode())
+            continue;
+        uint8_t prefer = 0;
+        EnemySchoolMasks(candidates[i], schoolCaster, prefer, candidateAvoid[i]);
+    }
+    // A candidate the member cannot hurt (every school it deals is avoided there) is its last choice, whatever the priority: the
+    // emitter refuses those casts and the member would stand on it doing nothing. bwl_nefarian 2026-11-07: the drakonids resist their
+    // colour's school with 400 (75% of every hit), warlocks and shadow priests sat on Black Drakonids (fire and shadow) while the waves
+    // piled up. Among the rest the higher priority wins, then the main tank's target.
+    // A wave encounter (RaidRules::focusHeldLowest): an enemy a tank holds comes before any other, and among equals the most hurt one.
+    // bwl_nefarian 2026-11-08: two drakonids every 6-7 s, each new one ran loose at a raid member; idle DPS took it (equal priority, not the
+    // main tank's), stood in the threat hold, and the damage spread over half a dozen drakonids: 2,600 raid damage a second against the
+    // 6,000 the waves need, a wipe at 214 s with 27 drakonids up.
+    bool focusHeldLowest = false;
+    for (Unit* enemy : plan.enemies)
+        if (std::find(rules.focusHeldLowest.begin(), rules.focusHeldLowest.end(), enemy->GetEntry()) != rules.focusHeldLowest.end())
+            focusHeldLowest = true;
+    auto const heldByTank = [&](Unit* enemy)
+    {
+        if (Unit* v = enemy->GetVictim())
+            if (Player* vp = v->ToPlayer())
+                if (Member const* vm = FindMember(plan, vp))
+                    return vm->tank;
+        return false;
+    };
     auto const bestFor = [&](Member const& m) -> Unit*
     {
+        uint8_t const schools = MemberDamageSchools(m, plan.mainTank);
         Unit* best = nullptr;
         int bestPriority = 0;
-        for (Unit* enemy : candidates)
+        bool bestHurts = false;
+        bool bestHeld = false;
+        for (size_t i = 0; i < candidates.size(); ++i)
         {
+            Unit* enemy = candidates[i];
             if (shieldForbids(m, enemy))
                 continue;
             int const priority = priorityFor(m, enemy);
             if (priority < 0)
                 continue;
-            if (!best || priority > bestPriority || (priority == bestPriority && enemy == tankTarget))
+            bool const hurts = (schools & ~candidateAvoid[i]) != 0;
+            bool const held = focusHeldLowest && heldByTank(enemy);
+            bool better = !best || (hurts && !bestHurts);
+            if (!better && hurts == bestHurts)
+            {
+                if (held != bestHeld)
+                    better = held;
+                else if (priority != bestPriority)
+                    better = priority > bestPriority;
+                else if (focusHeldLowest)
+                    better = enemy->GetHealthPct() < best->GetHealthPct();
+                else
+                    better = enemy == tankTarget;
+            }
+            if (better)
             {
                 best = enemy;
                 bestPriority = priority;
+                bestHurts = hurts;
+                bestHeld = held;
             }
         }
         return best;
@@ -3239,6 +3353,13 @@ void PublishTargets(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& orders,
                 pick = bestFor(m);
             if (pick)
                 o.fallback_target = pick->GetGUID();
+            // A member already on an enemy it cannot hurt leaves it while there is one it can: the fallback alone only steers a member
+            // with no target.
+            uint8_t const schools = MemberDamageSchools(m, plan.mainTank);
+            if (pick && (schools & ~candidateAvoid[size_t(std::find(candidates.begin(), candidates.end(), pick) - candidates.begin())]) != 0)
+                for (size_t i = 0; i < candidates.size(); ++i)
+                    if ((schools & ~candidateAvoid[i]) == 0 && candidates[i]->GetGUID() != focus)
+                        o.forbidden_targets.push_back(candidates[i]->GetGUID());
         }
         else if (m.tank)
         {
@@ -3391,6 +3512,7 @@ void PublishThreatHolds(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& ord
 std::vector<Brain::EnemySchools> SchoolHints(Plan const& plan, std::ostringstream& dump)
 {
     std::vector<Brain::EnemySchools> out;
+    Unit const* const schoolCaster = SchoolReferenceCaster(plan);
     for (Unit* enemy : plan.enemies)
     {
         // An evading creature reads immune to every school while it resets; that is no verdict on the mob (Garr 2026-10-08: the
@@ -3398,25 +3520,7 @@ std::vector<Brain::EnemySchools> SchoolHints(Plan const& plan, std::ostringstrea
         if (Creature const* c = enemy->ToCreature(); c && c->IsInEvadeMode())
             continue;
         uint8_t prefer = 0, avoid = 0;
-        for (uint32_t school = SPELL_SCHOOL_MASK_NORMAL; school <= SPELL_SCHOOL_MASK_ARCANE; school <<= 1)
-        {
-            if (enemy->IsImmunedToDamage(SpellSchoolMask(school)))
-            {
-                avoid |= uint8_t(school);
-                continue;
-            }
-            float const taken = enemy->GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN, school);
-            if (taken >= 1.5f)
-                prefer |= uint8_t(school);
-            else if (taken <= 0.5f)
-                avoid |= uint8_t(school);
-        }
-        // Spell reflection (an Anubisath Sentinel's Fire/Arcane or Shadow/Frost Reflect): those schools come back at the caster.
-        for (AuraEffect const* eff : enemy->GetAuraEffectsByType(SPELL_AURA_REFLECT_SPELLS_SCHOOL))
-            avoid |= uint8_t(eff->GetMiscValue() & SPELL_SCHOOL_MASK_MAGIC);
-        if (enemy->HasAuraType(SPELL_AURA_REFLECT_SPELLS))
-            avoid |= uint8_t(SPELL_SCHOOL_MASK_MAGIC);
-        prefer &= uint8_t(~avoid);
+        EnemySchoolMasks(enemy, schoolCaster, prefer, avoid);
         if (!prefer && !avoid)
             continue;
         // Why: the first sighting of an entry with this mask says which immunity, aura or reflect produced it (Garr 2026-10-09:
@@ -3439,6 +3543,11 @@ std::vector<Brain::EnemySchools> SchoolHints(Plan const& plan, std::ostringstrea
                         << eff->GetAmount() << "%)";
                 for (AuraEffect const* eff : enemy->GetAuraEffectsByType(SPELL_AURA_REFLECT_SPELLS_SCHOOL))
                     why << " reflect(" << eff->GetId() << ")";
+                if (schoolCaster)
+                    for (uint32_t school = SPELL_SCHOOL_MASK_FIRE; school <= SPELL_SCHOOL_MASK_ARCANE; school <<= 1)
+                        if (int32 const res = enemy->GetResistance(SpellSchoolMask(school)); res > 0)
+                            why << " resist(0x" << std::hex << school << std::dec << " " << res << " = "
+                                << int(Unit::CalculateAverageResistReduction(schoolCaster, SpellSchoolMask(school), enemy) * 100.0f) << "%)";
                 if (enemy->HasAuraWithMechanic(1u << MECHANIC_BANISH))
                     why << " banished";
                 TC_LOG_INFO("playerbot.v2", "[raid_school_why] {} entry {} ({}): avoid 0x{:x} prefer 0x{:x} - {}",

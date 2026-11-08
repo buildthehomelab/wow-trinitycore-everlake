@@ -52,3 +52,25 @@ TEST_CASE("RecoverRules: a player's bot sits only when the group has stopped, an
     CHECK(kLedDrinkBelowManaPct <= 60);
     CHECK(kLedEatBelowHpPct <= 60);
 }
+
+// Violet Hold 2026-11-08: Askara sat down to drink while her owner walked on (the follow's anchor tracker had not looked at him for
+// 3 s and read him as standing), the follow stood her straight up and the drink was lost. The leader is now looked at every tick.
+TEST_CASE("RecoverRules: the player leading the bot is looked at every tick for the rest rule", "[ClassicRecoverRules]")
+{
+    using namespace Playerbot::Classic;
+    LeaderStillTracker t;
+    CHECK(t.since_moved_ms(1000) == ~0u);              // no leader seen
+    t.note(42, 10.f, 10.f, 1000);                      // first seen: counts as just moved, no sitting yet
+    CHECK(t.since_moved_ms(1000) == 0u);
+    t.note(42, 10.5f, 10.f, 2000);                     // shuffling on the spot (under 1 y) is standing
+    CHECK(t.since_moved_ms(4000) == 3000u);
+    CHECK(LedMaySitDown({ false, ~0u, SinceLeaderMovedMs(~0u, t.since_moved_ms(4000)) }));
+    t.note(42, 14.f, 10.f, 4100);                      // he walks on: no sitting, even when the follow's tracker reads "still"
+    CHECK_FALSE(LedMaySitDown({ false, ~0u, SinceLeaderMovedMs(~0u, t.since_moved_ms(4200)) }));
+    CHECK(LedMaySitDown({ false, ~0u, SinceLeaderMovedMs(~0u, t.since_moved_ms(4100 + kLedAnchorStillMs)) }));
+    t.note(7, 14.f, 10.f, 9000);                       // another leader (the owner left the map): counts as just moved
+    CHECK(t.since_moved_ms(9000) == 0u);
+    t.note(0, 0.f, 0.f, 9500);                         // no player leads it: unknown, taken as still
+    CHECK(t.since_moved_ms(9500) == ~0u);
+    CHECK(SinceLeaderMovedMs(500u, 9000u) == 500u);    // the more recent of the two trackers wins
+}

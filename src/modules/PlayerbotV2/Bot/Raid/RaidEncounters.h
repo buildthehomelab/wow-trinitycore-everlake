@@ -353,6 +353,10 @@ struct RaidRules
     std::vector<uint32_t> tankLast;    // a mob the tanks take only when no other free mob is left (Majordomo: he does little damage and cannot die)
     std::vector<uint32_t> offTankMob;  // a boss the second tank holds from the first second (Majordomo); no area taunt while he is up, the tanks keep their mobs
     std::vector<uint32_t> interruptFirst;   // casts the PvE coordinator's kick election takes before any other (heals, sheep)
+    // Encounters (an enemy entry that is up during them) where a DPS looking for a target takes an enemy a tank holds before any other,
+    // then the higher priority, then the most hurt one: wave fights where adds keep coming, an untanked one only means a threat hold, and
+    // the raid has to finish one before the next (Victor Nefarius' drakonids).
+    std::vector<uint32_t> focusHeldLowest;
 };
 
 // How long the corridor of a cast breath stays open from the first sighting of the cast. Onyxia's damage is one instant at the end of the 5 s cast

@@ -450,6 +450,33 @@ void BotAI::tick(BotSnapshotView snapshot,
     // idle:ooc_eat_food, so its gate is not asked there).
     note_resting(Classic::IsEating(snapshot) || Classic::IsDrinking(snapshot), Classic::RegenAuraLeftMs(snapshot),
                  snapshot.in_combat() || snapshot.recently_in_combat(30000), snapshot.published_at_ms());
+    // The player leading the bot (its owner on its map, else the group's leader), for the rest rule's "has the group stopped": looked at
+    // every tick, as the follow's own anchor tracker is fed only where the follow code runs (a dungeon run, a fight window skip it).
+    {
+        uint64 leader_counter = 0;
+        float lx = 0.f, ly = 0.f;
+        if (snapshot.in_group() && snapshot.is_led_by_player())
+            if (auto const* members = group.members())
+            {
+                ObjectGuid lead = group.leader();
+                if (snapshot.is_companion_with_owner())
+                    for (auto const& m : *members)
+                        if (m.guid == snapshot.raw().owner_guid && m.online && m.map_id == snapshot.map_id())
+                        {
+                            lead = m.guid;
+                            break;
+                        }
+                for (auto const& m : *members)
+                    if (m.guid == lead && m.guid != snapshot.guid() && m.online && m.map_id == snapshot.map_id())
+                    {
+                        leader_counter = m.guid.GetCounter();
+                        lx = m.x;
+                        ly = m.y;
+                        break;
+                    }
+            }
+        note_leader_position(leader_counter, lx, ly, snapshot.published_at_ms());
+    }
     if (ObjectGuid const lost = snapshot.raw().combat.chase_nopath_target; !lost.IsEmpty() &&
         note_chase_unreachable(lost, snapshot.published_at_ms()))
         TC_LOG_INFO("playerbot.v2", "[chase_nopath] {} has no path to {} (two in a row): another target for {} s", snapshot.name(),

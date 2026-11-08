@@ -9840,7 +9840,7 @@ bool DungeonDispatch(BotSnapshotView const& s, BotAI& ai,
                 // wide/far navigators (which can pick distant backward trash) honor it;
                 // the close 30y pull is unaffected.
                 bool  adv_have_boss = false;
-                float adv_boss_x = 0.f, adv_boss_y = 0.f;
+                float adv_boss_x = 0.f, adv_boss_y = 0.f, adv_boss_z = 0.f;
 
                 // ── Boss-priority navigation (Deadmines Glubtok fix, 2026-06-25) ──
                 // The tank navigates to the EARLIEST un-killed boss in
@@ -10022,6 +10022,7 @@ bool DungeonDispatch(BotSnapshotView const& s, BotAI& ai,
                             adv_have_boss = true;
                             adv_boss_x = btx;
                             adv_boss_y = bty;
+                            adv_boss_z = btz;
                             const float bdx = btx - bx_adv;
                             const float bdy = bty - by_adv;
                             const float bdz = btz - bz_adv;
@@ -10900,6 +10901,10 @@ bool DungeonDispatch(BotSnapshotView const& s, BotAI& ai,
                         const float cbx = adv_boss_x - u.x, cby = adv_boss_y - u.y;
                         const float tbx = adv_boss_x - bx_adv, tby = adv_boss_y - by_adv;
                         if (cbx*cbx + cby*cby > tbx*tbx + tby*tby + 15.0f*15.0f) continue;
+                        // Far trash on another floor while the boss is on ours: walking toward it only reaches the spot above or
+                        // below it, where no path goes down/up, and the tank stalls there (City of Dalaran 2026-11-08: Lyn on the
+                        // tank's floor at z 59, trash in the water channel at z 42 under it, path_fail_backoff at z 41.9).
+                        if (std::fabs(adv_boss_z - bz_adv) < 12.0f && std::fabs(u.z - bz_adv) > 12.0f) continue;
                     }
                     if (d2 < far_d2) { far_d2 = d2; far_target = &u; }
                 }

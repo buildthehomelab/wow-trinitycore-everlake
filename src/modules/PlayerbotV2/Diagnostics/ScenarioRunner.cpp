@@ -226,6 +226,9 @@ struct Run
     std::uint32_t leg_progress_ms = 0;    // run_ms he last got 2 y closer to the point
     float leg_best = 0.f;                 // his smallest distance to the point on this leg
     bool leg_leapt = false;               // he was set down on the point (no walking route)
+    bool leg_water = false;               // a water point: the deep spot found for it when the leg began
+    float leg_wx = 0.f, leg_wy = 0.f, leg_wz = 0.f;
+    std::uint32_t leg_hold_since_ms = 0;  // run_ms the squad was with him at a point he holds (0: not holding)
     std::map<std::uint64_t, std::uint32_t> leg_joined_ms;     // member -> run_ms it first stood with him at the point
     std::map<std::uint64_t, std::uint32_t> leg_catch_ups;     // member -> its catch-up count when the leg began
     std::uint32_t spot_moved = 0;        // the dps scorecard raid was moved to flat ground
@@ -1859,6 +1862,37 @@ constexpr float kRouteGatherYd = 30.f;             // a member this close to him
 constexpr std::uint32_t kRouteStallMs = 20000;     // no 2 y closer to the point in this long: he takes the jump (is set down on it)
 constexpr std::uint32_t kRouteGatherMs = 40000;    // every member must be with him this long after he reaches a point
 
+// The nearest deep water (BotMovement::SwimLevel) around (cx, cy) the stand-in can walk to: rings 8 y apart out to kWaterSearchYd.
+constexpr float kWaterSearchYd = 150.f;
+bool FindDeepWater(Player* p, float cx, float cy, float& ox, float& oy, float& oz)
+{
+    Map* m = p->GetMap();
+    if (!m)
+        return false;
+    for (float r = 0.f; r <= kWaterSearchYd; r += 8.f)
+    {
+        int const steps = r < 1.f ? 1 : 16;
+        for (int i = 0; i < steps; ++i)
+        {
+            float const a = float(i) * 6.2831853f / float(steps);
+            float const x = cx + r * std::cos(a), y = cy + r * std::sin(a);
+            m->LoadGrid(x, y);
+            float const level = m->GetWaterLevel(p->GetPhaseShift(), x, y);
+            if (level <= INVALID_HEIGHT)
+                continue;
+            float swim_z = 0.f;
+            if (!::Playerbot::BotMovement::SwimLevel(p, x, y, level, swim_z))
+                continue;
+            PathGenerator pg(p);
+            if (!::Playerbot::BotMovement::SehSafeCalculatePath(pg, x, y, swim_z) || (pg.GetPathType() & (PATHFIND_NOPATH | PATHFIND_SHORTCUT)))
+                continue;
+            ox = x; oy = y; oz = swim_z;
+            return true;
+        }
+    }
+    return false;
+}
+
 void PlayRoute(Run& run)
 {
     Player* p = StandIn(run);
@@ -1870,7 +1904,26 @@ void PlayRoute(Run& run)
         run.goal_reached = true;
         return;
     }
-    ScenarioRoutePoint const& w = route[run.route_leg];
+    ScenarioRoutePoint w = route[run.route_leg];
+    if (!run.leg_start_ms)
+    {
+        run.leg_water = false;
+        run.leg_hold_since_ms = 0;
+        if (w.water)
+        {
+            if (!FindDeepWater(p, w.x, w.y, run.leg_wx, run.leg_wy, run.leg_wz))
+            {
+                run.monitor->NoteSetupFailure(run.run_ms, p->GetName(), fmt::format("no deep water he can walk to within {:.0f} y of {} ({:.0f},{:.0f})",
+                                                                                     kWaterSearchYd, w.label, w.x, w.y));
+                return;
+            }
+            run.leg_water = true;
+        }
+    }
+    if (run.leg_water)
+    {
+        w.x = run.leg_wx; w.y = run.leg_wy; w.z = run.leg_wz;
+    }
     if (!run.leg_start_ms)
     {
         run.leg_start_ms = run.run_ms ? run.run_ms : 1u;
@@ -1973,6 +2026,17 @@ void PlayRoute(Run& run)
         missing += fmt::format("{}{} {:.0f} y at ({:.0f},{:.0f},{:.0f}) rule={}", missing.empty() ? "" : "; ", m.def.name, d, q->GetPositionX(),
                                q->GetPositionY(), q->GetPositionZ(), ai && ai->last_rule_fired() ? ai->last_rule_fired() : "-");
         if (!farthest || d > farthest_d) { farthest = q; farthest_d = d; }
+    }
+    if (missing.empty() && w.hold_s)
+    {
+        // A point he holds: the squad stays with him there (in the lake: longer than a bot's breath) before he goes on.
+        if (!run.leg_hold_since_ms)
+        {
+            run.leg_hold_since_ms = run.run_ms ? run.run_ms : 1u;
+            LeadLog(run, fmt::format("holds at {} for {} s", w.label, w.hold_s));
+        }
+        if (run.run_ms - run.leg_hold_since_ms < w.hold_s * 1000u)
+            return;
     }
     if (missing.empty())
     {
@@ -2677,6 +2741,13 @@ void Sample(Run& run, std::vector<ScenarioSample>& out)
         }
         if (p->GetPowerType() == POWER_MANA && p->GetMaxPower(POWER_MANA) > 0)
             s.mana_pct = 100.f * float(p->GetPower(POWER_MANA)) / float(p->GetMaxPower(POWER_MANA));
+        if (run.def->limits.water_under_ms || run.def->limits.water_flips || run.def->limits.water_noswim_ms)
+        {
+            float swim_z = 0.f;
+            s.deep_water = s.alive && ::Playerbot::BotMovement::SwimLevel(p, s.x, s.y, s.z, swim_z);
+            s.head_under = p->IsUnderWater();
+            s.swim_flag = p->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+        }
         out.push_back(std::move(s));
     }
 }

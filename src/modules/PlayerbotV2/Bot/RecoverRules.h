@@ -44,6 +44,47 @@ struct LedRestInputs
     unsigned since_anchor_moved_ms = ~0u;   // since the player / anchor last moved (~0u: unknown, taken as still)
 };
 
+// Where the player who leads the bot (its owner, else the group's leader) last was, looked at every tick whatever rule runs. The
+// follow's anchor tracker is fed only where the follow code runs and forgets a player it has not seen for 3 s, after which it read
+// "standing still": in the Violet Hold (2026-11-08) Askara sat down to drink while the owner walked on, the follow stood her straight
+// up and the drink was lost. A new or first-seen leader counts as just moved, so nobody sits before he has really stood kLedAnchorStillMs.
+struct LeaderStillTracker
+{
+    unsigned long long leader = 0;   // the leader's guid counter (0: none seen)
+    float x = 0.f, y = 0.f;          // where he was when last seen to move
+    unsigned moved_ms = 0;           // when he last moved (game ms, never 0 once seen)
+
+    void note(unsigned long long id, float px, float py, unsigned now_ms)
+    {
+        unsigned const stamp = now_ms ? now_ms : 1u;
+        if (id == 0)
+        {
+            leader = 0;
+            moved_ms = 0;
+            return;
+        }
+        float const dx = px - x, dy = py - y;
+        if (id != leader || dx * dx + dy * dy > 1.0f)
+        {
+            leader = id;
+            x = px;
+            y = py;
+            moved_ms = stamp;
+        }
+    }
+    // Since he last moved (~0u: no leader seen).
+    unsigned since_moved_ms(unsigned now_ms) const
+    {
+        return moved_ms != 0 && now_ms >= moved_ms ? now_ms - moved_ms : ~0u;
+    }
+};
+
+// The rest rule's "since the player / anchor moved": the more recent of the follow's anchor and the leader tracker.
+inline unsigned SinceLeaderMovedMs(unsigned since_anchor_ms, unsigned since_leader_ms)
+{
+    return since_anchor_ms < since_leader_ms ? since_anchor_ms : since_leader_ms;
+}
+
 // May a player's bot sit down to eat or drink now (the thresholds are the caller's pick)?
 inline bool LedMaySitDown(LedRestInputs const& in)
 {
