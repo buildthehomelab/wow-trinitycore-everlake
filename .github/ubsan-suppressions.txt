@@ -1,0 +1,9 @@
+# Everlake: UndefinedBehaviorSanitizer findings in existing code that are known and not fixed yet. CI reads this through
+# UBSAN_OPTIONS (linux-build.yml). Each entry should be fixed in its own pull request, with a test, and removed there.
+# A vptr_check entry matches the mangled type name of the object at the moment of the report; anchor it with ^ and $.
+
+# WorldObject::~WorldObject() calls IsStoredInWorldObjectGridContainer(), which reads Creature::m_isTempWorldObject
+# through ToCreature() after the Creature part of the object is already destroyed (Object.cpp). Happens for every
+# Creature deleted while not stored in the world object grid; same code in TrinityCore. WorldObject is abstract, so this
+# also hides any other vptr report made during ~WorldObject.
+vptr_check:^11WorldObject$
