@@ -19,6 +19,7 @@
 
 #include "ScriptMgr.h"
 #include "AreaTrigger.h"
+#include "ClassicProcRules.h"
 #include "CellImpl.h"
 #include "Creature.h"
 #include "CreatureAI.h"
@@ -1276,6 +1277,26 @@ class classic_spell_sha_lightning_shield : public AuraScript
     }
 };
 
+// The proc event as ClassicProcRules looks at it
+static ClassicProcRules::ProcEvent ClassicProcEvent(ProcEventInfo& eventInfo)
+{
+    ClassicProcRules::ProcEvent event;
+    if (SpellInfo const* spell = eventInfo.GetSpellInfo())
+    {
+        event.SpellFamily = spell->SpellFamilyName;
+        event.SpellFamilyFlags = spell->SpellFamilyFlags;
+        event.FinishingMove = std::ranges::any_of(spell->PowerCosts, [](SpellPowerEntry const* cost) { return cost && cost->PowerType == POWER_COMBO_POINTS; });
+        event.Chill = spell->SpellFamilyName == SPELLFAMILY_MAGE && spell->HasAura(SPELL_AURA_MOD_DECREASE_SPEED);
+    }
+    event.SchoolMask = eventInfo.GetSchoolMask();
+    event.Blocked = (eventInfo.GetHitMask() & (PROC_HIT_BLOCK | PROC_HIT_FULL_BLOCK)) != 0;
+    event.Critical = (eventInfo.GetHitMask() & PROC_HIT_CRITICAL) != 0;
+    event.Periodic = bool(eventInfo.GetTypeMask() & PROC_FLAG_DEAL_HARMFUL_PERIODIC);
+    DamageInfo const* damage = eventInfo.GetDamageInfo();
+    event.Damage = damage && damage->GetDamage() > 0;
+    return event;
+}
+
 // Shaman weapon imbues of 1.60: one DUMMY aura per imbue, the enchant on the weapon tells the rank.
 static Item* ClassicImbuedWeapon(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
 {
@@ -1297,21 +1318,7 @@ class classic_spell_sha_flametongue_weapon : public AuraScript
 {
     static constexpr uint32 SPELL_FLAMETONGUE_ATTACK = 10444;
 
-    // enchant -> the rank's proc spell whose points carry the damage
-    static uint32 GetRankSpell(uint32 enchantId)
-    {
-        switch (enchantId)
-        {
-            case 5:    return 8026;
-            case 4:    return 8028;
-            case 3:    return 8029;
-            case 523:  return 10445;
-            case 1665: return 16343;
-            case 1666:
-            case 7567: return 16344;
-            default:   return 0;
-        }
-    }
+    static uint32 GetRankSpell(uint32 enchantId) { return ClassicProcRules::FlametongueRankSpell(enchantId); }
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
@@ -1333,8 +1340,7 @@ class classic_spell_sha_flametongue_weapon : public AuraScript
         SpellInfo const* rank = sSpellMgr->GetSpellInfo(GetRankSpell(weapon->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT)), DIFFICULTY_NONE);
         if (!rank)
             return;
-        float const speed = weapon->GetTemplate()->GetDelay() / 1000.0f;
-        int32 const damage = std::max(int32(rank->GetEffect(EFFECT_0).CalcValue() * speed / 100.0f), 1);
+        int32 const damage = ClassicProcRules::FlametongueDamage(float(rank->GetEffect(EFFECT_0).CalcValue()), weapon->GetTemplate()->GetDelay());
         // spell power is added by 10444 itself (its bonus coefficient)
         GetTarget()->CastSpell(eventInfo.GetActionTarget(), SPELL_FLAMETONGUE_ATTACK, CastSpellExtraArgs(aurEff)
             .SetCastItem(weapon).AddSpellMod(SPELLVALUE_BASE_POINT0, damage));
@@ -1350,20 +1356,7 @@ class classic_spell_sha_flametongue_weapon : public AuraScript
 // 439431 - Windfury Weapon
 class classic_spell_sha_windfury_weapon : public AuraScript
 {
-    // enchant -> the rank's attack power + extra attacks spell
-    static uint32 GetRankSpell(uint32 enchantId)
-    {
-        switch (enchantId)
-        {
-            case 283:  return 8233;
-            case 284:  return 8236;
-            case 525:  return 10484;
-            case 1669:
-            case 7569: return 16361;
-            case 8293: return 8233;
-            default:   return 0;
-        }
-    }
+    static uint32 GetRankSpell(uint32 enchantId) { return ClassicProcRules::WindfuryRankSpell(enchantId); }
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
@@ -1430,25 +1423,11 @@ class classic_spell_grave_touch : public AuraScript
 class classic_spell_proc_chance_from_effect : public AuraScript
 {
 protected:
-    static SpellEffIndex ChanceEffect(uint32 spellId)
+    bool CheckProc(ProcEventInfo& eventInfo)
     {
-        switch (spellId)
-        {
-            case 11180:   // Winter's Chill: $m2
-            case 12298:   // Shield Specialization (warrior): $m2
-            case 14909:   // Searing Light: $m2
-            case 16850:   // Improved Starfire: $s2
-            case 20150:   // Shield Specialization (paladin): $m2
-            case 1224716: // Puncturing Wounds: $m2
-                return EFFECT_1;
-            default:
-                return EFFECT_0;
-        }
-    }
-
-    bool CheckProc(ProcEventInfo& /*eventInfo*/)
-    {
-        AuraEffect const* chance = GetEffect(ChanceEffect(GetId()));
+        if (!ClassicProcRules::TalentProcMatches(GetId(), ClassicProcEvent(eventInfo)))
+            return false;
+        AuraEffect const* chance = GetEffect(ClassicProcRules::TalentChanceEffect(GetId()));
         return chance && roll_chance(chance->GetAmount());
     }
 
@@ -1514,26 +1493,16 @@ class classic_spell_pal_reckoning : public AuraScript
 
     bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
-        ProcFlagsHit const hitMask = eventInfo.GetHitMask();
-        bool const blocked = (hitMask & (PROC_HIT_BLOCK | PROC_HIT_FULL_BLOCK)) != 0;
-        DamageInfo const* damage = eventInfo.GetDamageInfo();
-        if (!blocked && (!damage || !damage->GetDamage()))   // a full block leaves no damage and still counts
+        // "no more than once per 1.5 s after a block": the block branch alone has the cooldown, so the row in spell_proc
+        // sets the aura's own cooldown to 1 ms and the 1.5 s live here
+        uint32 const now = GameTime::GetGameTimeMS();
+        bool fromBlock = false;
+        float const chance = ClassicProcRules::ReckoningChance(ClassicProcEvent(eventInfo), now, _lastBlockMs, float(aurEff->GetAmount()), fromBlock);
+        if (chance <= 0.0f || !roll_chance(chance))
             return false;
-        if (blocked)
-        {
-            // "no more than once per 1.5 s after a block": the block branch alone has the cooldown, so the row in spell_proc
-            // sets the aura's own cooldown to 1 ms and the 1.5 s live here
-            uint32 const now = GameTime::GetGameTimeMS();
-            if (_lastBlockMs && now - _lastBlockMs < 1500)
-                return false;
-            if (!roll_chance(float(aurEff->GetAmount())))
-                return false;
+        if (fromBlock)
             _lastBlockMs = now;
-            return true;
-        }
-        if (hitMask & PROC_HIT_CRITICAL)
-            return roll_chance(float(aurEff->GetAmount()) * 2.5f);
-        return false;
+        return true;
     }
 
     uint32 _lastBlockMs = 0;
@@ -1579,20 +1548,10 @@ class classic_spell_mage_missile_barrage : public AuraScript
     bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
         SpellInfo const* spell = eventInfo.GetSpellInfo();
-        if (!spell || spell->SpellFamilyName != SPELLFAMILY_MAGE)
+        if (!spell)
             return false;
-        // the whole family mask of each rank, so no other mage spell matches
-        flag128 const& f = spell->SpellFamilyFlags;
-        if (f[3] != 0)
-            return false;
-        if (f[0] == 0x60000000 && f[1] == 0 && f[2] == 0)                       // Arcane Blast
-            return roll_chance(float(aurEff->GetAmount()));
-        if ((f[0] == 0x40000000 && f[1] == 0x8000 && f[2] == 0)                 // Arcane Surge
-            || (f[0] == 0x40000001 && f[1] == 0 && f[2] == 0)                   // Fireball
-            || (f[0] == 0x40180020 && f[1] == 0 && f[2] == 0)                   // Frostbolt
-            || (f[0] == 0x40100000 && f[1] == 0x1000 && f[2] == 0x8))           // Frostfire Bolt
-            return roll_chance(float(aurEff->GetAmount()) / 2.0f);
-        return false;
+        float const chance = ClassicProcRules::MissileBarrageChance(spell->SpellFamilyName, spell->SpellFamilyFlags, float(aurEff->GetAmount()));
+        return chance > 0.0f && roll_chance(chance);
     }
 
     // effect 1 carries the same trigger: it must not fire a second 400589
