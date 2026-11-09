@@ -17,12 +17,15 @@
 
 #include "TraitMgr.h"
 #include "DB2Stores.h"
+#include "DB2HotfixGenerator.h"
+#include "Config.h"
 #include "FlatSet.h"
 #include "IteratorPair.h"
 #include "Log.h"
 #include "MapUtils.h"
 #include "TraitPacketsCommon.h"
 #include "UpdateFields.h"
+#include <cmath>
 
 namespace TraitMgr
 {
@@ -87,6 +90,122 @@ int32 _configIdGenerator = 0;
 std::unordered_map<int32, std::vector<TraitCurrencySourceEntry const*>> _traitCurrencySourcesByCurrency;
 std::unordered_map<int32, std::vector<TraitDefinitionEffectPointsEntry const*>> _traitDefinitionEffectPointModifiers;
 std::unordered_map<int32, std::vector<TraitTreeLoadoutEntryEntry const*>> _traitTreeLoadoutsByChrSpecialization;
+}
+
+// Classic 1.60: Rate.Talent (worldserver.conf / zz-9-local.conf), as on vanilla cores: talent points per level times this.
+// Talent points are the class talent currency 3820 (one point at each level 10-60, SourcedMax 51). The client works the
+// points out from the same DB2 rows, so the changed rows are also sent to it as hotfixes, or its talent window would still
+// show the old number. 1 = blizzlike (nothing is changed or sent). Points are handed out level by level, so 1.5 gives 1, 2,
+// 1, 2... and a level-60 character always ends with round-down(51 x rate). Lowering the rate below what a character has
+// spent makes its next talent change ask to reset first.
+std::vector<int32> ScaleClassicTalentLevelPoints(std::vector<int32> const& amounts, float rate)
+{
+    std::vector<int32> scaled;
+    scaled.reserve(amounts.size());
+    int32 baseTotal = 0;
+    int32 givenTotal = 0;
+    for (int32 amount : amounts)
+    {
+        baseTotal += amount;
+        int32 const wanted = int32(std::floor(float(baseTotal) * rate + 0.0001f));
+        int32 const given = std::max(0, wanted - givenTotal);
+        givenTotal += given;
+        scaled.push_back(given);
+    }
+    return scaled;
+}
+
+ClassicTalentRateRow GetClassicTalentRateRow(TraitCurrencySourceEntry const& source)
+{
+    // The rows the Legacy perk Talented opens (37163-37167: one point at each level 9..5 behind a Talented node) stay as they
+    // are: the server does not count them (the node is in the Legacy config, not the talent config being checked) but adds
+    // Talented's points itself, one a level (FillOwnedCurrenciesMap, GetClassicTalentedStartLevel). Scaled for the client only,
+    // the talent window offered more points than the server allowed and Apply Changes failed, as in advocaite/TrinityCore#150.
+    if (source.TraitNodeEntryID)
+        return ClassicTalentRateRow::Unchanged;
+
+    if (source.PlayerLevel > 0 && !source.QuestID && !source.AchievementID)
+        return ClassicTalentRateRow::Level;
+
+    return ClassicTalentRateRow::Scaled;
+}
+
+static void ApplyClassicTalentRate()
+{
+    static constexpr uint32 ClassicTalentCurrencyID = 3820;
+
+    float const rate = sConfigMgr->GetFloatDefault("Rate.Talent", 1.0f);
+    if (rate <= 0.0f || std::fabs(rate - 1.0f) < 0.001f)
+        return;
+
+    std::vector<TraitCurrencySourceEntry const*> levelSources;
+    std::vector<uint32> otherSources;
+    for (TraitCurrencySourceEntry const* source : sTraitCurrencySourceStore)
+    {
+        if (source->TraitCurrencyID != ClassicTalentCurrencyID || source->Amount <= 0)
+            continue;
+
+        switch (GetClassicTalentRateRow(*source))
+        {
+            case ClassicTalentRateRow::Level:
+                levelSources.push_back(source);
+                break;
+            case ClassicTalentRateRow::Scaled:
+                otherSources.push_back(source->ID);
+                break;
+            case ClassicTalentRateRow::Unchanged:
+                break;
+        }
+    }
+
+    if (levelSources.empty())
+    {
+        TC_LOG_ERROR("server.loading", "Rate.Talent = {} not applied: no level rows for talent currency {} in TraitCurrencySource", rate, ClassicTalentCurrencyID);
+        return;
+    }
+
+    std::ranges::sort(levelSources, {}, &TraitCurrencySourceEntry::PlayerLevel);
+
+    std::vector<int32> amounts;
+    amounts.reserve(levelSources.size());
+    for (TraitCurrencySourceEntry const* source : levelSources)
+        amounts.push_back(source->Amount);
+
+    std::vector<int32> const scaled = ScaleClassicTalentLevelPoints(amounts, rate);
+
+    uint32 changed = 0;
+    int32 baseTotal = 0;
+    int32 givenTotal = 0;
+    for (std::size_t i = 0; i < levelSources.size(); ++i)
+    {
+        baseTotal += amounts[i];
+        givenTotal += scaled[i];
+
+        const_cast<TraitCurrencySourceEntry*>(levelSources[i])->Amount = scaled[i];
+        DB2HotfixGeneratorBase::AddClientHotfix(sTraitCurrencySourceStore.GetTableHash(), levelSources[i]->ID);
+        ++changed;
+    }
+
+    for (uint32 sourceId : otherSources)
+    {
+        TraitCurrencySourceEntry* source = const_cast<TraitCurrencySourceEntry*>(sTraitCurrencySourceStore.AssertEntry(sourceId));
+        source->Amount = std::max(0, int32(std::lround(float(source->Amount) * rate)));
+        DB2HotfixGeneratorBase::AddClientHotfix(sTraitCurrencySourceStore.GetTableHash(), sourceId);
+        ++changed;
+    }
+
+    if (TraitCurrencyEntry const* currency = sTraitCurrencyStore.LookupEntry(ClassicTalentCurrencyID))
+    {
+        if (currency->SourcedMax > 0 && currency->SourcedMax < givenTotal)
+        {
+            const_cast<TraitCurrencyEntry*>(currency)->SourcedMax = givenTotal;
+            DB2HotfixGeneratorBase::AddClientHotfix(sTraitCurrencyStore.GetTableHash(), ClassicTalentCurrencyID);
+            ++changed;
+        }
+    }
+
+    TC_LOG_INFO("server.loading", ">> Rate.Talent = {}: {} talent points by the level cap instead of {} ({} rows changed)",
+        rate, givenTotal, baseTotal, changed);
 }
 
 void Load()
@@ -335,6 +454,8 @@ void Load()
         for (int32 traitTreeId : traitTreeIds)
             if (Tree* tree = Trinity::Containers::MapGetValuePtr(_traitTrees, traitTreeId))
                 _traitTreesByTraitSystem[traitSystemId].push_back(tree);
+
+    ApplyClassicTalentRate();
 
     for (TraitCurrencySourceEntry const* traitCurrencySource : sTraitCurrencySourceStore)
         _traitCurrencySourcesByCurrency[traitCurrencySource->TraitCurrencyID].push_back(traitCurrencySource);

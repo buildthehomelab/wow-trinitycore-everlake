@@ -2523,19 +2523,13 @@ void Player::InitTalentForLevel()
         ResetTalentSpecialization();
 
     int32 talentTiers = DB2Manager::GetNumTalentsAtLevel(level, Classes(GetClass()));
-    if (level < 15)
-    {
-        // Remove all talent points
-        ResetTalents(true);
-    }
-    else
-    {
-        if (!GetSession()->HasPermission(rbac::RBAC_PERM_SKIP_CHECK_MORE_TALENTS_THAN_ALLOWED))
-            for (int32 t = talentTiers; t < MAX_TALENT_TIERS; ++t)
-                for (uint32 c = 0; c < MAX_TALENT_COLUMNS; ++c)
-                    for (TalentEntry const* talent : sDB2Manager.GetTalentsByPosition(GetClass(), t, c))
-                        RemoveTalent(talent);
-    }
+    // Classic 1.60: a level change never respecs (vanilla only resets talents at a trainer). The retail-era "level < 15 ->
+    // ResetTalents" cleanup wiped the points a level 10-14 character had spent on every ding and spec activation.
+    if (level >= 15 && !GetSession()->HasPermission(rbac::RBAC_PERM_SKIP_CHECK_MORE_TALENTS_THAN_ALLOWED))
+        for (int32 t = talentTiers; t < MAX_TALENT_TIERS; ++t)
+            for (uint32 c = 0; c < MAX_TALENT_COLUMNS; ++c)
+                for (TalentEntry const* talent : sDB2Manager.GetTalentsByPosition(GetClass(), t, c))
+                    RemoveTalent(talent);
 
     SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::MaxTalentTiers), talentTiers);
 
@@ -3310,8 +3304,18 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
 
             // Runeforging special case
             if ((_spell_idx->second->GetAcquireMethod() == SkillLineAbilityAcquireMethod::AutomaticCharLevel && !HasSkill(_spell_idx->second->SkillLine)) || ((_spell_idx->second->SkillLine == SKILL_RUNEFORGING) && _spell_idx->second->TrivialSkillLineRankHigh == 0))
+            {
                 if (SkillRaceClassInfoEntry const* rcInfo = sDB2Manager.GetSkillRaceClassInfo(_spell_idx->second->SkillLine, GetRace(), GetClass()))
                     LearnDefaultSkill(rcInfo);
+            }
+            // Classic 1.60: a weapon spell taught by a weapon master (Two-Handed Maces 199, Two-Handed Axes 197 for a shaman) opens its
+            // weapon skill when the race and class may have it. These spells carry no skill effect and those skills are not given at
+            // creation, so the spell was in the spellbook but the weapon could not be equipped ("you don't know how to use it").
+            else if (IsWeaponSkill(_spell_idx->second->SkillLine) && !HasSkill(_spell_idx->second->SkillLine))
+            {
+                if (SkillRaceClassInfoEntry const* rcInfo = sDB2Manager.GetSkillRaceClassInfo(_spell_idx->second->SkillLine, GetRace(), GetClass()))
+                    LearnDefaultSkill(rcInfo);
+            }
         }
     }
 
@@ -7360,8 +7364,8 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, HonorGainS
         // apply honor multiplier from aura (not stacking-get highest)
         AddPct(honor_f, GetMaxPositiveAuraModifierByMiscMask(SPELL_AURA_MOD_HONOR_GAIN_PCT_FROM_SOURCE, 1 << AsUnderlyingType(source)));
         AddPct(honor_f, GetMaxPositiveAuraModifier(SPELL_AURA_MOD_HONOR_GAIN_PCT));
-        // Classic 1.60 Legacy perk For Great Honor 1225501: currency gain aura on Honor (1792); honor is not credited as that currency here
-        AddPct(honor_f, GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_CURRENCY_GAIN, 1792));
+        // Classic 1.60 Legacy perk For Great Honor 1225501 (currency gain aura on Honor 1792) is applied by
+        // ModifyCurrency when the honor is credited below, for kills and battleground honor alike.
         honor_f += _restMgr->GetRestBonusFor(REST_TYPE_HONOR, honor_f);
     }
 
@@ -7382,6 +7386,12 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, HonorGainS
     SendDirectMessage(data.Write());
 
     AddHonorXP(honor);
+
+    // Classic 1.60: honor is the Honor currency (1792). The PvP quartermasters (Lady Palanseer 12792, Brave Stonehide
+    // 12793, Sergeant Thunderhorn 14581) price their goods in it through ItemExtendedCost (11575-11706: 1792 plus marks),
+    // so honor that only fed the retail honor level bar could never be spent.
+    if (honor > 0 && sCurrencyTypesStore.HasRecord(CURRENCY_HONOR_CLASSIC))
+        ModifyCurrency(CURRENCY_HONOR_CLASSIC, honor, CurrencyGainSource::PvPHonorReward);
 
     if (InBattleground() && honor > 0)
     {
@@ -14820,9 +14830,20 @@ void Player::PrepareGossipMenu(WorldObject* source, uint32 menuId, bool showQues
                     if (!HasPlayerFlag(PLAYER_FLAGS_NO_XP_GAIN) || IsMaxLevel())
                         canTalk = false;
                     break;
+                case GossipOptionNpc::Trainer:
+                {
+                    // A class trainer offers training to its own class only (classic: another class saw no train option, only the
+                    // trainer's talk). The trainer is the option's own, else the creature's, as when the option is picked.
+                    uint32 trainerId = sObjectMgr->GetCreatureTrainerForGossipOption(creature->GetEntry(), menuId, gossipMenuItem.OrderIndex);
+                    if (!trainerId)
+                        trainerId = creature->GetTrainerId();
+                    if (Trainer::Trainer const* trainer = sObjectMgr->GetTrainer(trainerId))
+                        if (!(trainer->GetClassMask() & GetClassMask()))
+                            canTalk = false;
+                    break;
+                }
                 case GossipOptionNpc::None:
                 case GossipOptionNpc::Vendor:
-                case GossipOptionNpc::Trainer:
                 case GossipOptionNpc::Binder:
                 case GossipOptionNpc::Banker:
                 case GossipOptionNpc::PetitionVendor:
@@ -14884,7 +14905,9 @@ void Player::PrepareGossipMenu(WorldObject* source, uint32 menuId, bool showQues
             return false;
         };
 
-        if (creature->HasNpcFlag(UNIT_NPC_FLAG_TRAINER) && creature->GetTrainerId() && !hasOption(GossipOptionNpc::Trainer))
+        Trainer::Trainer const* ownTrainer = creature->GetTrainerId() ? sObjectMgr->GetTrainer(creature->GetTrainerId()) : nullptr;
+        if (creature->HasNpcFlag(UNIT_NPC_FLAG_TRAINER) && ownTrainer && (ownTrainer->GetClassMask() & GetClassMask())
+            && !hasOption(GossipOptionNpc::Trainer))
             menu.AddMenuItem(CLASSIC_GOSSIP_OPTION_AUTO_TRAINER, menu.GetMenuItemCount(), GossipOptionNpc::Trainer, "Train me.", 0,
                 GossipOptionFlags::None, {}, 0, 0, false, 0, "", {}, {}, menuId, menu.GetMenuItemCount());
 
@@ -15872,7 +15895,7 @@ void Player::CompleteQuest(uint32 quest_id)
 
         if (Quest const* qInfo = sObjectMgr->GetQuestTemplate(quest_id))
             if (qInfo->HasFlag(QUEST_FLAGS_TRACKING_EVENT))
-                RewardQuest(qInfo, LootItemType::Item, 0, this, false);
+                RewardQuest(qInfo, LootItemType::Item, 0, nullptr, false);   // no quest giver: keep the open gossip menu
     }
 
     if (sWorld->getBoolConfig(CONFIG_QUEST_ENABLE_QUEST_TRACKER)) // check if Quest Tracker is enabled
@@ -19360,6 +19383,34 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
                 }
                 else
                     transport = transportOnMap;
+            }
+        }
+
+        // A zeppelin or boat between two continents is on the other continent by the time the player logs in again,
+        // so it is not found on the saved map. Look for it on the other maps of its route before sending the player home.
+        if (!transport)
+        {
+            if (TransportSpawn const* transportSpawn = sTransportMgr->GetTransportSpawn(fields.transguid))
+            {
+                if (TransportTemplate const* transportTemplate = sTransportMgr->GetTransportTemplate(transportSpawn->TransportGameObjectId))
+                {
+                    for (uint32 routeMapId : transportTemplate->MapIds)
+                    {
+                        if (routeMapId == mapId)
+                            continue;
+
+                        if (Map* routeMap = sMapMgr->CreateMap(routeMapId, this))
+                        {
+                            if (Transport* transportOnRoute = routeMap->GetTransport(transGUID))
+                            {
+                                transport = transportOnRoute;
+                                mapId = routeMapId;
+                                instanceId = 0;
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -24427,6 +24478,10 @@ void Player::StartTaxiMovement(uint32 mountDisplayId, uint32 path, uint32 pathNo
 {
     // remove fake death
     RemoveAurasWithInterruptFlags(SpellAuraInterruptFlags::Interacting);
+
+    // Forever: classic dismisses the pet for the flight and Dismount() on landing resummons it; left out, the pet
+    // stays behind, falls out of visibility range and is removed with its reagent (soul shard) refunded.
+    UnsummonPetTemporaryIfAny();
 
     if (mountDisplayId)
         Mount(mountDisplayId);

@@ -2666,6 +2666,16 @@ Rate.XP.Quest   = 1
 Rate.XP.Explore = 1
 
 #
+#    Rate.Talent
+#        Description: Classic 1.60: talent points per level. Talent points are the class talent currency (one point at
+#                     each level from 10 to 60); its level rows and its cap are multiplied by this and sent to the
+#                     client as hotfixes so its talent window shows the same number. Points are handed out level by
+#                     level (1.5 = 1, 2, 1, 2...). Lowering it below what a character spent asks for a talent reset.
+#        Default:     1 - (blizzlike, nothing changed or sent)
+
+Rate.Talent = 1
+
+#
 #    Rate.XP.BattlegroundKill
 #        Description: Experience rate for honorable kills in battlegrounds,
 #                     it works when Battleground.GiveXPForKills = 1
@@ -4920,6 +4930,17 @@ Classic.Shop.BoostGold = 250
 #                     1 - (Enabled)
 
 Classic.Shop.VasTest = 0
+
+#    Classic.PvPRank.PointsBattlegroundWin
+#    Classic.PvPRank.PointsBattlegroundLoss
+#        Description: PvP rank points (reputation of the "PvP Rank Points" track, faction 2800) given to every player of the
+#                     winning / losing side when a battleground ends. Rank 1 needs 750 points, rank 14 needs 24750 in all.
+#                     Rate.Reputation.Gain also applies. 0 gives none.
+#        Default:     250 - (Win)
+#                     100 - (Loss)
+
+Classic.PvPRank.PointsBattlegroundWin = 250
+Classic.PvPRank.PointsBattlegroundLoss = 100
 
 #
 #    Discord.Channel.Enable

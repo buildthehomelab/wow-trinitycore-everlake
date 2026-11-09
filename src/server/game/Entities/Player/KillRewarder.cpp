@@ -58,7 +58,7 @@
  // 3.2.1. Initialize initial XP amount based on killer's level.
  // 3.2.2. Reward killer (see 4. for more details).
  // 4. Reward player.
- // 4.1. Give honor (player must be alive and not on BG).
+ // 4.1. Give honor (player must be alive).
  // 4.2. Give XP.
  // 4.2.1. If player is in group, adjust XP:
  //        * set to 0 if player's level is more than maximum level of not gray member;
@@ -184,17 +184,18 @@ inline void KillRewarder::_RewardKillCredit(Player* player)
 void KillRewarder::_RewardPlayer(Player* player, bool isDungeon)
 {
     // 4. Reward player.
-    if (!_isBattleGround)
-    {
-        // 4.1. Give honor (player must be alive and not on BG).
-        _RewardHonor(player);
-        // 4.1.1 Send player killcredit for quests with PlayerSlain
-        if (_victim->GetTypeId() == TYPEID_PLAYER)
-            player->KilledPlayerCredit(_victim->GetGUID());
-    }
-    // Give XP only in PvE or in battlegrounds.
+    // 4.1. Give honor. A player victim is an honorable kill in a battleground too - `Rate.Honor` and
+    //      every gate that decides whether honor is due live in `Player::RewardHonor` (gray level,
+    //      same team, arena, aura modifiers), so honor is not tied to the PvE/battleground split here.
+    //      Battleground kill XP is still a separate switch (see below).
+    _RewardHonor(player);
+    // 4.1.1 Send player killcredit for quests with PlayerSlain (open world only)
+    if (!_isBattleGround && _victim->GetTypeId() == TYPEID_PLAYER)
+        player->KilledPlayerCredit(_victim->GetGUID());
+
+    // Give XP only in PvE or in battlegrounds (battleground kill XP needs Battleground.GiveXPForKills).
     // Give reputation and kill credit only in PvE.
-    if (!_isPvP || _isBattleGround)
+    if (!_isPvP || (_isBattleGround && sWorld->getBoolConfig(CONFIG_BG_XP_FOR_KILL)))
     {
         float const rate = player->GetGroup() ?
             _groupRate * float(player->GetLevel()) / _sumLevel : // Group rate depends on summary level.
@@ -221,8 +222,9 @@ void KillRewarder::_RewardGroup(Group const* group, Player const* killer)
             _InitXP(_maxNotGrayMember, killer);
         // To avoid unnecessary calculations and calls,
         // proceed only if XP is not ZERO or player is not on battleground
-        // (battleground rewards only XP, that's why).
-        if (!_isBattleGround || _xp)
+        // (a battleground creature kill rewards only XP; a battleground player kill also pays honor, advocaite/TrinityCore#182,
+        // so it must not hang on the kill XP, which Rate.XP.BattlegroundKill = 0 makes 0).
+        if (!_isBattleGround || _isPvP || _xp)
         {
             bool const isDungeon = !_isPvP && sMapStore.LookupEntry(killer->GetMapId())->IsDungeon();
             if (!_isBattleGround)
@@ -267,8 +269,8 @@ void KillRewarder::Reward()
             _InitXP(killer, killer);
             // To avoid unnecessary calculations and calls,
             // proceed only if XP is not ZERO or player is not on battleground
-            // (battleground rewards only XP, that's why).
-            if (!_isBattleGround || _xp)
+            // (or the victim is a player: honor, see 3.1.)
+            if (!_isBattleGround || _isPvP || _xp)
                 // 3.2.2. Reward killer.
                 _RewardPlayer(killer, false);
         }
