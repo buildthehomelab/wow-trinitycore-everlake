@@ -2312,6 +2312,25 @@ uint32 Item::GetSellPrice(ItemTemplate const* proto, uint32 /*quality*/, uint32 
     return proto->GetSellPrice();
 }
 
+uint32 Item::GetRetailSellPrice(ItemTemplate const* proto, uint32 quality, uint32 itemLevel)
+{
+    if (proto->HasFlag(ITEM_FLAG2_OVERRIDE_GOLD_COST))
+        return proto->GetSellPrice();
+
+    bool standardPrice;
+    uint32 cost = Item::GetBuyPrice(proto, quality, itemLevel, standardPrice);
+    if (!standardPrice)
+        return proto->GetSellPrice();
+
+    if (ItemClassEntry const* classEntry = sDB2Manager.GetItemClassByOldEnum(proto->GetClass()))
+    {
+        uint32 buyCount = std::max(proto->GetBuyCount(), 1u);
+        return cost * classEntry->PriceModifier / buyCount;
+    }
+
+    return 0;
+}
+
 uint32 Item::GetItemLevel(Player const* owner) const
 {
     ItemTemplate const* itemTemplate = GetTemplate();
@@ -2480,7 +2499,11 @@ ItemDisenchantLootEntry const* Item::GetBaseDisenchantLoot(ItemTemplate const* i
     if (itemTemplate->GetArea(0) || itemTemplate->GetArea(1) || itemTemplate->GetMap() || itemTemplate->GetMaxStackSize() > 1)
         return nullptr;
 
-    if (!Item::GetSellPrice(itemTemplate, quality, itemLevel) && !sDB2Manager.HasItemCurrencyCost(itemTemplate->GetId()))
+    // Worthless items can't be disenchanted. "Worth" here is the retail price, as before advocaite #283 made vendors use the
+    // Classic sell price: 422 rare and uncommon items (252424 Black Whelp Slippers ...) have a Classic sell price of 0, and
+    // nothing says Forever stops them being disenchanted.
+    if (!Item::GetSellPrice(itemTemplate, quality, itemLevel) && !Item::GetRetailSellPrice(itemTemplate, quality, itemLevel)
+        && !sDB2Manager.HasItemCurrencyCost(itemTemplate->GetId()))
         return nullptr;
 
     uint32 itemClass = itemTemplate->GetClass();

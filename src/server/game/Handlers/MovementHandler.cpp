@@ -21,6 +21,7 @@
 #include "Corpse.h"
 #include "DB2Stores.h"
 #include "FlightPathMovementGenerator.h"
+#include "FallOutOfWorld.h"
 #include "GameTime.h"
 #include "Garrison.h"
 #include "InstanceLockMgr.h"
@@ -618,14 +619,24 @@ void WorldSession::HandleMovementOpcode(OpcodeClient opcode, MovementInfo& movem
         {
             if (!(plrMover->GetBattleground() && plrMover->GetBattleground()->HandlePlayerUnderMap(_player)))
             {
-                // NOTE: this is actually called many times while falling, so the repop is requested once per teleport.
-                // Falling out of the world is not the player's fault: an alive player goes back to the nearest graveyard
-                // instead of dying (RepopAtGraveyard revives at the teleport when he is below the map's minimum height)
+                // NOTE: this is actually called many times while falling, so it acts once per teleport.
+                // Out of combat in the open world, falling out of the world is not the player's fault: back to the nearest
+                // graveyard alive (RepopAtGraveyard revives at the teleport when he is below the map's minimum height).
+                // In combat or in an instance the player dies as before (Trinity::FallOutOfWorld).
                 if (plrMover->IsAlive() && !plrMover->IsBeingTeleported())
                 {
                     TC_LOG_DEBUG("entities.player.falldamage", "FALLDAMAGE Below map. Map min height: {} , Player debug info:\n{}", minHeight, plrMover->GetDebugInfo());
                     plrMover->SetPlayerFlag(PLAYER_FLAGS_IS_OUT_OF_BOUNDS);
-                    plrMover->RepopAtGraveyard();
+                    if (Trinity::FallOutOfWorld::For(plrMover->IsInCombat(), plrMover->GetMap()->Instanceable()) == Trinity::FallOutOfWorld::Outcome::ReturnToGraveyard)
+                        plrMover->RepopAtGraveyard();
+                    else
+                    {
+                        plrMover->EnvironmentalDamage(DAMAGE_FALL_TO_VOID, plrMover->GetMaxHealth());
+                        // player can be alive if GM/etc; change the death state to CORPSE so the death timer doesn't start
+                        // in the next player update
+                        if (plrMover->IsAlive())
+                            plrMover->KillPlayer();
+                    }
                 }
             }
         }
