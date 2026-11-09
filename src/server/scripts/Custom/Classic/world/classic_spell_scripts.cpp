@@ -1157,12 +1157,11 @@ class classic_spell_tauren_cultivate_herb : public SpellScript
             return;
 
         uint32 twinEntry = ClassicCultivation::GetTwinEntry(herb->GetGOInfo());
-        GameObject* twin = GameObject::CreateGameObject(twinEntry, herb->GetMap(), *herb, herb->GetLocalRotation(), 255, GO_STATE_READY);
+        GameObject* twin = GameObject::CreateGameObject(twinEntry, herb->GetMap(), *herb, herb->GetLocalRotation(), InitialPhaseShift(caster), 255, GO_STATE_READY);
         if (!twin)
             return;
 
         ClassicCultivation::MarkCultivated(herb->GetGUID());
-        PhasingHandler::InheritPhaseShift(twin, caster);
         twin->SetPrivateObjectOwner(caster->GetGUID());
         twin->SetRespawnTime(ClassicCultivation::TWIN_DURATION.count());
         caster->AddGameObject(twin);

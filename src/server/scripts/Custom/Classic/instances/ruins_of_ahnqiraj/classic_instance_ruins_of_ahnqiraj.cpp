@@ -31,6 +31,7 @@
 #include "Map.h"
 #include "MotionMaster.h"
 #include "ObjectMgr.h"
+#include "PhasingHandler.h"
 #include "Player.h"
 #include "QuaternionData.h"
 #include "ReputationMgr.h"
@@ -522,7 +523,7 @@ public:
                 {
                     Position const doorPos(-8526.0f, 1507.4f, 49.0f, 4.20662f);
                     if (GameObject* pAQDoor = GameObject::CreateGameObject(CLASSIC_AQ20_GO_AQ_DOOR, instance, doorPos,
-                        QuaternionData(0.0f, 0.0f, 0.861534f, -0.5077f), 255, GO_STATE_READY))
+                        QuaternionData(0.0f, 0.0f, 0.861534f, -0.5077f), InitialPhaseShift(), 255, GO_STATE_READY))
                     {
                         pAQDoor->SetSpawnedByDefault(false);
                         if (instance->AddToMap(pAQDoor))
@@ -921,7 +922,7 @@ public:
                     }
 
                     GameObject* pCrystal = GameObject::CreateGameObject(CLASSIC_AQ20_GO_OSSIRIAN_CRYSTAL, instance,
-                        Position(newLoc.x, newLoc.y, newLoc.z, 0.0f), QuaternionData(), 255, GO_STATE_READY);
+                        Position(newLoc.x, newLoc.y, newLoc.z, 0.0f), QuaternionData(), InitialPhaseShift(), 255, GO_STATE_READY);
                     if (pCrystal)
                     {
                         pCrystal->SetSpawnedByDefault(false);
