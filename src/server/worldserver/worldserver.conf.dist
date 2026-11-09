@@ -978,6 +978,27 @@ CharactersPerAccount = 60
 CharactersPerRealm = 60
 
 #
+#    NameReservation.Enable
+#        Description: Everlake: a character name belongs to one Battle.net account on every realm that shares
+#                     this login database (tables name_reservation and name_reservation_character in it).
+#                     Character create, rename, customize, race/faction change, undelete and .pdump load accept a
+#                     name only if it is free or already this account's. Bot pool accounts never reserve.
+#                     With the tables missing, new names are refused until
+#                     sql/everlake/2026_11_07_09_auth_name_reservation.sql is applied.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled, names unique per realm only)
+
+NameReservation.Enable = 1
+
+#
+#    NameReservation.GracePeriod
+#        Description: Seconds a name stays with its account after the last character using it on any realm
+#                     was deleted. Then another account may take it. Use the same value on every realm.
+#        Default:     7776000 - (90 days)
+
+NameReservation.GracePeriod = 7776000
+
+#
 #    CharacterCreating.EvokersPerRealm
 #        Description: Limit number of evokers per account on this realm.
 #        Range:       1-60

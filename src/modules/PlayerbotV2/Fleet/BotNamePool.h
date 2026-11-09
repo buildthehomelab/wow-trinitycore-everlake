@@ -49,6 +49,16 @@ public:
     // one JOIN scan per boot.
     static void ReconcileOnBoot();
 
+    // Everlake name reservation (NameReservationMgr, login database). Bots never reserve a name and never take one a
+    // player holds:
+    //  - Acquire skips held names;
+    //  - pool accounts are exempt from reserving (a GM rename or dump load onto a bot account reserves nothing);
+    //  - a player who may claim a name an offline bot on this realm has gets it: the bot is renamed on the spot.
+    //    An online bot keeps it until the next start, when RenameBotsHoldingReservedNames renames it.
+    // Call once at module start, after the account pool is loaded and before any bot logs in.
+    static void RegisterNameReservationHooks();
+    static uint32 RenameBotsHoldingReservedNames();
+
     // Diagnostic — returns (available, total) for /popstats.
     struct PoolStats { uint32 available; uint32 total; };
     static PoolStats GetStats();

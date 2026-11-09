@@ -918,6 +918,11 @@ void Module::Init()
     // boot doesn't see a phantom-claimed pool.
     Fleet::BotNamePool::ReconcileOnBoot();
 
+    // Everlake name reservation: bots never reserve and never keep a name a player holds (see BotNamePool.h).
+    // Before any bot logs in, so the renames below only touch offline bots.
+    Fleet::BotNamePool::RegisterNameReservationHooks();
+    Fleet::BotNamePool::RenameBotsHoldingReservedNames();
+
     // Re-roll bot appearances the client would reject (retail-only
     // customization options in the Classic 1.60 data crashed the owner's
     // client when such a bot came into view). Before any bot logs in.

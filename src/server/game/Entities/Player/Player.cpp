@@ -99,6 +99,7 @@
 #include "MiscPackets.h"
 #include "MotionMaster.h"
 #include "MovementPackets.h"
+#include "NameReservationMgr.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
@@ -4518,6 +4519,9 @@ void Player::DeleteFromDB(ObjectGuid playerguid, uint32 accountId, bool updateRe
 
     LoginDatabase.CommitTransaction(loginTransaction);
     CharacterDatabase.CommitTransaction(trans);
+
+    // Everlake: the character no longer uses its name; it is freed once no character on any realm does
+    sNameReservationMgr->Release(guid);
 
     if (updateRealmChars)
         sWorld->UpdateRealmCharCount(accountId);
