@@ -3065,6 +3065,17 @@ Battleground.PremadeGroupWaitForMatch = 1800000
 Battleground.GiveXPForKills = 0
 
 #
+#    Battleground.AlteracValley.ReinforcementDefeat
+#        Description: Classic Alterac Valley: show both teams' reinforcements (600 each at the start;
+#                     -1 per player death, -75 per tower burned, -100 for the captain, +1 per owned
+#                     mine every 45 s) and end the match when a team reaches 0. Off: vanilla rules,
+#                     the counter stays hidden and only a general kill ends the match.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+
+Battleground.AlteracValley.ReinforcementDefeat = 1
+
+#
 #    Battleground.Random.ResetHour
 #        Description: Hour of the day when the global instance resets occur.
 #        Range:       0-23
