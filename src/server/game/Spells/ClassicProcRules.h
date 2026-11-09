@@ -22,6 +22,7 @@
 #include "FlagsArray.h"
 #include "SharedDefines.h"
 #include <algorithm>
+#include <array>
 
 // Classic 1.60: the decisions of the proc scripts in classic_spell_scripts.cpp (advocaite/TrinityCore#325), apart from the
 // scripts so tests can reach them. Pure: the script reads the aura, the weapon and the proc event and passes plain values.
@@ -100,9 +101,86 @@ namespace ClassicProcRules
         bool Chill = false;         // a mage spell with a snare (a mage "Chill effect")
     };
 
-    // Whether the event is one the talent's tooltip names. #325: every event the talent's proc flags let through.
-    inline bool TalentProcMatches(uint32 /*talentSpellId*/, ProcEvent const& /*event*/)
+    // What a talent's tooltip asks of the event besides its spell and school
+    namespace TalentRequires
     {
+        constexpr uint32 Block          = 0x01;
+        constexpr uint32 Critical       = 0x02;
+        constexpr uint32 Periodic       = 0x04;
+        constexpr uint32 Damage         = 0x08;
+        constexpr uint32 FinishingMove  = 0x10;
+        constexpr uint32 Chill          = 0x20;
+    }
+
+    // The client data has no spell filter on these talents (their proc effects have no SpellClassMask and there is no spell_proc
+    // row), so without these rules each fired on every event its proc flags let through: Improved Kick on every Sinister Strike,
+    // Nightfall on every Shadow Bolt. Family flags are the 70862 SpellClassOptions masks of the spells the tooltip names.
+    struct TalentProcRule
+    {
+        uint32 TalentSpellId;
+        uint32 SpellFamily;         // SPELLFAMILY_GENERIC: any spell or none
+        flag128 SpellFamilyFlags;   // empty: any spell of the family; else a spell with any of these bits
+        uint32 SchoolMask;          // 0: any school
+        uint32 Requires;            // TalentRequires
+    };
+
+    constexpr uint32 FireFrostNature = SPELL_SCHOOL_MASK_FIRE | SPELL_SCHOOL_MASK_FROST | SPELL_SCHOOL_MASK_NATURE;
+
+    constexpr std::array<TalentProcRule, 23> TalentProcRules =
+    { {
+        { 19407,   SPELLFAMILY_HUNTER,  flag128(0x00000200),                   0, 0 },                              // Improved Concussive Shot: Concussive Shot
+        { 19228,   SPELLFAMILY_HUNTER,  flag128(0x00000040),                   0, 0 },                              // Improved Wing Clip: Wing Clip
+        { 12289,   SPELLFAMILY_WARRIOR, flag128(0x00000002),                   0, 0 },                              // Improved Hamstring: Hamstring
+        { 12311,   SPELLFAMILY_WARRIOR, flag128(0x00000800),                   0, 0 },                              // Improved Shield Bash: Shield Bash
+        { 12298,   SPELLFAMILY_GENERIC, flag128(),                             0, TalentRequires::Block },          // Shield Specialization (warrior): a block
+        { 20150,   SPELLFAMILY_GENERIC, flag128(),                             0, TalentRequires::Block },          // Shield Specialization (paladin): a block
+        { 13754,   SPELLFAMILY_ROGUE,   flag128(0x00000010),                   0, 0 },                              // Improved Kick: Kick
+        { 1224716, SPELLFAMILY_ROGUE,   flag128(0x00000004),                   0, 0 },                              // Puncturing Wounds: Backstab
+        { 13976,   SPELLFAMILY_ROGUE,   flag128(0x00000700),                   0, 0 },                              // Initiative: Ambush 0x200, Garrote 0x100, Cheap Shot 0x400
+        { 14156,   SPELLFAMILY_ROGUE,   flag128(),                             0, TalentRequires::FinishingMove },  // Ruthlessness: finishing moves (combo point cost)
+        { 16850,   SPELLFAMILY_DRUID,   flag128(0x00000004),                   0, 0 },                              // Improved Starfire: Starfire
+        { 18119,   SPELLFAMILY_WARLOCK, flag128(0, 0x00800000),                0, 0 },                              // Aftermath: Conflagrate
+        { 18094,   SPELLFAMILY_WARLOCK, flag128(0x0000400A, 0x00040000),       0, TalentRequires::Damage },         // Nightfall: Corruption 0x2, Drain Life 0x8, Drain Soul 0x4000, Wrack [1] 0x40000
+        { 14909,   SPELLFAMILY_PRIEST,  flag128(0x00100000),                   0, TalentRequires::Periodic },       // Searing Light: Holy Fire's periodic damage
+        { 15257,   SPELLFAMILY_PRIEST,  flag128(),                             SPELL_SCHOOL_MASK_SHADOW, TalentRequires::Damage }, // Shadow Weaving: Shadow damage spells
+        { 15326,   SPELLFAMILY_PRIEST,  flag128(),                             SPELL_SCHOOL_MASK_SHADOW, TalentRequires::Damage }, // Blackout: Shadow damage spells
+        { 14531,   SPELLFAMILY_GENERIC, flag128(),                             0, TalentRequires::Critical },       // Martyrdom: a melee or ranged critical strike taken
+        { 20210,   SPELLFAMILY_PALADIN, flag128(0x00206000, 0, 0, 0x04000000), 0, TalentRequires::Critical },       // Illumination: Flash of Light 0x2000, Holy Light 0x4000, Holy Shock 0x200000, Light's Vigil [3] 0x4000000
+        { 16164,   SPELLFAMILY_SHAMAN,  flag128(),                             FireFrostNature, TalentRequires::Damage }, // Elemental Focus: Fire, Frost or Nature damage spells
+        { 11071,   SPELLFAMILY_MAGE,    flag128(),                             0, TalentRequires::Chill },          // Frostbite: Chill effects
+        { 11103,   SPELLFAMILY_MAGE,    flag128(),                             SPELL_SCHOOL_MASK_FIRE, TalentRequires::Damage }, // Impact: Fire spells
+        { 11213,   SPELLFAMILY_MAGE,    flag128(),                             0, TalentRequires::Damage },         // Arcane Concentration: damage spells
+        { 11180,   SPELLFAMILY_MAGE,    flag128(0x00000020),                   0, 0 },                              // Winter's Chill: Frostbolt
+    } };
+
+    // Whether the event is one the talent's tooltip names. Talents without a rule (Unbridled Wrath: melee swings, Spirit Tap:
+    // kills) take every event their proc flags let through.
+    inline bool TalentProcMatches(uint32 talentSpellId, ProcEvent const& event)
+    {
+        auto rule = std::ranges::find(TalentProcRules, talentSpellId, &TalentProcRule::TalentSpellId);
+        if (rule == TalentProcRules.end())
+            return true;
+
+        if (rule->SpellFamily != SPELLFAMILY_GENERIC && event.SpellFamily != rule->SpellFamily)
+            return false;
+        if (rule->SpellFamilyFlags && !(event.SpellFamilyFlags & rule->SpellFamilyFlags))
+            return false;
+        if (rule->SchoolMask && !(event.SchoolMask & rule->SchoolMask))
+            return false;
+
+        uint32 const need = rule->Requires;
+        if ((need & TalentRequires::Block) && !event.Blocked)
+            return false;
+        if ((need & TalentRequires::Critical) && !event.Critical)
+            return false;
+        if ((need & TalentRequires::Periodic) && !event.Periodic)
+            return false;
+        if ((need & TalentRequires::Damage) && !event.Damage)
+            return false;
+        if ((need & TalentRequires::FinishingMove) && !event.FinishingMove)
+            return false;
+        if ((need & TalentRequires::Chill) && !event.Chill)
+            return false;
         return true;
     }
 

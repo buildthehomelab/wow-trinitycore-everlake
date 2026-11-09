@@ -1340,7 +1340,9 @@ class classic_spell_sha_flametongue_weapon : public AuraScript
         SpellInfo const* rank = sSpellMgr->GetSpellInfo(GetRankSpell(weapon->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT)), DIFFICULTY_NONE);
         if (!rank)
             return;
-        int32 const damage = ClassicProcRules::FlametongueDamage(float(rank->GetEffect(EFFECT_0).CalcValue()), weapon->GetTemplate()->GetDelay());
+        // with the shaman as caster the points grow per level up to the rank's max level (8026: 326 at 10, 19 per level to 16),
+        // as the tooltip's $8026m1 shows them
+        int32 const damage = ClassicProcRules::FlametongueDamage(float(rank->GetEffect(EFFECT_0).CalcValue(GetTarget())), weapon->GetTemplate()->GetDelay());
         // spell power is added by 10444 itself (its bonus coefficient)
         GetTarget()->CastSpell(eventInfo.GetActionTarget(), SPELL_FLAMETONGUE_ATTACK, CastSpellExtraArgs(aurEff)
             .SetCastItem(weapon).AddSpellMod(SPELLVALUE_BASE_POINT0, damage));
@@ -1463,9 +1465,10 @@ class classic_spell_warl_nightfall : public AuraScript
         return ValidateSpellInfo({ SPELL_SHADOW_TRANCE });
     }
 
-    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
-        return roll_chance(aurEff->GetAmount());
+        // only the four spells of the tooltip (the aura's proc flags also let every other harmful spell and periodic through)
+        return ClassicProcRules::TalentProcMatches(GetId(), ClassicProcEvent(eventInfo)) && roll_chance(aurEff->GetAmount());
     }
 
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
