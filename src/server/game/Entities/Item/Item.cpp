@@ -604,7 +604,7 @@ void Item::UpdateDuration(Player* owner, uint32 diff)
 // action bar. Each effect takes its own slot: the first effect naming a slot gets it, and an effect without a usable slot of its own
 // takes the lowest slot no other effect has. In the 70790 data one item, 239695, has two effects in slot 1 (charges -1 and 0); giving
 // the second one slot 1 as well wrote its 0 over the first one's charge when the item was made, and the item could not be used.
-static uint32 GetSpellChargesSlotForEffect(BonusData const& bonusData, uint32 effectIndex)
+uint32 GetSpellChargesSlotForEffect(BonusData const& bonusData, uint32 effectIndex)
 {
     static constexpr uint32 MaxSpellChargesSlot = UF::size<decltype(UF::ItemData::SpellCharges)>();
     if (effectIndex >= MaxSpellChargesSlot)
