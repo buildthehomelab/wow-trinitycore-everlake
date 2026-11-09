@@ -25,7 +25,7 @@
 // learns. Rows below are the Forever client's (build 70862, SpellEffect.db2).
 namespace
 {
-    SpellEffectEntry Effect(int32 index, SpellEffectName effect, int32 triggerSpell)
+    SpellEffectEntry Effect(int32 index, SpellEffects effect, int32 triggerSpell)
     {
         SpellEffectEntry entry{};
         entry.EffectIndex = index;
