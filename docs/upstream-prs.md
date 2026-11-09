@@ -4,7 +4,10 @@ Every change from advocaite's branches or TrinityCore that goes into `everlake`,
 checked, and the verdict. Plan: `docs/core-fork.md` in buildthehomelab/wow-project-everlake.
 
 From the first batch of advocaite pull requests (#276-#282) on, each review is its own file in `docs/upstream-prs/`
-(`advocaite-<number>.md`), so pull requests reviewed side by side don't clash in this file.
+(`advocaite-<number>.md`), so pull requests reviewed side by side don't clash in this file. TrinityCore `master` commits
+come in by `git cherry-pick -x`, one file per commit: `trinitycore-<first 10 characters of the commit>.md`. A commit
+already in `everlake` under another hash (same `git patch-id`, or the same fix made by advocaite) gets a file too, so
+the daily upstream check counts it as sorted.
 
 ## 2026-11-08: advocaite `forever-bots` @ 19bdc6af66 (the bot module)
 
