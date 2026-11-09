@@ -19,6 +19,7 @@
 
 #include "ScriptMgr.h"
 #include "AreaTrigger.h"
+#include "ClassicProcRules.h"
 #include "CellImpl.h"
 #include "Creature.h"
 #include "CreatureAI.h"
@@ -538,7 +539,21 @@ private:
 
         PreventHitDefaultEffect(effIndex);
         caster->CastSpell(caster, _longBuffSpell, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
+
+        // "Reading the Ley Lines" (92597) completes on criteria 109629: cast Read Ley Line while having Leyline Convergence
+        // (1271952). Nothing in the client data or the sniffed DB applies that aura (on the official server it comes from a
+        // server-side source that was not captured), so the quest could never complete. Give it next to the ley line and
+        // count the cast again now that the condition holds.
+        if (_spellFocus == SPELL_FOCUS_LEY_LINE)
+            if (Player* player = caster->ToPlayer())
+            {
+                player->CastSpell(player, SPELL_LEYLINE_CONVERGENCE, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
+                player->UpdateCriteria(CriteriaType::CastSpell, GetSpellInfo()->Id);
+            }
     }
+
+    static constexpr uint32 SPELL_FOCUS_LEY_LINE = 2246;
+    static constexpr uint32 SPELL_LEYLINE_CONVERGENCE = 1271952;
 
     void Register() override
     {
@@ -1222,6 +1237,339 @@ class classic_spell_warr_gore_drinker_enrage : public AuraScript
     }
 };
 
+// 324, 325, 905, 945, 8134, 10431, 10432 - Lightning Shield: every rank triggers the dummy 26545 in 1.60, so cast the rank's
+// damage spell on the attacker instead (26364-26370, 26363)
+class classic_spell_sha_lightning_shield : public AuraScript
+{
+    static uint32 GetDamageSpell(uint32 shieldId)
+    {
+        switch (shieldId)
+        {
+            case 324:   return 26364;
+            case 325:   return 26365;
+            case 905:   return 26366;
+            case 945:   return 26367;
+            case 8134:  return 26369;
+            case 10431: return 26370;
+            case 10432: return 26363;
+            default:    return 0;
+        }
+    }
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellInfo({ GetDamageSpell(spellInfo->Id) });
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        if (Unit* attacker = eventInfo.GetActor())
+            GetTarget()->CastSpell(attacker, GetDamageSpell(GetId()), CastSpellExtraArgsInit{
+                .TriggerFlags = TRIGGERED_FULL_MASK,
+                .TriggeringAura = aurEff
+            });
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_sha_lightning_shield::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
+// The proc event as ClassicProcRules looks at it
+static ClassicProcRules::ProcEvent ClassicProcEvent(ProcEventInfo& eventInfo)
+{
+    ClassicProcRules::ProcEvent event;
+    if (SpellInfo const* spell = eventInfo.GetSpellInfo())
+    {
+        event.SpellFamily = spell->SpellFamilyName;
+        event.SpellFamilyFlags = spell->SpellFamilyFlags;
+        event.FinishingMove = std::ranges::any_of(spell->PowerCosts, [](SpellPowerEntry const* cost) { return cost && cost->PowerType == POWER_COMBO_POINTS; });
+        event.Chill = spell->SpellFamilyName == SPELLFAMILY_MAGE && spell->HasAura(SPELL_AURA_MOD_DECREASE_SPEED);
+    }
+    event.SchoolMask = eventInfo.GetSchoolMask();
+    event.Blocked = (eventInfo.GetHitMask() & (PROC_HIT_BLOCK | PROC_HIT_FULL_BLOCK)) != 0;
+    event.Critical = (eventInfo.GetHitMask() & PROC_HIT_CRITICAL) != 0;
+    event.Periodic = bool(eventInfo.GetTypeMask() & PROC_FLAG_DEAL_HARMFUL_PERIODIC);
+    DamageInfo const* damage = eventInfo.GetDamageInfo();
+    event.Damage = damage && damage->GetDamage() > 0;
+    return event;
+}
+
+// Shaman weapon imbues of 1.60: one DUMMY aura per imbue, the enchant on the weapon tells the rank.
+static Item* ClassicImbuedWeapon(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+{
+    Player* player = aurEff->GetBase()->GetUnitOwner()->ToPlayer();
+    DamageInfo* damage = eventInfo.GetDamageInfo();
+    if (!player || !damage || !eventInfo.GetActionTarget())
+        return nullptr;
+    WeaponAttackType const attack = damage->GetAttackType();
+    if (attack != BASE_ATTACK && attack != OFF_ATTACK)
+        return nullptr;
+    Item* weapon = player->GetWeaponForAttack(attack, true);
+    if (!weapon || weapon->GetGUID() != aurEff->GetBase()->GetCastItemGUID())
+        return nullptr;
+    return weapon;
+}
+
+// 436519 - Flametongue Weapon
+class classic_spell_sha_flametongue_weapon : public AuraScript
+{
+    static constexpr uint32 SPELL_FLAMETONGUE_ATTACK = 10444;
+
+    static uint32 GetRankSpell(uint32 enchantId) { return ClassicProcRules::FlametongueRankSpell(enchantId); }
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_FLAMETONGUE_ATTACK, 8026, 8028, 8029, 10445, 16343, 16344 });
+    }
+
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        Item* weapon = ClassicImbuedWeapon(aurEff, eventInfo);
+        return weapon && GetRankSpell(weapon->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT));
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        Item* weapon = ClassicImbuedWeapon(aurEff, eventInfo);
+        if (!weapon)
+            return;
+        SpellInfo const* rank = sSpellMgr->GetSpellInfo(GetRankSpell(weapon->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT)), DIFFICULTY_NONE);
+        if (!rank)
+            return;
+        // with the shaman as caster the points grow per level up to the rank's max level (8026: 326 at 10, 19 per level to 16),
+        // as the tooltip's $8026m1 shows them
+        int32 const damage = ClassicProcRules::FlametongueDamage(float(rank->GetEffect(EFFECT_0).CalcValue(GetTarget())), weapon->GetTemplate()->GetDelay());
+        // spell power is added by 10444 itself (its bonus coefficient)
+        GetTarget()->CastSpell(eventInfo.GetActionTarget(), SPELL_FLAMETONGUE_ATTACK, CastSpellExtraArgs(aurEff)
+            .SetCastItem(weapon).AddSpellMod(SPELLVALUE_BASE_POINT0, damage));
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_sha_flametongue_weapon::CheckProc, EFFECT_0, SPELL_AURA_DUMMY);
+        OnEffectProc += AuraEffectProcFn(classic_spell_sha_flametongue_weapon::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 439431 - Windfury Weapon
+class classic_spell_sha_windfury_weapon : public AuraScript
+{
+    static uint32 GetRankSpell(uint32 enchantId) { return ClassicProcRules::WindfuryRankSpell(enchantId); }
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ 8233, 8236, 10484, 16361 });
+    }
+
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        Item* weapon = ClassicImbuedWeapon(aurEff, eventInfo);
+        if (!weapon)
+            return false;
+        uint32 const rank = GetRankSpell(weapon->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT));
+        // the attacks it granted do not grant more
+        return rank && GetTarget()->GetLastExtraAttackSpell() != rank;
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        if (Item* weapon = ClassicImbuedWeapon(aurEff, eventInfo))
+            if (uint32 rank = GetRankSpell(weapon->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT)))
+                GetTarget()->CastSpell(GetTarget(), rank, CastSpellExtraArgs(aurEff).SetCastItem(weapon));
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_sha_windfury_weapon::CheckProc, EFFECT_0, SPELL_AURA_DUMMY);
+        OnEffectProc += AuraEffectProcFn(classic_spell_sha_windfury_weapon::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 1260189, 1260201 - Grave Touch (Undead racial)
+class classic_spell_grave_touch : public AuraScript
+{
+    static constexpr uint32 SPELL_GRAVE_TOUCH_LEECH = 1260198;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_GRAVE_TOUCH_LEECH });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Unit* target = eventInfo.GetActionTarget();
+        return target && target != GetTarget() && target->IsAlive();
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        int32 const amount = std::max(int32(GetTarget()->CountPctFromMaxHealth(aurEff->GetAmount())), 1);
+        GetTarget()->CastSpell(eventInfo.GetActionTarget(), SPELL_GRAVE_TOUCH_LEECH, CastSpellExtraArgs(aurEff)
+            .AddSpellMod(SPELLVALUE_BASE_POINT0, amount));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_grave_touch::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_grave_touch::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// Talents of 1.60 whose proc chance is an effect value scaled by the talent rank, not SpellAuraOptions.ProcChance (100).
+class classic_spell_proc_chance_from_effect : public AuraScript
+{
+protected:
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        if (!ClassicProcRules::TalentProcMatches(GetId(), ClassicProcEvent(eventInfo)))
+            return false;
+        AuraEffect const* chance = GetEffect(ClassicProcRules::TalentChanceEffect(GetId()));
+        return chance && roll_chance(chance->GetAmount());
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_proc_chance_from_effect::CheckProc);
+    }
+};
+
+// The same, for the ones that also carry DUMMY effects: those must not proc on their own (Winter's Chill's second effect
+// triggers 12579 again, a double stack; the others only log "does not have triggered spell").
+class classic_spell_proc_chance_from_effect_dummy : public classic_spell_proc_chance_from_effect
+{
+    void HandleDummyProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+    }
+
+    void Register() override
+    {
+        classic_spell_proc_chance_from_effect::Register();
+        OnEffectProc += AuraEffectProcFn(classic_spell_proc_chance_from_effect_dummy::HandleDummyProc, EFFECT_ALL, SPELL_AURA_DUMMY);
+    }
+};
+
+// 18094 - Nightfall: Corruption, Drain Soul, Drain Life and Siphon Life damage may give Shadow Trance ($m1% by rank)
+class classic_spell_warl_nightfall : public AuraScript
+{
+    static constexpr uint32 SPELL_SHADOW_TRANCE = 17941;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_SHADOW_TRANCE });
+    }
+
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        // only the four spells of the tooltip (the aura's proc flags also let every other harmful spell and periodic through)
+        return ClassicProcRules::TalentProcMatches(GetId(), ClassicProcEvent(eventInfo)) && roll_chance(aurEff->GetAmount());
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        GetTarget()->CastSpell(GetTarget(), SPELL_SHADOW_TRANCE, CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_warl_nightfall::CheckProc, EFFECT_0, SPELL_AURA_DUMMY);
+        OnEffectProc += AuraEffectProcFn(classic_spell_warl_nightfall::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 20177 - Reckoning: a block ($m1%) or a direct critical hit taken ($m1 * 2.5%) adds a stack of 1326084
+class classic_spell_pal_reckoning : public AuraScript
+{
+    static constexpr uint32 SPELL_RECKONING_ATTACKS = 1326084;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_RECKONING_ATTACKS });
+    }
+
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        // "no more than once per 1.5 s after a block": the block branch alone has the cooldown, so the row in spell_proc
+        // sets the aura's own cooldown to 1 ms and the 1.5 s live here
+        uint32 const now = GameTime::GetGameTimeMS();
+        bool fromBlock = false;
+        float const chance = ClassicProcRules::ReckoningChance(ClassicProcEvent(eventInfo), now, _lastBlockMs, float(aurEff->GetAmount()), fromBlock);
+        if (chance <= 0.0f || !roll_chance(chance))
+            return false;
+        if (fromBlock)
+            _lastBlockMs = now;
+        return true;
+    }
+
+    uint32 _lastBlockMs = 0;
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        GetTarget()->CastSpell(GetTarget(), SPELL_RECKONING_ATTACKS, CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_pal_reckoning::CheckProc, EFFECT_0, SPELL_AURA_DUMMY);
+        OnEffectProc += AuraEffectProcFn(classic_spell_pal_reckoning::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 1326084 - Reckoning (the stacks): the next main hand swing attacks once more per stack
+class classic_spell_pal_reckoning_attacks : public AuraScript
+{
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        DamageInfo const* damage = eventInfo.GetDamageInfo();
+        return damage && damage->GetAttackType() == BASE_ATTACK && eventInfo.GetActionTarget();
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        GetTarget()->AddExtraAttacks(GetStackAmount());
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_pal_reckoning_attacks::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_pal_reckoning_attacks::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 400588 - Missile Barrage: Arcane Blast $m1%, Arcane Surge, Fireball, Frostbolt and Frostfire Bolt $m1 / 2
+class classic_spell_mage_missile_barrage : public AuraScript
+{
+    bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        SpellInfo const* spell = eventInfo.GetSpellInfo();
+        if (!spell)
+            return false;
+        float const chance = ClassicProcRules::MissileBarrageChance(spell->SpellFamilyName, spell->SpellFamilyFlags, float(aurEff->GetAmount()));
+        return chance > 0.0f && roll_chance(chance);
+    }
+
+    // effect 1 carries the same trigger: it must not fire a second 400589
+    void HandleDummyProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_mage_missile_barrage::CheckProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+        OnEffectProc += AuraEffectProcFn(classic_spell_mage_missile_barrage::HandleDummyProc, EFFECT_1, SPELL_AURA_DUMMY);
+    }
+};
+
 void AddSC_classic_spell_scripts()
 {
     RegisterSpellScript(classic_spell_warr_gore_drinker);
@@ -1250,8 +1598,18 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_pal_holy_shock);
     RegisterSpellScript(classic_spell_pal_judgement_of_the_crusader_refresh);
     RegisterSpellScript(classic_spell_pal_seal_of_righteousness);
+    RegisterSpellScript(classic_spell_pal_reckoning);
+    RegisterSpellScript(classic_spell_pal_reckoning_attacks);
+    RegisterSpellScript(classic_spell_mage_missile_barrage);
+    RegisterSpellScript(classic_spell_sha_flametongue_weapon);
+    RegisterSpellScript(classic_spell_sha_windfury_weapon);
+    RegisterSpellScript(classic_spell_grave_touch);
+    RegisterSpellScript(classic_spell_proc_chance_from_effect);
+    RegisterSpellScript(classic_spell_proc_chance_from_effect_dummy);
+    RegisterSpellScript(classic_spell_warl_nightfall);
     RegisterSpellScript(classic_spell_pal_judgement);
     RegisterSpellScript(classic_spell_profession_book);
     RegisterSpellScript(classic_spell_ground_area_damage);
     RegisterSpellScript(classic_spell_heal_injured_druid);
+    RegisterSpellScript(classic_spell_sha_lightning_shield);
 }
