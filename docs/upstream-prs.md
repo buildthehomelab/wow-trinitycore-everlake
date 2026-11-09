@@ -3,6 +3,9 @@
 Every change from advocaite's branches or TrinityCore that goes into `everlake`, with what it claims, how it was
 checked, and the verdict. Plan: `docs/core-fork.md` in buildthehomelab/wow-project-everlake.
 
+From the first batch of advocaite pull requests (#276-#282) on, each review is its own file in `docs/upstream-prs/`
+(`advocaite-<number>.md`), so pull requests reviewed side by side don't clash in this file.
+
 ## 2026-11-08: advocaite `forever-bots` @ 19bdc6af66 (the bot module)
 
 **What:** fast-forward of `forever` to `forever-bots`: 80 commits (35 merges), 919 files, +384,979 / -287 lines.
