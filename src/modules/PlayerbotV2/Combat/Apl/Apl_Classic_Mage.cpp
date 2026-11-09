@@ -48,6 +48,7 @@ constexpr uint32 FIRE_VULNERABILITY = 22959;   // the Improved Scorch debuff, 5 
 constexpr uint32 ARCANE_MISSILES    = 5143;
 constexpr uint32 FIRE_BLAST         = 2136;
 constexpr uint32 ARCANE_EXPLOSION   = 1449;
+constexpr uint32 BLIZZARD           = 10;
 constexpr uint32 FROST_ARMOR        = 168;
 constexpr uint32 ICE_ARMOR          = 7302;
 constexpr uint32 MAGE_ARMOR         = 6117;
@@ -251,6 +252,41 @@ bool ShouldArcaneExplosion(ApPredicateContext const& ctx)
 }
 void DoArcaneExplosion(ApPredicateContext const&, BotIntentEmitter& e) { e.cast(ARCANE_EXPLOSION); }
 
+// Blizzard: an 8 s ground channel of 8 ticks on every enemy within 8 yd of the point (classic_spell_ground_area_damage, rank 6: 149 frost
+// plus 4.17% spell power a tick). Three enemies in the area out-damage the single-target nukes: a T2 mage's Frostbolt is about 330 a
+// second on one target, Blizzard about 165 a second on each one in it. Cast on the victim from range, so it reaches the piles a raid's
+// tanks hold (bwl_nefarian 1108h: 3-5 drakonids on each tank, and the mages' one area spell, Arcane Explosion, reaches 10 yd round
+// the mage only). Enemies that avoid frost (a Blue Drakonid's resistance, the raid school hint) are not counted. Standing still, with
+// the mana for the channel, and never over a crowd-controlled, unpulled or not yet secured mob (AoeSafeAroundVictim).
+constexpr float kBlizzardRadius = 8.0f;
+constexpr int kBlizzardMinTargets = 3;
+bool ShouldBlizzard(ApPredicateContext const& ctx)
+{
+    NearbyUnit const* v = ctx.bot.victim_info();
+    if (!v || !HasLiveTarget(ctx) || !ctx.bot.in_combat() || ctx.bot.is_moving() || ManaPct(ctx) < 40)
+        return false;
+    if (ctx.bot.raw().raid_order.no_aoe || !(Ready(ctx, BLIZZARD) && ctx.bot.victim_in_spell_range(BLIZZARD)))
+        return false;
+    uint8 const frost = BotIntentEmitter::SpellSchoolMaskOf(BLIZZARD, 0);
+    PveOrder const& po = ctx.bot.raw().pve_order;
+    int n = 0;
+    float const r2 = kBlizzardRadius * kBlizzardRadius;
+    for (NearbyUnit const& u : ctx.bot.nearby_enemies())
+    {
+        if (u.hp <= 0 || u.untargetable || u.is_pacified || u.is_player || !u.unit_in_combat) continue;
+        float const dx = u.x - v->x, dy = u.y - v->y, dz = u.z - v->z;
+        if (dx * dx + dy * dy + dz * dz > r2) continue;
+        if (PveOrder::SchoolHint const* h = po.school_hint_for(u.guid); h && (h->avoid_mask & frost)) continue;
+        ++n;
+    }
+    return n >= kBlizzardMinTargets && AoeSafeAroundVictim(ctx.bot, kBlizzardRadius, "Blizzard", BLIZZARD);
+}
+void DoBlizzard(ApPredicateContext const& ctx, BotIntentEmitter& e)
+{
+    if (NearbyUnit const* v = ctx.bot.victim_info())
+        e.cast_at(BLIZZARD, v->x, v->y, v->z);
+}
+
 bool ShouldFireBlast(ApPredicateContext const& ctx)
 {
     // Instant but on the global cooldown and mana-hungry: worth it while moving (a hard cast cannot run) or as a filler for a fire
@@ -369,6 +405,7 @@ ApRule const kMageRules[] = {
     { ShouldPresenceOfMind,  DoPresenceOfMind,  "classic_mage:presence_of_mind" },
     { ShouldCombustion,      DoCombustion,      "classic_mage:combustion" },
     { ShouldArcaneExplosion, DoArcaneExplosion, "classic_mage:arcane_explosion" },
+    { ShouldBlizzard,        DoBlizzard,        "classic_mage:blizzard" },
     { ShouldScorch,          DoScorch,          "classic_mage:scorch" },
     { ShouldIceLanceFingers, DoIceLanceFingers, "classic_mage:ice_lance_fingers" },
     { ShouldPyroblastHeatingUp, DoPyroblastHeatingUp, "classic_mage:pyroblast_heating_up" },

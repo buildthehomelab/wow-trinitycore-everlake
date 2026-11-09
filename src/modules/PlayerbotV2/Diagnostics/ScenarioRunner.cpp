@@ -188,6 +188,7 @@ struct Run
     std::uint32_t start_event_sent_ms = 0;    // run_ms the main tank sent ScenarioDef::start_event (0: not yet)
     std::uint32_t start_npc_wait_ms = 0;      // run_ms ScenarioDef::start_instance_data was set and the wait for start_npc began (0: not yet)
     std::uint32_t start_npc_done_ms = 0;      // run_ms the main tank talked to ScenarioDef::start_npc (0: not yet)
+    bool start_data_set = false;              // ScenarioDef::start_instance_data was set for a fight with no start_npc
     std::uint32_t goal_wait_log_ms = 0;       // run_ms of the last 'waiting for the summoned boss' line
     std::uint32_t landing_log_ms = 0;     // game time of the last landing position round
     std::uint32_t landing_rounds = 0;     // rounds logged (capped)
@@ -1862,6 +1863,17 @@ constexpr float kRouteGatherYd = 30.f;             // a member this close to him
 constexpr std::uint32_t kRouteStallMs = 20000;     // no 2 y closer to the point in this long: he takes the jump (is set down on it)
 constexpr std::uint32_t kRouteGatherMs = 40000;    // every member must be with him this long after he reaches a point
 
+// A detached stand-in is played like a player, and a player's client swims him. He has left the bot registry, so the module's world
+// tick (UpdateSwimState for every headless bot) no longer sees him: the runner does it (lake_swim 2026-11-09: Scnrogue stood on top
+// of the lake without the swimming flag while his squad swam around him).
+void SwimStandIn(Run& run)
+{
+    if (!run.stand_in_detached)
+        return;
+    if (Player* p = StandIn(run); p && p->IsInWorld())
+        ::Playerbot::BotMovement::UpdateSwimState(p);
+}
+
 // The nearest deep water (BotMovement::SwimLevel) around (cx, cy) the stand-in can walk to: rings 8 y apart out to kWaterSearchYd.
 constexpr float kWaterSearchYd = 150.f;
 bool FindDeepWater(Player* p, float cx, float cy, float& ox, float& oy, float& oz)
@@ -2347,21 +2359,28 @@ bool IssueAttack(Run& run)
         if (BotAI* ai = ::Playerbot::Services::Registry().ai(m.id))
             if (ai->holding_position(GameTime::GetGameTimeMS()))
                 ai->exit_manual();
+    // A fight the raid opens on an add (ScenarioDef::start_add): the order is onto the nearest living one, as a raid leader marks it. Mandokir
+    // sits on his raptor immune to players until his Speaker dies; the order onto him was refused and the run failed its setup at 20 s
+    // while the raid went on to pull the Speaker itself and kill the boss (sweep-zg-0134 zg_mandokir: goal reached, setup_failed).
+    Creature* target = boss;
+    if (run.def->start_add)
+        if (Creature* add = tank->FindNearestCreature(run.def->start_add, 400.f, true))
+            target = add;
     ::Playerbot::API api(tank);
-    ::Playerbot::Result const res = api.start_attack(boss->GetGUID());
+    ::Playerbot::Result const res = api.start_attack(target->GetGUID());
     if (BotAI* ai = ::Playerbot::Services::Registry().ai(tank->GetGUID().GetCounter()))
     {
-        ai->enter_manual(BotAI::OwnerCommand::Engage, boss->GetGUID(), GameTime::GetGameTimeMS());
+        ai->enter_manual(BotAI::OwnerCommand::Engage, target->GetGUID(), GameTime::GetGameTimeMS());
         ai->release_owner_lead();
     }
     TC_LOG_INFO("playerbot.v2", "[scenario] {} ordered {} onto {} ({}) at {} s, {:.0f} y away (start_attack result {})", run.def->name,
-                tank->GetName(), boss->GetName(), run.def->goal_entry, run.run_ms / 1000u, tank->GetDistance(boss), int(res));
+                tank->GetName(), target->GetName(), target->GetEntry(), run.run_ms / 1000u, tank->GetDistance(target), int(res));
     // A target the server refuses (immune to players, not interactible) is a fault in the setup, not a fight that happens to be quiet.
     // Not when the boss is already fighting the raid: a boss script (Bot/Raid/RaidFightScript.h) owns the pull and had the DPS on it before
     // this order, and Attack on a mob the bot already fights is refused as an invalid target.
-    if (res == ::Playerbot::Result::InvalidTarget && !boss->IsInCombat())
-        run.monitor->NoteSetupFailure(run.run_ms, "", fmt::format("{} refused the attack order on {} ({}): the boss is not attackable (immune to players or not interactible)",
-                                                                   tank->GetName(), boss->GetName(), run.def->goal_entry));
+    if (res == ::Playerbot::Result::InvalidTarget && !target->IsInCombat())
+        run.monitor->NoteSetupFailure(run.run_ms, "", fmt::format("{} refused the attack order on {} ({}): the {} is not attackable (immune to players or not interactible)",
+                                                                   tank->GetName(), target->GetName(), target->GetEntry(), target == boss ? "boss" : "opening add"));
     return true;
 }
 
@@ -3553,6 +3572,23 @@ static void TickRun(Run& run, std::uint32_t diff_ms)
                     attack_due = false;
                 }
             }
+            // A boss the raid fights after others (ScenarioDef::start_instance_data with no start_npc: Hakkar after the five High Priests): the
+            // instance gets their finished states at the attack, as the raid's own kills would have set them.
+            if (attack_due && !run.def->start_npc && !run.def->start_instance_data.empty() && !run.start_data_set)
+                if (Player* tank = MainTank(run))
+                {
+                    run.start_data_set = true;
+                    InstanceScript* is = tank->GetInstanceScript();
+                    std::string set;
+                    if (is)
+                        for (auto const& [type, value] : run.def->start_instance_data)
+                        {
+                            is->SetData(type, value);
+                            set += fmt::format(" {}={}", type, value);
+                        }
+                    TC_LOG_INFO("playerbot.v2", "[scenario] {} instance data set before the attack:{}", run.def->name,
+                                !set.empty() ? set : std::string(" none (no instance script)"));
+                }
             // A fight the leader starts by talking to a creature (ScenarioDef::start_npc: Vaelastrasz's gossip, Lord Victor Nefarius's): the
             // instance gets the earlier steps the runner skips, the main tank talks once the creature offers it, then the attack waits for the
             // boss to turn hostile (Vaelastrasz), or for the boss the fight summons later (Nefarian) while the raid fights on its own.
@@ -3743,6 +3779,7 @@ static void TickRun(Run& run, std::uint32_t diff_ms)
                 PlayRoute(run);
             else
                 PlayLeader(run);
+            SwimStandIn(run);
             LogPositions(run);
             LogLanding(run);
             SamplePull(run);

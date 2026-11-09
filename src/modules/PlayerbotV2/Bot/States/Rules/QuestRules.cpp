@@ -5,6 +5,7 @@
 #include "Bot/IdleRule.h"
 #include "Group/GroupSnapshot.h"
 #include "Bot/BotAI.h"
+#include "Bot/BotBridge.h"
 #include "Bot/DeathHotspots.h"
 #include "GameTime.h"
 #include "Bot/BotSnapshotView.h"
@@ -432,6 +433,9 @@ bool QuestAbandonUnachievableFire(BotSnapshotView const& s, BotAI& ai, GroupSnap
         ai.blacklist_quest(q.quest_id, s.raw().published_at_ms);
         emit.abandon_quest(q.quest_id);
         ai.set_last_rule_fired("idle:quest_abandon_unachievable");
+        if (BotBridge::Enabled())
+            BotBridge::ReportQuestFail(s.bot_id(), q.quest_id, junk ? "dropped the quest: it can never be turned in"
+                                                                    : "dropped the quest: an objective needs a script credit bots cannot get (no normal mob to kill for it)");
         return true;
     }
     return false;

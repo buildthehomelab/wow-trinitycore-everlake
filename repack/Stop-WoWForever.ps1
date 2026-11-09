@@ -26,7 +26,27 @@ else {
     if ($p.WaitForExit(60000)) { 'bnetserver stopped' } else { Stop-Process -Id $p.Id -Force; 'bnetserver force-stopped' }
 }
 $root = Split-Path $PSScriptRoot -Parent
-& "$root\mysql\bin\mysqladmin.exe" "--defaults-file=$root\config\my.ini" -u root shutdown 2>$null
+# mysqladmin runs as a plain child process with its own redirected input and output. Started from the launcher (no console
+# window), the old "& mysqladmin.exe" call failed with "The handle is invalid ... while getting the console mode" and MySQL
+# kept running.
+$admin = Join-Path $root 'mysql\bin\mysqladmin.exe'
+function Get-OurMysqld { Get-Process mysqld -ErrorAction SilentlyContinue | Where-Object { -not $_.Path -or $_.Path -like "$root\*" } }
+if (Get-OurMysqld) {
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo $admin
+        $psi.Arguments = "`"--defaults-file=$root\config\my.ini`" -u root shutdown"
+        $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+        $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+        $m = [System.Diagnostics.Process]::Start($psi)
+        $m.StandardInput.Close()
+        $null = $m.StandardOutput.ReadToEndAsync(); $null = $m.StandardError.ReadToEndAsync()
+        if (-not $m.WaitForExit(120000)) { try { $m.Kill() } catch { } }
+    } catch { Write-Warning "mysqladmin: $($_.Exception.Message)" }
+    $d = Get-OurMysqld
+    if ($d) { $null = $d | Wait-Process -Timeout 120 -ErrorAction SilentlyContinue }
+    if (Get-OurMysqld) { Write-Warning 'MySQL is still running; close it with the Stop button again or restart Windows.' }
+    else { 'MySQL stopped' }
+} else { 'MySQL not running' }
 . "$PSScriptRoot\BotChat.ps1"
 Stop-BotChat $root   # Ollama, when the launcher installed it for bot chat
 "Stopped."

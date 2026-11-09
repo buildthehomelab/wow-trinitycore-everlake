@@ -827,8 +827,16 @@ TEST_CASE("ScenarioDefs: the other raids are one boss each, 40 raiders (BWL, AQ4
     // The three fights that keep two or three kinds of add: the bug trio (Yauj, Kri), Thekal (Zath, Lor'Khan), the Horsemen (the other three).
     CHECK(FindScenario("aq40_bugtrio")->keep_entry_c == 0);
     CHECK(FindScenario("zg_thekal")->keep_entry_b == 11347);
+    CHECK(FindScenario("zg_mandokir")->start_add == 11391);   // the order is onto the Vilebranch Speaker; Mandokir is immune until he dies
+    CHECK(FindScenario("zg_jindo")->start_add == 0);
+    // Hakkar is fought after the five High Priests: their DONE states, then his Power stacks recounted (type 0).
+    REQUIRE(FindScenario("zg_hakkar")->start_instance_data.size() == 6);
+    CHECK(FindScenario("zg_hakkar")->start_instance_data.back() == std::pair<std::uint32_t, std::uint32_t>{ 0u, 0u });
+    CHECK(FindScenario("zg_jindo")->start_instance_data.empty());
     CHECK(FindScenario("naxx_horsemen")->keep_entry_c == 16065);
-    CHECK(found.size() == 5 + 8 + 5 + 8 + 14);
+    CHECK(found.size() == 5 + 9 + 5 + 8 + 14);
+    // Arlokk has no creature row (the gong summons her): the runner summons her at the gong's spot.
+    CHECK(FindScenario("zg_arlokk")->lair_z != 0.f);
 }
 
 TEST_CASE("deadmines_full is a whole-dungeon clear that runall leaves out", "[ScenarioMonitor]")

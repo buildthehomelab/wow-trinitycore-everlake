@@ -99,3 +99,45 @@ TEST_CASE("Placeholders are filled and the pace stays readable", "[ClassicGather
             CHECK(p >= kLineMinMs); CHECK(p <= kLineMaxMs);
         }
 }
+
+TEST_CASE("Street chats stand in the walkway, on the player's side of the counter", "[ClassicGathering]")
+{
+    Pt const c = StreetCenter(0.f, 0.f, 30.f, 0.f);          // player 30 yards east of the banker
+    CHECK(c.x == Catch::Approx(kStreetFromNpc)); CHECK(c.y == Catch::Approx(0.f).margin(1e-4));
+    Pt const close = StreetCenter(0.f, 0.f, 0.f, 4.f);       // he stands right by it: never past him, never on the NPC
+    CHECK(close.y == Catch::Approx(3.f)); CHECK(close.x == Catch::Approx(0.f).margin(1e-4));
+    Pt const on = StreetCenter(5.f, 5.f, 5.f, 5.f);
+    CHECK(std::hypot(on.x - 5.f, on.y - 5.f) == Catch::Approx(3.f));
+    CHECK(IsStreet(kStreetRing)); CHECK_FALSE(IsStreet(0)); CHECK_FALSE(IsStreet(1));
+}
+
+TEST_CASE("Street chats get no talk about the campfire or the road", "[ClassicGathering]")
+{
+    auto const& all = Scripts();
+    for (bool alliance : { true, false })
+    {
+        std::vector<std::size_t> const street = ScriptsFor(alliance, 3, true);
+        CHECK(!street.empty());
+        CHECK(street.size() < ScriptsFor(alliance, 3).size());
+        for (std::size_t i : street)
+            for (Line const& ln : all[i].lines)
+            {
+                CHECK(std::string(ln.text).find("fire") == std::string::npos);
+                CHECK(std::string(ln.text).find("road") == std::string::npos);
+            }
+    }
+}
+
+TEST_CASE("A line said face to face gets a gesture that fits it", "[ClassicGathering]")
+{
+    CHECK(GestureFor("anyone going to Deadmines tonight?") == kGestureQuestion);
+    CHECK(GestureFor("lol no way") == kGestureLaugh);
+    CHECK(GestureFor("hahaha that's you") == kGestureLaugh);
+    CHECK(GestureFor("nah, too expensive") == kGestureNo);
+    CHECK(GestureFor("Yeah, same here") == kGestureYes);
+    CHECK(GestureFor("look at that mount") == kGesturePoint);
+    CHECK(GestureFor("Gnomes again!") == kGestureExclaim);
+    CHECK(GestureFor("just got back from Westfall") == kGestureTalk);
+    CHECK(GestureFor("nothing much") == kGestureTalk);      // "no" inside a word is not a no
+    CHECK(GestureFor("") == kGestureTalk);
+}

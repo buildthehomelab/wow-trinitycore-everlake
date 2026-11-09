@@ -2381,7 +2381,8 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
                     break;
                 }
         if (why)
-            TC_LOG_INFO("playerbot.v2", "[gathering] {} {} ring ended: {}", GD::kCities[r.city].name, r.sit ? "campfire" : "standing", why);
+            TC_LOG_INFO("playerbot.v2", "[gathering] {} {} ended: {}", GD::kCities[r.city].name,
+                        IsStreet(r.ring) ? "street chat by " + r.place : std::string(r.sit ? "campfire ring" : "standing ring"), why);
     };
 
     if (!cfg.enable || !Services::Config().gate_duels_enable() || anchors.empty())
@@ -2412,8 +2413,15 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
     {
         GatherRing& r = *it;
         char const* end_why = nullptr;
-        if (!player_near[r.city]) end_why = "no player near the gate";
-        else if (now_ms >= r.until_ms) end_why = "time to move on";
+        if (IsStreet(r.ring))
+        {
+            bool player_close = false;
+            for (Anchor const& a : anchors)
+                player_close = player_close || (a.map == GD::kCities[r.city].map && a.alliance == GD::kCities[r.city].alliance && Dist2D(a.x, a.y, r.cx, r.cy) <= 90.0f);
+            if (!player_close) end_why = "no player near any more";
+        }
+        else if (!player_near[r.city]) end_why = "no player near the gate";
+        if (!end_why && now_ms >= r.until_ms) end_why = "time to move on";
         if (!end_why)
         {
             // Members that are gone, fighting, grouped, duelling or dead leave the ring.
@@ -2512,7 +2520,7 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
             };
             auto const start_script = [&]()
             {
-                std::vector<std::size_t> pool = ScriptsFor(city.alliance, r.talkers.size());
+                std::vector<std::size_t> pool = ScriptsFor(city.alliance, r.talkers.size(), IsStreet(r.ring));
                 std::vector<std::size_t> fresh;
                 for (std::size_t i : pool)
                     if (std::find(r.recent.begin(), r.recent.end(), uint32(i)) == r.recent.end()) fresh.push_back(i);
@@ -2539,7 +2547,7 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
                     {
                         r.model = true; r.waiting = false; r.chat.clear();
                         r.turns_left = 3u + urand(0, 3);
-                        r.topic = urand(0, uint32(kTopicCount - 1));
+                        r.topic = urand(0, uint32((IsStreet(r.ring) ? kStreetTopicCount : kTopicCount) - 1));
                         r.key = (uint64(0x6A7Bu) << 48) | (++gather_seq_ & 0xFFFFFFFFFFFFull);
                     }
                     else
@@ -2555,8 +2563,16 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
                     r.waiting = false;
                     if (r.turns_left) --r.turns_left;
                     r.next_line_ms = now_ms + LinePause(line.size(), urand(0, 0xFFFF));
+                    // Face to face: the speaker's gesture fits the line (a question, a laugh, a yes, a no), and now and then one of the
+                    // others laughs along at a funny one.
+                    uint16 const gesture = GestureFor(line);
+                    bool laughed = false;
                     for (uint64 const id : r.talkers)
-                        if (Player* p = find(id); p && name == p->GetName()) emote(p, kTalk);
+                        if (Player* p = find(id))
+                        {
+                            if (name == p->GetName()) emote(p, gesture);
+                            else if (gesture == kGestureLaugh && !laughed && urand(0, 1)) { emote(p, kGestureLaugh); laughed = true; }
+                        }
                 }
                 if (r.waiting)
                 {
@@ -2581,12 +2597,22 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
                         if (char const* race = GatherRaceName(sp->GetRace()); *race) sys += std::string(race) + " ";
                         sys += GatherClassName(sp->GetClass());
                         sys += " playing World of Warcraft Classic (the original 2004 game).";
-                        sys += std::string(" You are ") + (r.sit ? "sitting around a campfire" : "standing with a few others") + " just outside the gates of "
-                            + city.name + ", in " + GatherZoneName(sp->GetZoneId()) + ", chatting in /say with " + (others.empty() ? std::string("a friend") : others) + ".";
-                        sys += std::string(" The talk is about ") + kTopics[r.topic % kTopicCount] + ".";
+                        if (IsStreet(r.ring))
+                        {
+                            sys += " You are standing near " + r.place + " in " + city.name + ", face to face with " + (others.empty() ? std::string("a friend") : others)
+                                + ", chatting in /say while people walk past.";
+                            sys += std::string(" The talk is about ") + kStreetTopics[r.topic % kStreetTopicCount] + ".";
+                        }
+                        else
+                        {
+                            sys += std::string(" You are ") + (r.sit ? "sitting around a campfire" : "standing with a few others") + " just outside the gates of "
+                                + city.name + ", in " + GatherZoneName(sp->GetZoneId()) + ", chatting in /say with " + (others.empty() ? std::string("a friend") : others) + ".";
+                            sys += std::string(" The talk is about ") + kTopics[r.topic % kTopicCount] + ".";
+                        }
                         sys += " Write only your own next line: one short line under 15 words, casual, like a player typing in game chat, no emojis,"
                                " no actions in asterisks, no quotation marks, no name prefix. You may answer the others or tease them by name."
                                " Never say you are a bot or a program. Don't invent quests, items or places.";
+                        sys += " " + ::Playerbot::V2::World::VanillaLevelPlaces(uint8(sp->GetLevel()));
                         if (!Services::Config().chat_model().extra_prompt.empty())
                             sys += " " + Services::Config().chat_model().extra_prompt;
                         if (BotChatModel::AskSay(sp, sys, r.chat, r.key, cfg.model_per_minute))
@@ -2633,6 +2659,7 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
         }
         ++it;
     }
+    FormStreetChats(now_ms, anchors);
     if (!any)
         return;
 
@@ -2645,7 +2672,7 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
     {
         if (!player_near[ci] || (gather_form_ms_[ci] && getMSTimeDiff(gather_form_ms_[ci], now_ms) < 20000u)) continue;
         uint32 have = 0;
-        for (GatherRing const& r : gather_rings_) if (r.city == ci) ++have;
+        for (GatherRing const& r : gather_rings_) if (r.city == ci && !IsStreet(r.ring)) ++have;
         if (have < uint32(want_fire ? 1 : 0) + uint32(want_stand ? 1 : 0)) { need[ci] = true; any_need = true; }
     }
     if (!any_need)
@@ -2660,14 +2687,7 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
     Services::Registry().for_each([&](BotId id, BotRegistryEntry const&)
     {
         Player* p = find(uint64(id));
-        if (!p || !p->IsAlive() || !p->GetMap() || p->IsBeingTeleported() || p->IsInFlight() || p->GetTransport() || p->IsMounted()) return;
-        if (!owner_.IsAmbientBot(id, p) || p->GetGroup() || p->InBattleground() || p->InBattlegroundQueue() || p->GetMap()->IsDungeon()) return;
-        if (!owner_.SetupDone(uint64(id)) || pending_.contains(uint64(id)) || seeding_.contains(uint64(id))) return;
-        if (p->IsInCombat() || p->duel || p->GetLevel() < 5 || p->IsInWater()) return;
-        if (board.Has(uint64(id))) return;
-        GD::Assignment taken;
-        if (GD::Board::Get().Find(uint64(id), taken)) return;
-        if (auto const r = gather_rest_.find(uint64(id)); r != gather_rest_.end() && now_ms < r->second) return;
+        if (!GatherFree(id, p, now_ms)) return;
         for (std::size_t ci = 0; ci < GD::kCityCount; ++ci)
         {
             if (!need[ci] || p->GetMapId() != GD::kCities[ci].map || (p->GetTeam() == ALLIANCE) != GD::kCities[ci].alliance) continue;
@@ -2743,6 +2763,136 @@ void WorldBotSpawner::DriveGatherings(uint32 now_ms, std::vector<Anchor> const& 
             TC_LOG_INFO("playerbot.v2", "[gathering] {} {} ring at ({:.0f},{:.0f}): {}", city.name, r.sit ? "campfire" : "standing", c.x, c.y, names);
             gather_rings_.push_back(std::move(r));
         }
+    }
+}
+
+bool WorldBotSpawner::GatherFree(BotId id, Player* p, uint32 now_ms) const
+{
+    namespace GD = ::Playerbot::V2::GateDuels;
+    if (!p || !p->IsAlive() || !p->GetMap() || p->IsBeingTeleported() || p->IsInFlight() || p->GetTransport() || p->IsMounted()) return false;
+    if (!owner_.IsAmbientBot(id, p) || p->GetGroup() || p->InBattleground() || p->InBattlegroundQueue() || p->GetMap()->IsDungeon()) return false;
+    if (!owner_.SetupDone(uint64(id)) || pending_.contains(uint64(id)) || seeding_.contains(uint64(id))) return false;
+    if (p->IsInCombat() || p->duel || p->GetLevel() < 5 || p->IsInWater()) return false;
+    if (::Playerbot::V2::Gathering::Board::Get().Has(uint64(id))) return false;
+    GD::Assignment taken;
+    if (GD::Board::Get().Find(uint64(id), taken)) return false;
+    if (auto const r = gather_rest_.find(uint64(id)); r != gather_rest_.end() && now_ms < r->second) return false;
+    return true;
+}
+
+// Street chats (Gathering.h, Playerbot.World.Gathering.CityChats): in a capital, by a bank, auctioneer, innkeeper, shop or mailbox
+// within 60 yards of a real player of that side, two to four free world bots of the city stand together facing each other; the talk
+// itself is DriveGatherings'. At most one new chat per city every 30 s, CityChats at once, kStreetApart between two.
+void WorldBotSpawner::FormStreetChats(uint32 now_ms, std::vector<Anchor> const& anchors)
+{
+    using namespace ::Playerbot::V2::Gathering;
+    namespace GD = ::Playerbot::V2::GateDuels;
+    namespace TV = ::Playerbot::V2::Travel;
+    auto const& cfg = Services::Config().gathering();
+    if (!cfg.city_chats || !TV::TownNpcIndex::Instance().IsInitialized())
+        return;
+    constexpr float kNearPlayer = 60.0f, kCandidateYards = 150.0f;
+    constexpr uint32 kPlaceFlags = UNIT_NPC_FLAG_BANKER | UNIT_NPC_FLAG_AUCTIONEER | UNIT_NPC_FLAG_INNKEEPER | UNIT_NPC_FLAG_VENDOR |
+                                   UNIT_NPC_FLAG_TRAINER | UNIT_NPC_FLAG_FLIGHTMASTER;
+    Board& board = Board::Get();
+    auto const find = [](uint64 id) -> Player*
+    {
+        Player* p = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(id));
+        return p && p->IsInWorld() ? p : nullptr;
+    };
+    for (std::size_t ci = 0; ci < GD::kCityCount; ++ci)
+    {
+        GD::City const& city = GD::kCities[ci];
+        if (street_form_ms_[ci] && getMSTimeDiff(street_form_ms_[ci], now_ms) < 30000u)
+            continue;
+        uint32 have = 0;
+        for (GatherRing const& r : gather_rings_) if (r.city == ci && IsStreet(r.ring)) ++have;
+        if (have >= cfg.city_chats)
+            continue;
+        Anchor const* who = nullptr;
+        for (Anchor const& a : anchors)
+            if (a.map == city.map && a.zone == city.zone && a.alliance == city.alliance) { who = &a; break; }
+        if (!who)
+            continue;
+        street_form_ms_[ci] = now_ms;
+
+        // The places near him: service NPCs of his side and mailboxes, none too close to a chat already there.
+        struct Place { float x, y, z; std::string name; };
+        std::vector<Place> places;
+        auto const free_place = [&](float x, float y)
+        {
+            for (GatherRing const& r : gather_rings_)
+                if (r.city == ci && Dist2D(r.cx, r.cy, x, y) < kStreetApart + kStreetFromNpc) return false;
+            return true;
+        };
+        auto const& index = TV::TownNpcIndex::Instance();
+        index.ForEachNear(city.map, who->x, who->y, kNearPlayer, [&](TV::TownNpc const& n)
+        {
+            if (!(n.npc_flags & kPlaceFlags) || !n.usable_by(city.alliance) || std::fabs(n.z - who->z) > 15.0f || !free_place(n.x, n.y)) return;
+            char const* name = (n.npc_flags & UNIT_NPC_FLAG_BANKER) ? "the bank" : (n.npc_flags & UNIT_NPC_FLAG_AUCTIONEER) ? "the auction house"
+                             : (n.npc_flags & UNIT_NPC_FLAG_INNKEEPER) ? "the inn" : (n.npc_flags & UNIT_NPC_FLAG_FLIGHTMASTER) ? "the flight master"
+                             : (n.npc_flags & UNIT_NPC_FLAG_TRAINER) ? "a trainer" : "a shop";
+            places.push_back({ n.x, n.y, n.z, name });
+        });
+        index.ForEachMailboxNear(city.map, who->x, who->y, kNearPlayer, [&](TV::TownNpc const& n)
+        {
+            if (std::fabs(n.z - who->z) <= 15.0f && free_place(n.x, n.y))
+                places.push_back({ n.x, n.y, n.z, "the mailbox" });
+        });
+        if (places.empty())
+            continue;
+        Place const& pl = places[urand(0, uint32(places.size() - 1))];
+        Pt const c = StreetCenter(pl.x, pl.y, who->x, who->y);
+
+        // Free bots of the city.
+        struct Cand { uint64 id; Player* p; float d; };
+        std::vector<Cand> cs;
+        Services::Registry().for_each([&](BotId id, BotRegistryEntry const&)
+        {
+            Player* p = find(uint64(id));
+            if (!GatherFree(id, p, now_ms) || p->GetMapId() != city.map || p->GetZoneId() != city.zone || (p->GetTeam() == ALLIANCE) != city.alliance) return;
+            float const d = Dist2D(p->GetPositionX(), p->GetPositionY(), c.x, c.y);
+            if (d <= kCandidateYards) cs.push_back({ uint64(id), p, d });
+        });
+        if (cs.size() < kStreetMin)
+            continue;
+        std::sort(cs.begin(), cs.end(), [](Cand const& a, Cand const& b) { return a.d < b.d; });
+        Player* first = cs.front().p;
+        float const cz = first->GetMap()->GetHeight(first->GetPhaseShift(), c.x, c.y, pl.z + 5.0f, true, 25.0f);
+        uint32 used = 0;
+        if (cz <= INVALID_HEIGHT || std::fabs(cz - pl.z) > 4.0f || first->GetMap()->IsInWater(first->GetPhaseShift(), c.x, c.y, cz)
+            || !ReachableChain(first, c.x, c.y, cz, 3u, used))
+            continue;   // a counter, a ledge or water there: another place next time
+
+        GatherRing r;
+        r.city = uint32(ci);
+        r.ring = kStreetRing + (++street_seq_ % 100000u);
+        r.sit = false;
+        r.place = pl.name;
+        r.cx = c.x; r.cy = c.y; r.cz = cz;
+        r.since_ms = now_ms;
+        r.until_ms = now_ms + urand(kStreetStayMinMs, kStreetStayMaxMs);
+        r.next_line_ms = now_ms + 12000u + urand(0, 8000u);   // time to walk over first
+        std::size_t const n = std::min<std::size_t>(cs.size(), urand(uint32(kStreetMin), uint32(kStreetMax)));
+        for (std::size_t i = 0, seat = 0; i < cs.size() && r.members.size() < n && seat < n; ++seat)
+        {
+            float face = 0.f;
+            Pt const st = Seat(c, seat, n, kStreetRadius, face);
+            float const sz = cs[i].p->GetMap()->GetHeight(cs[i].p->GetPhaseShift(), st.x, st.y, cz + 3.0f, true, 8.0f);
+            if (sz <= INVALID_HEIGHT || std::fabs(sz - cz) > 1.5f) continue;   // a step or a wall there: leave that place empty
+            board.Set(cs[i].id, Spot{ uint32(ci), r.ring, st.x, st.y, sz, face, false });
+            r.members.push_back(cs[i].id);
+            ++i;
+        }
+        if (r.members.size() < kStreetMin)
+        {
+            for (uint64 const id : r.members) board.Clear(id);
+            continue;
+        }
+        std::string names;
+        for (uint64 const id : r.members) if (Player* p = find(id)) names += std::string(names.empty() ? "" : ", ") + p->GetName();
+        TC_LOG_INFO("playerbot.v2", "[gathering] {} street chat by {} at ({:.0f},{:.0f}): {}", city.name, r.place, c.x, c.y, names);
+        gather_rings_.push_back(std::move(r));
     }
 }
 

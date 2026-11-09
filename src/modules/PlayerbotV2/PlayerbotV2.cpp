@@ -10,6 +10,7 @@
 #include "LfgBotFill.h"
 #include "Services.h"
 #include "Fleet/RaidSubgroupPlan.h"
+#include "Bot/BotBridge.h"
 #include "Bot/BotRegistry.h"
 #include "Bot/BotSnapshot.h"
 #include "Bot/World/LearnFlightpaths.h"
@@ -69,6 +70,7 @@
 #include "SpellMgr.h"
 #include "Group/GroupSnapshotBuilder.h"
 #include "Group.h"
+#include "Transport.h"   // DriveRideWithOwner: the ship or zeppelin a player rides
 #include "BotGroupRules.h"
 #include "GitRevision.h"
 #include <filesystem>
@@ -1148,8 +1150,9 @@ void Module::Shutdown()
     for (int pass = 0; pass < 10 && Services::SessionMgr().active_count() > 0; ++pass)
         Services::SessionMgr().Update(0);
 
-    // Stop the chat model's worker thread (cancels a request in flight).
+    // Stop the chat model's worker thread (cancels a request in flight), and the bot bridge's writer (marks the stop as clean).
     BotChatModel::Shutdown();
+    BotBridge::Shutdown();
 
     // Stop threads first; then tear down state.
     Services::Shutdown();
@@ -1341,6 +1344,127 @@ static void DriveFlyWithOwner(uint32 now_ms)
         }
     }
     // Owners who logged out or left the world mid-flight.
+    for (auto it = watches.begin(); it != watches.end();)
+        it = seen.count(it->first) ? std::next(it) : watches.erase(it);
+}
+
+// A player who gets on a ship or zeppelin takes the bots by him along (Playerbot.Behavior.RideWithOwner): each gets on the deck beside him
+// a moment after him (BotPopulationManager::BoardOwnerShip) and rides as a passenger, across the map change too. When he steps off, the
+// ones aboard step off with him and the ones that never got on are brought to him, as a flight landing does. Before this a bot had no
+// way onto his ship: it chased his x,y over the sea and "summon" over land set it down under the zeppelin (11-08, Orgrimmar ->
+// Undercity). Runs on the world thread, before the maps update.
+static void DriveRideWithOwner(uint32 now_ms)
+{
+    struct Boarding { uint64 bot_low; uint32 due_ms; };
+    struct Watch
+    {
+        ObjectGuid ship;                         // the ship he rides
+        std::vector<Boarding> boarding;          // bots about to get on
+    };
+    static std::unordered_map<uint64, Watch> watches;
+    static uint32 next_ms = 0;
+    if (int32(now_ms - next_ms) < 0)
+        return;
+    next_ms = now_ms + 100u;
+    if (!Services::Config().behavior_ride_with_owner())
+    {
+        watches.clear();
+        return;
+    }
+
+    auto bot_by_low = [](uint64 low) { return ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(low)); };
+    std::unordered_set<uint64> seen;
+    for (auto const& [guid, owner] : ObjectAccessor::GetPlayers())
+    {
+        if (!owner || !::Playerbot::Scenario::PlaysAsHuman(owner))
+            continue;
+        uint64 const owner_low = guid.GetCounter();
+        auto it = watches.find(owner_low);
+        // The ship carries him to its other map: he is out of the world for the load. The ride goes on.
+        if (!owner->IsInWorld() || owner->IsBeingTeleported())
+        {
+            if (it != watches.end())
+                seen.insert(owner_low);
+            continue;
+        }
+        Transport* ship = dynamic_cast<Transport*>(owner->GetTransport());
+        if (it == watches.end())
+        {
+            if (!ship)
+                continue;
+            it = watches.emplace(owner_low, Watch{}).first;
+        }
+        seen.insert(owner_low);
+        Watch& w = it->second;
+
+        if (ship && w.ship != ship->GetGUID())
+        {
+            // He got on: the bots by him follow him on in a moment, the rest wait for him to step off.
+            w.ship = ship->GetGUID();
+            w.boarding.clear();
+            uint32 boarders = 0, waiting = 0;
+            ForEachBotWithOwner(owner, [&](Player* bot)
+            {
+                if (bot->GetTransport() == ship)
+                    return;
+                bool const same = bot->GetMap() == owner->GetMap();
+                float const dist = same ? bot->GetExactDist(owner) : -1.0f;
+                if (Fleet::FlyBoardEligible(bot->IsAlive(), bot->IsInCombat(), bot->IsInFlight(), bot->GetVehicle() != nullptr, same, dist))
+                {
+                    w.boarding.push_back({ bot->GetGUID().GetCounter(), now_ms + urand(Fleet::kFlyBoardDelayMinMs, Fleet::kFlyBoardDelayMaxMs) });
+                    ++boarders;
+                }
+                else
+                    ++waiting;
+            });
+            TC_LOG_INFO("playerbot.v2", "[ride_with_owner] {} gets on ship {} at ({:.0f},{:.0f},{:.0f}) map {}: {} bot(s) get on with him, {} are brought when he steps off",
+                        owner->GetName(), ship->GetEntry(), owner->GetPositionX(), owner->GetPositionY(), owner->GetPositionZ(), owner->GetMapId(),
+                        boarders, waiting);
+        }
+
+        // Put on board the ones whose moment has come (a bot that started a fight, died or wandered off meanwhile waits for the step-off).
+        if (ship)
+            for (auto b = w.boarding.begin(); b != w.boarding.end();)
+            {
+                if (int32(now_ms - b->due_ms) < 0) { ++b; continue; }
+                Player* bot = bot_by_low(b->bot_low);
+                if (bot && bot->IsInWorld() && !bot->IsBeingTeleported() && bot->GetMap() == owner->GetMap() && bot->IsAlive() &&
+                    !bot->IsInCombat() && !bot->IsInFlight() && !bot->GetVehicle() && bot->GetExactDist(owner) <= Fleet::kFlyBoardYards * 1.5f)
+                    Services::Population().BoardOwnerShip(owner, bot, "ride with owner");
+                else if (bot)
+                    TC_LOG_INFO("playerbot.v2", "[ride_with_owner] {} did not get on {}'s ship ({}): brought when he steps off", bot->GetName(),
+                                owner->GetName(), !bot->IsAlive() ? "dead" : bot->IsInCombat() ? "in combat" : "moved off");
+                b = w.boarding.erase(b);
+            }
+
+        if (!ship)
+        {
+            // He stepped off (at a dock, or over the side): the ones aboard step off with him and every bot not by him comes to him.
+            ObjectGuid const left = w.ship;
+            ForEachBotWithOwner(owner, [&](Player* bot)
+            {
+                if (!bot->IsInWorld() || bot->IsBeingTeleported() || bot->IsInFlight() || bot->GetGroup() != owner->GetGroup())
+                    return;
+                bool aboard = false;
+                if (Transport* t = dynamic_cast<Transport*>(bot->GetTransport()); t && t->GetGUID() == left)
+                {
+                    // Off the deck: a bot has no client to walk it off, and the deck hangs beside the tower or the pier.
+                    t->RemovePassenger(bot);
+                    bot->SetFallInformation(0, bot->GetPositionZ());
+                    aboard = true;
+                }
+                if (!aboard && bot->GetMap() == owner->GetMap() && bot->GetExactDist(owner) <= 15.0f)
+                    return;
+                if (std::string const why = Services::Population().BringToOwner(owner, bot, aboard ? "ship step-off" : "ship landing"); why.empty())
+                    TC_LOG_INFO("playerbot.v2", "[ride_with_owner] {} {} {} at ({:.0f},{:.0f},{:.0f}) map {}", bot->GetName(),
+                                aboard ? "steps off the ship with" : "missed the ship, brought to", owner->GetName(), owner->GetPositionX(),
+                                owner->GetPositionY(), owner->GetPositionZ(), owner->GetMapId());
+            });
+            watches.erase(it);
+            continue;
+        }
+    }
+    // Owners who logged out mid-ride.
     for (auto it = watches.begin(); it != watches.end();)
         it = seen.count(it->first) ? std::next(it) : watches.erase(it);
 }
@@ -1691,6 +1815,7 @@ void Module::OnWorldUpdate(std::chrono::milliseconds diff)
     }
     ::Playerbot::Diagnostics::Scenario::Tick(std::uint32_t(diff.count()));   // bot scenario tests (.playerbot scenario)
     BotChatModel::DeliverReplies(GameTime::GetGameTimeMS());               // Playerbot.ChatModel replies that came back
+    BotBridge::Update(GameTime::GetGameTimeMS());                          // Playerbot.Bridge: events out, replies in (off: returns at once)
 
     // [cast_state] (playtest, WSG start room 2026-10-11: a healer stood with the casting animation on while casting nothing). Twice a
     // second, every bot in a battleground: a line when the spell it is casting changes (spell id, generic or channel, 0 = none), and a
@@ -2590,8 +2715,9 @@ void Module::OnWorldUpdate(std::chrono::milliseconds diff)
     // 2.7. Pets that cannot walk to their bot owner are set down next to it.
     DrivePetSnap(getMSTime());
 
-    // 2.8. Bots board their player's flight, and a bot with no way to him is set down beside him (Fleet/OwnerCatchUp.h).
+    // 2.8. Bots board their player's flight, ship or zeppelin, and a bot with no way to him is set down beside him (Fleet/OwnerCatchUp.h).
     DriveFlyWithOwner(getMSTime());
+    DriveRideWithOwner(getMSTime());
     DriveOwnerCatchUp(getMSTime());
     DriveOwnerTrail(getMSTime());
 
@@ -3599,6 +3725,8 @@ void Module::OnDeath(Unit* victim, Unit* killer)
             DeathHotspots::Instance().NoteDeath(vp->GetMapId(), vp->GetPositionX(), vp->GetPositionY(),
                                                 uint8(killer->GetLevel()), uint64(GameTime::GetGameTime()));
         LogPlayerDeath(vp, killer, vai);
+        if (vai)
+            BotBridge::NoteDeath(vp, killer && killer != vp ? killer->GetName() : std::string());
         return;
     }
 
@@ -4680,8 +4808,18 @@ namespace
 // queue's BattlemasterListId only, so a queue id built from that type reaches the same instance.
 Battleground* FindInvitedBattleground(uint32 bg_instance_id, uint32 bg_type_id)
 {
-    return sBattlegroundMgr->GetBattleground(bg_instance_id,
-        BattlegroundMgr::BGQueueTypeId(uint16(bg_type_id), BattlegroundQueueIdType::Battleground, false, 0));
+    if (Battleground* bg = sBattlegroundMgr->GetBattleground(bg_instance_id,
+            BattlegroundMgr::BGQueueTypeId(uint16(bg_type_id), BattlegroundQueueIdType::Battleground, false, 0)))
+        return bg;
+    // An arena match (Mak'gora Arena 1169) is queued through "All Arenas" (6) with its team size, so its queue id is not built from
+    // the match type. Without this the bots of an arena with a real player waited for a player they never saw and did not port in.
+    if (BattlegroundTemplate const* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplateByTypeId(BattlegroundTypeId(bg_type_id)); bgTemplate && bgTemplate->IsArena())
+        for (uint8 teamSize : { uint8(2), uint8(3), uint8(5) })
+            for (bool rated : { true, false })
+                if (Battleground* bg = sBattlegroundMgr->GetBattleground(bg_instance_id,
+                        BattlegroundMgr::BGQueueTypeId(uint16(BATTLEGROUND_AA), BattlegroundQueueIdType::Arena, rated, teamSize)))
+                    return bg;
+    return nullptr;
 }
 }
 
@@ -4712,8 +4850,15 @@ void Module::OnBGInvitationReceived(Player* player, uint32 bg_instance_id, uint3
     bool const is_bot = player->GetSession() && player->GetSession()->IsBot();
     if (!is_bot)
     {
-        std::lock_guard lk(pending_bg_ports_mtx_);
-        ++bg_invite_state_[bg_instance_id].expected_humans;
+        {
+            std::lock_guard lk(pending_bg_ports_mtx_);
+            ++bg_invite_state_[bg_instance_id].expected_humans;
+        }
+        // The client's arena pop has Enter only: say how to turn it down (the ForeverBots add-on also shows Enter / Leave buttons).
+        if (BattlegroundTemplate const* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplateByTypeId(BattlegroundTypeId(bg_type_id));
+            bgTemplate && bgTemplate->IsArena() && player->GetSession())
+            BotLanguage::LocalizedHandler(player->GetSession()).SendSysMessage(
+                "Your arena is ready. Enter: click Enter at the minimap or type .bot arena enter. Leave: type .bot arena leave.");
         return;
     }
 

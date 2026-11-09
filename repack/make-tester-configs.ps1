@@ -26,7 +26,10 @@ $p = @{
 }[$Preset]
 
 function Set-Options($dist, $out, $options) {
-    if ((Test-Path $out) -and -not $overwrite) { $script:kept += (Split-Path $out -Leaf); return }
+    # a file with no [section] line is read as nothing by the server (an empty bnetserver.conf the updater then added a few lines
+    # to, noobiru 0.1.33): it is written again like a missing one
+    $readable = (Test-Path $out) -and [bool](Select-String -LiteralPath $out -Pattern '^\s*\[\s*\w+\s*\]' -Quiet)
+    if ($readable -and -not $overwrite) { $script:kept += (Split-Path $out -Leaf); return }
     $text = Get-Content $dist; $extra = [ordered]@{}
     foreach ($key in $options.Keys) {
         $pattern = '^' + [regex]::Escape($key) + '\s*='; $hit = $false

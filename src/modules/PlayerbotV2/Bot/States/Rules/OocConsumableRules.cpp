@@ -178,7 +178,7 @@ bool AlwaysBuffGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const
     if (ai.action_recently_tried(BotAI::ActionKind::AlwaysBuff, kAlwaysBuffLockKey, GameTime::GetGameTimeMS()))
         return false;
     uint8 const mask = AlwaysMask(s, g);
-    if ((mask & kAlwaysMaskRepair) && (s.lowest_equipped_durability_pct() < 100 || int64(s.gold()) < int64(kAlwaysGoldFloor) * 10000   /* gold() is copper */))
+    if ((mask & kAlwaysMaskRepair) && !s.raw().players_own_character && (s.lowest_equipped_durability_pct() < 100 || int64(s.gold()) < int64(kAlwaysGoldFloor) * 10000   /* gold() is copper */))
         return true;
     if (s.level() < kAlwaysBuffMinLevel)
         return false;   // below the raiding levels nothing of the buffs is put on or taken off
@@ -571,7 +571,9 @@ bool EquipUpgradeGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView con
     // FULLY yield: there is NO bag-full carve-out because equipping does not free
     // bag slots (API::equip_item swaps the replaced item back into the bag); the
     // real full-bag blocker is idle:vendor_sell_trash, which is quest-aware.
-    if (s.has_actionable_quest())
+    // A bot in a player's group runs no quest rules (IdleRuleRegistry::tick skips them), so its quest list must not hold this
+    // rule back: with it, a grouped bot never wore a piece it was traded (Gremloc 11-08).
+    if (s.has_actionable_quest() && !s.is_led_by_player())
     {
         if (ai.pending_equip_upgrade_at_ms() != 0)
             ai.set_pending_equip_upgrade_at_ms(0);
@@ -611,6 +613,8 @@ bool EquipUpgradeFire(BotSnapshotView const& s, BotAI& ai,
         if (it.quality == 0) continue;
         if (ai.equip_recently_tried(it.entry, equip_now_ms)) continue;
         EquippedItem const& cur = s.equipped(it.equip_slot);
+        // A piece a player chose for the bot (trade or "equip <item>") stays on.
+        if (ai.worn_is_kept(it.equip_slot, cur.entry)) continue;
         const float score_new = ScoreItem(it.stats, it.item_level, weights, dps_w);
         const float score_cur = (cur.entry != 0)
             ? ScoreItem(cur.stats, cur.item_level, weights, dps_w)

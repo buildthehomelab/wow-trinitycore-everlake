@@ -21,6 +21,7 @@ $logDir = Join-Path $dir 'logs'
 . "$PSScriptRoot\ClientLanguage.ps1"
 Set-ClientLanguageConf $dir
 . "$PSScriptRoot\WorldUp.ps1"
+Repair-ServerConf $dir   # a bnetserver.conf/worldserver.conf with no [section] line is written again from its .dist
 Repair-ConfDir $dir
 Sync-NetworkKeys $dir
 Sync-LocalSettings $dir

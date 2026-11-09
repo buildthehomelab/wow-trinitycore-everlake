@@ -2401,6 +2401,25 @@ void Player::GrantClassicFreeBankTab()
     SetCharacterBankTabSettings(0, ChatHandler(GetSession()).PGetParseString(LANG_BANK_TAB_NAME, 1), "", "", BagSlotFlags::None);
 }
 
+void Player::UpdateClassicPvPRank()
+{
+    // Classic 1.60: the PvP rank is the renown level of faction 2800 "PvP Rank Points" (renown currency 3473, rank 1 ... 14), but rank
+    // gear (ItemSparse RequiredPVPRank) and the honor kill code read the old honor rank in ActivePlayerData::LifetimeMaxRank, where
+    // rank 1 Private/Scout = 5 ... rank 14 Grand Marshal/High Warlord = 18. Nothing set it, so every rank item stayed red at the
+    // vendor whatever rank the player had. It is the highest rank ever reached: it never goes down.
+    static constexpr uint32 PvPRankRenownCurrencyID = 3473;
+    static constexpr uint8 HonorRankOffset = 4;
+    static constexpr uint8 MaxPvPRank = 14;
+
+    uint32 rank = std::min<uint32>(GetCurrencyQuantity(PvPRankRenownCurrencyID), MaxPvPRank);
+    if (!rank)
+        return;
+
+    uint8 honorRank = uint8(rank + HonorRankOffset);
+    if (honorRank > *m_activePlayerData->LifetimeMaxRank)
+        SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::LifetimeMaxRank), honorRank);
+}
+
 void Player::UpdateClassicLegacyUnlock()
 {
     // Classic 1.60: the Legacy system (micro menu "Legacy", LegacyMicroButtonMixin:IsLegacySystemUnlocked) opens with renown level 1
@@ -17885,6 +17904,8 @@ void Player::CurrencyChanged(uint32 currencyId, int32 change)
     UpdateQuestObjectiveProgress(QUEST_OBJECTIVE_CURRENCY, currencyId, change);
     UpdateQuestObjectiveProgress(QUEST_OBJECTIVE_HAVE_CURRENCY, currencyId, change);
     UpdateQuestObjectiveProgress(QUEST_OBJECTIVE_OBTAIN_CURRENCY, currencyId, change);
+
+    UpdateClassicPvPRank();
 }
 
 void Player::UpdateQuestObjectiveProgress(QuestObjectiveType objectiveType, int32 objectId, int64 addCount, ObjectGuid victimGuid /*= ObjectGuid::Empty*/,
@@ -31387,8 +31408,9 @@ void Player::SetPetSlot(uint32 petNumber, PetSaveMode dstPetSlot)
                 if (newActivePetIndex)
                     sess->GetPlayer()->GetPetStable()->SetCurrentActivePetIndex(*newActivePetIndex);
 
-                int32 srcPetIndex = m_activePlayerData->PetStable->Pets.FindIndexIf([srcPetSlot](UF::StablePetInfo const& p) { return p.PetSlot == uint32(srcPetSlot); });
-                int32 dstPetIndex = m_activePlayerData->PetStable->Pets.FindIndexIf([dstPetSlot](UF::StablePetInfo const& p) { return p.PetSlot == uint32(dstPetSlot); });
+                // Classic 1.60: the update fields hold the client slot numbers (0 = current pet, 1.. = stable), not the saved slot
+                int32 srcPetIndex = m_activePlayerData->PetStable->Pets.FindIndexIf([srcPetSlot](UF::StablePetInfo const& p) { return p.PetSlot == ToClassicStableSlot(srcPetSlot); });
+                int32 dstPetIndex = m_activePlayerData->PetStable->Pets.FindIndexIf([dstPetSlot](UF::StablePetInfo const& p) { return p.PetSlot == ToClassicStableSlot(dstPetSlot); });
 
                 // Classic 1.60: client slot numbers and flags; the moved pets show their saved values (official 70291: happiness
                 // is sent again when the pet is stabled)

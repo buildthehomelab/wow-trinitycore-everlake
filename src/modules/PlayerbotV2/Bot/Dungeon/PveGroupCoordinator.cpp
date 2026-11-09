@@ -808,7 +808,7 @@ void PveGroupCoordinator::Update(uint32 now_ms)
                     for (Raid::Brain::EnemySchools const& h : *hints)
                         if (h.target == g)
                         {
-                            o->school_hints[n++] = { h.target, h.prefer_mask, h.avoid_mask };
+                            o->school_hints[n++] = { h.target, h.prefer_mask, h.avoid_mask, h.reflect_mask };
                             return;
                         }
                 };
@@ -1829,11 +1829,18 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
             }
             return nullptr;
         };
+        // A mob the raid brain's order forbids this tank (a fixed tank row's tank waits at its slot for an add still far out, RaidBrain
+        // TankSpotFor) is not this tank's to hold now: the brain reads the room's shape, this pass only distances.
+        auto raid_forbids = [&](uint64 tank_low, ObjectGuid mob) -> bool
+        {
+            RaidOrder const* ro = Raid::GetBrain().OrderFor(tank_low);
+            return ro && ro->active && std::find(ro->forbidden_targets.begin(), ro->forbidden_targets.end(), mob) != ro->forbidden_targets.end();
+        };
         for (auto it = sticky.begin(); it != sticky.end();)
         {
             auto t = by_low.find(it->first);
             bool keep = t != by_low.end() && t->second->tank && t->second->alive &&
-                        find_mob(it->second) != nullptr;
+                        find_mob(it->second) != nullptr && !raid_forbids(it->first, it->second);
             if (!keep && t != by_low.end() && t->second->tank && t->second->alive)
             {
                 // [raid_tank] why a tank lost its mob (Garr 2026-10-08: one tank hopped between Firesworn ~15 times).
@@ -1842,7 +1849,7 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
                     cc_held_[bkey][it->second.GetCounter()] = { t->first, now_ms + kCcHoldMs };
                 TC_LOG_INFO("playerbot.v2", "[raid_tank] group={} map={} {} drops {} ({}): {}", group_low, map_id, t->second->src->name,
                             it->second.GetEntry(), it->second.GetCounter(),
-                            !gone ? "out of every view or dead" : (gone->is_cc_locked ? "crowd-controlled" : (!gone->unit_in_combat ? "out of combat" : "no longer hitting the group")));
+                            !gone ? "out of every view or dead" : raid_forbids(it->first, it->second) ? "the raid order forbids it" : (gone->is_cc_locked ? "crowd-controlled" : (!gone->unit_in_combat ? "out of combat" : "no longer hitting the group")));
             }
             it = keep ? std::next(it) : sticky.erase(it);
         }
@@ -1925,6 +1932,9 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
                 Mob const* mm = find_mob(mk_grp->GetTargetIcon(mkr));
                 if (!mm) continue;
                 if (Raid::OffTankMob(map_id, mm->u->entry)) continue;   // the second tank's, whatever tank the icon was given to
+                // The raid brain's forbid wins over the icon: the sticky check above drops it again on the next pass, and the tank took
+                // and dropped the marked add every pass (bwl_nefarian 1109a run 1: Mctankwa "takes … why=marker 0" / "drops" in a loop).
+                if (raid_forbids(tl, mm->u->guid)) continue;
                 if (auto sit = sticky.find(tl); sit != sticky.end() && sit->second == mm->u->guid) continue;
                 for (auto it = sticky.begin(); it != sticky.end();)
                     it = it->second == mm->u->guid ? sticky.erase(it) : std::next(it);
@@ -2029,7 +2039,7 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
             float best_d2 = kTankAssignRange * kTankAssignRange;
             for (auto const& m : mobs)
             {
-                if (is_taken(m.u->guid) || cc_owned(m)) continue;
+                if (is_taken(m.u->guid) || cc_owned(m) || raid_forbids(t->guid_low, m.u->guid)) continue;
                 const float dx = m.u->x - t->src->x, dy = m.u->y - t->src->y;
                 const float d2 = dx * dx + dy * dy;
                 if (d2 > kTankAssignRange * kTankAssignRange) continue;
@@ -2090,6 +2100,7 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
                 Mob const* pick = find_mob(t->src->victim);
                 char const* why = "already_on_it";
                 if (pick && Raid::NoTank(map_id, pick->u->entry)) pick = nullptr;   // a Spawn is no mob to hold
+                if (pick && raid_forbids(t->guid_low, pick->u->guid)) pick = nullptr;
                 if (pick && Raid::TankLast(map_id, pick->u->entry) && other_free_mob(pick->u->guid)) pick = nullptr;   // the adds first
                 if (!pick || is_taken(pick->u->guid))
                 {
@@ -2119,6 +2130,7 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
         {
             if (!t->is_bot || sticky.count(t->guid_low)) continue;
             if (Mob const* cur = find_mob(t->src->victim); cur && !is_taken(cur->u->guid) && !Raid::NoTank(map_id, cur->u->entry) && !cc_owned(*cur) &&
+                !raid_forbids(t->guid_low, cur->u->guid) &&
                 !(Raid::TankLast(map_id, cur->u->entry) && other_free_mob(cur->u->guid)))
                 assign(t, *cur, "already_on_it");
         }

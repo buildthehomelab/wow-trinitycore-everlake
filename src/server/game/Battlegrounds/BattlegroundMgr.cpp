@@ -248,7 +248,10 @@ Battleground* BattlegroundMgr::GetBattleground(uint32 instanceId, BattlegroundQu
 
     BattlegroundDataContainer::const_iterator begin, end;
 
-    if (battlegroundTemplate->MapIDs.size() > 1)
+    // A queue that picks another template ("All Arenas" 6, the random battlegrounds) has its matches stored under the picked
+    // template, so look through all of them, also when it lists just one map (Classic: "All Arenas" has only map 2995, played as
+    // Mak'gora Arena 1169). Before, an arena match was never found here: Enter did nothing and the invite never ran out.
+    if (battlegroundTemplate->MapIDs.size() > 1 || queueId.BattlemasterListId == BATTLEGROUND_AA || IsRandomBattleground(queueId.BattlemasterListId))
     {
         begin = bgDataStore.begin();
         end = bgDataStore.end();

@@ -99,6 +99,8 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include <atomic>
+#include <bit>
+#include <limits>
 #include <queue>
 #include <sstream>
 #include <cmath>
@@ -13257,15 +13259,30 @@ uint32 Unit::GetModelForForm(ShapeshiftForm form, uint32 spellId) const
                 }
 
                 // Classic 1.60: no form appearance chosen - the first one made for this race and class (sniffs of the official beta:
-                // Skyborne druids without a choice are bear 144331, cat 144330, travel form 145284)
+                // Skyborne druids without a choice are bear 144331, cat 144330, travel form 145284). The one made for the fewest races
+                // wins: the cheetah travel form 145290 (req 4905) is for Night Elves, Tauren, Trolls and the Skyborne, and comes first,
+                // the Skyborne bird 145284 (req 4906) is for the Skyborne only.
+                ChrCustomizationDisplayInfoEntry const* defaultDisplay = nullptr;
+                uint32 defaultRaceCount = std::numeric_limits<uint32>::max();
                 for (std::size_t i = 0; i < formModelData->Choices->size(); ++i)
                 {
                     ChrCustomizationReqEntry const* req = sChrCustomizationReqStore.LookupEntry((*formModelData->Choices)[i]->ChrCustomizationReqID);
                     if (!formModelData->Displays[i] || !req || req->RaceMask.IsEmpty() || req->RaceMask == RACEMASK_ALL_v<int32, 2>)
                         continue;
-                    if (req->RaceMask.HasRace(GetRace()) && (!req->ClassMask || req->ClassMask & (1 << (GetClass() - 1))))
-                        return formModelData->Displays[i]->DisplayID;
+                    if (!req->RaceMask.HasRace(GetRace()) || (req->ClassMask && !(req->ClassMask & (1 << (GetClass() - 1)))))
+                        continue;
+
+                    uint32 raceCount = 0;
+                    for (int32 maskPart : req->RaceMask.RawValue)
+                        raceCount += std::popcount(uint32(maskPart));
+                    if (raceCount < defaultRaceCount)
+                    {
+                        defaultDisplay = formModelData->Displays[i];
+                        defaultRaceCount = raceCount;
+                    }
                 }
+                if (defaultDisplay)
+                    return defaultDisplay->DisplayID;
             }
         }
         switch (form)

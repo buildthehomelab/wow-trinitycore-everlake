@@ -784,11 +784,15 @@ bool WorldSession::ValidateAppearance(Races race, Classes playerClass, Gender ge
             return option->ID == playerChoice.ChrCustomizationOptionID;
         });
 
+        // Classic 1.60: a druid form appearance (barber shop) belongs to the form's own model, not to the race model
+        ChrCustomizationOptionEntry const* customizationOption = customizationOptionDataItr != options->end() ? *customizationOptionDataItr
+            : sDB2Manager.GetShapeshiftFormOption(race, gender, playerChoice.ChrCustomizationOptionID);
+
         // option not found for race/gender combination
-        if (customizationOptionDataItr == options->end())
+        if (!customizationOption)
             return false;
 
-        if (ChrCustomizationReqEntry const* req = sChrCustomizationReqStore.LookupEntry((*customizationOptionDataItr)->ChrCustomizationReqID))
+        if (ChrCustomizationReqEntry const* req = sChrCustomizationReqStore.LookupEntry(customizationOption->ChrCustomizationReqID))
             if (!MeetsChrCustomizationReq(req, race, playerClass, false, customizations))
                 return false;
 
@@ -1328,6 +1332,29 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPackets::Character::PlayerLogin&
         return;
     }
 
+    // Classic 1.60: the character can still be in the world as this account's bot (the player's own alt summoned into the party,
+    // the player gone back to the character list; Discord report 2026-11-08). Loading it a second time put two players with the
+    // same guid in the world and the client closed with a fatal error. The bot is logged out first and the login goes on once it
+    // has left the world (WorldSession::Update), like a delete of that character (HandleCharDeleteOpcode).
+    if (Player* loaded = ObjectAccessor::FindConnectedPlayer(playerLogin.Guid))
+    {
+        WorldSession* botSession = loaded->GetSession();
+        if (!botSession || botSession == this || !botSession->IsBot() || botSession->GetAccountId() != GetAccountId())
+        {
+            TC_LOG_ERROR("network", "Account ({}) can't login with character ({}): it is already in the world.", GetAccountId(),
+                playerLogin.Guid.ToString());
+            AbortLogin(WorldPackets::Character::LoginFailureReason::DuplicateCharacter);
+            return;
+        }
+
+        TC_LOG_INFO("entities.player.character", "Account: {} logs in to character {}, still in the world as a bot: logging it out first",
+            GetAccountId(), playerLogin.Guid.ToString());
+        botSession->KickPlayer("WorldSession::HandlePlayerLoginOpcode the player logs in to this character");
+        _pendingLoginAfterBot = true;
+        _pendingLoginAfterBotTimer = 30 * IN_MILLISECONDS;
+        return;
+    }
+
     SendConnectToInstance(WorldPackets::Auth::ConnectToSerial::WorldAttempt1);
 }
 
@@ -1555,6 +1582,9 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
 
     // Classic 1.60: characters that were already level 25+ get the Legacy unlock on login
     pCurrChar->UpdateClassicLegacyUnlock();
+
+    // Classic 1.60: the honor rank that rank gear checks, from the PvP rank renown level (not saved, rebuilt on login)
+    pCurrChar->UpdateClassicPvPRank();
 
     // Classic 1.60: titles of the profession certifications bought on this account (300 skill shows them)
     pCurrChar->UpdateClassicProfessionTitles();

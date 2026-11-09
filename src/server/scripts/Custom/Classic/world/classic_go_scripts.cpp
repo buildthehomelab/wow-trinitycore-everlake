@@ -87,6 +87,9 @@ enum CampfireRest
 };
 
 static constexpr float CAMPFIRE_RANGE = 15.0f;      // sitting this close to the fire (same as HandleStandStateChangeOpcode)
+// the Basic Campfire of the adventurer camps (Goldshire, Brill, Kharanos, Razor Hill, Bloodhoof, Dolanaar, Zephras Isle): a fixed
+// spawn, unlike a player's fire (summoned, no spawn id)
+static constexpr uint32 GO_BASIC_CAMPFIRE = 529161;
 // features this close to the resting player count: Camp Benefits 1229741 finds them with its area effects 1 and 2 (creatures and
 // gameobjects round the caster's spot, radius index 9 = 20 yards), not round the fire
 static constexpr float CAMP_FEATURE_RANGE = 20.0f;
@@ -182,6 +185,20 @@ static void CastCampBuff(Unit* target, uint32 buff)
     target->CastSpell(target, buff, args);
 }
 
+// The Great Outdoors asks to rest at the adventurer's camp for Boosted Rest. That camp's tent is part of the map, so no Camp Tent
+// object stands there: the server spawns of it floated over the map's tent and were removed (2026_11_05_75, 2026_11_07_80), and
+// from then on the camp gave only the 60 s rest, never Boosted Rest (Discord, ErikaST and Joy 2026-11-08: Goldshire and Brill
+// since 0.1.32.1; a player's own camp with a tent still worked). A fixed Basic Campfire spawn within reach counts as that camp.
+static bool IsAtAdventurerCamp(Unit* unit)
+{
+    std::list<GameObject*> fires;
+    unit->GetGameObjectListWithEntryInGrid(fires, GO_BASIC_CAMPFIRE, CAMPFIRE_RANGE);
+    for (GameObject* fire : fires)
+        if (fire->GetSpawnId())
+            return true;
+    return false;
+}
+
 // the campfire (spell focus 4) the player is resting at, nullptr if none is close enough
 static GameObject* FindCampfire(Unit* unit)
 {
@@ -214,6 +231,8 @@ class classic_spell_campfire_rest : public AuraScript
             if (nearby && sSpellMgr->GetSpellInfo(feature.Buff, DIFFICULTY_NONE))
                 buffs.insert(feature.Buff);
         }
+        if (IsAtAdventurerCamp(target) && sSpellMgr->GetSpellInfo(SPELL_BOOSTED_REST, DIFFICULTY_NONE))
+            buffs.insert(SPELL_BOOSTED_REST);
         for (uint32 buff : buffs)
             CastCampBuff(target, buff);
         // the Boosted buffs are hidden auras (Attributes 0x80); the visible buff is Camp Benefits, whose tooltip lists every one of them

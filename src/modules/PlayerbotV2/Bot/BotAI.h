@@ -2340,6 +2340,19 @@ public:
         if (it == equip_try_until_ms_.end()) return false;
         return now_ms < it->second;
     }
+    // A piece a player chose for the bot: gear it took in a trade as an upgrade, or an "equip <item>" order. While that entry is
+    // still worn in that slot, the auto-equip rules leave the slot alone, so the old piece in the bags is not put back on a few
+    // minutes later. Memory only (cleared by a restart); a slot is free again once something else is worn there. The order sets it
+    // from the command thread, the rules read it on the worker: atomics.
+    void keep_worn(uint8 slot, uint32 entry)
+    {
+        if (slot < kept_worn_.size()) kept_worn_[slot].store(entry, std::memory_order_relaxed);
+    }
+    bool worn_is_kept(uint8 slot, uint32 worn_entry) const
+    {
+        if (slot >= kept_worn_.size() || worn_entry == 0) return false;
+        return kept_worn_[slot].load(std::memory_order_relaxed) == worn_entry;
+    }
     void prune_equip_try_cache(uint32 now_ms)
     {
         for (auto it = equip_try_until_ms_.begin(); it != equip_try_until_ms_.end();)
@@ -3277,6 +3290,10 @@ private:
     // (Dungeon/TankStill.h). Log only; it changes nothing the tank does.
     void note_tank_still(BotSnapshotView, GroupSnapshotView);
 
+    // Gear a player traded the bot as an upgrade (TradeShop::TakeGiftGear) goes on as soon as the snapshot shows it in the bags,
+    // one piece per tick, out of combat; a piece for a later level goes on at that level. The slot is then kept (keep_worn).
+    void wear_gift_gear(BotSnapshotView const&, BotIntentEmitter&);
+
     // Recompute raid_map_party_hold_ and release the owner follow order when the owner
     // engages a mob himself. Runs every tick before the state dispatch.
     void update_dungeon_autopilot_hold(BotSnapshotView, GroupSnapshotView);
@@ -3724,6 +3741,10 @@ private:
     uint64_t     last_whisper_hash_       = 0;
     uint32       last_whisper_ms_         = 0;
     uint32       last_bag_room_ms_        = 0;   // when idle:make_bag_room last fired
+    // Traded gear still to put on (wear_gift_gear): the entry, when it is given up on if it never shows in the bags, and whether
+    // it was seen there (a piece for a later level waits in the bags until the bot has the level, and is dropped once it is gone).
+    struct GiftWear { uint32 entry = 0; uint32 until_ms = 0; bool seen = false; };
+    std::vector<GiftWear> gift_wear_;
 public:
     uint32 last_bag_room_ms() const { return last_bag_room_ms_; }
     void   note_bag_room(uint32 now_ms) { last_bag_room_ms_ = now_ms; }
@@ -5039,6 +5060,8 @@ private:
     std::atomic<uint32> mana_break_until_ms_{0};
     // Per-item-entry equip retry cooldown — see kEquipTryLockoutMs above.
     std::unordered_map<uint32, uint32> equip_try_until_ms_;
+    // Worn pieces a player chose, per equipment slot (keep_worn).
+    std::array<std::atomic<uint32>, 19> kept_worn_{};
     // Per-hub blacklist for unproductive arrivals — see kHubTriedLockoutMs.
     std::unordered_map<uint32, uint32> tried_hub_until_ms_;
     // A4 per-corpse loot first-seen timestamp — see loot_corpse_overdue.

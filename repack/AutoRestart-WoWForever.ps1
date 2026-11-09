@@ -27,6 +27,7 @@ while (-not (Test-Path $flag)) {
         # same port check as Start-WoWForever.ps1, before every start: after a crash or a Windows change another program (or a range
         # Windows keeps for Hyper-V/WSL) can hold 8085, and the worldserver then only logs "failed to bind socket acceptor" and closes
         try { Test-GamePorts $root } catch { Log "Not starting: $_"; break }
+        Repair-ServerConf $server | ForEach-Object { Log $_ }
         Repair-ConfDir $server | ForEach-Object { Log $_ }
         Sync-NetworkKeys $server
         Sync-LocalSettings $server | ForEach-Object { Log $_ }

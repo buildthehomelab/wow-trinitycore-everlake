@@ -12,6 +12,7 @@
 #include "PlayerbotAPI.h"
 #include "BotLanguage.h"
 #include "Bot/QuestLoot.h"
+#include "Bot/BotBridge.h"
 #include "ClassicBotSkills.h"
 #include "Travel/ReachMemory.h"
 #include "ClassicSpec.h"
@@ -66,6 +67,7 @@
 #include "JunkDrop.h"
 #include "VirtualSupply.h"
 #include "Services.h"
+#include "Fleet/BotAccountMgr.h"   // is_pool_account: a player's own alt gets no free gold or repair
 #include "Util/ConfigReader.h"
 #include "BotTrade.h"
 #include "BotTradeShop.h"
@@ -961,8 +963,15 @@ uint32 CastBlockedByOwnState(Player* p, SpellInfo const* info)
             continue;
         uint32 const count = std::clamp<uint32>(eff.CalcValueAsInt(), 1u, proto->GetMaxStackSize());
         ItemPosCountVec dest;
-        if (p->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, eff.ItemType, count) != EQUIP_ERR_OK)
+        if (InventoryResult const r = p->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, eff.ItemType, count); r != EQUIP_ERR_OK)
+        {
+            // Which limit it is (bags full, the item's own count, its limit category): API_ITEM_AT_LIMIT alone did not say why a
+            // mage with no water could not conjure any (Gun, 2026-11-08).
+            TC_LOG_INFO("playerbot.v2", "[cast_block] {} spell {}: item {} x{} does not fit, InventoryResult {} (limit category {}, max "
+                        "count {}, free slots {})", p->GetName(), info->Id, eff.ItemType, count, uint32(r), proto->GetItemLimitCategory(),
+                        proto->GetMaxCount(), p->GetFreeInventorySlotCount());
             return API::CastRejectItemAtLimit;
+        }
     }
     return 0;
 }
@@ -1283,6 +1292,9 @@ Result API::cast_spell(uint32 spell_id, ObjectGuid target, bool exact_rank)
     ClearStaleMoveFlags(p_);
     SpellCastResult sr = p_->CastSpell(tu, spell_id, false);
     last_cast_fail_ = sr == SPELL_CAST_OK ? 0u : uint32(sr);
+    // Playerbot.Bridge: a spell the server keeps refusing (not the timing races: cooldown, another cast still going).
+    if (sr != SPELL_CAST_OK && sr != SPELL_FAILED_NOT_READY && sr != SPELL_FAILED_SPELL_IN_PROGRESS && ::Playerbot::BotBridge::Enabled())
+        ::Playerbot::BotBridge::NoteCastFail(p_->GetGUID().GetCounter(), spell_id, uint32(sr));
     if (sr == SPELL_CAST_OK)
     {
         LogCastWhileMoving(p_, "casts", spell_id);
@@ -1430,6 +1442,9 @@ Result API::cast_spell_at_position(uint32 spell_id, float x, float y, float z)
     if (!p_) return Result::Other;
     if (!spell_id) return Result::NotKnown;
 
+    // The highest rank the bot knows, as cast() does: the rotations name rank 1 (Hurricane 16914, Blizzard 10), and a bot that knows
+    // every rank went out at rank 1's damage.
+    spell_id = HighestKnownRank(p_, spell_id);
     SpellInfo const* info = sSpellMgr->GetSpellInfo(spell_id, p_->GetMap()->GetDifficultyID());
     if (!info) return Result::NotKnown;
     if (!p_->HasSpell(spell_id) && !info->HasAttribute(SPELL_ATTR0_PASSIVE))
@@ -2013,6 +2028,11 @@ Result API::move_to(float x, float y, float z, bool run, bool direct, bool drop,
                 p_->movespline->Initialized(), p_->movespline->Finalized(), p_->movespline->timePassed(), p_->movespline->Duration(),
                 uint32(p_->GetUnitMovementFlags()), p_->IsFalling());
             NotePathFail(p_, PathDestKey(p_->GetMapId(), x, y, z_ask), GameTime::GetGameTimeMS(), kPathFailTtlLongMs);
+            if (::Playerbot::BotBridge::Enabled())
+                ::Playerbot::BotBridge::ReportStuck(p_->GetGUID().GetCounter(), fmt::format(
+                    "tried to go to ({:.0f},{:.0f},{:.0f}) for over 30 s without moving; goal dropped (combat={} rooted={} path_fail_recent={})",
+                    x, y, z, p_->IsInCombat(), p_->HasUnitState(UNIT_STATE_ROOT),
+                    PathFailedRecently(p_, PathDestKey(p_->GetMapId(), x, y, z_ask), GameTime::GetGameTimeMS())));
             return Result::Locked;
         }
     }
@@ -2212,6 +2232,46 @@ Result API::move_to(float x, float y, float z, bool run, bool direct, bool drop,
     };
     if (refuse_exit_portal())
         return Result::Locked;
+
+    // A floor with no navmesh: the top of a zeppelin tower is collision a player walks on, but the navmesh has only the ground 25-30 y
+    // under it. Every path from up there ends on that ground, so a bot beside its player on the tower walked off it to the ground below
+    // (11-08: Orgrimmar, a formation slot at z 48 went to "mesh at z 20.8"; Undercity, two bots brought beside him ran 40 y off).
+    // A short step across that same floor is walked straight: the bot stands off the mesh, the spot is real ground within 2.5 y of the
+    // ask on the bot's own level, the mesh lies far below both, and nothing is in the way. Anything else goes the usual way.
+    if (!direct && !asked_on_mesh && p_->IsAlive() && !p_->IsInWater() && !p_->IsFlying() && !p_->GetTransport() && !p_->GetVehicle() &&
+        p_->GetMap() && !p_->GetMap()->IsBattlegroundOrArena())
+    {
+        constexpr float kDeckWalkYards = 20.0f;
+        float const bx = p_->GetPositionX(), by = p_->GetPositionY(), bz = p_->GetPositionZ();
+        float const step = std::hypot(x - bx, y - by);
+        if (step > 0.5f && step <= kDeckWalkYards && std::fabs(z_ask - bz) <= 4.0f)
+        {
+            bool mesh_far_below = true;   // no path at all: the mesh is nowhere near
+            if (path_ok && !(pt & PATHFIND_NOPATH))
+            {
+                G3D::Vector3 const ae = path.GetActualEndPosition();
+                mesh_far_below = ae.z < z_ask - 8.0f && ae.z < bz - 8.0f;
+            }
+            Position bot_on_mesh;
+            float floor_z = 0.f;
+            if (mesh_far_below && !BotMovement::NearestNavPoint(p_, bx, by, bz, 3.0f, 4.0f, bot_on_mesh) &&
+                BotMovement::ProbeGround(p_, x, y, z_ask, floor_z) && std::fabs(floor_z - z_ask) <= 2.5f && std::fabs(floor_z - bz) <= 4.0f &&
+                BotMovement::LineIsClear(p_, bx, by, bz + 1.5f, x, y, floor_z + 1.5f))
+            {
+                p_->GetMotionMaster()->MovePoint(0, x, y, floor_z, /*generatePath*/ false);
+                static std::unordered_map<uint64, uint32> s_deckAt;
+                uint32 const dnow = GameTime::GetGameTimeMS();
+                uint32& dat = s_deckAt[p_->GetGUID().GetCounter()];
+                if (dat == 0 || dnow - dat >= 10000u)
+                {
+                    dat = dnow ? dnow : 1u;
+                    TC_LOG_INFO("playerbot.v2", "[deck_walk] {} walks {:.1f} y straight across a floor with no navmesh: ({:.1f},{:.1f},{:.1f}) -> ({:.1f},{:.1f},{:.1f}) map {}",
+                                p_->GetName(), step, bx, by, bz, x, y, floor_z, p_->GetMapId());
+                }
+                return Result::Ok;
+            }
+        }
+    }
 
     if (!path_ok || (pt & PATHFIND_NOPATH))
     {
@@ -4333,7 +4393,10 @@ Result API::always_buffs(uint8 set, uint8 mask)
     for (uint8 b = 0; b < kBuffSetCount; ++b)
         if (b == set || !(mask & (kAlwaysMaskConsumables | kAlwaysMaskWorldBuffs)))   // the other roles' rows only to strip them
             for (AlwaysAura const& a : AlwaysBuffRoleRows(BuffSet(b))) row(a);
-    if (mask & kAlwaysMaskRepair)
+    // A real player's own character summoned as a bot (an alt on their account) gets no free gold or repair: each summon put the
+    // alt up to 200 gold for nothing (Discord report 2026-11-08). The server's bots live on the bot pool accounts.
+    bool const players_own = p_->GetSession() && !Services::Accounts().is_pool_account(p_->GetSession()->GetAccountId());
+    if ((mask & kAlwaysMaskRepair) && !players_own)
     {
         // Gear never wears out and the bot is never broke: a full repair at no cost, and the gold back up to the floor.
         for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
@@ -9488,6 +9551,22 @@ Result API::bg_port(uint16 bg_type_id, bool accept)
         {
             qid = q;
             break;
+        }
+    }
+    // An arena (or random battleground) invite names the match's own type (Mak'gora Arena 1169), while the queue slot holds the queue
+    // that picked it ("All Arenas" 6): take the slot of that kind the bot is invited from. Before, bots never entered an arena.
+    if (qid == BATTLEGROUND_QUEUE_NONE)
+    {
+        for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+        {
+            BattlegroundQueueTypeId q = p_->GetBattlegroundQueueTypeId(i);
+            if (q != BATTLEGROUND_QUEUE_NONE
+                && (q.BattlemasterListId == BATTLEGROUND_AA || BattlegroundMgr::IsRandomBattleground(q.BattlemasterListId))
+                && p_->IsInvitedForBattlegroundQueueType(q))
+            {
+                qid = q;
+                break;
+            }
         }
     }
     if (qid == BATTLEGROUND_QUEUE_NONE)

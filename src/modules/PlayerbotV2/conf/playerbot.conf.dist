@@ -15,6 +15,25 @@
 [playerbot]
 
 ###############################################################################
+# BOTS ON OR OFF (put your choice in zz-9-local.conf, your own file)
+#
+#   Playerbot.Enable       = 1   1 = the bots are on. 0 = the bots are completely
+#                                off, as if the server had no bot module: no bots
+#                                in the world, no bots you call yourself, no
+#                                dungeon finder or battleground bots, no bot
+#                                commands, no bot database work. Restart needed.
+#   Playerbot.World.Enable = 1   only when the bots are on: 1 = bots wander the
+#                                world, 0 = no wandering world bots (see below).
+#
+#   Playerbot.Enable = 0 does not touch two core features the bot files turn
+#   on: the auction house bot (AuctionHouseBot.Seller.Enabled / .Buyer.Enabled
+#   / .Account) and the road pathing further down (Pathfinding.SlopeCoefficient,
+#   HandcraftedRoads.Enable, RoadGraph.Enable). For a plain server set those to
+#   0 as well; the launcher's Bots: Off does all of this for you.
+###############################################################################
+Playerbot.Enable = 1
+
+###############################################################################
 # BOT NUMBERS, THE SIMPLE WAY (put these in zz-9-local.conf, your own file)
 #
 #   Bots.Size      = High    Low, Normal or High: fills the four below.
@@ -410,6 +429,12 @@ Playerbot.World.Gathering.TalkGapSec = 40
 Playerbot.World.Gathering.Campfire = 1
 Playerbot.World.Gathering.UseChatModel = 1
 Playerbot.World.Gathering.ChatModelPerMinute = 4
+# Street chats inside the capitals (all six; needs Gathering.Enable): where a real player walks, two to four world bots of his side
+# stand together a few yards from the bank, the auction house, the inn, a shop or a mailbox near him, turned to each other, and talk
+# face to face in /say, each line with a gesture (talk, laugh, nod, no, point, question); a listener may laugh along. The talk is the
+# gatherings' own (chat model or bot bridge, ChatModelPerMinute shared, else the written talks that fit a city street). A chat lasts
+# 3 to 6 minutes, then they go on with their day and others may start one. CityChats = how many at once in one city, 0 = none.
+Playerbot.World.Gathering.CityChats = 3
 
 # How many other players may stand within 40 yards of a world bot working a quest objective before it gives that objective up for 15
 # minutes and takes another quest (real players and their companions keep their place first, then world bots by id). Keeps a popular mob
@@ -916,6 +941,11 @@ Playerbot.Behavior.OwnerCommands = 1
 #                     route a moment later and land with him. The ones that could not board (farther off, dead, fighting) are brought
 #                     to him when he lands. Off: the bots follow him on the ground as before.
 Playerbot.Behavior.FlyWithOwner = 1
+#   RideWithOwner     a player who gets on a ship or zeppelin takes the bots of his group that stand by him (45 y) along: they get
+#                     on beside him a moment later, ride with him and get off when he does. "summon" / "come" while he rides puts
+#                     them on board beside him. The ones that could not get on (farther off, dead, fighting) are brought to him
+#                     when he steps off. Off: the bots wait at the dock and CatchUpToOwner brings them after its 15 s.
+Playerbot.Behavior.RideWithOwner = 1
 #   CatchUpToOwner    a bot of a player's group (his companion, or any bot when he leads) that gets no closer to him for 15 s
 #                     while he is more than 40 y away (or 12 y away and 8 y above or below, a ledge it cannot climb), or is left on
 #                     another map (another continent, outside the dungeon he went into, inside the one he left), is set down
@@ -1551,6 +1581,120 @@ Playerbot.ChatModel.HistoryLines    = 8
 Playerbot.ChatModel.HistoryMinutes  = 10
 Playerbot.ChatModel.Language        = "auto"
 Playerbot.ChatModel.ExtraPrompt     = ""
+
+# Bot bridge (off by default): talks to an outside program on this PC through files, so a player can plug in their own chat
+# model, bug collector or tool without changing the server. Each realm has its own bridge; nothing is sent over the internet.
+# With Enable = 1 the server writes what happens to the bots, one JSON line per event, into Folder\events-YYYYMMDD-HH00.jsonl:
+#   chat_in     a whisper / party / raid / /say line a bot would answer (the same lines Playerbot.ChatModel answers, with its
+#               Whispers / Party / Say switches and limits); has "channel", "from", "text" and "prompt" (the bot description).
+#   stuck       a bot asked to go somewhere for over 30 s without moving, so it dropped the goal.
+#   quest_fail  a bot dropped a quest it can never finish or turn in.
+#   spell_fail  the server refused the same spell SpellFailCount times in a minute ("reason" = the cast result number).
+#   death_loop  a bot died DeathLoopCount times in 10 minutes in the same place ("killer" when known).
+#   start/stop  server start and clean stop. A start after a crash (no clean stop) has "unclean_stop":1 and "last_crash", the
+#               newest report in CrashFolder.
+# Every bot event has the bot's name, guid, class, race, level, zone, area, map, position and quest (id and name).
+# The program answers by adding lines to Folder\replies.jsonl:
+#   {"reply_to":1042,"say":"Sure, on my way."}             answer chat_in 1042 on the channel it came from
+#   {"bot":"Brannor","say":"Anyone for Deadmines?","channel":"say"}   a line a bot says on its own (say, party, raid, yell, or
+#                                                           whisper with "to"); at most one every BotLineGapMs per bot
+#   {"ping":1}                                             nothing to say, the program is still running
+# Text only, unless Actions.Enable is on (below). Broken lines are skipped (one warning a minute).
+# Chat goes to the bridge only while the program has written to replies.jsonl in the last ClientTimeoutSec; otherwise bots answer
+# the usual way (Playerbot.ChatModel if that is on). Folder\status.json says every 10 s that the server is up and how many bots it has.
+#   Enable           1 = on.
+#   Folder           where the files go (relative to the server folder).
+#   CrashFolder      where the server writes crash reports (default "Crashes").
+#   Chat             1 = player lines to bots go to the program (when it is running).
+#   Events           1 = write stuck / quest_fail / spell_fail / death_loop events.
+#   PromptInChat     1 = chat_in carries "prompt", the bot description the built-in chat model would use.
+#   ClientTimeoutSec how long after the program's last write it still counts as running.
+#   EventCooldownSec one bot writes one event of a type at most this often (default 300). Repeats in between are counted in the
+#                    next event's "repeats" (and status.json "skipped_repeats"), not as dropped.
+#   MaxEventsPerSec  events for the whole server per second; extra ones are counted in a "dropped" line.
+# replies.jsonl, once read to its end and over 1 MB, is renamed to replies.old.jsonl; the program's next write makes a new one.
+#   ReplyMaxAgeSec   an answer to a chat_in older than this is not said (the moment has passed).
+#   BotLineGapMs     shortest gap between two lines one bot says on its own.
+#   MaxLineBytes     longest line a bot says (cut on a word).
+#   RotateMB         start a new events file past this size; KeepDays: event files older than this are deleted.
+#   SpellFailCount / DeathLoopCount   how many repeats make a spell_fail / death_loop event.
+#   ReadMs           how often replies.jsonl is read, in milliseconds (default 200).
+#   Swearing         1 = chat_in carries "swearing":1, telling the program that everyday bad language (damn, ffs, piss off) is fine
+#                    on this realm. Slurs, threats and sexual lines stay blocked in the program either way. Off by default.
+#   Moments          1 = while a program answers chat, the lines a bot says on its own in party (it looted something good, gained
+#                    a level, the group wiped, a boss died, the group came to a new zone...) are written as "moment" events and
+#                    the program writes the line, instead of a fixed line from the text table. The same chance and cooldowns
+#                    decide when a bot speaks (Playerbot.Chatter.*); without a program the fixed lines are said as before.
+#   MomentsPerMinute at most this many moments a minute for the whole server (the model's time goes to chat first); past it,
+#                    the fixed line is said. 0 = no moments.
+#   Talk             1 = while a program answers chat, world bots talking with each other (the gatherings outside the city gates,
+#                    Playerbot.World.Gathering.*) get their lines from the program as "talk" events, so one model does all the
+#                    talking (the built-in chat model is not loaded next to it). Gathering.ChatModelPerMinute still caps them, and
+#                    the program skips them while players' chat waits. 0 = the built-in chat model or the written talks, as before.
+#                    Also world bots' posts in General and Trade (WTS / WTB / LFM / a question, when Playerbot.Chatter.Suggest.* lets
+#                    a bot post; at most MomentsPerMinute a minute), and now and then another bot answering one there (at most 2 a
+#                    minute). An item or quest named in a post keeps its link. Without a program, the fixed lines as before.
+# chat_in also carries "weather" (the zone's weather) and "time_of_day" (morning, afternoon, evening, night) for small talk.
+Playerbot.Bridge.Enable             = 0
+Playerbot.Bridge.Folder             = "BotBridge"
+Playerbot.Bridge.CrashFolder        = "Crashes"
+Playerbot.Bridge.Chat               = 1
+Playerbot.Bridge.Events             = 1
+Playerbot.Bridge.PromptInChat       = 1
+Playerbot.Bridge.ClientTimeoutSec   = 120
+Playerbot.Bridge.EventCooldownSec   = 300
+Playerbot.Bridge.MaxEventsPerSec    = 30
+Playerbot.Bridge.ReplyMaxAgeSec     = 60
+Playerbot.Bridge.BotLineGapMs       = 8000
+Playerbot.Bridge.MaxLineBytes       = 200
+Playerbot.Bridge.RotateMB           = 20
+Playerbot.Bridge.KeepDays           = 3
+Playerbot.Bridge.SpellFailCount     = 5
+Playerbot.Bridge.DeathLoopCount     = 3
+Playerbot.Bridge.ReadMs             = 200
+Playerbot.Bridge.Swearing           = 0
+Playerbot.Bridge.Moments            = 1
+Playerbot.Bridge.MomentsPerMinute   = 6
+Playerbot.Bridge.Talk               = 1
+
+# Bot bridge actions (off by default; needs Playerbot.Bridge.Enable = 1): a reply line may also carry ONE action, which the bot
+# does after the server has checked it. Only these words exist, each something a player can already order a bot to do:
+#   follow, stay, resume, attack, stop_attack, flee, go_to, accept_quest, turn_in, drop_quest, share_quest, unstuck, sit,
+#   stand, mount, dismount, emote, cast
+#   {"reply_to":1042,"say":"Right behind you.","do":"follow"}
+#   {"reply_to":1042,"say":"Watch this.","do":"cast","spell":"Fireball","ref":2}   a spell from the chat_in's "spells" list
+#   {"reply_to":1042,"say":"On it!","do":"attack","ref":2}        a "ref" from the event's "near" list (valid 60 s)
+#   {"bot":"Brannor","do":"go_to","x":-5340.1,"y":-2950.3}
+# Nothing else is possible: no commands, no teleport, no trade, items, gold, mail, auction, guild or group changes, no attacking
+# players. A companion (a player's own bot) acts only when its owner asked in the chat_in it answers. A bot grouped with a real
+# player takes anything but emote/sit/stand only from the player leading the group. In dungeons, raids and battlegrounds only
+# follow, stay, resume, emote, sit, stand, order, trade and step; in combat only attack, stop_attack, flee, follow, stay, cast, order
+# and step (order, trade, and step there, only for the owner or group leader). Every action gets an
+# "action_result" event (ok 1, or ok 0 with "why"). chat_in carries "can", the actions this player may ask of this bot right now.
+# cast: only plain damage on one hostile (as attack allows), heals, buffs and resurrection on friendly players or the bot, and
+# Basic Campfire; never teleports, portals, summons, mind control. The spell must be known, ready and in range.
+#   Actions.Enable        1 = replies may carry actions.
+#   Actions.OwnedBots     1 = the program may also act for a player's companion on its own (no chat_in from the owner).
+#   Actions.Allowed       the actions allowed here, comma separated, or "all".
+#   Actions.BotGapMs      shortest gap between two actions of one bot (default 5 s). Emotes: one per 10 s; unstuck: one per 2 min.
+#   Actions.MaxPerSec     actions for the whole server per second.
+#   Actions.MaxAgeSec     an action that arrives later than this after the chat_in (or after it was written) is dropped.
+#   Actions.FollowMinutes how long a world bot follows / stays for a player who is not its owner or group leader.
+#   Actions.MaxGoToYards  farthest go_to (walking only, on the same map, a path must exist).
+#   Actions.NearYards     hostiles within this distance are listed in "near" (one per name, with "count") and may be attacked or
+#                         cast at. Quest givers and NPCs: 40 yards; named objects (mailbox, bench, campfire): 30 yards.
+#   Actions.Spells        1 = chat_in lists the bot's spells ("spells", name and kind) and cast may use them.
+# A bot with 10 refused actions in a minute takes none for 5 minutes.
+Playerbot.Bridge.Actions.Enable        = 0
+Playerbot.Bridge.Actions.OwnedBots     = 0
+Playerbot.Bridge.Actions.Allowed       = "all"
+Playerbot.Bridge.Actions.BotGapMs      = 5000
+Playerbot.Bridge.Actions.MaxPerSec     = 20
+Playerbot.Bridge.Actions.MaxAgeSec     = 30
+Playerbot.Bridge.Actions.FollowMinutes = 10
+Playerbot.Bridge.Actions.MaxGoToYards  = 200
+Playerbot.Bridge.Actions.NearYards     = 60
+Playerbot.Bridge.Actions.Spells        = 1
 
 # Speech no game event announces (also off with Playerbot.Chatter.Enabled = 0):
 #   Callouts.*   a companion (owner in its group) speaks ike3's combat lines: "Heal me!" when it

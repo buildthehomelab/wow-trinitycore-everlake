@@ -10,21 +10,20 @@ Bot chat is off unless you turn it on. Everything else in the repack works the s
 - About 3 GB of free disk space (Ollama is about 1 GB, the model 1.3 to 2 GB).
 - 16 GB of memory or more is best. With less, pick the Small model.
 
-## The easy way: from the launcher (no typing)
-1. Open WoWForeverLauncher.exe and go to **Settings**.
-2. Press **Bot chat...**
-3. Pick a model:
-   - **Better: llama3.2:3b**, for most PCs (about 2 GB to download).
-   - **Small: llama3.2:1b**, for PCs with less than 16 GB of memory (about 1.3 GB).
-4. Press **Download and turn on**. Then wait. The launcher:
+## The easy way: the launcher's AI BOTS tab (no typing)
+Bot chat is now part of **AI bots**: the bots also remember you, have moods and do things you ask (fight, cast spells,
+follow, sit, dance...).
+1. Open WoWForeverLauncher.exe and click **AI BOTS** on the left, under Server.
+2. Pick what your PC can run: **No graphics card**, **Low**, **Medium** or **High**. The launcher suggests one.
+3. Press **Download and turn on**. Then wait. The launcher:
    - installs Ollama if you don't have it yet. If Ollama is already installed, it uses that one.
-   - downloads the model. A bar shows how far it has got.
-   - turns bot chat on for your server.
-   - restarts your server if it is running.
-5. That's it. Whisper a bot and it answers.
+   - downloads the model and a small Python (from python.org) for the AI program. A bar shows how far it has got.
+   - turns AI bots on for your server, with bot chat as the fallback when the AI program is not running.
+   - asks to restart your server if it is running.
+4. That's it. Whisper a bot and it answers.
 
-The setting is kept. Bot chat is on every time you start the server until you turn it off. You don't need to do anything
-again.
+The setting is kept. AI bots start every time you start the server until you turn them off. You don't need to do anything
+again. More in repack\bot-bridge\README.txt.
 
 ## Does Ollama run all the time?
 If the launcher installed Ollama, it does not start with Windows. Starting the server starts Ollama, and stopping the
@@ -34,9 +33,9 @@ If you installed Ollama yourself before, the launcher leaves it alone and it kee
 the server still starts Ollama if it isn't running.
 
 ## Turning it off
-Go to Settings, press **Bot chat...**, then press **Turn off**. The bots go back to their usual lines.
-**Remove model** also deletes the downloaded model to free the disk space. To remove Ollama itself, use Windows Settings,
-Apps, Ollama, Uninstall.
+In the launcher, click **AI BOTS**, then press **Turn off**. The bots go back to their usual lines.
+**Remove models** also deletes the downloaded models and Python to free the disk space. To remove Ollama itself, use
+Windows Settings, Apps, Ollama, Uninstall.
 
 ## Doing it by hand (if the launcher can't)
 1. Download Ollama from https://ollama.com/download and install it.
@@ -58,8 +57,8 @@ Apps, Ollama, Uninstall.
 - Is Ollama running? Open http://127.0.0.1:11434 in your browser. It should say "Ollama is running". If it doesn't,
   start Ollama from the Start menu, or restart the server from the launcher.
 - Did the model download? In a command prompt, `ollama list` shows the models you have.
-- If the Bot chat window shows a yellow note that another file also sets Playerbot.ChatModel.Enable, remove that
-  line from that file.
+- If the AI BOTS tab shows a yellow note that another file also set these lines, the launcher has turned those lines
+  off (a copy of that file is kept as .bak).
 - The server log (server\logs\Server.log) says once a minute when it can't reach Ollama.
 
 The Llama 3.2 models are made by Meta and come under the Llama 3.2 Community License. Ollama is free (MIT licence).

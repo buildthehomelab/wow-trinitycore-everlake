@@ -581,6 +581,17 @@ void DispatchInGroup(BotAI& ai,
         return;
     }
 
+    // Nor a player on a ship or zeppelin: his x,y is a moving deck over the sea (11-08, Orgrimmar -> Undercity: three bots tried to walk to
+    // him across the water). The bots by him ride with him and step off with him, the others are brought to him when he steps off
+    // (PlayerbotV2.cpp DriveRideWithOwner). A bot on the deck keeps still: a passenger's walk is relative to the moving deck.
+    if (!leader_member->is_bot && !leader_member->ship_guid.IsEmpty() && Services::Config().behavior_ride_with_owner())
+    {
+        if (snapshot.raw().movement.is_moving)
+            emit.stop_movement(/*clear_generators=*/true);
+        ai.set_last_rule_fired(snapshot.on_transport() ? "ingroup:rides_with_owner" : "ingroup:owner_on_ship");
+        return;
+    }
+
     // Bot's current world position — needed for both anchor sanity checks
     // and the follow-recall distance test further below. Computed once and
     // reused so the anchor-on-tank fallback can compare distances.

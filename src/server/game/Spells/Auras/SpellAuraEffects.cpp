@@ -1536,6 +1536,9 @@ void AuraEffect::HandleShapeshiftBoosts(Unit* target, bool apply) const
             spellId3 = 106829;
             spellId4 = 106899;
             break;
+        case FORM_MOONKIN_FORM:
+            spellId = 24905; // Moonkin Form (Passive): armor from items, as the form tooltip says
+            break;
         case FORM_FLIGHT_FORM:
             spellId = 33948;
             spellId2 = 34764;
@@ -1567,7 +1570,6 @@ void AuraEffect::HandleShapeshiftBoosts(Unit* target, bool apply) const
         case FORM_BATTLE_STANCE:
         case FORM_DEFENSIVE_STANCE:
         case FORM_BERSERKER_STANCE:
-        case FORM_MOONKIN_FORM:
         case FORM_METAMORPHOSIS:
             break;
         default:

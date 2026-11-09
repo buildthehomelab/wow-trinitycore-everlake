@@ -269,7 +269,15 @@ struct FaceAway { uint32_t enemy; float hpMax = 100.0f; float hpMin = 0.0f; floa
 
 // While <anchor> is fighting, the players that hold an <enemy> stand <reach> yards past the spot the anchor stood on when the fight began, away from the
 // raid's centre at that moment, side by side <spacing> yards apart (Majordomo: his tank drags him out, each Elite tank one Elite, all visibly apart).
-struct TankSpot { uint32_t anchor; uint32_t enemy; float reach; float spacing; };
+// fixed: the row is centred on the world point (x, y) and runs along rowDeg (world bearing), whatever the raid does; the anchor only has to be
+// alive and in the fight. A fixed rule with reach > 0 is an arc instead: every slot <reach> yards from (x, y), neighbours <spacing> apart, the
+// middle of the arc on bearing rowDeg (a camp at (x, y) then has every tank's pile at the same distance). also: further entries whose holders share the one row (adds of any colour), so no two tanks get the same slot.
+struct TankSpot { uint32_t anchor; uint32_t enemy; float reach; float spacing; bool fixed = false; float x = 0.0f, y = 0.0f, rowDeg = 0.0f;
+                  std::vector<uint32_t> also = {}; };
+inline bool InTankSpot(TankSpot const& rule, uint32_t entry)
+{
+    return entry == rule.enemy || std::find(rule.also.begin(), rule.also.end(), entry) != rule.also.end();
+}
 
 // While <enemy> is alive and fighting, matching bots stand in the sector behind it: <halfAngleDeg> either side of the line
 // straight behind where it faces, between <minDist> and <maxDist> yards. A bot outside walks to the nearest such spot on its

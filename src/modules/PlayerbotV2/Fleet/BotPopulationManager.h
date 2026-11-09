@@ -171,6 +171,10 @@ public:
     // Brings an owned companion to its owner at once, in the open world or inside an instance (see the definition). Empty = on its way,
     // else why not (also logged as [summon]). World thread.
     std::string BringToOwner(Player* owner, Player* bot, char const* why);
+    // Puts a bot of the owner's group on the ship or zeppelin he rides, on the deck beside him (Playerbot.Behavior.RideWithOwner). It rides
+    // with him from there as a passenger. Empty = aboard (or already was), else why not (also logged as [ride_with_owner]). Same map
+    // only. World thread.
+    std::string BoardOwnerShip(Player* owner, Player* bot, char const* why);
 
     // Resolves and pins a companion's role: `requested` (the owner's word) if not Role::Unknown, else the role stored with
     // the companion (OwnerRegistry::DeclaredRole, migration 0024), else the one its talents say. Sets the BotAI role
@@ -225,6 +229,12 @@ public:
         uint64 bot_low = 0;
         ObjectGuid owner;
         uint32 queued_ms = 0;
+        // Where it was sent, so a bring that did not land says how far it got and from where (11-08: a catch-up after the zeppelin
+        // logged "brought" and the bot never moved).
+        uint32 map_id = 0;
+        float x = 0.f, y = 0.f, z = 0.f;
+        float from_x = 0.f, from_y = 0.f, from_z = 0.f;
+        std::string why;
     };
     std::vector<PendingBring> pending_brings_;
     void DrainBringChecks();

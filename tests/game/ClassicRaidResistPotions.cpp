@@ -55,6 +55,7 @@ TEST_CASE("each raid boss with a school-bound hit orders the matching resistance
     CHECK(PotionFor(469, 14601) == kShadow);   // Ebonroc: Shadow Flame
     CHECK(PotionFor(469, 11981) == kShadow);   // Flamegor
     CHECK(PotionFor(469, 11583) == kShadow);   // Nefarian
+    CHECK(PotionFor(469, 10162) == kFire);     // Victor Nefarius' drakonids: Brood Power Black / Red
     CHECK(PotionFor(531, 15509) == kNature);   // Huhuran: Poison Bolt Volley
     CHECK(PotionFor(533, 15989) == kFrost);    // Sapphiron
 }

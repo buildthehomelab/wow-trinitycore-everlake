@@ -81,6 +81,8 @@ struct Line
     std::uint64_t value = 0;     // fair price of the whole stack; on the player's side what the bot pays for it (PaidUnitPrice)
     bool upgrade = false;        // equippable and better than what the bot wears there (only meaningful on the player's side)
     bool reagent = false;        // a reagent of a recipe the bot knows: a gift from the owner or a group mate, so "trade them to me and ask again" works
+    bool later = false;          // gear the bot may wear but only a few levels from now: a gift from the owner or a group mate, kept until then
+                                 // (Gremloc 11-08: a group mate's piece above the bot's level was bought at the vendor price)
 };
 
 struct View
@@ -100,7 +102,12 @@ struct View
     bool bot_has_room = true;                // the bot can store everything the player put up
     bool has_delivery = false;               // a craft order made for this player is waiting in the bot's bags, to be handed over for free
     bool delivery_present = false;           // that item is still in the bags (or already in the window)
+    std::uint32_t delivery_left = 0;         // of the things to hand over (a craft order, or what the owner asked for), how many are
+                                             // still in the bags and not in the window yet
 };
+
+// The item slots of a trade window that change hands (the seventh only shows an enchant).
+constexpr std::size_t kTradeItemSlots = 6;
 
 enum class Act : unsigned char
 {
@@ -135,14 +142,14 @@ struct Action
 inline bool AllGifts(std::vector<Line> const& v)
 {
     for (Line const& l : v)
-        if (!l.upgrade && !l.reagent) return false;
+        if (!l.upgrade && !l.reagent && !l.later) return false;
     return true;
 }
 
 inline bool AnyGift(std::vector<Line> const& v)
 {
     for (Line const& l : v)
-        if (l.upgrade || l.reagent) return true;
+        if (l.upgrade || l.reagent || l.later) return true;
     return false;
 }
 
@@ -159,9 +166,12 @@ inline Action Decide(View const& v)
 {
     bool const he_gives = !v.his.empty();
 
-    // A finished craft order that could not go by mail: handed over for nothing when he opens a trade with nothing in it.
+    // A finished craft order that could not go by mail, or the things the owner asked the bot for: handed over for nothing in a
+    // window with nothing in his side, one by one, then accepted once he has.
     if (!he_gives && v.has_delivery && v.his_money == 0 && v.my_money == 0)
     {
+        if (v.delivery_left > 0 && v.mine.size() < kTradeItemSlots)
+            return { Act::AddDelivery };
         if (v.mine.empty())
             return v.delivery_present ? Action{ Act::AddDelivery } : Action{ Act::Cancel, 0, Say::OrderGone };
         if (v.his_accepted && !v.my_accepted) return { Act::Accept };

@@ -740,6 +740,9 @@ std::string PlanEquipOrder(::Playerbot::BotSnapshot const& snap, std::string con
         if (!found)
             return fmt::format("{}: I don't have that in my bags", bot_name);
         ItemTemplate const* t = sObjectMgr->GetItemTemplate(found->entry);
+        // Too low for it (Gremloc 11-08: a traded piece above the bot's level stayed in the bags with no word why).
+        if (t && t->GetBaseRequiredLevel() > int32(level))
+            return fmt::format("{}: I need level {} for [{}], I'm {}", bot_name, t->GetBaseRequiredLevel(), t->GetDefaultLocaleName(), uint32(level));
         if (::Playerbot::Gear::IsPvpItem(t))
             return fmt::format("{}: [{}] is a PvP item, I don't wear those", bot_name, t->GetDefaultLocaleName());
         if (found->equip_slot == 0xFF || found->equip_slot >= equipped.size())
@@ -754,6 +757,8 @@ std::string PlanEquipOrder(::Playerbot::BotSnapshot const& snap, std::string con
     for (InventoryItem const& it : snap.inventory.bag_items)
     {
         if (it.equip_slot == 0xFF || it.equip_slot >= equipped.size() || it.item_level == 0 || it.quality == 0) continue;
+        // Above the bot's level: the server refuses it, but the reply said "equipped" (Gremloc 11-08). Named below if nothing else goes on.
+        if (ItemTemplate const* t = sObjectMgr->GetItemTemplate(it.entry); t && t->GetBaseRequiredLevel() > int32(level)) continue;
         cands.push_back({ &it, it.equip_slot });
     }
     auto score_of = [&](InventoryItem const& it, uint8 slot) -> int32
@@ -790,7 +795,19 @@ std::string PlanEquipOrder(::Playerbot::BotSnapshot const& snap, std::string con
         done.push_back(describe(it, slot));
     }
     if (picks.empty())
+    {
+        // Say why a piece the player may have meant stays in the bags: the lowest required level above the bot's.
+        ItemTemplate const* too_high = nullptr;
+        for (InventoryItem const& it : snap.inventory.bag_items)
+            if (ItemTemplate const* t = sObjectMgr->GetItemTemplate(it.entry);
+                t && (t->GetClass() == ITEM_CLASS_ARMOR || t->GetClass() == ITEM_CLASS_WEAPON) && t->GetInventoryType() != INVTYPE_NON_EQUIP &&
+                t->GetBaseRequiredLevel() > int32(level) && (!too_high || t->GetBaseRequiredLevel() < too_high->GetBaseRequiredLevel()))
+                too_high = t;
+        if (too_high)
+            return fmt::format("{}: nothing better in my bags I can wear yet ([{}] needs level {}, I'm {})", bot_name,
+                               too_high->GetDefaultLocaleName(), too_high->GetBaseRequiredLevel(), uint32(level));
         return fmt::format("{}: nothing better in my bags", bot_name);
+    }
     return fmt::format("{}: equipped {}", bot_name, join(done));
 }
 

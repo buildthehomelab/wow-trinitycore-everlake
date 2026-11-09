@@ -109,6 +109,12 @@ if (-not (Test-Path "$stage\addons\ForeverBots\ForeverBots.toc")) { throw 'Forev
 # ForeverDots (countdown bars for your own damage-over-time spells) goes in beside it and is installed the same way
 robocopy "$src\src\modules\PlayerbotV2\Addon\ForeverDots" "$stage\addons\ForeverDots" /E /NFL /NDL /NJH /NJS | Out-Null
 if (-not (Test-Path "$stage\addons\ForeverDots\ForeverDots.toc")) { throw 'ForeverDots addon missing from the package' }
+# The bot bridge (Playerbot.Bridge.*, off by default): the player guide, the technical guide and the two programs that plug into it,
+# always the copies from this commit. In both zips (the update zip is made from the same stage).
+New-Item -ItemType Directory -Force "$stage\repack\bot-bridge" | Out-Null
+foreach ($f in 'BOT_BRIDGE_PLAYERS.txt|README.txt', 'BOT_BRIDGE.md|BOT_BRIDGE.md', 'tools\bot_bridge_ollama.py|bot_bridge_ollama.py', 'tools\bot_bridge_example.py|bot_bridge_example.py', 'tools\bot_bridge_models.txt|models.txt') {
+    $a, $b = $f -split '\|'; Copy-Item "$src\src\modules\PlayerbotV2\$a" "$stage\repack\bot-bridge\$b" -Force
+}
 if (Test-Path "$root\mysql-portable\bin\mysqld.exe") {
     robocopy "$root\mysql-portable" "$stage\mysql" /E /XD data mysql-data /XF *.log /NFL /NDL /NJH /NJS | Out-Null
 } else { Write-Warning 'mysql-portable missing: testers would have to supply MySQL' }
@@ -187,7 +193,7 @@ foreach ($f in Get-ChildItem $stage -Recurse -File) {
 }
 if ($hits.Count) { throw ("Packed files still carry the build-tool words:`n  " + ($hits -join "`n  ")) }
 # Files the package must hold
-foreach ($need in 'server\worldserver.exe', 'server\bnetserver.exe', 'server\legacy.dll', 'server\worldserver.conf.d\zz-0-playerbot-defaults.conf', 'server\worldserver.conf.d\zz-1-wow-forever-realm.conf', 'repack\templates\zz-9-local.template', 'Install.cmd', 'addons\ForeverBots\ForeverBots.toc', 'addons\ForeverDots\ForeverDots.toc') {
+foreach ($need in 'server\worldserver.exe', 'server\bnetserver.exe', 'server\legacy.dll', 'server\worldserver.conf.d\zz-0-playerbot-defaults.conf', 'server\worldserver.conf.d\zz-1-wow-forever-realm.conf', 'repack\templates\zz-9-local.template', 'Install.cmd', 'addons\ForeverBots\ForeverBots.toc', 'addons\ForeverDots\ForeverDots.toc', 'repack\bot-bridge\README.txt', 'repack\bot-bridge\BOT_BRIDGE.md', 'repack\bot-bridge\bot_bridge_ollama.py', 'repack\bot-bridge\bot_bridge_example.py', 'repack\bot-bridge\models.txt') {
     if (-not (Test-Path (Join-Path $stage $need))) { throw "Package file missing: $need" }
 }
 # Every file of the full package with its size: before the install the launcher compares the folder with this list and asks the

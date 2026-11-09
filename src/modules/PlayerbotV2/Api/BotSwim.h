@@ -61,4 +61,14 @@ inline bool NeedsSettle(float bot_z, float swim_z)
     return std::fabs(bot_z - swim_z) > kSettleTolerance;
 }
 
+// A follower's settle to (dx, dy, dz) from its leader keeps it inside the follow generator's 3D range (combat reaches + follow
+// distance), with a margin so the next leader step does not tip it out at once. Out of range, the generator would path it back up
+// to the surface by the leader at his next step, and the settle would start again.
+constexpr float kFollowRangeMargin = 0.5f;
+inline bool SettleKeepsFollowRange(float dx, float dy, float dz, float follow_range)
+{
+    float const limit = follow_range - kFollowRangeMargin;
+    return limit > 0.0f && dx * dx + dy * dy + dz * dz < limit * limit;
+}
+
 } // namespace Playerbot::BotMovement::Swim

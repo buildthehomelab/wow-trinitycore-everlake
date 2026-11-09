@@ -15,6 +15,8 @@
 #include <deque>
 #include <string>
 #include <utility>
+#include <array>
+#include <initializer_list>
 #include <vector>
 
 namespace Playerbot::Diagnostics {
@@ -129,6 +131,10 @@ struct ScenarioDef
     // script despawns him the moment he spawns): when the attack is due the main tank sends it, and the attack waits for the boss to
     // be alive within 400 y (up to 30 s). 0 = none.
     std::uint32_t start_event = 0;
+    // A fight the raid opens on one of the boss's adds (Bloodlord Mandokir waits on his raptor, immune, until his Vilebranch Speaker dies):
+    // when the attack is due and a living one stands within 400 y of the main tank, the order is onto the nearest one instead of the boss.
+    // The goal stays the boss's death. 0 = the order is onto the boss.
+    std::uint32_t start_add = 0;
     // A fight the raid leader starts by talking to a creature (Vaelastrasz's gossip; Lord Victor Nefarius's "Attack them, minions!"): when the
     // attack is due, the instance first gets start_instance_data (SetData type, value: the steps a raid has done before, which the runner
     // skips - Razorgore dead, the Vaelastrasz room entered), then the main tank picks the first gossip option of start_npc
@@ -295,6 +301,10 @@ struct RaidBossRow
     std::uint32_t wear_entry = 0;       // see ScenarioDef::wear_entry
     std::uint32_t start_object = 0;     // see ScenarioDef::start_object
     std::uint32_t start_event = 0;      // see ScenarioDef::start_event
+    std::uint32_t start_add = 0;        // see ScenarioDef::start_add
+    // The instance data of the bosses a raid kills before this one (SetData type, value), set at the attack: see ScenarioDef::start_instance_data.
+    std::array<std::pair<std::uint32_t, std::uint32_t>, 8> start_data{};
+    std::uint8_t start_data_n = 0;
 };
 
 // A row whose fight keeps two or three kinds of creature alive (the bug trio, the Four Horsemen): the extra ones, without spelling out
@@ -344,6 +354,23 @@ constexpr RaidBossRow StartsWith(RaidBossRow r, std::uint32_t object_entry)
 constexpr RaidBossRow StartsOnEvent(RaidBossRow r, std::uint32_t event_id)
 {
     r.start_event = event_id;
+    return r;
+}
+
+// A row whose fight the raid opens on one of the boss's adds (ScenarioDef::start_add): Mandokir's Vilebranch Speaker.
+constexpr RaidBossRow OpensOn(RaidBossRow r, std::uint32_t add_entry)
+{
+    r.start_add = add_entry;
+    return r;
+}
+
+// A row whose boss a raid fights after others, with fight parts that only the living ones bring (Hakkar's five Aspects and his Power
+// stacks, one per High Priest alive): the instance data the runner sets at the attack (ScenarioDef::start_instance_data), in order.
+constexpr RaidBossRow After(RaidBossRow r, std::initializer_list<std::pair<std::uint32_t, std::uint32_t>> data)
+{
+    for (auto const& d : data)
+        if (r.start_data_n < r.start_data.size())
+            r.start_data[r.start_data_n++] = d;
     return r;
 }
 
@@ -413,6 +440,8 @@ inline ScenarioDef MakeRaidScenario(RaidBossRow const& r, RaidEntrance const& e,
     d.wear_entry = r.wear_entry;
     d.start_object = r.start_object;
     d.start_event = r.start_event;
+    d.start_add = r.start_add;
+    d.start_instance_data.assign(r.start_data.begin(), r.start_data.begin() + r.start_data_n);
     d.order_attack = true;
     d.order_delay_ms = 20000;
     return d;
@@ -521,7 +550,7 @@ inline ScenarioDef MakeBwlNefarianScenario()
 // ---- The other raids, one boss at a time: Blackwing Lair, Zul'Gurub, the Ruins and the Temple of Ahn'Qiraj, Naxxramas ----
 // The same shape as the Molten Core rows: the squad enters at the instance entrance, staging kills the trash, places the raid in sight of
 // the boss and orders the attack. A boss kill passes the run; every death is a warning. Only bosses with a creature row of their own
-// are here (Vaelastrasz and Nefarian, whose fights a gossip starts, have their own scenarios above). Left out, with the reason: Arlokk (the gong summons her), General Rajaxx (his seven waves come from Andorov's event),
+// are here (Vaelastrasz and Nefarian, whose fights a gossip starts, have their own scenarios above). Left out, with the reason: General Rajaxx (his seven waves come from Andorov's event),
 // Ouro (a trigger summons him) and Sapphiron (the instance spawns him once the four wings are cleared).
 // Reading a run: the [raid] lines of the bots' decisions (Logger.playerbot.v2=3), [raid_death] (spell, position) and the fight hp in [raid_fight].
 
@@ -574,12 +603,20 @@ inline constexpr RaidBossRow kZgBosses[] = {
       14510, "High Priestess Mar'li", 20 },
     Keeps({ "zg_thekal", "Zul'Gurub: 20 level 60 raiders to High Priest Thekal, Zath and Lor'Khan (the three die together, then the tiger)",
       14509, "High Priest Thekal", 25, 11348 }, 11347),   // Zath, Lor'Khan
-    { "zg_mandokir",  "Zul'Gurub: 20 level 60 raiders to Bloodlord Mandokir (the Speaker starts it, Ohgan first, Threatening Gaze)",
-      11382, "Bloodlord Mandokir",    25, 11391 },   // Vilebranch Speaker
+    OpensOn({ "zg_mandokir",  "Zul'Gurub: 20 level 60 raiders to Bloodlord Mandokir (the Speaker starts it, Ohgan first, Threatening Gaze)",
+      11382, "Bloodlord Mandokir",    25, 11391 }, 11391),   // Vilebranch Speaker: kept alive at staging, the attack order is onto him
+    // Arlokk has no creature row: the Gong of Bethekk (180526) summons her ten seconds after it is struck (classic_boss_arlokk.cpp,
+    // ArlokkSummonPos; VMaNGOS event_scripts 9066). The runner summons her at that spot, as for Ragnaros. Her vanish and the Prowlers that
+    // come meanwhile are the fight.
+    { "zg_arlokk",    "Zul'Gurub: 20 level 60 raiders to High Priestess Arlokk (summoned as by the gong; vanish, Prowlers, Gouge retaunt)",
+      14515, "High Priestess Arlokk", 20, 0, 0, 0, -11540.7f, -1627.71f, 41.27f, 0.1f },
     { "zg_jindo",     "Zul'Gurub: 20 level 60 raiders to Jin'do the Hexxer (totems first, Hex, Delusions, brain-washed raiders)",
       11380, "Jin'do the Hexxer",     20 },
-    { "zg_hakkar",    "Zul'Gurub: 20 level 60 raiders to Hakkar (Corrupted Blood carrier runs, Cause Insanity, Blood Siphon)",
-      14834, "Hakkar",                25, 11357 },   // Son of Hakkar
+    // The five High Priests are dead before Hakkar (Arlokk 1, Jeklik 2, Venoxis 3, Mar'li 4, Thekal 6: DONE), then type 0 sets the Hakkar's
+    // Power stacks from them (classic_instance_zulgurub.cpp UpdateHakkarPowerStacks: one per priest alive). With the priests alive the run met
+    // their Aspects (sweep-zg-0134: Hakkar's melee up to 6690, the tank dead at 33 s, the raid at 43-77 s to Aspect of Jeklik / Venoxis).
+    After({ "zg_hakkar",    "Zul'Gurub: 20 level 60 raiders to Hakkar (Corrupted Blood carrier runs, Cause Insanity, Blood Siphon)",
+      14834, "Hakkar",                25, 11357 }, { { 1u, 3u }, { 2u, 3u }, { 3u, 3u }, { 4u, 3u }, { 6u, 3u }, { 0u, 0u } }),   // Son of Hakkar
     StartsOnEvent({ "zg_gahzranka", "Zul'Gurub: 20 level 60 raiders to Gahz'ranka (Frost Breath cone, Massive Geyser threat reset)",
       15114, "Gahz'ranka",            15 }, 9104),   // the Mudskunk Lure's event (classic_event_summon_gahzranka)
 };

@@ -29,6 +29,31 @@ TEST_CASE("GroupOrder: exact orders are normalized", "[grouporder]")
     CHECK(ClassifyGroupOrder("pullback", false) == "pull back");
     CHECK(ClassifyGroupOrder("Pull And Back", false) == "pull back");
 }
+TEST_CASE("GroupOrder: everyday words for stay and follow", "[grouporder]")
+{
+    CHECK(ClassifyGroupOrder("wait here", false) == "stay");
+    CHECK(ClassifyGroupOrder("Wait here!", false) == "stay");
+    CHECK(ClassifyGroupOrder("wait", false) == "stay");
+    CHECK(ClassifyGroupOrder("stay here.", false) == "stay");
+    CHECK(ClassifyGroupOrder("Follow me", false) == "follow");
+    CHECK(ClassifyGroupOrder("come with me", false) == "follow");
+    CHECK(ClassifyGroupOrder("\xD0\xB6\xD0\xB4\xD0\xB8", false) == "stay");                                   // "жди"
+    CHECK(ClassifyGroupOrder("\xD0\xB7\xD0\xB0 \xD0\xBC\xD0\xBD\xD0\xBE\xD0\xB9", false) == "follow");    // "за мной"
+    CHECK_FALSE(ClassifyGroupOrder("wait for the tank", false));
+    CHECK_FALSE(ClassifyGroupOrder("!", false));
+}
+TEST_CASE("GroupOrder: mount, dismount and come here are orders, not chatter for the AI chat", "[grouporder]")
+{
+    CHECK(ClassifyGroupOrder("mount", false) == "mount");
+    CHECK(ClassifyGroupOrder("Dismount", false) == "dismount");
+    CHECK(ClassifyGroupOrder("mount up", false) == "mount");
+    CHECK(ClassifyGroupOrder("mount up!", false) == "mount");
+    CHECK(ClassifyGroupOrder("get off your mount", false) == "dismount");
+    CHECK(ClassifyGroupOrder("come here", false) == "come");
+    CHECK(ClassifyGroupOrder("\xD0\xBF\xD0\xBE \xD0\xBA\xD0\xBE\xD0\xBD\xD1\x8F\xD0\xBC", false) == "mount");
+    CHECK_FALSE(ClassifyGroupOrder("nice mount", false).has_value());
+}
+
 TEST_CASE("GroupOrder: panel argument orders are recognized", "[grouporder]")
 {
     CHECK(ClassifyGroupOrder("distance 8", false) == "distance 8");

@@ -407,6 +407,27 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
             _pendingCharDeleteTimer -= diff;
     }
 
+    // Classic 1.60: go on with a login once the bot playing that character has left the world (HandlePlayerLoginOpcode)
+    if (_pendingLoginAfterBot && updater.ProcessUnsafe())
+    {
+        if (!PlayerLoading() || _player)
+            _pendingLoginAfterBot = false;
+        else if (!ObjectAccessor::FindConnectedPlayer(m_playerLoading))
+        {
+            _pendingLoginAfterBot = false;
+            SendConnectToInstance(WorldPackets::Auth::ConnectToSerial::WorldAttempt1);
+        }
+        else if (_pendingLoginAfterBotTimer <= diff)
+        {
+            TC_LOG_ERROR("network", "Account ({}) can't login with character ({}): its bot did not leave the world in time.",
+                GetAccountId(), m_playerLoading.ToString());
+            _pendingLoginAfterBot = false;
+            AbortLogin(WorldPackets::Character::LoginFailureReason::DuplicateCharacter);
+        }
+        else
+            _pendingLoginAfterBotTimer -= diff;
+    }
+
     ///- Retrieve packets from the receive queue and call the appropriate handlers
     /// not process packets if socket already closed
     WorldPacket* packet = nullptr;

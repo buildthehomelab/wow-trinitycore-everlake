@@ -5,6 +5,10 @@
 #include "BotSnapshotView.h"
 #include "TradeRule.h"
 #include "BotTrade.h"
+#include "BotTradeShop.h"   // TradeShop::TakeGiftGear - traded upgrades to wear
+#include "Player.h"         // EQUIPMENT_SLOT_* for wear_gift_gear
+#include "ObjectMgr.h"      // item templates (required level) for wear_gift_gear
+#include "ItemTemplate.h"
 #include "BotIntentEmitter.h"
 #include "BotActivityTier.h"
 #include "Group/GroupSnapshot.h"
@@ -863,6 +867,12 @@ void BotAI::update_group_fight(BotSnapshotView s, GroupSnapshotView g)
         in.order = GroupFight::Order::Fallback;
     else if (pull_back_active())
         in.order = GroupFight::Order::PullBack;
+    // The main tank's own pull back is out at the opener or on its way back (PveOrder::tank_pulling_back): every other bot, the off
+    // tank too, holds until the mob is at the return point (Blackrock Spire 2026-11-08: with a rally point set the main tank pulled
+    // and ran back, and a few seconds later the off tank charged in at the pack, so the group never got back to the rally). A healer
+    // still heals; a mob loose on the group is fought (loose_on_group).
+    else if (!loose_on_group && s.raw().pve_order.active && s.raw().pve_order.tank_pulling_back && effective_role(s) != Role::Healer)
+        in.order = GroupFight::Order::PullBack;
     // The rest of the group holds while the tank brings the mob back, until the leader's Attack or a later order; a healer still heals
     // (rule 2) and a tank still takes the mobs (rule 5: a raid's Pull hands the fight back to the tanks without an icon too).
     else if (!loose_on_group &&
@@ -884,7 +894,8 @@ void BotAI::update_group_fight(BotSnapshotView s, GroupSnapshotView g)
     else if (owner_follow_order())
         in.order = GroupFight::Order::Follow;
     in.order_age_ms = (owner_no_fight() || in.order == GroupFight::Order::Flee || in.order == GroupFight::Order::Fallback ||
-                       (in.order == GroupFight::Order::PullBack && pull_back_active())) ? 0u
+                       (in.order == GroupFight::Order::PullBack && (pull_back_active() ||
+                        (s.raw().pve_order.active && s.raw().pve_order.tank_pulling_back)))) ? 0u
                     : in.order == GroupFight::Order::PullBack ? now_ms - owner_pull_ms() : order_age;
 
     GroupFight::Mode const mode = GroupFight::Decide(in);
@@ -924,6 +935,67 @@ void BotAI::dispatch_primary(BotSnapshotView s, GroupSnapshotView g,
             // Cross-cutting states are not primary; treat as Idle.
             States::DispatchIdle(*this, s, g, em);
             break;
+    }
+}
+
+void BotAI::wear_gift_gear(BotSnapshotView const& s, BotIntentEmitter& em)
+{
+    // A player gave the bot gear it judged better (Gremloc 11-08: a traded armor piece stayed in the bags). The auto-equip rules
+    // score with other weights, wait for their 3-minute look, and the fast one waits while the bot has a quest, so they could
+    // leave it there for good. The trade already decided it is an upgrade: wear it now, as an "equip <item>" order would.
+    // A piece for a later level (TradeShop::IsForLater) waits in the bags and goes on at that level.
+    uint32 const now_ms = s.published_at_ms();
+    constexpr uint32 kGiftWearWindowMs = 60u * 1000u;
+    for (uint32 entry : ::Playerbot::TradeShop::TakeGiftGear(s.bot_id()))
+        gift_wear_.push_back({ entry, now_ms + kGiftWearWindowMs, false });
+    if (gift_wear_.empty() || s.in_combat() || s.is_casting() || !s.is_alive())
+        return;
+    auto const& raw = s.raw();
+    for (auto it = gift_wear_.begin(); it != gift_wear_.end();)
+    {
+        InventoryItem const* found = nullptr;
+        for (InventoryItem const& bi : raw.inventory.bag_items)
+            if (bi.entry == it->entry && bi.equip_slot < raw.inventory.equipped.size())
+            {
+                found = &bi;
+                break;
+            }
+        if (!found)
+        {
+            // Seen before and gone now (sold, given away, or put on by an order): done. Never seen: the snapshot can be a tick
+            // behind the trade, so wait out the window.
+            if (it->seen || int32(now_ms - it->until_ms) >= 0)
+            {
+                if (!it->seen)
+                    TC_LOG_INFO("playerbot.v2", "[gear] {} (bot {}): traded item {} not seen in the bags, not worn", raw.identity.name, s.bot_id(), it->entry);
+                it = gift_wear_.erase(it);
+            }
+            else
+                ++it;
+            continue;
+        }
+        it->seen = true;
+        ItemTemplate const* t = sObjectMgr->GetItemTemplate(found->entry);
+        if (t && t->GetBaseRequiredLevel() > int32(s.level()))
+        {
+            ++it;   // kept for later
+            continue;
+        }
+        uint8 const slot = found->equip_slot;
+        // Prot warrior / paladin: the weapon and shield slots belong to EnsureShieldTankWeapon (as in the auto-equip rules).
+        if ((s.spec() == 73 || s.spec() == 66) && (slot == EQUIPMENT_SLOT_MAINHAND || slot == EQUIPMENT_SLOT_OFFHAND))
+        {
+            TC_LOG_INFO("playerbot.v2", "[gear] {} (bot {}): traded weapon {} left in the bags (tank weapons are set by the tank rule)",
+                raw.identity.name, s.bot_id(), found->entry);
+            it = gift_wear_.erase(it);
+            continue;
+        }
+        em.equip_item(found->bag, found->slot, slot);
+        keep_worn(slot, found->entry);
+        note_equip_try(found->entry, now_ms);
+        TC_LOG_INFO("playerbot.v2", "[gear] {} (bot {}): wearing traded item {} (slot {})", raw.identity.name, s.bot_id(), found->entry, slot);
+        gift_wear_.erase(it);
+        return;   // one piece per tick
     }
 }
 
@@ -1093,6 +1165,8 @@ void BotAI::dispatch_layers(BotSnapshotView s, GroupSnapshotView g,
         em.make_bag_room(Playerbot::BotTrade::kKeepFreeSlots);
     }
 
+    wear_gift_gear(s, em);
+
     note_tank_still(s, g);
 
     if (s.in_group())
@@ -1141,11 +1215,13 @@ void BotAI::dispatch_layers(BotSnapshotView s, GroupSnapshotView g,
                 {
                     // ike3's level-up lines ("Ding!", "Yess, I am level 24!", ...): chance-gated,
                     // and one bot per group when several ding off the same kill.
+                    bool to_program = false;   // the bot bridge's program says it (BotChatter moments)
                     std::string line = BotChatter::LevelUpLine(pending_ding_level_, s.cls(), s.race(),
-                        s.zone_id(), s.area_id(), s.group_guid().GetCounter(), s.bot_id(), now_ms);
-                    if (!line.empty())
+                        s.zone_id(), s.area_id(), s.group_guid().GetCounter(), s.bot_id(), now_ms, &to_program);
+                    if (!line.empty() || to_program)
                     {
-                        em.say(std::move(line));
+                        if (!line.empty())
+                            em.say(std::move(line));
                         if (Services::Config().behavior_social_emotes() && !s.big_raid())
                             em.perform_emote(4 /*EMOTE_ONESHOT_CHEER*/);   // Playerbot.Behavior.SocialEmotes
                     }

@@ -15,6 +15,9 @@ Players send two folders from their game folder: `_forever_\Cache\WDB` and `_for
    - `missing_quests.json`: full data of quests we lack, for the quest builder.
 3. Items: `Cache\ADB\<locale>\DBCache.bin` has the same format as the live hotfix file, so use
    `tools/full_forever/live_hotfix_sql.py --dbcache <player>/Cache/ADB/enUS/DBCache.bin` with its own hotfix id range.
+4. Items only a Russian (or other non-English) cache has: `english_names.py` writes the same records with the real English name
+   (Questie's classic item data, then wowsims/forever's item data) and the Russian text as the locale row. Where no source has
+   the English name yet, it uses our own translation from `item_translations.tsv`; swap those once an English cache has them.
 
 A cache from someone who also plays on our realm holds our own answers too. That is why only quests that are missing
 or placeholders on our side become SQL. Differences on quests we already have are listed, never changed automatically.

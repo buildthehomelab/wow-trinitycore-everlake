@@ -87,3 +87,16 @@ TEST_CASE("BotSwim: a bot standing still on the bed or on top of the water settl
     REQUIRE_FALSE(NeedsSettle(swim, swim));
     REQUIRE_FALSE(NeedsSettle(swim + 0.5f, swim));
 }
+
+TEST_CASE("BotSwim: a follower settles only where it stays in follow range, so the follow does not lift it straight back up", "[botswim]")
+{
+    // lake_swim 2026-11-09: follow distance 2 y, reaches 1.5 + 1.5: range 5 y. The leader on the surface, the follower 4.6 y off:
+    // 0.9 y down took it out of range and the next leader step pathed it back up, 14 times in 25 s.
+    float const range = 1.5f + 1.5f + 2.0f;
+    REQUIRE_FALSE(SettleKeepsFollowRange(4.6f, 0.0f, -0.9f, range));
+    // The same follower closer in, or a leader who swims at the same depth: it settles.
+    REQUIRE(SettleKeepsFollowRange(3.0f, 0.0f, -0.9f, range));
+    REQUIRE(SettleKeepsFollowRange(4.3f, 0.0f, 0.0f, range));
+    // No range left after the margin: never.
+    REQUIRE_FALSE(SettleKeepsFollowRange(0.0f, 0.0f, 0.0f, 0.4f));
+}

@@ -9,6 +9,7 @@
 #include "Player.h"
 #include "Pet.h"
 #include "Group.h"
+#include "Transport.h"   // ship_guid: the member's ship or zeppelin
 #include "GameTime.h"
 #include "Unit.h"
 #include "ObjectAccessor.h"
@@ -306,6 +307,8 @@ std::shared_ptr<GroupSnapshot const> GroupSnapshotBuilder::Build(Player* p, Snap
             m.is_controlled = mp->HasUnitState(UNIT_STATE_FLEEING | UNIT_STATE_CONFUSED | UNIT_STATE_STUNNED);
             m.is_mounted   = mp->IsMounted();
             m.in_flight    = mp->IsInFlight();
+            if (Transport const* ship = dynamic_cast<Transport const*>(mp->GetTransport()))
+                m.ship_guid = ship->GetGUID();
             m.is_alive     = mp->IsAlive();
             m.rez_pending  = mp->IsResurrectRequested();
             m.is_ghost     = mp->HasPlayerFlag(PLAYER_FLAGS_GHOST);

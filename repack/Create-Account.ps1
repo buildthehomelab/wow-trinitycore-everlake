@@ -29,7 +29,13 @@ function Read-Plain($prompt) {
     try { [Runtime.InteropServices.Marshal]::PtrToStringBSTR($b) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b) }
 }
 
-# 1. the server must be running and finished starting
+# 1. the server must be running and finished starting. Right after the install starts it in another window the process can take a
+# few seconds to appear ("Create your account now? y" then said "not running" while step 8 was still starting it), so give
+# it up to a minute first.
+for ($i = 0; $i -lt 60 -and -not (Get-Process worldserver -ErrorAction SilentlyContinue); $i++) {
+    if ($i -eq 0) { Write-Host 'Waiting for the server window to start...' }
+    Start-Sleep -Seconds 1
+}
 if (-not (Get-Process worldserver -ErrorAction SilentlyContinue)) {
     Write-Host 'The server is not running. Start it first (menu 1 or 3), then create the account.' -ForegroundColor Yellow
     return

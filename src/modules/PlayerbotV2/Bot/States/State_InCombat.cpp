@@ -820,7 +820,9 @@ ThreatHold EvaluateThreatHold(BotAI& ai, BotSnapshotView const& s, ObjectGuid ta
     // and a damage dealer that opens on it or on a mob of it out there turns it round (eea74327b3 dmnorth_moldar: the mage opened on
     // the Mage-Lord at 48 y the second the tank's shot landed, the hunter and the rogue on a Brute at 50 y; two Brutes reached the
     // priest and killed it). Not a mob that hits this bot (self-defence), not a healer.
-    if (!s.is_in_raid() && s.is_in_dungeon() && h == ThreatHold::None && u->victim != s.guid() &&
+    // A raid group in a dungeon too (a 10-man Blackrock Spire group is a raid group, 2026-11-08): the coordinator sets
+    // tank_pulling_back only for a group it plays as a dungeon.
+    if (s.is_in_dungeon() && h == ThreatHold::None && u->victim != s.guid() &&
         ai.effective_role(s) != Role::Healer)
     {
         PveOrder const& po = s.raw().pve_order;
@@ -3287,8 +3289,13 @@ void DispatchInCombat(BotAI& ai,
     // Not mid-cast: a cast in progress is on a target in range (an out-of-
     // range heal fails at once and never enters the casting state), and
     // moving would throw it away.
+    // Not for a raid healer with an encounter post (RaidOrder::post_enemy): the encounter put its tanks within heal reach of the post, and
+    // a tank gone further (after a loose add) comes back to it. bwl_nefarian 1108i: the healers walked after a tank to the drakonid doors
+    // and the post's move walked them back (runs 1 and 3: 125-146 "healer_follow_tank" against 164-181 "raid:move" in the healers' last
+    // seconds); 103-405 heals a pull against 622 in 1108g.
     if (snapshot.raw().group.my_role == Role::Healer && !snapshot.is_casting() &&
-        snapshot.is_in_dungeon() && snapshot.hp_pct() > 40 && group.exists())
+        snapshot.is_in_dungeon() && snapshot.hp_pct() > 40 && group.exists() &&
+        !(snapshot.raw().raid_order.active && !snapshot.raw().raid_order.post_enemy.IsEmpty()))
     {
         // A raid healer keeps ITS heal_focus tank in range (the tank rule 5c
         // walks it to), not g.tank() — following the main tank would drag it

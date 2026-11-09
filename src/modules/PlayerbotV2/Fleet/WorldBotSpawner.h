@@ -191,6 +191,8 @@ private:
     void DriveCrowd(uint32 now_ms, std::vector<Anchor> const& anchors);
     void DriveGateDuels(uint32 now_ms, std::vector<Anchor> const& anchors);   // pairs of bots duelling outside a capital gate (GateDuels.h)
     void DriveGatherings(uint32 now_ms, std::vector<Anchor> const& anchors);  // bots at a campfire and in a group outside the gate, talking (Gathering.h)
+    void FormStreetChats(uint32 now_ms, std::vector<Anchor> const& anchors);  // and small chats inside the cities where a player walks
+    bool GatherFree(BotId id, Player* p, uint32 now_ms) const;                // a world bot free to join a gathering or a chat now
     // Level range of the bots around this anchor: its zone's, lifted to MinLevel, except on Zephras Isle (Fleet/SkyborneIsle.h).
     void WindowFor(Anchor const& a, uint8& lo, uint8& hi) const;
     bool PlaceNear(Player* bot, Player* anchor);
@@ -308,8 +310,9 @@ private:
     // (learnt from the first fire a bot lights: 0 = not yet, UINT32_MAX = the spell gave none).
     struct GatherRing
     {
-        uint32 city = 0, ring = 0, since_ms = 0, until_ms = 0;
+        uint32 city = 0, ring = 0, since_ms = 0, until_ms = 0;   // ring: 0 campfire, 1 standing, Gathering::kStreetRing+ a street chat
         bool   sit = false;
+        std::string place;            // a street chat: where it stands ("the bank")
         float  cx = 0, cy = 0, cz = 0;
         std::vector<uint64> members;
         ObjectGuid fire;
@@ -328,6 +331,8 @@ private:
     uint32 last_gather_ms_ = 0;
     uint32 gather_form_ms_[6] = {};
     uint32 gather_why_ms_[6] = {};
+    uint32 street_form_ms_[6] = {};
+    uint32 street_seq_ = 0;
     uint32 campfire_entry_ = 0;
     uint64 gather_seq_ = 0;
     std::unordered_map<uint64, uint32> leaving_;   // bot guid low -> module ms when it was sent walking away

@@ -53,13 +53,28 @@ namespace Playerbot::Raid {
         // Victor Nefarius' drakonids: every Brood Power hits all enemies within 15 yards of the drakonid (70532 client data, SpellAudit.tsv:
         // radius 15 on every effect): Black 22560 1,250 fire, Red 22558 a 300 a tick fire DoT stacking to 5, Blue 22559 a mana burn, Bronze
         // 22642 900 arcane and a slow, Green 22561 a stun. bwl_nefarian 2026-11-08: healers and casters stood within it beside the tanks'
-        // pile, 37 of 43 deaths were Brood Power (27 of them casters, hunters and healers), a healer burned to 3% mana. Casters and
-        // healers keep 18 yards from every drakonid; the melee stand in it as a raid's melee do.
+        // pile, 37 of 43 deaths were Brood Power (27 of them casters, hunters and healers), a healer burned to 3% mana. Healers keep
+        // 18 yards from every drakonid; the melee stand in it as a raid's melee do. The ranged DPS do not: with the rule on them too
+        // (bwl_nefarian 42560db4) raid:move was the rule they fired most, raid damage fell from 3,140 to 2,240 a second and the waves
+        // won earlier. They fight from range on the drakonid the tanks hold (the Nefarian fight script), outside its 15 yards.
         for (uint32_t drakonid : { 14261u, 14262u, 14263u, 14264u, 14265u, 14302u })
-        {
-            r.avoidEnemy.push_back({ drakonid, 18.0f, Who::Ranged });
             r.avoidEnemy.push_back({ drakonid, 18.0f, Who::Healer });
-        }
+        // The tanks hold the drakonids on an arc round one camp, where the ranged DPS stand; the healers stand just behind them. Every pile
+        // is 23 yards from the camp (outside Brood Power's 15, inside the 30 yard spells), the piles 18 yards apart (out of each other's
+        // Brood Power), every tank within 40 yards of the healers. bwl_nefarian 1108f: the tanks held the drakonids where they came in, at
+        // the west opening (-7599,-1191, classic_boss_victor_nefarius.cpp), and 703 casts failed on line of sight in one pull. 1108g, a
+        // straight row 20 yards apart across the room (-7580 to -7520 with four tanks): the line of sight failures fell to 87-123 a pull,
+        // but the focus drakonid was up to 55 yards from the ranged, so they kept walking in (raid_range, raid_los, the formation walk
+        // toward the main tank) past the other piles: 9-12 casters and hunters a run died of Brood Power by the row, the warlocks did 4-43
+        // damage a second and the raid 1,945-2,545. The camp is next to where the raid is placed (-7555,-1239), 44 yards from Victor
+        // (-7588,-1262); the arc opens north, toward both drakonid doors, so a tank coming back from a door has its drakonid on the far
+        // side. The two posts hold 6 yards round their point (16 ranged, 12 healers, without the clump separation; Stand / at_post).
+        // A tank goes after a loose drakonid within 15 yards and brings it back; one further out (a new one still coming in from its door
+        // after its random raider) it waits for at its slot (TankSpotFor).
+        constexpr float kNefCampX = -7552.0f, kNefCampY = -1236.0f, kNefHealY = -1245.0f, kNefFloorZ = 476.8f;
+        r.tankSpot.push_back({ 10162, 14263, 23.0f, 18.0f, true, kNefCampX, kNefCampY, 100.0f, { 14261u, 14262u, 14264u, 14265u, 14302u } });
+        r.stand.push_back({ 10162, Who::Ranged, kNefCampX, kNefCampY, kNefFloorZ, 6.0f, false, 0 });
+        r.stand.push_back({ 10162, Who::Healer, kNefCampX, kNefHealY, kNefFloorZ, 6.0f, false, 0 });
         // Their priorities and dispels are in the data file.
     }
 } // namespace Playerbot::Raid

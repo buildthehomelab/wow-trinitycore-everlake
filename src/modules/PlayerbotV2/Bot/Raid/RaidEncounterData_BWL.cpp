@@ -52,6 +52,10 @@ namespace Playerbot::Raid {
         r.resistPotion.push_back({ 14601, 13459, Who::Anyone });
         r.resistPotion.push_back({ 11981, 13459, Who::Anyone });
         r.resistPotion.push_back({ 11583, 13459, Who::Anyone });
+        // Victor Nefarius' drakonid waves (phase 1, engaged boss 10162): Brood Power: Black 22560 (1,250 fire to all within 15 y every 4-6 s)
+        // and Red 22558 (a 300 a tick fire DoT stacking to 5) are fire school: Greater Fire Protection, drunk again whenever it is used up and
+        // off cooldown (PickResistPotion). bwl_nefarian 1108e: 11 of 15 deaths were Black Brood Power on the melee pile within 3 s.
+        r.resistPotion.push_back({ 10162, 13457, Who::Anyone });
         r.avoidCarrier.push_back({ 23620, 15.0f, Who::NonTank });                 // everybody but tanks keeps off the carrier (explosion 23478 :45)
         // Cleave 19983 chains to everybody close to the main tank (boss_vaelastrasz.cpp:49-51: nobody within ~10 yd of the tank).
         r.spread.push_back({ 13020, 10.0f, Who::Ranged });                        // Cleave chain (boss_vaelastrasz.cpp:51)

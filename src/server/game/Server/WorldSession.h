@@ -2010,6 +2010,11 @@ class TC_GAME_API WorldSession
         // Classic 1.60: a character deleted while it is still in the world as this account's bot (HandleCharDeleteOpcode)
         ObjectGuid _pendingCharDelete;
         uint32 _pendingCharDeleteTimer = 0;
+
+        // Classic 1.60: a login to a character still in the world as this account's bot (HandlePlayerLoginOpcode); the character
+        // is m_playerLoading
+        bool _pendingLoginAfterBot = false;
+        uint32 _pendingLoginAfterBotTimer = 0;
         AsyncCallbackProcessor<TransactionCallback> _transactionCallbacks;
         AsyncCallbackProcessor<SQLQueryHolderCallback> _queryHolderProcessor;
 

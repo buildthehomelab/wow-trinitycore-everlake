@@ -137,7 +137,12 @@ struct AoeHazard
 //   * for a non-tank in a tanked group: a mob a tank is holding but has not
 //     secured yet (TankNotSecured).
 //   * school_spell != 0: a mob whose raid school hint (PveOrder::SchoolHint)
-//     avoids that spell's school (Plague Slime immunity), in or out of a group.
+//     reflects that spell's school (an Anubisath Sentinel), in or out of a group.
+//     A mob merely immune to it or resisting it is no hazard: the area spell
+//     still hits everything else in it (bwl_nefarian 1108f: Victor Nefarius,
+//     immune to all schools behind his barrier, held every Multi-Shot and
+//     Arcane Explosion near him, and a Bronze Drakonid's arcane resistance
+//     held Arcane Explosion on the whole pile).
 // Mobs already on this bot or another non-tank member are fair game (the
 // fight is on them anyway); players and un-fightable props are ignored.
 // The hard vetoes (crowd-controlled, school avoided) win over the threat ones
@@ -155,7 +160,7 @@ inline AoeHazard FindAoeHazard(BotSnapshotView const& s, float cx, float cy, flo
     {
         if (!aoe_school) return false;
         PveOrder::SchoolHint const* h = po.school_hint_for(u.guid);
-        return h && (h->avoid_mask & aoe_school) != 0;
+        return h && (h->reflect_mask & aoe_school) != 0;
     };
     const bool tanked = ThreatDisciplineApplies(s);
     const bool me_tank = caster_is_tank || s.group_tank() == s.guid() ||

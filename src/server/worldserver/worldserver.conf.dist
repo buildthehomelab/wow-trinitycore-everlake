@@ -2724,7 +2724,10 @@ Rate.Damage.Fall = 1
 #    Rate.Auction.Deposit
 #    Rate.Auction.Cut
 #        Description: Auction rates (auction time, deposit get at auction start,
-#                     auction cut from price at auction end).
+#                     auction cut from price at auction end). All three multiply the
+#                     normal value: 0.5 = half, 2 = double. Deposit and cut can be 0
+#                     (free). Time can't be 0 (the auction would end at once); the
+#                     lowest is 0.01.
 #        Default:     1 - (Rate.Auction.Time)
 #                     1 - (Rate.Auction.Deposit)
 #                     1 - (Rate.Auction.Cut)
@@ -2732,6 +2735,15 @@ Rate.Damage.Fall = 1
 Rate.Auction.Time    = 1
 Rate.Auction.Deposit = 1
 Rate.Auction.Cut     = 1
+
+#
+#    Rate.Mining.Amount
+#        Description: How many times a mining vein can be mined before it is gone,
+#                     as a multiplier (2 = twice as many times, 0.5 = half, never
+#                     fewer than once).
+#        Default:     1
+
+Rate.Mining.Amount = 1
 
 #
 #    Rate.Honor

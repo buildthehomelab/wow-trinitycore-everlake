@@ -44,6 +44,8 @@
 #include "Bot/ChannelChat.h"
 #include "Bot/PartyLink.h"
 #include "Bot/BotRegistry.h"
+#include "Bot/BotBridge.h"
+#include "Fleet/BotPool.h"
 #include "Fleet/OwnerRegistry.h"
 #include "Fleet/WorldPvpConfig.h"
 #include "Util.h"
@@ -652,11 +654,42 @@ bool FidgetFire(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
 // I-P3h: needs a NearbyUnit.is_bot flag (owned by BotSnapshotBuilder)
 // to fully suppress bot-on-bot greets — until then the hard rate-limit
 // keeps it from looking robotic.
+//
+// 2026-11-09: on a live realm a stranger walking through Stormwind is greeted now and then, not by every bot he passes (with fifty
+// bots in town the old per-bot lockout made five waves a minute, which read as robotic). So a real player is greeted by at most one
+// bot every two and a half to four minutes, realm-wide (TakePasserbySlot); bots never greet each other this way (they are in the
+// registry); the greeting varies (a wave, a nod, a bow, a salute); and with a program writing the bots' talk (Playerbot.Bridge.Talk)
+// one greeting in two also comes with a short /say line to him (BotBridge::QueueGreet).
+std::mutex g_passerby_mtx;
+std::unordered_map<uint64, uint32> g_passerby_ms;   // real player guid low -> when a bot last greeted him
+
+bool PasserbySlotFree(uint64 player, uint32 now_ms)
+{
+    uint32 const gap = 150000u + uint32((player * 2654435761ull) % 90000u);
+    std::lock_guard<std::mutex> lk(g_passerby_mtx);
+    auto it = g_passerby_ms.find(player);
+    return it == g_passerby_ms.end() || now_ms - it->second >= gap;
+}
+
+bool TakePasserbySlot(uint64 player, uint32 now_ms)
+{
+    uint32 const gap = 150000u + uint32((player * 2654435761ull) % 90000u);
+    std::lock_guard<std::mutex> lk(g_passerby_mtx);
+    if (g_passerby_ms.size() > 4096)
+        g_passerby_ms.clear();
+    auto [it, fresh] = g_passerby_ms.try_emplace(player, now_ms);
+    if (!fresh && now_ms - it->second < gap)
+        return false;
+    it->second = now_ms;
+    return true;
+}
+
 bool ReactToPasserbyGate(BotSnapshotView const& s, BotAI& ai,
                          GroupSnapshotView const&, uint32)
 {
     if (ai.personality().verbosity < Verbosity::Normal) return false;
     if (!s.is_alive()) return false;
+    if (::Playerbot::Pool::IsScenarioBot(s.bot_id())) return false;   // a test squad does not greet the town
     if (s.is_moving() || s.in_combat() || s.is_casting()) return false;
     if (s.raw().movement.is_mounted) return false;
     if (s.raw().social_events.has_duel_request) return false;
@@ -669,6 +702,8 @@ bool ReactToPasserbyGate(BotSnapshotView const& s, BotAI& ai,
         if (!u.is_player) continue;
         if (u.is_in_group) continue;     // skip grouped players (likely in a party)
         if (u.hp <= 0) continue;
+        if (Services::Registry().has(u.guid.GetCounter())) continue;   // another bot
+        if (!PasserbySlotFree(u.guid.GetCounter(), s.published_at_ms())) continue;
         return true;
     }
     return false;
@@ -701,6 +736,8 @@ bool ReactToPasserbyFire(BotSnapshotView const& s, BotAI& ai,
         if (u.hp <= 0) continue;
         if (u.guid == s.raw().guid) continue;
         if (in_our_group(u.guid)) continue;
+        if (Services::Registry().has(u.guid.GetCounter())) continue;
+        if (!PasserbySlotFree(u.guid.GetCounter(), now_ms)) continue;
         // Per-target hard lockout (10 min, ActionKind::GreetPlayer).
         if (ai.action_recently_tried(BotAI::ActionKind::GreetPlayer,
                                      u.guid.GetCounter(), now_ms))
@@ -710,11 +747,15 @@ bool ReactToPasserbyFire(BotSnapshotView const& s, BotAI& ai,
         if (d2 < best_d2) { best_d2 = d2; best = u.guid; }
     }
     if (best.IsEmpty()) return false;
-    // Face them, then wave (3 = EMOTE_ONESHOT_WAVE aimed at the target).
+    if (!TakePasserbySlot(best.GetCounter(), now_ms)) return false;   // another bot greeted him meanwhile
+    // Face them, then a wave (3), a nod (273), a bow (2) or a salute (66), aimed at him.
+    static constexpr uint32 kGreets[] = { 3, 3, 3, 273, 273, 2, 66 };
     emit.face_target(best);
-    if (!emit.perform_emote(3, best)) return false;
+    if (!emit.perform_emote(kGreets[urand(0, uint32(std::size(kGreets) - 1))], best)) return false;
     ai.note_action_retry(BotAI::ActionKind::GreetPlayer,
                          best.GetCounter(), now_ms);
+    if (best_d2 <= 15.0f * 15.0f && urand(0, 1))
+        BotBridge::QueueGreet(s.bot_id(), best);
     ai.set_last_rule_fired("idle:react_to_passerby");
     return true;
 }

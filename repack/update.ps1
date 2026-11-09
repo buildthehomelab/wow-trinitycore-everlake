@@ -318,6 +318,9 @@ try {
         Set-Content $localConf ("[worldserver]`r`n" + $old) -Encoding ascii
     }
     # the database updater reads the SQL files from the package and needs the MySQL client; keep both paths current
+    # a settings file left empty (no [bnetserver] line) is written again from its .dist first, so the two lines below do not
+    # turn it into a file of a few lines the server cannot read (noobiru 0.1.33)
+    try { . (Join (Join $Root 'repack') 'WorldUp.ps1'); Repair-ServerConf (Join $Root 'server') | ForEach-Object { Say $_ } } catch { Write-Warning "Could not check the server settings files: $($_.Exception.Message)" }
     $fwd = { param($p) '"' + ($p -replace '\\', '/') + '"' }
     foreach ($c in 'worldserver.conf', 'bnetserver.conf') {
         $cf = Join (Join $Root 'server') $c

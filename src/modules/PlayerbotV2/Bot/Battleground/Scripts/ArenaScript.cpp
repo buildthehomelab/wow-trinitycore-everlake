@@ -130,13 +130,14 @@ static ArenaGeometry const& GeometryFor(uint16_t id)
         };
         return rl;
     }
-    // Mak'gora Arena (id 1169, Classic 1.60 map 2995 Hyjal Crater): the round crater east of Nordrassil, a flat floor about
-    // 200 yards across at height 1453.4 inside walls with no walkable slope (70707 navmesh). No pillars, no hazards.
+    // Mak'gora Arena (id 1169), played in the Ring of Law (map 3200, an arena copy of Blackrock Depths): a walled round floor
+    // about 40 yards across, the teams start in tunnels behind the south and east gates. No pillars, no hazards; the rally
+    // is the ring centre (the Blackrock Depths script's own ring point).
     if (id == 1169) {
         static const ArenaGeometry mk = {
             /*pillars*/ {},
             /*hazards*/ {},
-            /*rally*/ 5440.0f, -2805.0f, 1453.4f
+            /*rally*/ 596.285f, -188.699f, -54.132f
         };
         return mk;
     }

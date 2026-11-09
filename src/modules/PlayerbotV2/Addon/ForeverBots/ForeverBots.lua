@@ -236,6 +236,13 @@ end
 local helloDotSent = false
 local inAuto = false
 local Cmd = {}
+-- Whispers to bots: the last one the panel or the menu sent per bot (Cmd.NoteOwnWhisper) and when the player last whispered a bot by
+-- hand (CHAT_MSG_WHISPER_INFORM in the "filters" part). WhisperFilter hides "<Bot>: ..." confirmations of the add-on's own orders only.
+Cmd.ownSent, Cmd.typedAt = {}, {}
+function Cmd.NoteOwnWhisper(name, text)
+    local who = type(name) == "string" and strmatch(name, "^[^-]+")
+    if who and type(text) == "string" then Cmd.ownSent[who] = { text = text, at = GetTime and GetTime() or 0 } end
+end
 -- The other files of the add-on (ForeverBots_Net.lua, the windows) share the add-on table; kept in Cmd, not a new local.
 Cmd.ns = select(2, ...) or {}
 Cmd.ns.Print, Cmd.ns.SafeName, Cmd.ns.L = Print, SafeName, L
@@ -715,6 +722,10 @@ local function ConfirmText(msg, author)
     if type(msg) ~= "string" or type(author) ~= "string" or IsSecret(msg) or IsSecret(author) then return nil end
     local who = strmatch(author, "^[^-]+")
     if not who then return nil end
+    -- The answer to a whisper the player typed himself ("gear", "equip upgrades", "stats") is for him to read: only the
+    -- confirmations of the panel's and the menu's own orders are hidden (Gremloc 11-08: "gear" seemed to answer nothing).
+    local asked = Cmd.typedAt and Cmd.typedAt[who]
+    if asked and Now() - asked < 20 then return nil end
     return strmatch(msg, "^" .. who .. ": (.+)$")
 end
 
@@ -766,6 +777,20 @@ AddPart("filters", function()
     if not ChatFrame_AddMessageEventFilter then return end
     ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER", WhisperFilter)
     ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER_INFORM", function(_, _, msg) return type(msg) == "string" and not IsSecret(msg) and msg == "assign list" end)
+    -- A whisper the player sent by hand (his own /w or the chat box, not the panel or the menu): the bot's answer stays visible.
+    local typed = CreateFrame("Frame")
+    typed:RegisterEvent("CHAT_MSG_WHISPER_INFORM")
+    typed:SetScript("OnEvent", function(_, _, msg, target)
+        if type(msg) ~= "string" or type(target) ~= "string" or IsSecret(msg) or IsSecret(target) or msg == "assign list" then return end
+        local who = strmatch(target, "^[^-]+")
+        if not who then return end
+        local own = Cmd.ownSent[who]
+        if own and own.text == msg and Now() - own.at < 5 then
+            Cmd.ownSent[who] = nil
+            return
+        end
+        Cmd.typedAt[who] = Now()
+    end)
     for _, ev in ipairs({ "CHAT_MSG_PARTY", "CHAT_MSG_PARTY_LEADER", "CHAT_MSG_RAID", "CHAT_MSG_RAID_LEADER" }) do
         ChatFrame_AddMessageEventFilter(ev, OwnListFilter)
     end
@@ -2258,6 +2283,7 @@ local function BotWhisper(text)
         pcall(send, ORDER_PREFIX, text, "WHISPER", botName)
     else
         SendChatMessage(text, "WHISPER", nil, botName)
+        Cmd.NoteOwnWhisper(botName, text)
     end
     botSentAt = Now()
     SetBotStatus("|cffffff00" .. text .. " ...|r")
@@ -2538,6 +2564,7 @@ end
 local sentPicks = {}   -- [bot name][slot word] = choice word, this session
 
 local function MenuWhisper(who, text)
+    Cmd.NoteOwnWhisper(who, text)
     local ok, err = pcall(SendChatMessage, text, "WHISPER", nil, who)
     if not ok then Print(L["could not whisper %s: %s"]:format(who, tostring(err))) end
 end
@@ -3393,5 +3420,105 @@ do
         ForeverBotsDB.menuEntries = false
     end)
 end
+
+------------------------------------------------------------------------------------------------------ movement keys kept
+-- "I set strafe left/right to Q and E, and every time I reopen the game (or after a loading screen) they are back to default"
+-- (fdshiga, pennywhi, cruborg and others, 2026-11-08). The server keeps the key bindings like any other (the rest of them stay), and
+-- the WTF file has Q and E: it is the client's own turn/strafe code (Blizzard_RPE_TurnStrafe calls
+-- C_KeyBindings.UpdateTurnStrafeBindingsForCharacter after PLAYER_ENTERING_WORLD) that puts its turn/strafe style back on A, D, Q, E
+-- and the arrow keys each time the world loads. This keeps what the player chose: the keys below and the keys of the movement
+-- actions are remembered whenever the bindings change outside a loading screen (per binding set: account, or character when
+-- "Character Specific Key Bindings" is ticked), and put back once the world has loaded. Never in combat (SetBinding is protected
+-- there): then it waits for the fight to end. "/fb part movekeys off" and /reload switch it off.
+-- (A function, not a do block: the file's main chunk is at Lua's limit of 200 local variables.)
+;(function()
+    local MOVE_ACTIONS = { "MOVEFORWARD", "MOVEBACKWARD", "TURNLEFT", "TURNRIGHT", "STRAFELEFT", "STRAFERIGHT" }
+    local WATCH_KEYS = { "W", "S", "A", "D", "Q", "E", "UP", "DOWN", "LEFT", "RIGHT" }
+    local GUARD_SECONDS = 10           -- after a loading screen, binding changes are the client's, not the player's
+    local guardUntil, restorePending = 0, false
+    local frame = CreateFrame("Frame")
+
+    local function SetKey()
+        local ok, set = pcall(GetCurrentBindingSet)
+        if ok and Enum and Enum.BindingSet and set == Enum.BindingSet.Character then
+            return "char:" .. (SafeName("player") or "?") .. "-" .. (GetRealmName and (SafeStr(GetRealmName()) or "") or "")
+        end
+        return "account"
+    end
+
+    -- key -> action ("" when the key is unbound) for the watched keys and every key bound to a movement action
+    local function Snapshot()
+        local map = {}
+        for _, key in ipairs(WATCH_KEYS) do map[key] = GetBindingAction(key) or "" end
+        for _, action in ipairs(MOVE_ACTIONS) do
+            local keys = { GetBindingKey(action) }
+            for _, key in ipairs(keys) do
+                if type(key) == "string" and key ~= "" then map[key] = action end
+            end
+        end
+        return map
+    end
+
+    local function Remember()
+        ForeverBotsDB.moveKeys = ForeverBotsDB.moveKeys or {}
+        ForeverBotsDB.moveKeys[SetKey()] = Snapshot()
+    end
+
+    local function Restore()
+        restorePending = false
+        local saved = ForeverBotsDB.moveKeys and ForeverBotsDB.moveKeys[SetKey()]
+        if not saved then Remember(); return end
+        if InCombatLockdown and InCombatLockdown() then
+            restorePending = true
+            frame:RegisterEvent("PLAYER_REGEN_ENABLED")
+            return
+        end
+        local changed = 0
+        for key, action in pairs(saved) do
+            local now = GetBindingAction(key) or ""
+            if now ~= action then
+                local ok = pcall(SetBinding, key, action ~= "" and action or nil)
+                if ok then changed = changed + 1 end
+            end
+        end
+        if changed > 0 then
+            -- keep the guard up while our own change fires UPDATE_BINDINGS, then save the set the player uses
+            guardUntil = math.max(guardUntil, GetTime() + 1)
+            pcall(SaveBindings, GetCurrentBindingSet())
+            Debug("movement keys: " .. changed .. " key(s) put back after the client changed them")
+        end
+    end
+
+    local function After(sec, fn) if C_Timer and C_Timer.After then C_Timer.After(sec, fn) else fn() end end
+
+    local function WorldLoaded()
+        guardUntil = GetTime() + GUARD_SECONDS
+        -- the client's change comes right after the world is shown; check a few times while it settles
+        After(1, Restore); After(3, Restore); After(GUARD_SECONDS - 1, Restore)
+    end
+
+    AddPart("movekeys", function()
+        if not (GetBindingAction and GetBindingKey and SetBinding and SaveBindings and GetCurrentBindingSet) then return end
+        frame:RegisterEvent("PLAYER_ENTERING_WORLD")
+        frame:RegisterEvent("LOADING_SCREEN_ENABLED")
+        frame:RegisterEvent("UPDATE_BINDINGS")
+        pcall(frame.RegisterEvent, frame, "NOTIFY_TURN_STRAFE_CHANGE")
+        frame:SetScript("OnEvent", function(self, event)
+            if event == "LOADING_SCREEN_ENABLED" then
+                guardUntil = GetTime() + 600   -- until the world is loaded (PLAYER_ENTERING_WORLD sets the real end)
+            elseif event == "PLAYER_ENTERING_WORLD" then
+                WorldLoaded()
+            elseif event == "NOTIFY_TURN_STRAFE_CHANGE" then
+                guardUntil = math.max(guardUntil, GetTime() + 2)
+                After(0.5, Restore)
+            elseif event == "PLAYER_REGEN_ENABLED" then
+                self:UnregisterEvent("PLAYER_REGEN_ENABLED")
+                if restorePending then Restore() end
+            elseif event == "UPDATE_BINDINGS" then
+                if GetTime() >= guardUntil and not restorePending then Remember() end
+            end
+        end)
+    end)
+end)()
 
 PERF.running = nil   -- the file loaded to the end

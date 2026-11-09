@@ -856,6 +856,10 @@ NearbyUnit const* BotSnapshotView::assigned_tank_mob() const
     PveOrder const& po = s_->pve_order;
     if (!po.active || po.tank_target.IsEmpty())
         return nullptr;
+    // The coordinator's pass already skips a raid-forbidden mob, but its order is a pass older than the raid brain's.
+    RaidOrder const& ro = s_->raid_order;
+    if (ro.active && std::find(ro.forbidden_targets.begin(), ro.forbidden_targets.end(), po.tank_target) != ro.forbidden_targets.end())
+        return nullptr;
     for (auto const& e : s_->combat.nearby_enemies)
         if (e.guid == po.tank_target)
             return e.hp > 0 ? &e : nullptr;
@@ -973,6 +977,11 @@ static NearbyUnit const* UnclaimedLooseAttacker(BotSnapshot const& s, float rang
         if (ThreatVictim(e.victim_kind) != ThreatVictim::Member) continue;
         if (s.pve_order.active && s.pve_order.claimed_by_other_tank(e.guid) && LooseOnMemberMs(e.guid, s.published_at_ms) < kClaimStaleMs) continue;
         if (OtherTankTakesLoose(s, e)) continue;
+        // The raid brain forbids it to this bot (a fixed tank row's tank waits at its slot for an add still far out): a pickup or a taunt
+        // would pull the tank off its slot all the same (bwl_nefarian 1109a: tanks left the arc for drakonids 40-60 y out and died there).
+        if (s.raid_order.active && std::find(s.raid_order.forbidden_targets.begin(), s.raid_order.forbidden_targets.end(), e.guid) !=
+                                       s.raid_order.forbidden_targets.end())
+            continue;
         // The line-of-sight pull (PveOrder::sight_pull): a mob standing off out of the group's sight is on its way to the spot; a tank
         // that walks out to it takes the fight back to where it stood (smlibrary_loksey 8d2fd499aa: Taunt reach 4 y, the tank walked 30 y
         // to the Beastmaster on the priest).

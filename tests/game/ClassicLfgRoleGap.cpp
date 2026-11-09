@@ -56,10 +56,38 @@ TEST_CASE("LfgRoleGap: a player who ticked every role takes the first free one",
     CHECK(Gap({ all, all }) == LfgRoleGap{ 0, 0, 3 });
 }
 
-TEST_CASE("LfgRoleGap: a full group needs no bots whatever the roles", "[lfggap]")
+TEST_CASE("LfgRoleGap: a damage dealer never takes the tank or healer place", "[lfggap]")
 {
-    CHECK(Gap({ kLfgRoleDamage, kLfgRoleDamage, kLfgRoleDamage, kLfgRoleDamage, kLfgRoleDamage, kLfgRoleDamage }) == LfgRoleGap{ 0, 0, 0 });
-    CHECK(Gap({ 0, 0, 0, 0 }).Total() == 1);          // four damage dealers: the last place is open to any role
+    CHECK(Gap({ kLfgRoleTank, kLfgRoleHealer, kLfgRoleDamage, kLfgRoleDamage, kLfgRoleDamage, kLfgRoleDamage }) == LfgRoleGap{ 0, 0, 0 });
+    // four damage dealers: the last place goes to the tank, and one damage dealer makes room for the healer
+    CHECK(Gap({ 0, 0, 0, 0 }) == LfgRoleGap{ 1, 1, 0 });
+    CHECK(PlanLfgSeats(std::vector<uint8>{ 0, 0, 0, 0 }).dropDamage == 1);
+    // six damage dealers in a 5-man: two make room for a tank and a healer
+    std::vector<uint8> const six(6, kLfgRoleDamage);
+    CHECK(PlanLfgSeats(six, 5).gap == LfgRoleGap{ 1, 1, 0 });
+    CHECK(PlanLfgSeats(six, 5).dropDamage == 2);
+}
+
+TEST_CASE("LfgRoleGap: Blackrock Spire, three healers and seven damage dealers still lack a tank", "[lfggap]")
+{
+    // the group finder group of 2026-11-08: 3 healers, 3 rogues (the player too), 2 warlocks, a hunter, a mage
+    std::vector<uint8> members(3, kLfgRoleHealer);
+    members.insert(members.end(), 7, kLfgRoleDamage);
+    LfgSeatPlan const plan = PlanLfgSeats(members, 10);
+    CHECK(plan.gap == LfgRoleGap{ 1, 0, 0 });
+    CHECK(plan.dropDamage == 1);
+    // nine of them (before the player joined): the tenth place is the tank's, nobody has to leave
+    members.pop_back();
+    CHECK(PlanLfgSeats(members, 10).gap == LfgRoleGap{ 1, 0, 0 });
+    CHECK(PlanLfgSeats(members, 10).dropDamage == 0);
+}
+
+TEST_CASE("LfgRoleGap: real players past the places leave the tank place open only when room can be made", "[lfggap]")
+{
+    // five tanks in a 5-man: one tank place, then the damage places; no damage dealer to make room for a healer
+    std::vector<uint8> const tanks(5, kLfgRoleTank);
+    CHECK(PlanLfgSeats(tanks, 5).gap == LfgRoleGap{ 0, 0, 0 });
+    CHECK(PlanLfgSeats(tanks, 5).dropDamage == 0);
 }
 
 TEST_CASE("LfgRoleGap: the role mix of a 5-man party and a 10-man group", "[lfggap]")
@@ -86,18 +114,24 @@ TEST_CASE("LfgRoleGap: real players in a 10-man group take their roles first", "
     CHECK(ComputeLfgRoleGap(two, 10) == LfgRoleGap{ 1, 3, 4 });
 }
 
-TEST_CASE("LfgRoleGap: a full 10-man group needs no bots, an 11th member takes no place", "[lfggap]")
+TEST_CASE("LfgRoleGap: a full 10-man group of the right mix needs no bots, an 11th member takes no place", "[lfggap]")
 {
-    std::vector<uint8> const ten(10, kLfgRoleDamage);
+    std::vector<uint8> ten{ kLfgRoleTank, kLfgRoleHealer, kLfgRoleHealer, kLfgRoleHealer };
+    ten.insert(ten.end(), 6, kLfgRoleDamage);
     CHECK(ComputeLfgRoleGap(ten, 10).Total() == 0);
-    std::vector<uint8> const eleven(11, kLfgRoleDamage);
+    std::vector<uint8> eleven = ten;
+    eleven.push_back(kLfgRoleDamage);
     CHECK(ComputeLfgRoleGap(eleven, 10).Total() == 0);
+    // ten damage dealers lack the tank and the healers: four of them make room
+    std::vector<uint8> const allDamage(10, kLfgRoleDamage);
+    CHECK(PlanLfgSeats(allDamage, 10).gap == LfgRoleGap{ 1, 3, 0 });
+    CHECK(PlanLfgSeats(allDamage, 10).dropDamage == 4);
 }
 
 TEST_CASE("LfgRoleGap: the 5-man default is unchanged by the size parameter", "[lfggap]")
 {
     CHECK(ComputeLfgRoleGap({}, 5) == ComputeLfgRoleGap({}));
-    std::vector<uint8> const six(6, kLfgRoleDamage);
+    std::vector<uint8> const six{ kLfgRoleTank, kLfgRoleHealer, kLfgRoleDamage, kLfgRoleDamage, kLfgRoleDamage, kLfgRoleDamage };
     CHECK(ComputeLfgRoleGap(six, 5).Total() == 0);
 }
 
@@ -166,4 +200,21 @@ TEST_CASE("LfgRoleGap: the fill of a joined group is spread over at most a minut
     CHECK(LfgJoinedFillSeconds(60) == 60);
     CHECK(LfgJoinedFillSeconds(20) == 20);
     CHECK(LfgJoinedFillSeconds(0) == 0);                    // fill off stays off
+}
+
+TEST_CASE("LfgRoleGap: a role the class cannot play is not counted", "[lfggap]")
+{
+    CHECK(LfgRoleForClass(4, kLfgRoleTank) == 0);                       // rogue picked Tank
+    CHECK(LfgRoleForClass(8, kLfgRoleHealer) == 0);                     // mage picked Heal
+    CHECK(LfgRoleForClass(1, kLfgRoleTank) == kLfgRoleTank);            // warrior
+    CHECK(LfgRoleForClass(11, kLfgRoleHealer) == kLfgRoleHealer);       // druid
+    CHECK(LfgRoleForClass(2, kLfgRoleTank | kLfgRoleHealer) == (kLfgRoleTank | kLfgRoleHealer));
+    CHECK(LfgRoleForClass(5, kLfgRoleTank | kLfgRoleDamage) == kLfgRoleDamage);
+    CHECK(LfgRoleForClass(4, kLfgRoleDamage) == kLfgRoleDamage);
+}
+
+TEST_CASE("LfgRoleGap: a rogue leader who picked Tank still gets a tank (Scarlet Monastery 2026-11-08)", "[lfggap]")
+{
+    uint8 const own = LfgRoleForClass(4, kLfgRoleTank);
+    CHECK(Gap({ own ? own : kLfgRoleDamage }) == LfgRoleGap{ 1, 1, 2 });
 }

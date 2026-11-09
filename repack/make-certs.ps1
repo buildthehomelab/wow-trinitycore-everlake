@@ -64,15 +64,32 @@ $hosts = "$env:SystemRoot\System32\drivers\etc\hosts"
 # An antivirus that guards the hosts file (Kaspersky, some others) refuses the write. That used to stop the whole install at
 # this step (krabov0690, 2026-11-07): now it is tried a few times, and if it still fails the install goes on and says how to add
 # the line by hand. Without the line the login server cannot start.
-if (-not (Select-String $hosts -Pattern 'trinity.actual.battle.net' -Quiet)) {
+# Some PCs have no hosts file at all (a "cleaner" or tweak tool removed it, or a custom Windows build): reading it then stopped
+# the install with "Cannot find path ...\hosts" (lev, 2026-11-08). A missing file is simply made, with Windows' own header.
+$hasLine = $false
+if (Test-Path -LiteralPath $hosts -PathType Leaf) {
+    try { $hasLine = [bool](Select-String -LiteralPath $hosts -Pattern 'trinity.actual.battle.net' -SimpleMatch -Quiet -ErrorAction Stop) }
+    catch { Write-Warning "Could not read the hosts file ($($_.Exception.Message)); trying to add the line anyway." }
+} else {
+    Write-Host "There is no hosts file on this PC ($hosts); making a new one."
+    try {
+        New-Item -ItemType Directory -Force (Split-Path $hosts -Parent) | Out-Null
+        Set-Content -LiteralPath $hosts -Encoding ascii -ErrorAction Stop -Value @(
+            '# Copyright (c) 1993-2009 Microsoft Corp.', '#',
+            '# This is a sample HOSTS file used by Microsoft TCP/IP for Windows.', '#',
+            '# localhost name resolution is handled within DNS itself.',
+            '#      127.0.0.1       localhost', '#      ::1             localhost')
+    } catch { Write-Warning "Could not make the hosts file ($($_.Exception.Message))." }
+}
+if (-not $hasLine) {
     $hostsLine = "127.0.0.1 trinity.actual.battle.net # wow-forever-local"
     $written = $false; $why = ''
     for ($try = 1; $try -le 3 -and -not $written; $try++) {
-        try { Add-Content -LiteralPath $hosts "`n$hostsLine" -ErrorAction Stop; $written = $true }
+        try { Add-Content -LiteralPath $hosts "`r`n$hostsLine" -Encoding ascii -ErrorAction Stop; $written = $true }
         catch { $why = $_.Exception.Message; Start-Sleep -Seconds 2 }
     }
     if (-not $written) {
-        Write-Warning "Windows did not let us write the hosts file ($why). Usually an antivirus protects it."
+        Write-Warning "Windows did not let us write the hosts file ($why). Usually an antivirus protects it, or the file is set to Read-only."
         Write-Host "Fix: allow the WoW Forever Bots folder in your antivirus (or turn its hosts file protection off for a minute) and run" -ForegroundColor Yellow
         Write-Host "Install.cmd again, or add this line yourself at the end of $hosts (Notepad, run as administrator):" -ForegroundColor Yellow
         Write-Host "    127.0.0.1 trinity.actual.battle.net" -ForegroundColor Yellow

@@ -17,6 +17,25 @@ local ROLES = { { nil, L["Auto"], L["Your role is left to the server: the bots f
                 { "healer", L["Heal"], L["You heal: the bots bring a tank and damage."] },
                 { "dps", L["DPS"], L["You deal damage: the bots bring a tank, a healer and the rest."] } }
 
+-- The roles your class can play (the server checks the same: a rogue who picks Tank still gets a tank bot).
+local CAN = { WARRIOR = { tank = true }, DEATHKNIGHT = { tank = true }, DEMONHUNTER = { tank = true },
+              PALADIN = { tank = true, healer = true }, MONK = { tank = true, healer = true }, DRUID = { tank = true, healer = true },
+              PRIEST = { healer = true }, SHAMAN = { healer = true }, EVOKER = { healer = true } }
+
+function F.CanPlay(classToken, role)
+    if not role or role == "dps" then return true end
+    local c = CAN[classToken or ""]
+    return c and c[role] or false
+end
+
+-- The role that goes to the server: a saved pick your class cannot play (Tank kept from another character) is Auto.
+function F.Role()
+    local role = ForeverBotsDB.finderRole
+    local token = UnitClass and select(2, UnitClass("player"))
+    if F.CanPlay(token, role) then return role end
+    return nil
+end
+
 -- Any for my level first, then the dungeons of your level, then every other one by level; Upper Blackrock Spire (10) only from 58.
 function F.Choices(h, level)
     local list = { { word = "any", name = L["Any for my level"] } }
@@ -66,8 +85,10 @@ local function Refresh()
     local c = F.list[F.pick]
     pane.choice:SetText(c.name)
     pane.range:SetText(c.min and (((c.fits and "|cff40ff40" or "|cffbbbbbb") .. L["Levels %d-%d"]:format(c.min, c.max) .. "|r")) or ("|cffbbbbbb" .. L["A dungeon for level %d"]:format(level) .. "|r"))
-    local role = ForeverBotsDB.finderRole
+    local role = F.Role()
+    local token = UnitClass and select(2, UnitClass("player"))
     for _, b in ipairs(pane.roleButtons) do
+        b:SetEnabled(F.CanPlay(token, b.role))
         if b.role == role then b:LockHighlight() else b:UnlockHighlight() end
     end
     local st = F.state
@@ -125,7 +146,7 @@ function ns.BuildFinder(p, helpers)
     p.queue = Btn(p, 0, 106, 117, 24, L["Queue"], {})
     p.queue:SetScript("OnClick", function()
         local c = F.list and F.list[F.pick]
-        if c then h.Queue(c.word, ForeverBotsDB.finderRole, true); Soon() end
+        if c then h.Queue(c.word, F.Role(), true); Soon() end
     end)
     Tip(p.queue, L["Queue"], L["Your bots fill the missing tank, healer and damage places at your level (wearing the gear picked on the Bots tab) and the group is put inside the dungeon. Only the group leader can queue."])
     p.cancel = Btn(p, 121, 106, 117, 24, L["Cancel"], {})
@@ -143,7 +164,7 @@ function ns.BuildFinder(p, helpers)
     p.leave:SetScript("OnClick", function() h.Queue("leave", nil, true); Soon() end)
     Tip(p.leave, L["Leave dungeon"], L["Back to where you queued (else the dungeon's way out); your bots follow. Not in combat or while dead."])
     p.fill = Btn(p, 121, 212, 117, 24, L["Fill my group"], {})
-    p.fill:SetScript("OnClick", function() h.Lfg(ForeverBotsDB.finderRole); Soon() end)
+    p.fill:SetScript("OnClick", function() h.Lfg(F.Role()); Soon() end)
     Tip(p.fill, L["Fill my group"], L["Fills the missing tank, healer and damage places of your group here and now (1 tank, 1 healer, 3 damage), without going anywhere."])
 
     -- the status while the tab is open

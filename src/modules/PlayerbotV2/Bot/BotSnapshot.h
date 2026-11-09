@@ -714,6 +714,7 @@ struct PveOrder
         ObjectGuid target;          // empty = unused slot
         uint8      prefer_mask = 0; // SpellSchoolMask bits: 1 physical, 2 holy, 4 fire, 8 nature, 16 frost, 32 shadow, 64 arcane
         uint8      avoid_mask  = 0; // same bits; a school in both masks counts as avoided
+        uint8      reflect_mask = 0; // the avoided schools it reflects: an area spell keeps off it (ThreatDiscipline.h FindAoeHazard)
     };
     std::array<SchoolHint, 4> school_hints{};
 
@@ -2414,6 +2415,12 @@ struct BgState
     // prep. TC source: Battleground::GetInProgressDuration().
     uint32 in_progress_ms = 0;
 
+    // Arena only, once the gates are open: the nearest living enemy player anywhere in the match (not stealthed or
+    // invisible). Arena teams start out of sight of each other, so the 40 y enemy scan alone left a bot nobody hit
+    // standing at its start spot for the whole match. Empty guid = none known.
+    ObjectGuid arena_enemy;
+    float      arena_enemy_x = 0.f, arena_enemy_y = 0.f, arena_enemy_z = 0.f;
+
     // CTF flag carriers + their world positions (resolved at builder time).
     // Scalar fields hold the FIRST detected carrier per side (back-compat
     // for WSG/TP/EotS/BfG/DG semantics where the BG has at most one
@@ -2549,6 +2556,8 @@ struct BgState
         gate_doors = 0;
         mount_ok = false;
         in_progress_ms = 0;
+        arena_enemy = ObjectGuid::Empty;
+        arena_enemy_x = arena_enemy_y = arena_enemy_z = 0.f;
         friendly_flag_carrier = ObjectGuid::Empty;
         enemy_flag_carrier = ObjectGuid::Empty;
         friendly_carrier_hp_pct = 0;
@@ -2729,6 +2738,9 @@ struct BotSnapshot
     // The owner is in the bot's group: the bot is a companion and does what its owner's party does, not world-bot
     // errands (questing, vendors, gathering, travel). See IdleRuleRegistry::tick.
     bool owner_in_group = false;
+    // The character is a real player's own (not on a bot pool account): an alt summoned into the party (`.playerbot summon`, the
+    // add-on). The free upkeep meant for the server's bots (the gold floor and the free repair, Bot/AlwaysBuffs.h) leaves it out.
+    bool players_own_character = false;
     // The bot is in a group with a player who controls it although it has no owner in that group: a world bot the player invited
     // (or a companion whose owner is not in the group). Same duty as a companion: it does what the group does, no errands, and the
     // controller's orders reach it. controller_guid is that player (the group leader when human, else the first human member).
@@ -3045,6 +3057,7 @@ struct BotSnapshot
         owner_name.clear();
         owner_guid = ObjectGuid::Empty;
         owner_in_group = false;
+        players_own_character = false;
         led_by_player = false;
         controller_guid = ObjectGuid::Empty;
         no_tag_stance = false;

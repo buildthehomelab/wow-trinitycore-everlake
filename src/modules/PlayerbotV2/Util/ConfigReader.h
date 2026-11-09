@@ -388,6 +388,43 @@ public:
         std::string extra_prompt;
     };
     ChatModelConfig const& chat_model() const { return chat_model_; }
+    // Playerbot.Bridge.* (Bot/BotBridge.h): the optional file bridge to an outside program. Off by default.
+    struct BridgeConfig
+    {
+        bool        enable             = false;
+        std::string folder             = "BotBridge";
+        std::string crash_folder       = "Crashes";
+        bool        chat               = true;
+        bool        events             = true;
+        bool        prompt_in_chat     = true;
+        uint32      client_timeout_sec = 120;
+        uint32      event_cooldown_sec = 300;
+        uint32      max_events_per_sec = 30;
+        uint32      reply_max_age_sec  = 60;
+        uint32      bot_line_gap_ms    = 8000;
+        uint32      max_line_bytes     = 200;
+        uint32      rotate_mb          = 20;
+        uint32      keep_days          = 3;
+        uint32      spell_fail_count   = 5;
+        uint32      death_loop_count   = 3;
+        uint32      read_ms            = 200;    // how often replies.jsonl is read
+        bool        swearing           = false;  // chat_in says the program may use everyday bad language (never slurs)
+        bool        moments            = true;   // the bots' own party lines (loot, level-up, wipe...) come from the program
+        uint32      moments_per_minute = 6;      // at most this many moment events a minute for the whole server
+        bool        talk               = true;   // world bots' gathering talk (bot to bot) comes from the program too
+        // Playerbot.Bridge.Actions.*: a reply may also carry one action from a fixed list ("do"). Off by default.
+        bool        actions                = false;
+        bool        actions_owned_bots     = false;
+        std::string actions_allowed        = "all";
+        uint32      actions_bot_gap_ms     = 5000;
+        uint32      actions_per_sec        = 20;
+        uint32      actions_max_age_sec    = 30;
+        uint32      actions_follow_minutes = 10;
+        uint32      actions_max_goto_yards = 200;
+        uint32      actions_near_yards     = 60;    // hostiles listed in "near" and reachable by attack / cast
+        bool        actions_spells         = true;  // chat_in lists the bot's spells and "cast" may use them
+    };
+    BridgeConfig const& bridge() const { return bridge_; }
     bool   chatter_channel_replies()      const { return chatter_channel_replies_; }
     uint32 chatter_channel_question_pct() const { return chatter_channel_question_pct_; }
     uint32 chatter_channel_greet_pct()    const { return chatter_channel_greet_pct_; }
@@ -429,6 +466,9 @@ public:
     bool behavior_owner_commands()      const { return bhv_owner_commands_; }
     // A player's bots board his flight with him, and the ones that could not are brought to him when he lands (Fleet/OwnerCatchUp.h).
     bool behavior_fly_with_owner()      const { return bhv_fly_with_owner_; }
+    // A player's bots ride his ship or zeppelin with him, and the ones that could not get on are brought to him when he steps off
+    // (PlayerbotV2.cpp DriveRideWithOwner).
+    bool behavior_ride_with_owner()     const { return bhv_ride_with_owner_; }
     // A bot with no way closer to its player while he is well away is set down beside him (Fleet/OwnerCatchUp.h).
     bool behavior_catch_up_to_owner()   const { return bhv_catch_up_to_owner_; }
     bool behavior_follow_owner_steps()  const { return bhv_follow_owner_steps_; }
@@ -485,6 +525,7 @@ public:
         bool   campfire        = true;
         bool   use_chat_model  = true;
         uint32 model_per_minute = 4;
+        uint32 city_chats      = 3;      // street chats at once in one capital, where a real player walks (0 = none)
     };
     GatheringConfig const& gathering() const { return gathering_; }
     bool behavior_quest_accept()        const { return bhv_quest_accept_; }
@@ -662,6 +703,7 @@ private:
     bool   bhv_bot_whisperable_      = true;
     bool   chatter_conversation_     = true;
     ChatModelConfig chat_model_;
+    BridgeConfig bridge_;
     bool   chatter_channel_replies_  = true;
     uint32 chatter_channel_question_pct_ = 60;
     uint32 chatter_channel_greet_pct_    = 40;
@@ -700,6 +742,7 @@ private:
     bool   bhv_ike3_commands_        = true;
     bool   bhv_owner_commands_       = true;
     bool   bhv_fly_with_owner_       = true;
+    bool   bhv_ride_with_owner_      = true;
     bool   bhv_catch_up_to_owner_    = true;
     bool   bhv_follow_owner_steps_   = true;
     float  bhv_passive_leash_yd_     = 25.0f;

@@ -63,6 +63,12 @@ TEST_CASE("Want to buy, by link or by name", "[ClassicChannelTalk]")
     REQUIRE(a.item_entry == 2589);
     REQUIRE(a.item_name == "linen cloth");
 
+    // The 12.x client colours a link by quality as |cnIQ<q>: and sends every field of the item string.
+    a = Parse("WTB |cnIQ2:|Hitem:7071::::::::30::::::::::|h[Iron Buckle]|h|r need 2");
+    REQUIRE(a.kind == Kind::WantToBuy);
+    REQUIRE(a.item_entry == 7071);
+    REQUIRE(a.item_name == "iron buckle");
+
     a = Parse("wtb silk cloth x40, paying well");
     REQUIRE(a.kind == Kind::WantToBuy);
     REQUIRE(a.item_entry == 0);

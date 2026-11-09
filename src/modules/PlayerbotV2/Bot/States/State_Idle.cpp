@@ -817,6 +817,8 @@ bool MaintainAutoEquipUpgrades(BotSnapshotView const& s, BotAI& ai,
         // and the rule goes quiet until the next ding / periodic re-check.
         if (ai.equip_recently_tried(it.entry, equip_now_ms)) continue;
         EquippedItem const& cur = raw.inventory.equipped[it.equip_slot];
+        // A piece a player chose for the bot (trade or "equip <item>") stays on.
+        if (ai.worn_is_kept(it.equip_slot, cur.entry)) continue;
         // Score-based upgrade test (was pure item_level). 12.0 level-scaling
         // floors low-level whites AND quest greens to the same effective ilvl,
         // so `it.item_level <= cur.item_level` tied and refused real upgrades —
@@ -3131,6 +3133,9 @@ bool RaidFormationHold(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView co
         return false;
     if (ai.effective_role(s) == Role::Tank || s.is_casting() || s.is_rooted())
         return false;
+    // An encounter role position (Stand) is this bot's place in the fight: the arc slot behind the anchor tank is for fights without one.
+    if (s.raw().raid_order.active && s.raw().raid_order.at_post)
+        return false;
     GroupMemberSummary const* tk = GroupAnchorTank(s, ai, g);
     if (!tk || !tk->online || !tk->is_alive || tk->guid == s.raw().guid || tk->map_id != s.map_id() || !tk->in_combat)
         return false;
@@ -3385,7 +3390,21 @@ static PrePullSpacing RaidPrePullSpacing(BotSnapshotView const& s, BotAI& ai, Gr
         if (!spot(bearings[i], sx, sy)) continue;
         const float dx = bx - sx, dy = by - sy;
         if (dx * dx + dy * dy <= in_place * in_place && !crowded(i, sx, sy))
+        {
+            // The walk to the spot goes away from the pack, so the bot arrived with its back to the fight (Blackrock Spire
+            // 2026-11-08: the healers stood facing the wall). Standing in place it turns to the pull: a healer to the tank it
+            // heals, the others to the pack. Only a standing, idle bot more than 60 degrees off; a turned bot is left alone.
+            if (!s.is_moving() && !s.is_casting())
+            {
+                const bool healer = ai.effective_role(s) == Role::Healer;
+                const float fx = healer ? tk.x : pack->x, fy = healer ? tk.y : pack->y;
+                const float want = std::atan2(fy - by, fx - bx);
+                const float off = std::fabs(std::remainder(want - s.raw().position.o, 2.0f * float(M_PI)));
+                if (off > 1.0472f && emit.face_target(healer ? tk.guid : pack->guid))
+                    ai.set_last_rule_fired("idle:dungeon_prepull_face");
+            }
             return PrePullSpacing::InPlace;
+        }
         if (RaidMoveInFlightTo(s, sx, sy))
         {
             ai.set_last_rule_fired("idle:dungeon_prepull_spacing_hold");
@@ -6079,9 +6098,11 @@ bool DungeonCombatPositioning(BotSnapshotView const& s, BotAI& ai,
         float cx_rs = 0.f, cy_rs = 0.f, near_d2 = kRaidRangedTooClose * kRaidRangedTooClose;
         int   n_rs = 0;
         uint32 near_entry = 0;
+        RaidOrder const& ro_rs = s.raw().raid_order;
         for (auto const& u : s.raw().combat.nearby_enemies)
         {
             if (!spacing_mob(u)) continue;
+            if (ro_rs.active && !ro_rs.post_enemy.IsEmpty() && u.guid == ro_rs.post_enemy) continue;   // the encounter's post wins
             const float dx = bx_rs - u.x, dy = by_rs - u.y;
             const float d2 = dx * dx + dy * dy;
             if (d2 >= kRaidRangedTooClose * kRaidRangedTooClose) continue;
@@ -6172,7 +6193,8 @@ bool DungeonCombatPositioning(BotSnapshotView const& s, BotAI& ai,
     // and when no engaged elite is near. One try per 3 s, every step checked like 5b's (fire, idle packs, boss front arc).
     // Not under an owner Hold before the fight: the raid waits for the Attack where it stands (MC Garr 2026-10-10: 12 healers within
     // 2.6 y spread out, a mage stepped 27 y away and pulled the Firesworn before the order).
-    if (RaidRangedOrHealer(s, ai) && !s.is_casting() && !(s.raw().raid_order.active && s.raw().raid_order.move) &&
+    if (RaidRangedOrHealer(s, ai) && !s.is_casting() &&
+        !(s.raw().raid_order.active && (s.raw().raid_order.move || s.raw().raid_order.at_post)) &&
         !(ai.holding_position(now_ms) && !s.in_combat()) &&
         !ai.action_recently_tried(BotAI::ActionKind::RaidSpacing, 1, now_ms))
     {
@@ -6249,8 +6271,10 @@ bool DungeonCombatPositioning(BotSnapshotView const& s, BotAI& ai,
     // its own healers (PveOrder::heal_focus); a spare tank holding a mob
     // 50y from the main pack is out of their 40y heals unless they go to
     // it. Past 35y, close to the usual raid stand-off from that tank.
+    // A bot with an encounter post (RaidOrder::post_enemy) keeps it: the encounter put its tanks within heal reach of the post.
     if (s.is_in_raid() && !s.is_casting() &&
         ai.effective_role(s) != Role::Tank &&
+        !(s.raw().raid_order.active && !s.raw().raid_order.post_enemy.IsEmpty()) &&
         s.raw().pve_order.active && !s.raw().pve_order.heal_focus.IsEmpty() &&
         s.raw().pve_order.heal_focus != s.guid())
     {
@@ -12369,8 +12393,10 @@ bool DungeonDispatch(BotSnapshotView const& s, BotAI& ai,
             // The bot main tank is out at a pull back's opener or on its way back: the others wait at its return point, where the pack is
             // coming, instead of walking on after it toward the pack (eea74327b3 dmnorth_moldar: the group followed the tank down the ramp
             // to 20 y of a Gordok pack during the pull, the priest was first in the Brutes' way and died at 317 s).
+            // The off tank waits there too: only the puller itself runs out (Blackrock Spire 2026-11-08: the off tank charged the pack).
             if (PveOrder const& tpo = s.raw().pve_order;
-                ai.effective_role(s) != Role::Tank && !ai.holding_position(now_ms) && tpo.active && tpo.tank_pulling_back)
+                !ai.pull_back_active() && (ai.effective_role(s) != Role::Tank || tpo.main_tank != s.guid()) &&
+                !ai.holding_position(now_ms) && tpo.active && tpo.tank_pulling_back)
             {
                 float wx, wy, wz; s.position(wx, wy, wz);
                 const float rdx = tpo.tank_pull_x - wx, rdy = tpo.tank_pull_y - wy;
@@ -12763,6 +12789,7 @@ bool DungeonDispatch(BotSnapshotView const& s, BotAI& ai,
                     if (bi.item_level == 0 || bi.quality == 0) continue;
                     if (ai.equip_recently_tried(bi.entry, now_ms)) continue;
                     EquippedItem const& cur_eq = eq_raw.inventory.equipped[bi.equip_slot];
+                    if (ai.worn_is_kept(bi.equip_slot, cur_eq.entry)) continue;
                     if (::Playerbot::V2::Gear::RaidGearActive(eq_raw.identity.level))
                     {
                         auto const& eq = eq_raw.inventory.equipped;
@@ -15539,6 +15566,29 @@ bool BgDispatch(BotSnapshotView const& s, BotAI& ai,
         // through target acquisition; no formation follow is needed
         // for that small a roster.
 
+        // Arena, gates open, not fighting: go and find the other team. The teams start out of sight of each other (Mak'gora:
+        // 90 yards), so a bot that nobody came to hit stood at its start spot for the whole match (chris, 2026-11-08 2v2).
+        // Close enough: attack; further: run to the enemy. The combat state does the rest (healers heal from there).
+        if (s.is_alive() && !s.is_casting() && !s.in_combat() &&
+            s.bg_status() == 3 /*STATUS_IN_PROGRESS*/ && !s.raw().bg.arena_enemy.IsEmpty())
+        {
+            float self_x = 0.f, self_y = 0.f, self_z = 0.f;
+            s.position(self_x, self_y, self_z);
+            float const ex = s.raw().bg.arena_enemy_x, ey = s.raw().bg.arena_enemy_y, ez = s.raw().bg.arena_enemy_z;
+            float const dsq = (ex - self_x) * (ex - self_x) + (ey - self_y) * (ey - self_y);
+            if (dsq <= 35.0f * 35.0f && emit.start_attack(s.raw().bg.arena_enemy))
+            {
+                ai.set_last_rule_fired("idle:arena_attack_enemy");
+                return true;
+            }
+            if (dsq > 8.0f * 8.0f)
+            {
+                emit.move_to(ex, ey, ez, /*run=*/true);
+                ai.set_last_rule_fired("idle:arena_seek_enemy");
+                return true;
+            }
+        }
+
         // Arena positional intelligence — pillars / hazards / opening
         // rally. Gated on the script populating at least one of those
         // fields, so non-arena BGs see zero cost (vector empty checks).
@@ -15550,12 +15600,12 @@ bool BgDispatch(BotSnapshotView const& s, BotAI& ai,
         {
             float self_x = 0.f, self_y = 0.f, self_z = 0.f;
             s.position(self_x, self_y, self_z);
-            // Opening rally: while gates still up OR match elapsed
-            // is brief (start_delay_ms running), advance to the rally
-            // coord so bots don't dawdle in the starting cage AABB.
+            // Opening rally: once the gates are open and no enemy is known (all hidden), go to the middle. Not during the
+            // preparation minute: the bots wait at their start spot like players (walking out then made the battleground
+            // put them back at the start every second, the "jumping" chris saw on 2026-11-08).
             if ((bg_advice.opening_rally_x != 0.f ||
                  bg_advice.opening_rally_y != 0.f) &&
-                s.bg_start_delay_ms() > 0)
+                s.bg_status() == 3 /*STATUS_IN_PROGRESS*/ && s.bg_start_delay_ms() == 0)
             {
                 float dx = bg_advice.opening_rally_x - self_x;
                 float dy = bg_advice.opening_rally_y - self_y;

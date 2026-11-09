@@ -442,18 +442,29 @@ Item* AuctionHouseMgr::GetAItem(ObjectGuid itemGuid)
     return Trinity::Containers::MapGetValuePtr(_itemsByGuid, itemGuid);
 }
 
+// Rate.Auction.Deposit (worldserver.conf, 1 = normal, 0 = no deposit) was read but never used, so changing it did nothing.
+static uint64 ApplyAuctionDepositRate(uint64 deposit)
+{
+    float rate = sWorld->getRate(RATE_AUCTION_DEPOSIT);
+    if (rate == 1.0f)
+        return deposit;
+    return uint64(std::max(0.0, std::floor(double(deposit) * rate)));
+}
+
 uint64 AuctionHouseMgr::GetCommodityAuctionDeposit(ItemTemplate const* item, Minutes time, uint32 quantity, uint32 depositRate /*= 5*/)
 {
     uint32 sellPrice = item->GetSellPrice();
     // Classic 1.60: deposit DepositRate% of the vendor price per 2 hours (AuctionHouse.db2: 5 at the faction houses, 25 at the
     // neutral goblin house, like vanilla), at least 1 copper, no silver rounding
-    return uint64(std::max(1.0, std::floor(depositRate / 100.0 * quantity * sellPrice))) * (time.count() / (MIN_AUCTION_TIME / MINUTE));
+    uint64 deposit = uint64(std::max(1.0, std::floor(depositRate / 100.0 * quantity * sellPrice))) * (time.count() / (MIN_AUCTION_TIME / MINUTE));
+    return ApplyAuctionDepositRate(deposit);
 }
 
 uint64 AuctionHouseMgr::GetItemAuctionDeposit(Player const* player, Item const* item, Minutes time, uint32 depositRate /*= 5*/)
 {
     uint32 sellPrice = item->GetSellPrice(player);
-    return uint64(std::max(1.0, std::floor(sellPrice * (depositRate / 100.0)))) * (time.count() / (MIN_AUCTION_TIME / MINUTE));
+    uint64 deposit = uint64(std::max(1.0, std::floor(sellPrice * (depositRate / 100.0)))) * (time.count() / (MIN_AUCTION_TIME / MINUTE));
+    return ApplyAuctionDepositRate(deposit);
 }
 
 std::string AuctionHouseMgr::BuildItemAuctionMailSubject(AuctionMailType type, AuctionPosting const* auction)

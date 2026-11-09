@@ -3996,10 +3996,29 @@ void GameObject::SetLootState(LootState state, Unit* unit)
     }
 }
 
+bool GameObject::IsMiningVein() const
+{
+    LockEntry const* lock = sLockStore.LookupEntry(GetGOInfo()->GetLockId());
+    if (!lock)
+        return false;
+
+    for (uint8 i = 0; i < MAX_LOCK_CASE; ++i)
+        if (lock->Type[i] == LOCK_KEY_SKILL && (lock->Index[i] == LOCKTYPE_MINING || lock->Index[i] == LOCKTYPE_MINING_2))
+            return true;
+
+    return false;
+}
+
 void GameObject::RollChestOpens()
 {
     GameObjectTemplate const* goInfo = GetGOInfo();
     m_goValue.Chest.MaxOpens = urand(goInfo->chest.minRestock, std::max(goInfo->chest.minRestock, goInfo->chest.maxRestock));
+
+    // Rate.Mining.Amount (worldserver.conf, 1 = normal, 2 = double): how many times a mining vein can be mined before it is gone
+    float miningRate = sWorld->getRate(RATE_MINING_AMOUNT);
+    if (miningRate != 1.0f && IsMiningVein())
+        m_goValue.Chest.MaxOpens = std::max<uint32>(1, uint32(std::lround(std::max<uint32>(1, m_goValue.Chest.MaxOpens) * miningRate)));
+
     m_goValue.Chest.Opens = 0;
 }
 

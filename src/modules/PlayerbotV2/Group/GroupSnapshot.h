@@ -46,6 +46,9 @@ struct GroupMemberSummary
     bool                   is_controlled = false;
     bool                   is_mounted = false;
     bool                   in_flight = false;   // on a taxi flight (Player::IsInFlight)
+    // The ship or zeppelin the member rides (a type-15 Transport), empty when on none. His bots do not chase him on the ground
+    // while he rides: they ride with him (PlayerbotV2.cpp DriveRideWithOwner) or are brought to him when he steps off.
+    ObjectGuid             ship_guid;
     // V2-managed bot vs real player (Lifecycle::is_bot at build time).
     // Drives human-aware behavior: dungeon-complete auto-leave must not
     // hearth the bots out while a HUMAN group member is still inside the

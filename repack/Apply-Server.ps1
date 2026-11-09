@@ -14,8 +14,12 @@ if (-not [Net.IPAddress]::TryParse($Address, [ref]$ip)) { throw "Address '$Addre
 
 $hosts = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
 $bak = $hosts + '.wowforever.bak'
-if (-not (Test-Path $bak)) { Copy-Item $hosts $bak }
-$keep = @(Get-Content $hosts | Where-Object {
+# some PCs have no hosts file at all (removed by a cleaner tool): then it is simply made
+$exists = Test-Path -LiteralPath $hosts -PathType Leaf
+if ($exists -and -not (Test-Path $bak)) { Copy-Item $hosts $bak }
+if (-not $exists) { New-Item -ItemType Directory -Force (Split-Path $hosts -Parent) | Out-Null }
+$old = @(); if ($exists) { $old = @(Get-Content $hosts) }
+$keep = @($old | Where-Object {
     $t = ($_ -replace '#.*$', '').Trim() -split '\s+'
     -not ($t.Count -ge 2 -and ($t[1..($t.Count - 1)] -contains $Portal))
 })

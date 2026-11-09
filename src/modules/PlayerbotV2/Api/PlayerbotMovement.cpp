@@ -9,6 +9,7 @@
 #include "MapManager.h"
 #include "MMapManager.h"
 #include "MMapDefines.h"
+#include "FollowMovementGenerator.h"
 #include "MotionMaster.h"
 #include "MoveSplineInit.h"
 #include "Object.h"
@@ -747,6 +748,19 @@ void UpdateSwimState(Player* p)
     if (p->isMoving() || p->IsFalling() || (gen != IDLE_MOTION_TYPE && gen != FOLLOW_MOTION_TYPE) ||
         p->HasUnitState(UNIT_STATE_NOT_MOVE) || p->IsNonMeleeSpellCast(false) || !Swim::NeedsSettle(z, swimZ))
         return;
+    // A follower settles only where it stays in its follow range. The follow generator measures that range in 3D and, once the follower
+    // is out of it, paths again to a navmesh point by the leader, which in water is the surface: a settle that took the follower out
+    // of range was undone at the leader's next step and the two took turns (lake_swim 2026-11-09: a follower 2 y behind a leader on
+    // the surface, settled down and lifted back up 14 times in 25 s). Left where it is, it still swims (the flag above).
+    if (gen == FOLLOW_MOTION_TYPE)
+    {
+        auto const* follow = static_cast<FollowMovementGenerator const*>(p->GetMotionMaster()->GetCurrentMovementGenerator());
+        Unit const* leader = follow ? follow->GetTarget() : nullptr;
+        if (!leader || leader->GetMapId() != p->GetMapId() ||
+            !Swim::SettleKeepsFollowRange(x - leader->GetPositionX(), y - leader->GetPositionY(), swimZ - leader->GetPositionZ(),
+                                          p->GetCombatReach() + leader->GetCombatReach() + follow->GetRange()))
+            return;
+    }
     Movement::MoveSplineInit init(p);
     init.MoveTo(x, y, swimZ, /*generatePath*/ false);
     init.Launch();

@@ -3102,6 +3102,20 @@ ShapeshiftFormModelData const* DB2Manager::GetShapeshiftFormModelData(uint8 race
     return Trinity::Containers::MapGetValuePtr(_chrCustomizationChoicesForShapeshifts, { race, gender, form });
 }
 
+// Classic 1.60: the druid form appearances are options of the form models (ChrModel 189-194), not of the race model, so they are
+// not in GetCustomiztionOptions. The barber shop sends them with the race options; this finds one that is a form option for the race.
+ChrCustomizationOptionEntry const* DB2Manager::GetShapeshiftFormOption(uint8 race, uint8 gender, uint32 optionId) const
+{
+    for (auto itr = _chrCustomizationChoicesForShapeshifts.lower_bound({ race, gender, 0 }); itr != _chrCustomizationChoicesForShapeshifts.end(); ++itr)
+    {
+        if (std::get<0>(itr->first) != race || std::get<1>(itr->first) != gender)
+            break;
+        if (itr->second.OptionID == optionId)
+            return sChrCustomizationOptionStore.LookupEntry(optionId);
+    }
+    return nullptr;
+}
+
 std::vector<SkillLineEntry const*> const* DB2Manager::GetSkillLinesForParentSkill(uint32 parentSkillId) const
 {
     return Trinity::Containers::MapGetValuePtr(_skillLinesByParentSkillLine, parentSkillId);

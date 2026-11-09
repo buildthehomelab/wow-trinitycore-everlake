@@ -30,6 +30,8 @@
 #include "Log.h"
 #include <fstream>
 #include "Player.h"
+#include "../Fleet/PlayerCraftOrders.h"   // .playerbot craftfor
+#include "../Bot/BotBridge.h"           // .playerbot bridgeask
 #include "GameTime.h"
 #include "MovementPackets.h"
 #include "WorldSession.h"
@@ -568,6 +570,11 @@ public:
         static ChatCommandTable v2Table =
         {
             { "inspect",       HandleInspect,       rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            // Dev checks that need no client logged in (GM console / SOAP): can a player's bags take an item, a craft order as if
+            // a player whispered it, and a line to a bot through the bot bridge as if said in party.
+            { "canstore",      HandleCanStore,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "craftfor",      HandleCraftFor,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "bridgeask",     HandleBridgeAsk,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "status",        HandleStatus,        rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "activity",      HandleActivity,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "levels",        HandleLevels,        rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
@@ -696,6 +703,70 @@ public:
             { "learn all mylevel", HandleLearnAllMyLevelCommand, rbac::RBAC_PERM_COMMAND_LEARN_ALL_MY_SPELLS, Console::No },
         };
         return root;
+    }
+
+    // `.playerbot canstore <player> <item id> [count]`: what the game answers when that many of the item would go into the player's
+    // bags (the check a conjure or craft makes first), with the item's limits and the free bag slots.
+    static bool HandleCanStore(ChatHandler* handler, std::string name, uint32 item, Optional<uint32> count)
+    {
+        Player* p = ObjectAccessor::FindConnectedPlayerByName(name);
+        ItemTemplate const* t = sObjectMgr->GetItemTemplate(item);
+        if (!p || !t)
+        {
+            handler->SendSysMessage(!p ? "No such player online." : "No such item.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        uint32 const n = std::max<uint32>(1, count.value_or(1));
+        ItemPosCountVec dest;
+        uint32 no_space = 0;
+        InventoryResult const r = p->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, item, n, &no_space);
+        handler->PSendSysMessage("%s, item %u (%s) x%u: InventoryResult %u%s; limit category %u, max count %d, stack %u, carried %u, "
+                                 "free bag slots %u, no room for %u",
+            p->GetName().c_str(), item, t->GetName(DEFAULT_LOCALE), n, uint32(r), r == EQUIP_ERR_OK ? " (fits)" : "",
+            t->GetItemLimitCategory(), t->GetMaxCount(), t->GetMaxStackSize(), p->GetItemCount(item, true), p->GetFreeInventorySlotCount(),
+            no_space);
+        return true;
+    }
+
+    // `.playerbot craftfor <requester> <bot> <order>`: the bot takes a craft order ("craft water 10") from `requester` as if he had
+    // whispered it (no rights check: a test of the craft path itself). The bot's whispers go to the requester and the log.
+    static bool HandleCraftFor(ChatHandler* handler, std::string requester, std::string bot, Tail text)
+    {
+        Player* r = ObjectAccessor::FindConnectedPlayerByName(requester);
+        Player* b = ObjectAccessor::FindConnectedPlayerByName(bot);
+        std::string order(text);
+        if (!r || !b || order.empty())
+        {
+            handler->SendSysMessage("Usage: .playerbot craftfor <requester> <bot> craft <item> [count] (both online)");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        if (order.rfind("craft ", 0) != 0)
+            order = "craft " + order;
+        bool const taken = Playerbot::V2::PlayerCraftOrders::Order(r, b, order);
+        handler->PSendSysMessage("%s: \"%s\" %s (see the [craft_order] lines)", b->GetName().c_str(), order.c_str(),
+                                 taken ? "read as a craft order" : "not a craft order");
+        return true;
+    }
+
+    // `.playerbot bridgeask <from> <bot> <text>`: a chat_in to the bot bridge's program as if `from` had said it in party, so the
+    // program's answer and action can be tested without a client. Needs the bridge on and its program answering.
+    static bool HandleBridgeAsk(ChatHandler* handler, std::string from, std::string bot, Tail text)
+    {
+        Player* f = ObjectAccessor::FindConnectedPlayerByName(from);
+        Player* b = ObjectAccessor::FindConnectedPlayerByName(bot);
+        std::string line(text);
+        if (!f || !b || line.empty())
+        {
+            handler->SendSysMessage("Usage: .playerbot bridgeask <from> <bot> <text> (both online)");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        uint64 const id = Playerbot::BotBridge::ReportChat(b, f, "party", line, "");
+        handler->PSendSysMessage(id ? "chat_in %llu written for %s" : "not written (bridge off, or no program answering)",
+                                 (unsigned long long)id, b->GetName().c_str());
+        return true;
     }
 
     static bool HandleWhisperCmd(ChatHandler* handler, std::string name, Tail text)
@@ -850,16 +921,37 @@ public:
 
     // .bot lfg [tank|healer|dps]: fill the group's missing tank / healer / damage places now with level-matched companions
     // (the Group Finder does the same by itself when nobody joins a posted listing in time). The word is your own role.
-    // `.bot arena 2|3|leave`: the arena join without the client's arena window. The party leader queues the whole party through
-    // the same handler as the client's join (party size, level bracket and the bot opponents all as for the window). "leave"
-    // leaves the arena queue (not a running match). The ForeverBots add-on can send the same line.
+    // `.bot arena 2|3|enter|leave`: the arena join without the client's arena window. The party leader queues the whole party through
+    // the same handler as the client's join (party size, level bracket and the bot opponents all as for the window). "enter" takes
+    // the arena that is ready (the same as Enter on the pop), "leave" leaves the arena queue or turns down the ready arena (not a
+    // running match): the client's own arena pop has Enter only. The ForeverBots add-on sends the same lines from its pop-up.
     static bool HandleBotArena(ChatHandler* handler, Optional<std::string> what)
     {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
         WorldSession* session = handler->GetSession();
         Player* player = session ? session->GetPlayer() : nullptr;
         if (!player)
             return false;
-        std::string const w = what ? *what : std::string();
+        std::string const w = what ? ToLowerAscii(*what) : std::string();
+        if (w == "enter")
+        {
+            for (uint8 slot = 0; slot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++slot)
+            {
+                BattlegroundQueueTypeId const q = player->GetBattlegroundQueueTypeId(slot);
+                if (q == BATTLEGROUND_QUEUE_NONE || q.Type != uint8(BattlegroundQueueIdType::Arena) || !player->IsInvitedForBattlegroundQueueType(q))
+                    continue;
+                WorldPackets::Battleground::BattlefieldPort port{ WorldPacket(CMSG_BATTLEFIELD_PORT) };
+                port.Ticket.RequesterGuid = player->GetGUID();
+                port.Ticket.Id = slot;
+                port.Ticket.Type = WorldPackets::LFG::RideType::Battlegrounds;
+                port.AcceptedInvite = true;
+                session->HandleBattleFieldPortOpcode(port);
+                return true;
+            }
+            handler->SendSysMessage("No arena is ready for you yet.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
         if (w == "leave")
         {
             bool left = false;
@@ -876,6 +968,25 @@ public:
                 session->HandleBattleFieldPortOpcode(port);
                 left = true;
             }
+            // The party's bots leave the same queue with you (and an arena that has not begun yet), so they do not go in alone.
+            if (left)
+                if (Group* group = player->GetGroup())
+                    for (GroupReference const& itr : group->GetMembers())
+                    {
+                        Player* member = itr.GetSource();
+                        if (!member || member == player || !member->GetSession() || !member->GetSession()->IsBot())
+                            continue;
+                        if (Battleground* bg = member->GetBattleground(); bg && bg->isArena() && bg->GetStatus() == STATUS_WAIT_JOIN)
+                            member->LeaveBattleground(true, /*withoutDeserterDebuff*/ true);
+                        for (uint8 slot = 0; slot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++slot)
+                        {
+                            BattlegroundQueueTypeId const q = member->GetBattlegroundQueueTypeId(slot);
+                            if (q == BATTLEGROUND_QUEUE_NONE || q.Type != uint8(BattlegroundQueueIdType::Arena))
+                                continue;
+                            sBattlegroundMgr->GetBattlegroundQueue(q).RemovePlayer(member->GetGUID(), true);
+                            member->RemoveBattlegroundQueueId(q);
+                        }
+                    }
             handler->SendSysMessage(left ? "You left the arena queue." : "You are not in an arena queue.");
             return true;
         }
@@ -884,7 +995,7 @@ public:
         else if (w == "3" || w == "3v3") slot = 1;
         if (slot == 0xFF)
         {
-            handler->SendSysMessage("Usage: .bot arena 2 (2v2, a party of 2), .bot arena 3 (3v3, a party of 3), .bot arena leave");
+            handler->SendSysMessage("Usage: .bot arena 2 (2v2, a party of 2), .bot arena 3 (3v3, a party of 3), .bot arena enter, .bot arena leave");
             handler->SetSentErrorMessage(true);
             return false;
         }

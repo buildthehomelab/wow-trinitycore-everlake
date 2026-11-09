@@ -2470,6 +2470,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         static uint32 GetClassicProfessionSkill(uint32 skill);
         void SyncClassicProfessionChildSkills(uint32 skill);
         void UpdateClassicLegacyUnlock();
+        void UpdateClassicPvPRank();
         void UpdateClassicProfessionTitles();
         static bool IsClassicCertificationSkill(uint32 skillId);
         // Classic 1.60 Legacy perks (Legacy trait trees 1187 Professions, 1188 Adventure, 1189 Progression)

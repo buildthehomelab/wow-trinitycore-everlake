@@ -37,6 +37,46 @@ function Test-ConfDuplicates([string]$ServerDir) {
     $out
 }
 
+# A bnetserver.conf or worldserver.conf with no section line ([bnetserver] / [worldserver]) is not read by the server at all: every
+# setting in it is ignored and the login server listens nowhere. It happens when the file was left empty (the PC went off while it
+# was written, or a tool cleared it): the install keeps any settings file that exists, and the updater and the start then only added
+# their few lines to the empty file (noobiru 0.1.33: 361 bytes, SourceDirectory, MySQLExecutable, the network lines and
+# Realm.AlsoAcceptBuilds, no [bnetserver]). Such a file is set aside as <name>.broken-<time>, written again from the .conf.dist with
+# this install's values (make-tester-configs.ps1, the same as Install.cmd), and the lines the broken file had are put back on top.
+# Run before the other setting repairs of every start, and by the updater.
+function Repair-ServerConf([string]$ServerDir) {
+    $section = @{ 'bnetserver.conf' = 'bnetserver'; 'worldserver.conf' = 'worldserver' }
+    foreach ($name in 'bnetserver.conf', 'worldserver.conf') {
+        $path = Join-Path $ServerDir $name
+        $dist = "$path.dist"
+        if (-not (Test-Path -LiteralPath $path) -or -not (Test-Path -LiteralPath $dist)) { continue }
+        $lines = @(Get-Content -LiteralPath $path -ErrorAction Stop)
+        if (@($lines | Where-Object { $_ -match '^\s*\[\s*\w+\s*\]' }).Count) { continue }
+        $keep = [ordered]@{}
+        # the folder paths come from this folder (make-tester-configs.ps1), not from the broken file: it may be from before a move
+        $paths = 'SourceDirectory', 'MySQLExecutable', 'DataDir', 'CertificatesFile', 'PrivateKeyFile'
+        foreach ($l in $lines) { if ($l -match '^\s*([A-Za-z0-9_.]+)\s*=\s*(.*?)\s*$' -and $paths -notcontains $Matches[1]) { $keep[$Matches[1]] = $Matches[2] } }
+        $aside = "$path.broken-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+        Move-Item -LiteralPath $path $aside -Force
+        try {
+            & (Join-Path $PSScriptRoot 'make-tester-configs.ps1') | Out-Null
+            if (-not (Test-Path -LiteralPath $path)) { throw "make-tester-configs.ps1 did not write $name" }
+        } catch {
+            Move-Item -LiteralPath $aside $path -Force
+            Write-Warning "$name has no [$($section[$name])] line, so the server ignores it, and it could not be written again: $($_.Exception.Message). Run Install.cmd once; it keeps your characters and bots."
+            continue
+        }
+        $text = @(Get-Content -LiteralPath $path)
+        foreach ($k in $keep.Keys) {
+            $hit = $false
+            $text = @(foreach ($l in $text) { if (-not $hit -and $l -match ('^\s*' + [regex]::Escape($k) + '\s*=')) { $hit = $true; "$k = $($keep[$k])" } else { $l } })
+            if (-not $hit) { $text += "$k = $($keep[$k])" }
+        }
+        [IO.File]::WriteAllLines($path, [string[]]$text, (New-Object Text.UTF8Encoding $false))
+        "$name had no [$($section[$name])] line, so the server could not read it. It was written again from $name.dist with this install's settings (the old one is $(Split-Path $aside -Leaf))."
+    }
+}
+
 # The network limits the 0.1.25 server reads (connections per address, the login timeouts and the Battle.net
 # requests per second) are missing from the settings files of
 # installs made before them, and the server logs a "Missing name ..." line for each one on every connection. The defaults are used

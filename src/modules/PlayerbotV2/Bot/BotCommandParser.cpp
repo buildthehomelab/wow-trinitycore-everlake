@@ -1,5 +1,6 @@
 ﻿#include "BotCommandParser.h"
 #include "Api/BotLanguage.h"
+#include "GroupOrderText.h"   // ClassifyGroupOrder: which refused whispers get an answer
 #include "GroupControl.h"
 #include "BotIntent.h"
 #include "BotIntentEmitter.h"
@@ -2339,6 +2340,40 @@ bool BotCommandParser::DispatchSingle(Player* sender, Player* bot, std::string c
     // per bot (whispered chatter reaches here too). Chat handlers can run on map-update threads.
     bool const authorized = IsAuthorized(sender, bot);
     bool const handled = authorized && DispatchSingleImpl(sender, bot, msg);
+    // A whispered order the bot may not take was dropped without a word, so the player could not tell it from a broken command
+    // (Gremloc 11-08: "gear" and "equip upgrades" got no answer). Say why, for the order words only (small talk still goes to the
+    // chat reactor), at most once per 10 s per bot and player.
+    if (!authorized && direct && sender->GetSession() && !Services::Registry().has(sender->GetGUID().GetCounter()))
+    {
+        std::optional<std::string> const order = ::Playerbot::V2::ClassifyGroupOrder(msg, /*owner_words*/ true);
+        if (order && *order != "help" && *order != "who")
+        {
+            static std::mutex s_refuse_mutex;
+            static std::unordered_map<uint64, uint32> s_refused_ms;   // (bot << 32) ^ sender -> when told
+            uint32 const now = GameTime::GetGameTimeMS();
+            uint64 const key = (bot->GetGUID().GetCounter() << 32) ^ sender->GetGUID().GetCounter();
+            bool tell = false;
+            {
+                std::lock_guard<std::mutex> lock(s_refuse_mutex);
+                if (s_refused_ms.size() > 4096) s_refused_ms.clear();
+                uint32& last = s_refused_ms[key];
+                if (last == 0 || now - last >= 10000u)
+                {
+                    last = now ? now : 1u;
+                    tell = true;
+                }
+            }
+            if (tell)
+            {
+                bool const owned = Services::Owners().GetOwner(bot->GetGUID().GetCounter()).account_id != 0;
+                Push(bot, WhisperIntent{sender->GetName(), owned ? std::string("sorry, i only take orders from the player i belong to")
+                                                                 : std::string("i only take orders from my group, invite me first")});
+            }
+            TC_LOG_INFO("playerbot.v2", "[owner_order] {} from {} via {}: \"{}\" -> refused (not the owner), told", bot->GetName(),
+                        sender->GetName(), via ? via : "?", msg);
+            return true;
+        }
+    }
     if (handled && direct && t_whisper_replies == 0)
         ConfirmWhisperOrder(sender, bot, Normalize(msg));
     if (!handled)
@@ -2374,8 +2409,22 @@ static bool OrderEquip(Player* sender, Player* bot, std::string const& n)
         arg = n.substr(5);
     std::vector<::Playerbot::V2::Gear::EquipOrderPick> picks;
     std::string const reply = ::Playerbot::V2::Gear::PlanEquipOrder(*snap, bot->GetName(), arg, picks);
+    // A named piece ("equip <item>") is the player's choice: the auto-equip rules keep it on (BotAI::keep_worn), else they put the
+    // old piece back on a few minutes later when their score likes it more. "equip upgrades" follows the score, so nothing to keep.
+    std::string a = arg;
+    while (!a.empty() && a.front() == ' ') a.erase(a.begin());
+    while (!a.empty() && a.back() == ' ') a.pop_back();
+    // The same words PlanEquipOrder reads as "wear the upgrades".
+    bool const upgrades = a.empty() || a == "upgrades" || a == "upgrade" || a == "best" || a == "best gear" || a == "your best gear" ||
+                          a == "all" || a == "everything";
+    bool const named = !upgrades && picks.size() == 1;
+    BotAI* ai = named ? Services::Registry().ai(bot->GetGUID().GetCounter()) : nullptr;
     for (auto const& pk : picks)
+    {
         Push(bot, EquipItemIntent{ pk.bag, pk.slot, pk.to_slot });
+        if (ai)
+            ai->keep_worn(pk.to_slot, pk.entry);
+    }
     Push(bot, WhisperIntent{sender->GetName(), reply});
     TC_LOG_INFO("playerbot.v2", "[owner_order] [gear] {} <- {}: \"{}\" -> {} swap(s)", bot->GetName(), sender->GetName(), n, picks.size());
     return true;

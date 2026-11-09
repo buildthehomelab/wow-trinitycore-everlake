@@ -315,6 +315,24 @@ TEST_CASE("BotTrade: reagents of a recipe the bot knows, from a group mate, are 
     CHECK(Decide(mixed).act == Act::Wait);
 }
 
+TEST_CASE("BotTrade: a group mate's gear for a later level is a gift, not bought", "[bottrade]")
+{
+    View v;
+    v.gift_partner = true;
+    Line piece = L(4, 1, 1500);                        // the bot is a few levels short of it
+    piece.later = true;
+    v.his = { piece };
+    v.his_accepted = true;
+    Action const a = Decide(v);
+    CHECK(a.act == Act::Accept);
+    CHECK(a.money == 0);
+
+    View stranger;                                     // from a stranger it is still goods at the vendor price
+    stranger.his = { piece };
+    stranger.bot_gold = 100000;
+    CHECK(Decide(stranger).act == Act::SetMoney);
+}
+
 TEST_CASE("BotTrade: a finished craft order is put in the window for the requester", "[bottrade]")
 {
     View v;
@@ -329,6 +347,35 @@ TEST_CASE("BotTrade: a finished craft order is put in the window for the request
     CHECK(Decide(v).act == Act::Accept);                     // handed over for nothing once he accepts
     v.my_accepted = true;
     CHECK(Decide(v).act == Act::Wait);
+}
+
+TEST_CASE("BotTrade: what the owner asked for goes in one by one, then the bot accepts", "[bottrade]")
+{
+    View v;
+    v.gift_partner = true;
+    v.has_delivery = true;
+    v.delivery_present = true;
+    v.delivery_left = 3;                                     // the bot opened the window: food, a potion, a bag
+    CHECK(Decide(v).act == Act::AddDelivery);
+    v.mine = { L(4599, 20, 0) };
+    v.delivery_left = 2;
+    CHECK(Decide(v).act == Act::AddDelivery);
+    v.mine.push_back(L(929, 5, 0));
+    v.delivery_left = 1;
+    CHECK(Decide(v).act == Act::AddDelivery);
+    v.mine.push_back(L(4500, 1, 0));
+    v.delivery_left = 0;
+    CHECK(Decide(v).act == Act::Wait);                       // all in: waits for him
+    v.his_accepted = true;
+    CHECK(Decide(v).act == Act::Accept);
+
+    View full;                                               // six slots taken: what fits goes
+    full.has_delivery = true;
+    full.delivery_present = true;
+    full.delivery_left = 2;
+    full.mine.assign(kTradeItemSlots, L(4599, 1, 0));
+    full.his_accepted = true;
+    CHECK(Decide(full).act == Act::Accept);
 }
 
 TEST_CASE("BotTrade: a delivery that is gone closes the window", "[bottrade]")

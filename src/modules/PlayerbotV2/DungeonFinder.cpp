@@ -263,6 +263,11 @@ bool DungeonFinderQueue(Player* leader, std::string const& what, Playerbot::Role
         msg += " Your group is complete: in you go.";
     if (leader->GetLevel() < act.levelMin)
         msg += " Your bots are your level, below the dungeon's.";
+    // a role the class cannot play was not counted (LfgRoleForClass): say so, else the player waits for a tank that is them
+    uint8 const asked = ownRole == Playerbot::Role::Tank ? kLfgRoleTank : ownRole == Playerbot::Role::Healer ? kLfgRoleHealer : 0;
+    if (asked && !LfgRoleForClass(leader->GetClass(), asked))
+        msg += std::string(" Your class cannot ") + (asked == kLfgRoleTank ? "tank" : "heal") + ", so you count as damage and a bot brings the "
+             + (asked == kLfgRoleTank ? "tank" : "healer") + ".";
     msg += report;
     return true;
 }
