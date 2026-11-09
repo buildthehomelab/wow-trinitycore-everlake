@@ -90,16 +90,28 @@ constexpr uint32 GuildRetailServerGroup = 0x51;
 //    ACCOUNT_DATA_TIMES 0x1B6, SERVER_TIME_OFFSET 0x1C0, TUTORIAL_FLAGS 0x269, MIRROR_VARS 0x372, BATTLENET_RESPONSE 0x2B0;
 //    the inserted message is index 0x98: the official 70338 sniff has PARTY_UPDATE (0x97) unchanged at 0x470097
 // Classic.OpcodeGroupShift: -1 (default) = from the realm's game build (realmlist.gamebuild >= 70291 -> 1), or 0 / 1.
+static uint32 GroupShiftForBuild(uint32 build)
+{
+    static int32 const configured = sConfigMgr->GetIntDefault("Classic.OpcodeGroupShift", -1);
+    if (configured >= 0)
+        return uint32(configured);
+    return build >= 70291 ? 1 : 0;
+}
+
+// the realm's game build (realmlist.gamebuild), read once
+static uint32 CurrentRealmBuild()
+{
+    static uint32 const build = []() -> uint32
+    {
+        std::shared_ptr<Realm const> realm = sRealmList->GetCurrentRealm();
+        return realm ? realm->Build : 0;
+    }();
+    return build;
+}
+
 static uint32 ExtraGroupShift()
 {
-    static uint32 const shift = []() -> uint32
-    {
-        int32 configured = sConfigMgr->GetIntDefault("Classic.OpcodeGroupShift", -1);
-        if (configured >= 0)
-            return uint32(configured);
-        std::shared_ptr<Realm const> realm = sRealmList->GetCurrentRealm();
-        return realm && realm->Build >= 70291 ? 1 : 0;
-    }();
+    static uint32 const shift = GroupShiftForBuild(CurrentRealmBuild());
     return shift;
 }
 
@@ -130,7 +142,12 @@ bool ClassicOpcodes::IsBuild70790OrLater()
 
 uint32 ClassicOpcodes::TranslateClientOpcode(uint32 classicOpcode)
 {
-    if (uint32 shift = ExtraGroupShift())
+    return TranslateClientOpcodeForBuild(classicOpcode, CurrentRealmBuild());
+}
+
+uint32 ClassicOpcodes::TranslateClientOpcodeForBuild(uint32 classicOpcode, uint32 build)
+{
+    if (uint32 shift = GroupShiftForBuild(build))
     {
         // client: the connection group (70245 0x45) moved to 0x46
         if (OpcodeGroup(classicOpcode) == ClassicClientConnectionGroup + shift)
@@ -140,7 +157,7 @@ uint32 ClassicOpcodes::TranslateClientOpcode(uint32 classicOpcode)
         // Classic.ClientMainGroupInsertIndex70790 = the 70790 index of the first new message; the two new ones stay unknown.
         // Packet logs of the client: CREATE_CHARACTER (0x70, 96 bytes with the name) did not move and the name check (0x71) came
         // at 0x73, so the new messages are 0x71 and 0x72. 0x63 would turn CREATE_CHARACTER into PET_BATTLE_REPLACE_FRONT_PET (0x6E).
-        if (OpcodeGroup(classicOpcode) == ClassicClientConnectionGroup - 1 && IsBuild70790OrLater())
+        if (OpcodeGroup(classicOpcode) == ClassicClientConnectionGroup - 1 && build >= 70790)
         {
             static uint32 const clientInsertIndex70790 = uint32(sConfigMgr->GetIntDefault("Classic.ClientMainGroupInsertIndex70790", 0x71));
             uint32 index = classicOpcode & 0xFFFF;
@@ -162,8 +179,13 @@ uint32 ClassicOpcodes::TranslateClientOpcode(uint32 classicOpcode)
 
 uint32 ClassicOpcodes::TranslateServerOpcode(uint32 coreOpcode)
 {
+    return TranslateServerOpcodeForBuild(coreOpcode, CurrentRealmBuild());
+}
+
+uint32 ClassicOpcodes::TranslateServerOpcodeForBuild(uint32 coreOpcode, uint32 build)
+{
     uint32 classicOpcode = TranslateServerOpcode70245(coreOpcode);
-    if (uint32 shift = ExtraGroupShift())
+    if (uint32 shift = GroupShiftForBuild(build))
     {
         uint32 group = OpcodeGroup(classicOpcode);
         // Classic.MainGroupInsertIndex = the first 70245 main-group index that moved (0x98, see above)
@@ -176,7 +198,7 @@ uint32 ClassicOpcodes::TranslateServerOpcode(uint32 coreOpcode)
         // result did not reach the client (the mail window stays frozen after Send), with 0xED it did. So 0xDF..0xEC keep their
         // numbers and Classic.MainGroupInsertIndex70790 = 0xED, the first moved index in the numbering above (70291..70658)
         static uint32 const insertIndex70790 = uint32(sConfigMgr->GetIntDefault("Classic.MainGroupInsertIndex70790", 0xED));
-        if (group == FirstRetailServerGroup + 1 && IsBuild70790OrLater() && (classicOpcode & 0xFFFF) >= insertIndex70790)
+        if (group == FirstRetailServerGroup + 1 && build >= 70790 && (classicOpcode & 0xFFFF) >= insertIndex70790)
             ++classicOpcode;
         if (group >= FirstRetailServerGroup + 1 && group <= LastRetailServerGroup + 1)
             classicOpcode = WithOpcodeGroup(classicOpcode, group + shift);

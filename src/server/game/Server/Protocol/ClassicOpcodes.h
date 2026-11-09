@@ -31,6 +31,10 @@ namespace ClassicOpcodes
     /// core OpcodeServer value -> client number
     TC_GAME_API uint32 TranslateServerOpcode(uint32 coreOpcode);
 
+    /// the same for a given client build (realmlist.gamebuild); the two above pass the realm's build
+    TC_GAME_API uint32 TranslateClientOpcodeForBuild(uint32 classicOpcode, uint32 build);
+    TC_GAME_API uint32 TranslateServerOpcodeForBuild(uint32 coreOpcode, uint32 build);
+
     /// the same in the numbering of client 70245 (the tables); the two above add the newer builds' group shift
     TC_GAME_API uint32 TranslateClientOpcode70245(uint32 classicOpcode);
     TC_GAME_API uint32 TranslateServerOpcode70245(uint32 coreOpcode);
