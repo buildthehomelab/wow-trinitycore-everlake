@@ -249,7 +249,7 @@ void AreaTriggerDataStore::LoadAreaTriggerTemplates()
             }
 
             createProperties.MaxUnits              = fields.MaxUnits().GetInt32OrNull();
-            if (createProperties.MaxUnits && *createProperties.MaxSummons < 1)
+            if (createProperties.MaxUnits && *createProperties.MaxUnits < 1)
             {
                 TC_LOG_ERROR("sql.sql", "Table `areatrigger_create_properties` has AreaTriggerCreatePropertiesId (Id: {}, IsCustom: {}) with invalid MaxUnits {} (must be NULL or greater than 0), set to none.",
                     createPropertiesId.Id, uint32(createPropertiesId.IsCustom), *createProperties.MaxUnits);
