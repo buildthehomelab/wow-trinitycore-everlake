@@ -998,6 +998,14 @@ void AreaTrigger::SearchUnitInBoundedPlane(UF::AreaTriggerBoundedPlane const& bo
 #endif
 }
 
+std::ptrdiff_t AreaTrigger::GetEnteringUnitsInsideLimit(Optional<int32> maxUnits, std::ptrdiff_t insideUnits, std::ptrdiff_t enteringUnits)
+{
+    if (!maxUnits)
+        return enteringUnits;
+
+    return std::clamp<std::ptrdiff_t>(*maxUnits - insideUnits, 0, enteringUnits);
+}
+
 void AreaTrigger::HandleUnitEnterExit(std::span<Unit*> targetList, AreaTriggerExitReason exitMode)
 {
     GuidUnorderedSet exitUnits(std::move(_insideUnits));
@@ -1012,9 +1020,7 @@ void AreaTrigger::HandleUnitEnterExit(std::span<Unit*> targetList, AreaTriggerEx
             enteringUnits.push_back(unit);
     }
 
-    std::ptrdiff_t enteringUnitsEnd = std::ssize(enteringUnits);
-    if (GetCreateProperties()->MaxUnits)
-        enteringUnitsEnd = std::min(*GetCreateProperties()->MaxUnits - std::ssize(_insideUnits), enteringUnitsEnd);
+    std::ptrdiff_t const enteringUnitsEnd = GetEnteringUnitsInsideLimit(GetCreateProperties()->MaxUnits, std::ssize(_insideUnits), std::ssize(enteringUnits));
 
     for (std::ptrdiff_t i = 0; i < enteringUnitsEnd; ++i)
         _insideUnits.insert(enteringUnits[i]->GetGUID());

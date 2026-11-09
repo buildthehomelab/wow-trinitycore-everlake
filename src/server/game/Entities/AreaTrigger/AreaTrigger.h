@@ -125,6 +125,9 @@ class TC_GAME_API AreaTrigger final : public WorldObject, public GridObject<Area
     public:
         static AreaTrigger* CreateAreaTrigger(AreaTriggerCreatePropertiesId areaTriggerCreatePropertiesId, Position const& pos, int32 duration, Unit* caster, Unit* target, SpellCastVisual spellVisual = { 0, 0 }, SpellInfo const* spellInfo = nullptr, Spell* spell = nullptr, AuraEffect const* aurEff = nullptr);
         static ObjectGuid CreateNewMovementForceId(Map* map, uint32 areaTriggerId);
+        // how many of the units entering this update count as inside: all of them without a MaxUnits limit, else only as
+        // many as the limit has room for after the units already inside (never more than entered, never below 0)
+        static std::ptrdiff_t GetEnteringUnitsInsideLimit(Optional<int32> maxUnits, std::ptrdiff_t insideUnits, std::ptrdiff_t enteringUnits);
         bool LoadFromDB(ObjectGuid::LowType spawnId, Map* map, bool addToMap, bool allowDuplicate);
 
         void Update(uint32 diff) override;
