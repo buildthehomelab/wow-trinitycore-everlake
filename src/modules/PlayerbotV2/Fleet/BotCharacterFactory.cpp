@@ -306,7 +306,7 @@ BotCharacterFactory::Result BotCharacterFactory::Create(
         return {false, "name already in use", {}};
 
     // Everlake: a name a player holds on any realm (in use or within its grace period) is never a bot's
-    if (!NameReservation::CanUse(sNameReservationMgr->Check(normalized, 0)))
+    if (!NameReservation::CanUse(sNameReservationMgr->Check(normalized, "", 0)))
         return {false, "name is reserved by a player (name_reservation)", {}};
 
     // Acquire a slot from the dedicated bot account pool. The new char

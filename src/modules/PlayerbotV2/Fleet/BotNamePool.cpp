@@ -162,7 +162,7 @@ std::string BotNamePool::Acquire(uint8 gender)
         // Everlake: a name a player holds on any realm is skipped. It stays is_used=0 in the table and is looked at
         // again after the next start (the player's grace period may have run out by then).
         uint32 skipped = 0;
-        while (!NameReservation::CanUse(sNameReservationMgr->Check(e.name, 0)))
+        while (!NameReservation::CanUse(sNameReservationMgr->Check(e.name, "", 0)))
         {
             g_name_to_meta.erase(e.name);
             if (++skipped > 64 || bucket->empty())
@@ -265,7 +265,7 @@ bool RenameOfflineBot(ObjectGuid guid, std::string const& oldName, uint8 gender)
     std::string newName = BotNamePool::Acquire(gender);
     if (newName.empty())
         newName = BotComposition::RollUniqueName();
-    if (newName.empty() || !NameReservation::CanUse(sNameReservationMgr->Check(newName, 0)))
+    if (newName.empty() || !NameReservation::CanUse(sNameReservationMgr->Check(newName, "", 0)))
         return false;
 
     CharacterDatabase.DirectPExecute("UPDATE characters SET name = '{}' WHERE guid = {} AND online = 0",

@@ -19,8 +19,10 @@
 #include "CharacterCache.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
+#include "FullName.h"
 #include "Log.h"
 #include "RealmList.h"
+#include "StringFormat.h"
 #include <algorithm>
 
 namespace
@@ -37,11 +39,21 @@ namespace
         return sRealmList->GetCurrentRealmId().Realm;
     }
 
-    // Frees `escapedName` (sets freed_at) when no character on any realm uses it any more
-    void AppendFreeIfUnused(LoginDatabaseTransaction& trans, std::string const& escapedName)
+    // The full name a reservation is for: name (normalised, compared byte for byte) + surname (compared without regard to
+    // case by its column's collation, as characters.surname is)
+    std::string FullNameWhere(char const* table, std::string const& escapedName, std::string const& escapedSurname)
     {
-        trans->PAppend("UPDATE `name_reservation` r SET r.`freed_at` = NOW() WHERE r.`name` = '{}' AND r.`freed_at` IS NULL "
-            "AND NOT EXISTS (SELECT 1 FROM `name_reservation_character` c WHERE c.`name` = r.`name`)", escapedName);
+        return Trinity::StringFormat("{0}.`name` = '{1}' AND {0}.`surname` = '{2}'", table, escapedName, escapedSurname);
+    }
+
+    // a character row uses reservation r
+    constexpr char const* UsedBy = "EXISTS (SELECT 1 FROM `name_reservation_character` c WHERE c.`name` = r.`name` AND c.`surname` = r.`surname`)";
+
+    // Frees a full name (sets freed_at) when no character on any realm uses it any more
+    void AppendFreeIfUnused(LoginDatabaseTransaction& trans, std::string const& escapedName, std::string const& escapedSurname)
+    {
+        trans->PAppend("UPDATE `name_reservation` r SET r.`freed_at` = NOW() WHERE {} AND r.`freed_at` IS NULL AND NOT {}",
+            FullNameWhere("r", escapedName, escapedSurname), UsedBy);
     }
 }
 
@@ -80,11 +92,11 @@ bool NameReservationMgr::EnsureTables()
     return false;
 }
 
-bool NameReservationMgr::ReadRow(std::string const& escapedName, NameReservation::Row& row, time_t& created, time_t& now)
+bool NameReservationMgr::ReadRow(std::string const& escapedName, std::string const& escapedSurname, NameReservation::Row& row, time_t& created, time_t& now)
 {
     QueryResult result = LoginDatabase.PQuery("SELECT r.`battlenet_account`, IFNULL(UNIX_TIMESTAMP(r.`freed_at`), 0), "
-        "UNIX_TIMESTAMP(r.`created`), (SELECT COUNT(*) FROM `name_reservation_character` c WHERE c.`name` = r.`name`), "
-        "UNIX_TIMESTAMP() FROM `name_reservation` r WHERE r.`name` = '{}'", escapedName);
+        "UNIX_TIMESTAMP(r.`created`), (SELECT COUNT(*) FROM `name_reservation_character` c WHERE c.`name` = r.`name` AND c.`surname` = r.`surname`), "
+        "UNIX_TIMESTAMP() FROM `name_reservation` r WHERE {}", FullNameWhere("r", escapedName, escapedSurname));
 
     row = NameReservation::Row();
     created = 0;
@@ -102,10 +114,11 @@ bool NameReservationMgr::ReadRow(std::string const& escapedName, NameReservation
     return true;
 }
 
-NameReservationMgr::Result NameReservationMgr::Reserve(std::string const& name, uint32 gameAccountId, uint32 bnetAccountId, Ticket& ticket)
+NameReservationMgr::Result NameReservationMgr::Reserve(std::string const& name, std::string const& surname, uint32 gameAccountId, uint32 bnetAccountId, Ticket& ticket)
 {
     ticket = Ticket();
     ticket.Name = name;
+    ticket.Surname = surname;
     ticket.Account = bnetAccountId;
 
     if (!IsEnabled() || IsExempt(gameAccountId))
@@ -117,7 +130,7 @@ NameReservationMgr::Result NameReservationMgr::Reserve(std::string const& name, 
     // every player account belongs to a Battle.net account; one without has no identity to reserve for
     if (!bnetAccountId)
     {
-        TC_LOG_ERROR("entities.player.character", "NameReservation: no Battle.net account for a character named {}: refused", name);
+        TC_LOG_ERROR("entities.player.character", "NameReservation: no Battle.net account for a character named {} {}: refused", name, surname);
         return Result::Error;
     }
 
@@ -125,9 +138,10 @@ NameReservationMgr::Result NameReservationMgr::Reserve(std::string const& name, 
         return Result::Error;
 
     std::string escapedName = Escaped(name);
+    std::string escapedSurname = Escaped(surname);
     NameReservation::Row row;
     time_t created = 0, now = 0;
-    ReadRow(escapedName, row, created, now);
+    ReadRow(escapedName, escapedSurname, row, created, now);
 
     ticket.Claim = NameReservation::Evaluate(row, bnetAccountId, now, GetGracePeriod());
     ticket.PrevOwner = row.Owner;
@@ -138,23 +152,23 @@ NameReservationMgr::Result NameReservationMgr::Reserve(std::string const& name, 
     {
         case NameReservation::Claim::Free:
             // the primary key decides between two realms inserting at once: the loser's insert is ignored
-            LoginDatabase.DirectPExecute("INSERT IGNORE INTO `name_reservation` (`name`, `battlenet_account`, `created`) VALUES ('{}', {}, NOW())",
-                escapedName, bnetAccountId);
+            LoginDatabase.DirectPExecute("INSERT IGNORE INTO `name_reservation` (`name`, `surname`, `battlenet_account`, `created`) VALUES ('{}', '{}', {}, NOW())",
+                escapedName, escapedSurname, bnetAccountId);
             ticket.Changed = true;
             break;
         case NameReservation::Claim::Own:
             if (row.FreedAt)
             {
-                LoginDatabase.DirectPExecute("UPDATE `name_reservation` SET `freed_at` = NULL WHERE `name` = '{}' AND `battlenet_account` = {}",
-                    escapedName, bnetAccountId);
+                LoginDatabase.DirectPExecute("UPDATE `name_reservation` r SET r.`freed_at` = NULL WHERE {} AND r.`battlenet_account` = {}",
+                    FullNameWhere("r", escapedName, escapedSurname), bnetAccountId);
                 ticket.Changed = true;
             }
             break;
         case NameReservation::Claim::Expired:
             // compare-and-set on the row as read: only one realm's takeover matches
-            LoginDatabase.DirectPExecute("UPDATE `name_reservation` SET `battlenet_account` = {}, `created` = NOW(), `freed_at` = NULL "
-                "WHERE `name` = '{}' AND `battlenet_account` = {} AND UNIX_TIMESTAMP(`freed_at`) = {}",
-                bnetAccountId, escapedName, row.Owner, uint64(row.FreedAt));
+            LoginDatabase.DirectPExecute("UPDATE `name_reservation` r SET r.`battlenet_account` = {}, r.`created` = NOW(), r.`freed_at` = NULL "
+                "WHERE {} AND r.`battlenet_account` = {} AND UNIX_TIMESTAMP(r.`freed_at`) = {}",
+                bnetAccountId, FullNameWhere("r", escapedName, escapedSurname), row.Owner, uint64(row.FreedAt));
             ticket.Changed = true;
             break;
         case NameReservation::Claim::Taken:
@@ -163,9 +177,9 @@ NameReservationMgr::Result NameReservationMgr::Reserve(std::string const& name, 
 
     // read back: whoever's write landed owns the row
     NameReservation::Row after;
-    if (!ReadRow(escapedName, after, created, now))
+    if (!ReadRow(escapedName, escapedSurname, after, created, now))
     {
-        TC_LOG_ERROR("entities.player.character", "NameReservation: the row for {} is missing after reserving it: refused", name);
+        TC_LOG_ERROR("entities.player.character", "NameReservation: the row for {} {} is missing after reserving it: refused", name, surname);
         ticket.Changed = false;
         return Result::Error;
     }
@@ -184,28 +198,28 @@ void NameReservationMgr::Rollback(Ticket const& ticket)
     if (!ticket.Changed || !IsEnabled())
         return;
 
-    std::string escapedName = Escaped(ticket.Name);
-    std::string const unused = "NOT EXISTS (SELECT 1 FROM `name_reservation_character` c WHERE c.`name` = r.`name`)";
+    std::string const fullName = FullNameWhere("r", Escaped(ticket.Name), Escaped(ticket.Surname));
+    std::string const unused = Trinity::StringFormat("NOT {}", UsedBy);
     switch (ticket.Claim)
     {
         case NameReservation::Claim::Free:
-            LoginDatabase.DirectPExecute("DELETE r FROM `name_reservation` r WHERE r.`name` = '{}' AND r.`battlenet_account` = {} "
-                "AND r.`freed_at` IS NULL AND {}", escapedName, ticket.Account, unused);
+            LoginDatabase.DirectPExecute("DELETE r FROM `name_reservation` r WHERE {} AND r.`battlenet_account` = {} "
+                "AND r.`freed_at` IS NULL AND {}", fullName, ticket.Account, unused);
             break;
         case NameReservation::Claim::Own:
-            LoginDatabase.DirectPExecute("UPDATE `name_reservation` r SET r.`freed_at` = FROM_UNIXTIME({}) WHERE r.`name` = '{}' "
-                "AND r.`battlenet_account` = {} AND r.`freed_at` IS NULL AND {}", uint64(ticket.PrevFreedAt), escapedName, ticket.Account, unused);
+            LoginDatabase.DirectPExecute("UPDATE `name_reservation` r SET r.`freed_at` = FROM_UNIXTIME({}) WHERE {} "
+                "AND r.`battlenet_account` = {} AND r.`freed_at` IS NULL AND {}", uint64(ticket.PrevFreedAt), fullName, ticket.Account, unused);
             break;
         case NameReservation::Claim::Expired:
             LoginDatabase.DirectPExecute("UPDATE `name_reservation` r SET r.`battlenet_account` = {}, r.`created` = FROM_UNIXTIME({}), "
-                "r.`freed_at` = FROM_UNIXTIME({}) WHERE r.`name` = '{}' AND r.`battlenet_account` = {} AND r.`freed_at` IS NULL AND {}",
-                ticket.PrevOwner, uint64(ticket.PrevCreated), uint64(ticket.PrevFreedAt), escapedName, ticket.Account, unused);
+                "r.`freed_at` = FROM_UNIXTIME({}) WHERE {} AND r.`battlenet_account` = {} AND r.`freed_at` IS NULL AND {}",
+                ticket.PrevOwner, uint64(ticket.PrevCreated), uint64(ticket.PrevFreedAt), fullName, ticket.Account, unused);
             break;
         default:
             break;
     }
 
-    TC_LOG_INFO("entities.player.character", "NameReservation: {} released again (the character was not saved)", ticket.Name);
+    TC_LOG_INFO("entities.player.character", "NameReservation: {} {} released again (the character was not saved)", ticket.Name, ticket.Surname);
 }
 
 void NameReservationMgr::Attach(std::string const& name, std::string const& surname, uint32 gameAccountId, uint32 bnetAccountId, ObjectGuid::LowType guid)
@@ -215,26 +229,32 @@ void NameReservationMgr::Attach(std::string const& name, std::string const& surn
 
     uint32 realm = CurrentRealm();
     std::string escapedName = Escaped(name);
+    std::string escapedSurname = Escaped(surname);
 
-    std::string previous;
-    if (QueryResult result = LoginDatabase.PQuery("SELECT `name` FROM `name_reservation_character` WHERE `realm_id` = {} AND `character_guid` = {}",
+    bool hadPrevious = false;
+    std::string previousName, previousSurname;
+    if (QueryResult result = LoginDatabase.PQuery("SELECT `name`, `surname` FROM `name_reservation_character` WHERE `realm_id` = {} AND `character_guid` = {}",
         realm, guid))
-        previous = (*result)[0].GetString();
+    {
+        hadPrevious = true;
+        previousName = (*result)[0].GetString();
+        previousSurname = (*result)[1].GetString();
+    }
 
     LoginDatabaseTransaction trans = LoginDatabase.BeginTransaction();
     // the row exists (Reserve); the insert only covers a rollback by a concurrent failed create of the same account.
     // Columns change only while the row is this account's.
     trans->PAppend("INSERT INTO `name_reservation` (`name`, `surname`, `battlenet_account`, `realm_id`, `character_guid`, `created`) "
         "VALUES ('{0}', '{1}', {2}, {3}, {4}, NOW()) ON DUPLICATE KEY UPDATE "
-        "`surname` = IF(`battlenet_account` = {2}, VALUES(`surname`), `surname`), "
         "`realm_id` = IF(`battlenet_account` = {2}, VALUES(`realm_id`), `realm_id`), "
         "`character_guid` = IF(`battlenet_account` = {2}, VALUES(`character_guid`), `character_guid`), "
         "`freed_at` = IF(`battlenet_account` = {2}, NULL, `freed_at`)",
-        escapedName, Escaped(surname), bnetAccountId, realm, guid);
-    trans->PAppend("REPLACE INTO `name_reservation_character` (`realm_id`, `character_guid`, `name`) VALUES ({}, {}, '{}')",
-        realm, guid, escapedName);
-    if (!previous.empty() && previous != name)
-        AppendFreeIfUnused(trans, Escaped(previous));
+        escapedName, escapedSurname, bnetAccountId, realm, guid);
+    trans->PAppend("REPLACE INTO `name_reservation_character` (`realm_id`, `character_guid`, `name`, `surname`) VALUES ({}, {}, '{}', '{}')",
+        realm, guid, escapedName, escapedSurname);
+    // a new full name (a rename, or a new surname) frees the old one once no character uses it
+    if (hadPrevious && (previousName != name || !Trinity::FullName::SurnameEquals(previousSurname, surname)))
+        AppendFreeIfUnused(trans, Escaped(previousName), Escaped(previousSurname));
     LoginDatabase.CommitTransaction(trans);
 }
 
@@ -244,19 +264,20 @@ void NameReservationMgr::Release(ObjectGuid::LowType guid)
         return;
 
     uint32 realm = CurrentRealm();
-    QueryResult result = LoginDatabase.PQuery("SELECT `name` FROM `name_reservation_character` WHERE `realm_id` = {} AND `character_guid` = {}",
+    QueryResult result = LoginDatabase.PQuery("SELECT `name`, `surname` FROM `name_reservation_character` WHERE `realm_id` = {} AND `character_guid` = {}",
         realm, guid);
     if (!result)
         return;     // not reserved: a bot, or a character from before reservations (run the back-fill)
 
     std::string escapedName = Escaped((*result)[0].GetString());
+    std::string escapedSurname = Escaped((*result)[1].GetString());
     LoginDatabaseTransaction trans = LoginDatabase.BeginTransaction();
     trans->PAppend("DELETE FROM `name_reservation_character` WHERE `realm_id` = {} AND `character_guid` = {}", realm, guid);
-    AppendFreeIfUnused(trans, escapedName);
+    AppendFreeIfUnused(trans, escapedName, escapedSurname);
     LoginDatabase.CommitTransaction(trans);
 }
 
-NameReservation::Claim NameReservationMgr::Check(std::string const& name, uint32 bnetAccountId)
+NameReservation::Claim NameReservationMgr::Check(std::string const& name, std::string const& surname, uint32 bnetAccountId)
 {
     if (!IsEnabled())
         return NameReservation::Claim::Free;
@@ -265,7 +286,7 @@ NameReservation::Claim NameReservationMgr::Check(std::string const& name, uint32
 
     NameReservation::Row row;
     time_t created = 0, now = 0;
-    ReadRow(Escaped(name), row, created, now);
+    ReadRow(Escaped(name), Escaped(surname), row, created, now);
     return NameReservation::Evaluate(row, bnetAccountId, now, GetGracePeriod());
 }
 
@@ -289,9 +310,10 @@ std::unordered_set<std::string> NameReservationMgr::FindHeld(std::vector<std::st
             list += '\'' + Escaped(names[i]) + '\'';
         }
 
+        // bots have no surname: the full names asked about are these names with an empty surname
         QueryResult result = LoginDatabase.PQuery("SELECT r.`name`, r.`battlenet_account`, IFNULL(UNIX_TIMESTAMP(r.`freed_at`), 0), "
-            "(SELECT COUNT(*) FROM `name_reservation_character` c WHERE c.`name` = r.`name`), UNIX_TIMESTAMP() "
-            "FROM `name_reservation` r WHERE r.`name` IN ({})", list);
+            "(SELECT COUNT(*) FROM `name_reservation_character` c WHERE c.`name` = r.`name` AND c.`surname` = r.`surname`), UNIX_TIMESTAMP() "
+            "FROM `name_reservation` r WHERE r.`name` IN ({}) AND r.`surname` = ''", list);
         if (!result)
             continue;
 
@@ -310,17 +332,20 @@ std::unordered_set<std::string> NameReservationMgr::FindHeld(std::vector<std::st
     return held;
 }
 
-bool NameReservationMgr::TryYield(std::string const& name, uint32 bnetAccountId)
+bool NameReservationMgr::TryYield(std::string const& name, std::string const& surname, uint32 bnetAccountId)
 {
     if (!_yieldHandler || !IsEnabled())
         return false;
 
-    ObjectGuid holder = sCharacterCache->GetCharacterGuidByName(name);
-    if (holder.IsEmpty())
+    // the character with exactly this full name (bots have none, so only a player asking for "Bob" with no surname
+    // can take a bot's name)
+    CharacterCacheEntry const* holderEntry = sCharacterCache->GetCharacterCacheByFullName(name, surname);
+    if (!holderEntry)
         return false;
+    ObjectGuid holder = holderEntry->Guid;
 
     // only for a player who could have the name: never rename a bot for someone who is refused anyway
-    if (!NameReservation::CanUse(Check(name, bnetAccountId)))
+    if (!NameReservation::CanUse(Check(name, surname, bnetAccountId)))
         return false;
 
     return _yieldHandler(holder, name);

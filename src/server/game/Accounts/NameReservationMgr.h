@@ -27,11 +27,13 @@
 #include <unordered_set>
 #include <vector>
 
-// Everlake: a character name belongs to one Battle.net account on every realm that shares the login database.
+// Everlake: a character's full name ("Ora Swiftwind") belongs to one Battle.net account on every realm that shares the
+// login database. Only the full name is reserved: another account may still be "Ora Brightleaf". The name is the core's
+// normalised form ("Ora"); the surname compares without regard to case, like characters.surname.
 //
-// auth.name_reservation holds one row per name (the core's normalised form, "Ora"): the owning Battle.net account,
-// the surname, the realm and character that used it last, when it was reserved and when it was freed.
-// auth.name_reservation_character lists every character on every realm that uses a name now.
+// auth.name_reservation holds one row per full name: the owning Battle.net account, the realm and character that used it
+// last, when it was reserved and when it was freed. auth.name_reservation_character lists every character on every
+// realm that uses a full name now.
 //
 // Character create, rename, customize, faction change, undelete and dump load call Reserve() before the character
 // takes the name, then Attach() once it is saved (or Rollback() if it failed). Deleting a character calls Release():
@@ -51,6 +53,7 @@ public:
     struct Ticket
     {
         std::string Name;
+        std::string Surname;
         uint32 Account = 0;
         NameReservation::Claim Claim = NameReservation::Claim::Taken;
         bool Changed = false;           // Reserve wrote to the row
@@ -71,35 +74,36 @@ public:
     bool IsEnabled() const;                 // NameReservation.Enable
     time_t GetGracePeriod() const;          // NameReservation.GracePeriod, seconds
 
-    // Claims `name` (normalised) for `bnetAccountId` before a character takes it. Atomic across realms: the row is
-    // written with a compare-and-set on its unique key and read back.
+    // Claims the full name `name` (normalised) + `surname` for `bnetAccountId` before a character takes it. Atomic across
+    // realms: the row is written with a compare-and-set on its unique key and read back.
     // `gameAccountId` only decides whether the account is exempt (bots).
-    Result Reserve(std::string const& name, uint32 gameAccountId, uint32 bnetAccountId, Ticket& ticket);
+    Result Reserve(std::string const& name, std::string const& surname, uint32 gameAccountId, uint32 bnetAccountId, Ticket& ticket);
     // Undoes Reserve() when the character was not saved. Leaves the row alone if a character uses it meanwhile.
     void Rollback(Ticket const& ticket);
-    // The character `guid` on this realm now uses `name`. A different name it used before is freed when no other
-    // character uses that one.
+    // The character `guid` on this realm now uses the full name `name` + `surname`. A different full name it used before
+    // is freed when no other character uses that one.
     void Attach(std::string const& name, std::string const& surname, uint32 gameAccountId, uint32 bnetAccountId, ObjectGuid::LowType guid);
     // The character `guid` on this realm is gone (deleted or unlinked). Its name is freed when no other character on
     // any realm uses it.
     void Release(ObjectGuid::LowType guid);
 
     // Read only: what Reserve() would answer. bnetAccountId 0 = a bot (only names nobody holds).
-    NameReservation::Claim Check(std::string const& name, uint32 bnetAccountId);
-    // Read only, many names at once (bots at start-up): the ones a bot may not use
+    NameReservation::Claim Check(std::string const& name, std::string const& surname, uint32 bnetAccountId);
+    // Read only, many names at once (bots at start-up, which have no surname): the ones a bot may not use
     std::unordered_set<std::string> FindHeld(std::vector<std::string> const& names);
 
     void SetExemptAccountCheck(ExemptAccountCheck check) { _exemptAccountCheck = std::move(check); }
     bool IsExempt(uint32 gameAccountId) const { return _exemptAccountCheck && _exemptAccountCheck(gameAccountId); }
     void SetYieldHandler(YieldHandler handler) { _yieldHandler = std::move(handler); }
-    // A character on this realm has `name`: if `bnetAccountId` could claim it and the yield handler frees it, true
-    bool TryYield(std::string const& name, uint32 bnetAccountId);
+    // A character on this realm has the full name `name` + `surname`: if `bnetAccountId` could claim it and the yield
+    // handler frees it, true
+    bool TryYield(std::string const& name, std::string const& surname, uint32 bnetAccountId);
 
 private:
     NameReservationMgr() = default;
 
     bool EnsureTables();
-    bool ReadRow(std::string const& escapedName, NameReservation::Row& row, time_t& created, time_t& now);
+    bool ReadRow(std::string const& escapedName, std::string const& escapedSurname, NameReservation::Row& row, time_t& created, time_t& now);
 
     std::atomic<bool> _tablesChecked = false;
     ExemptAccountCheck _exemptAccountCheck;
@@ -117,9 +121,9 @@ public:
     NameReservationGuard& operator=(NameReservationGuard const&) = delete;
     ~NameReservationGuard() { if (_active) sNameReservationMgr->Rollback(_ticket); }
 
-    NameReservationMgr::Result Reserve(std::string const& name, uint32 gameAccountId, uint32 bnetAccountId)
+    NameReservationMgr::Result Reserve(std::string const& name, std::string const& surname, uint32 gameAccountId, uint32 bnetAccountId)
     {
-        NameReservationMgr::Result result = sNameReservationMgr->Reserve(name, gameAccountId, bnetAccountId, _ticket);
+        NameReservationMgr::Result result = sNameReservationMgr->Reserve(name, surname, gameAccountId, bnetAccountId, _ticket);
         _active = result == NameReservationMgr::Result::Reserved;
         return result;
     }

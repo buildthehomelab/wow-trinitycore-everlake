@@ -18,12 +18,14 @@
 #include "CharacterCache.h"
 #include "ArenaTeam.h"
 #include "DatabaseEnv.h"
+#include "FullName.h"
 #include "Log.h"
 #include "MiscPackets.h"
 #include "Player.h"
 #include "Timer.h"
 #include "World.h"
 #include <unordered_map>
+#include <vector>
 
 namespace
 {
@@ -263,18 +265,29 @@ CharacterCacheEntry const* CharacterCache::GetCharacterCacheByGuid(ObjectGuid co
 
 CharacterCacheEntry const* CharacterCache::GetCharacterCacheByName(std::string const& name) const
 {
-    auto itr = _characterCacheByNameStore.find(name);
-    if (itr != _characterCacheByNameStore.end())
-        return itr->second;
+    // "Bob", "bob smith": several characters may be called Bob, only the full name is unique (Trinity::FullName::Pick)
+    Trinity::FullName::Parts parts;
+    if (!Trinity::FullName::Split(name, parts))
+        return nullptr;
 
-    return nullptr;
+    std::vector<CharacterCacheEntry const*> candidates;
+    std::vector<std::string_view> surnames;
+    auto range = _characterCacheByNameStore.equal_range(parts.Name);
+    for (auto itr = range.first; itr != range.second; ++itr)
+    {
+        candidates.push_back(itr->second);
+        surnames.push_back(itr->second->Surname);
+    }
+
+    std::size_t picked = Trinity::FullName::Pick(surnames, parts);
+    return picked < candidates.size() ? candidates[picked] : nullptr;
 }
 
 CharacterCacheEntry const* CharacterCache::GetCharacterCacheByFullName(std::string const& name, std::string const& surname) const
 {
     auto range = _characterCacheByNameStore.equal_range(name);
     for (auto itr = range.first; itr != range.second; ++itr)
-        if (StringEqualI(itr->second->Surname, surname))
+        if (Trinity::FullName::SurnameEquals(itr->second->Surname, surname))
             return itr->second;
 
     return nullptr;
@@ -282,9 +295,8 @@ CharacterCacheEntry const* CharacterCache::GetCharacterCacheByFullName(std::stri
 
 ObjectGuid CharacterCache::GetCharacterGuidByName(std::string const& name) const
 {
-    auto itr = _characterCacheByNameStore.find(name);
-    if (itr != _characterCacheByNameStore.end())
-        return itr->second->Guid;
+    if (CharacterCacheEntry const* entry = GetCharacterCacheByName(name))
+        return entry->Guid;
 
     return ObjectGuid::Empty;
 }

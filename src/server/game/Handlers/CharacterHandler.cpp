@@ -51,6 +51,7 @@
 #include "Map.h"
 #include "MapUtils.h"
 #include "Metric.h"
+#include "FullName.h"
 #include "NameReservationMgr.h"
 #include "MiscPackets.h"
 #include "MotionMaster.h"
@@ -971,7 +972,7 @@ void WorldSession::HandleCharCreateOpcode(WorldPackets::Character::CreateCharact
     }
 
     // Everlake: a bot on this realm holding a name this player may have gives it up (bot module, NameReservationMgr)
-    sNameReservationMgr->TryYield(charCreate.CreateInfo->Name, GetBattlenetAccountId());
+    sNameReservationMgr->TryYield(charCreate.CreateInfo->Name, charCreate.CreateInfo->Surname, GetBattlenetAccountId());
 
     std::shared_ptr<WorldPackets::Character::CharacterCreateInfo> createInfo = charCreate.CreateInfo;
     // Classic 1.60: the same name (or the same surname) may be used by several characters,
@@ -1153,7 +1154,7 @@ void WorldSession::HandleCharCreateOpcode(WorldPackets::Character::CreateCharact
             // Everlake: the name belongs to this Battle.net account on every realm; reserved before the character takes
             // it, rolled back if the character is not saved
             NameReservationGuard nameReservation;
-            switch (nameReservation.Reserve(createInfo->Name, GetAccountId(), GetBattlenetAccountId()))
+            switch (nameReservation.Reserve(createInfo->Name, createInfo->Surname, GetAccountId(), GetBattlenetAccountId()))
             {
                 case NameReservationMgr::Result::Reserved:
                     break;
@@ -2011,7 +2012,8 @@ void WorldSession::HandleCheckCharacterNameAvailability(WorldPackets::Character:
     }
 
     // Everlake: a name another Battle.net account holds on any realm is in use
-    if (!NameReservation::CanUse(sNameReservationMgr->Check(checkCharacterNameAvailability.Name, GetBattlenetAccountId())))
+    if (!NameReservation::CanUse(sNameReservationMgr->Check(checkCharacterNameAvailability.Name,
+        utf8length(checkCharacterNameAvailability.Surname) > 48 ? std::string() : checkCharacterNameAvailability.Surname, GetBattlenetAccountId())))
     {
         SendPacket(WorldPackets::Character::CheckCharacterNameAvailabilityResult(checkCharacterNameAvailability.SequenceIndex, CHAR_CREATE_NAME_IN_USE).Write());
         return;
@@ -2061,13 +2063,14 @@ void WorldSession::HandleCharRenameOpcode(WorldPackets::Character::CharacterRena
     }
 
     // Everlake: a bot on this realm holding a name this player may have gives it up
-    sNameReservationMgr->TryYield(request.RenameInfo->NewName, GetBattlenetAccountId());
+    sNameReservationMgr->TryYield(request.RenameInfo->NewName, request.RenameInfo->NewSurname, GetBattlenetAccountId());
 
     // Ensure that there is no character with the desired new name
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_FREE_NAME);
     stmt->setUInt64(0, request.RenameInfo->Guid.GetCounter());
     stmt->setString(1, request.RenameInfo->NewName);
-    stmt->setUInt64(2, request.RenameInfo->Guid.GetCounter());    // Classic 1.60: keeping the name and changing only the surname is allowed
+    stmt->setString(2, utf8length(request.RenameInfo->NewSurname) > 48 ? std::string() : request.RenameInfo->NewSurname);
+    stmt->setUInt64(3, request.RenameInfo->Guid.GetCounter());    // Classic 1.60: only another character with the same full name blocks it
 
     _queryProcessor.AddCallback(CharacterDatabase.AsyncQuery(stmt)
         .WithPreparedCallback([this, renameInfo = std::move(request.RenameInfo)](PreparedQueryResult result) mutable
@@ -2100,8 +2103,9 @@ void WorldSession::HandleCharRenameCallBack(std::shared_ptr<WorldPackets::Charac
     // Everlake: the new name belongs to this Battle.net account on every realm (a kept name is not checked again, so a
     // name two accounts had before reservations existed can still be kept, and Attach records it)
     NameReservationGuard nameReservation;
-    switch (renameInfo->NewName == oldName ? NameReservationMgr::Result::Reserved
-        : nameReservation.Reserve(renameInfo->NewName, GetAccountId(), GetBattlenetAccountId()))
+    switch (renameInfo->NewName == oldName && Trinity::FullName::SurnameEquals(renameInfo->NewSurname, sCharacterCache->GetCharacterSurnameByGuid(renameInfo->Guid))
+        ? NameReservationMgr::Result::Reserved
+        : nameReservation.Reserve(renameInfo->NewName, renameInfo->NewSurname, GetAccountId(), GetBattlenetAccountId()))
     {
         case NameReservationMgr::Result::Reserved:
             break;
@@ -2354,15 +2358,16 @@ void WorldSession::HandleCharCustomizeCallback(std::shared_ptr<WorldPackets::Cha
     }
 
     // Everlake: a bot on this realm holding a name this player may have gives it up
-    if (customizeInfo->CharName != oldName)
-        sNameReservationMgr->TryYield(customizeInfo->CharName, GetBattlenetAccountId());
+    std::string const oldSurname = sCharacterCache->GetCharacterSurnameByGuid(customizeInfo->CharGUID);
+    bool const keepsFullName = customizeInfo->CharName == oldName && Trinity::FullName::SurnameEquals(customizeInfo->CharSurname, oldSurname);
+    if (!keepsFullName)
+        sNameReservationMgr->TryYield(customizeInfo->CharName, customizeInfo->CharSurname, GetBattlenetAccountId());
 
-    // character with this name already exist
+    // character with this full name already exist (Classic 1.60: several characters may share a name)
     /// @todo: make async
-    ObjectGuid newGuid = sCharacterCache->GetCharacterGuidByName(customizeInfo->CharName);
-    if (!newGuid.IsEmpty())
+    if (CharacterCacheEntry const* holder = sCharacterCache->GetCharacterCacheByFullName(customizeInfo->CharName, customizeInfo->CharSurname))
     {
-        if (newGuid != customizeInfo->CharGUID)
+        if (holder->Guid != customizeInfo->CharGUID)
         {
             SendCharCustomize(CHAR_CREATE_NAME_IN_USE, customizeInfo.get());
             return;
@@ -2371,8 +2376,8 @@ void WorldSession::HandleCharCustomizeCallback(std::shared_ptr<WorldPackets::Cha
 
     // Everlake: a new name belongs to this Battle.net account on every realm (a kept name is not checked again)
     NameReservationGuard nameReservation;
-    switch (customizeInfo->CharName == oldName ? NameReservationMgr::Result::Reserved
-        : nameReservation.Reserve(customizeInfo->CharName, GetAccountId(), GetBattlenetAccountId()))
+    switch (keepsFullName ? NameReservationMgr::Result::Reserved
+        : nameReservation.Reserve(customizeInfo->CharName, customizeInfo->CharSurname, GetAccountId(), GetBattlenetAccountId()))
     {
         case NameReservationMgr::Result::Reserved:
             break;
@@ -2707,14 +2712,15 @@ void WorldSession::HandleCharRaceOrFactionChangeCallback(std::shared_ptr<WorldPa
     }
 
     // Everlake: a bot on this realm holding a name this player may have gives it up
-    if (factionChangeInfo->Name != oldName)
-        sNameReservationMgr->TryYield(factionChangeInfo->Name, GetBattlenetAccountId());
+    std::string const oldSurname = sCharacterCache->GetCharacterSurnameByGuid(factionChangeInfo->Guid);
+    bool const keepsFullName = factionChangeInfo->Name == oldName && Trinity::FullName::SurnameEquals(factionChangeInfo->Surname, oldSurname);
+    if (!keepsFullName)
+        sNameReservationMgr->TryYield(factionChangeInfo->Name, factionChangeInfo->Surname, GetBattlenetAccountId());
 
-    // character with this name already exist
-    ObjectGuid newGuid = sCharacterCache->GetCharacterGuidByName(factionChangeInfo->Name);
-    if (!newGuid.IsEmpty())
+    // character with this full name already exist (Classic 1.60: several characters may share a name)
+    if (CharacterCacheEntry const* holder = sCharacterCache->GetCharacterCacheByFullName(factionChangeInfo->Name, factionChangeInfo->Surname))
     {
-        if (newGuid != factionChangeInfo->Guid)
+        if (holder->Guid != factionChangeInfo->Guid)
         {
             SendCharFactionChange(CHAR_CREATE_NAME_IN_USE, factionChangeInfo.get());
             return;
@@ -2730,8 +2736,8 @@ void WorldSession::HandleCharRaceOrFactionChangeCallback(std::shared_ptr<WorldPa
     // Everlake: a new name belongs to this Battle.net account on every realm (a kept name is not checked again); rolled
     // back on any return below that comes before the commit
     NameReservationGuard nameReservation;
-    switch (factionChangeInfo->Name == oldName ? NameReservationMgr::Result::Reserved
-        : nameReservation.Reserve(factionChangeInfo->Name, GetAccountId(), GetBattlenetAccountId()))
+    switch (keepsFullName ? NameReservationMgr::Result::Reserved
+        : nameReservation.Reserve(factionChangeInfo->Name, factionChangeInfo->Surname, GetAccountId(), GetBattlenetAccountId()))
     {
         case NameReservationMgr::Result::Reserved:
             break;
@@ -3319,8 +3325,10 @@ void WorldSession::HandleCharUndeleteOpcode(WorldPackets::Character::UndeleteCha
             return;
         }
 
-        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHECK_NAME);
+        // the full name has to be free (Classic 1.60: several characters may share a name)
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHECK_NAME_SURNAME);
         stmt->setString(0, undeleteInfo->Name);
+        stmt->setString(1, sCharacterCache->GetCharacterSurnameByGuid(undeleteInfo->CharacterGuid));
         queryCallback.SetNextQuery(CharacterDatabase.AsyncQuery(stmt));
     })
         .WithChainingPreparedCallback([this, undeleteInfo](QueryCallback& queryCallback, PreparedQueryResult result)
@@ -3356,7 +3364,7 @@ void WorldSession::HandleCharUndeleteOpcode(WorldPackets::Character::UndeleteCha
 
         // Everlake: the name must still be this Battle.net account's (another account may have it after the grace period)
         NameReservationGuard nameReservation;
-        switch (nameReservation.Reserve(undeleteInfo->Name, GetAccountId(), GetBattlenetAccountId()))
+        switch (nameReservation.Reserve(undeleteInfo->Name, sCharacterCache->GetCharacterSurnameByGuid(undeleteInfo->CharacterGuid), GetAccountId(), GetBattlenetAccountId()))
         {
             case NameReservationMgr::Result::Reserved:
                 break;
