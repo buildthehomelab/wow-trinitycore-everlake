@@ -25,6 +25,7 @@
 #include "GameTime.h"
 #include "Map.h"
 #include "ObjectAccessor.h"
+#include "PhasingHandler.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "SpellAuras.h"
@@ -942,7 +943,7 @@ private:
         }
 
         if (GameObject* dropped = GameObject::CreateGameObject(DroppedFlagEntry(flagTeam), battlegroundMap, player->GetPosition(),
-            QuaternionData::fromEulerAnglesZYX(player->GetOrientation(), 0.f, 0.f), 255, GO_STATE_READY))
+            QuaternionData::fromEulerAnglesZYX(player->GetOrientation(), 0.f, 0.f), InitialPhaseShift(), 255, GO_STATE_READY))
         {
             dropped->SetSpawnedByDefault(false);
             dropped->SetRespawnTime(int32(std::chrono::duration_cast<Seconds>(FlagDropTime).count()) + 5);
