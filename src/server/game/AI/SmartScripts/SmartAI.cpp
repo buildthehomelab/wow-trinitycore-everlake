@@ -835,23 +835,25 @@ void SmartAI::SetFollow(Unit* target, float dist, float angle, uint32 credit, ui
 
 void SmartAI::StopFollow(bool complete)
 {
-    _followGUID.Clear();
+    ObjectGuid const followGUID = std::exchange(_followGUID, ObjectGuid::Empty);
     _followDistance = 0;
     _followAngle = 0;
     uint32 followCredit = std::exchange(_followCredit, 0);
     _followArrivedTimer = 1000;
     _followArrivedEntry = 0;
-    _followCreditType = 0;
+    uint32 const followCreditType = std::exchange(_followCreditType, 0);
     me->GetMotionMaster()->Clear();
     me->GetMotionMaster()->MoveIdle();
 
     if (!complete)
         return;
 
-    Player* player = ObjectAccessor::GetPlayer(*me, _followGUID);
-    if (player)
+    // the guid and credit type are read before the reset above: reading the members here found them already cleared
+    Player* player = ObjectAccessor::GetPlayer(*me, followGUID);
+    // credit 0 means the follow gives no credit: KilledMonsterCredit(0, me) would count the follower as killed for criteria
+    if (player && followCredit)
     {
-        if (!_followCreditType)
+        if (!followCreditType)
             player->RewardPlayerAndGroupAtEvent(followCredit, me);
         else
             player->GroupEventHappens(followCredit, me);

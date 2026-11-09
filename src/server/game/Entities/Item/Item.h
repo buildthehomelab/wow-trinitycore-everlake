@@ -126,6 +126,10 @@ private:
     } _state;
 };
 
+// The ItemData::SpellCharges slot the client reads for the effect at effectIndex in bonusData.Effects: the effect's own
+// LegacySlotIndex when no earlier effect took it, else the lowest free slot (advocaite/TrinityCore#301)
+TC_GAME_API uint32 GetSpellChargesSlotForEffect(BonusData const& bonusData, uint32 effectIndex);
+
 struct ArtifactPowerData
 {
     uint32 ArtifactPowerId = 0;

@@ -16,6 +16,7 @@
  */
 
 #include "AuctionHouseMgr.h"
+#include <limits>
 #include "AccountMgr.h"
 #include "AuctionHouseBot.h"
 #include "AuctionHousePackets.h"
@@ -856,9 +857,23 @@ AuctionPosting* AuctionHouseObject::GetAuction(uint32 auctionId)
 std::vector<uint32> AuctionHouseObject::GetOwnedAuctionIds(ObjectGuid owner) const
 {
     std::vector<uint32> result;
-    for (auto const& entry : Trinity::Containers::MapEqualRange(_playerOwnedAuctions, owner))
-        result.push_back(entry.second);
+    if (std::unordered_set<uint32> const* ids = Trinity::Containers::MapGetValuePtr(_playerOwnedAuctions, owner))
+        result.assign(ids->begin(), ids->end());
     return result;
+}
+
+namespace
+{
+void EraseAuctionId(std::unordered_map<ObjectGuid, std::unordered_set<uint32>>& auctionsByPlayer, ObjectGuid player, uint32 auctionId)
+{
+    auto itr = auctionsByPlayer.find(player);
+    if (itr == auctionsByPlayer.end())
+        return;
+
+    itr->second.erase(auctionId);
+    if (itr->second.empty())
+        auctionsByPlayer.erase(itr);
+}
 }
 
 void AuctionHouseObject::AddAuction(CharacterDatabaseTransaction trans, AuctionPosting auction)
@@ -989,9 +1004,9 @@ void AuctionHouseObject::AddAuction(CharacterDatabaseTransaction trans, AuctionP
         sAuctionMgr->AddAItem(item);
 
     auction.Bucket = bucket;
-    _playerOwnedAuctions.emplace(auction.Owner, auction.Id);
+    _playerOwnedAuctions[auction.Owner].insert(auction.Id);
     for (ObjectGuid bidder : auction.BidderHistory)
-        _playerBidderAuctions.emplace(bidder, auction.Id);
+        _playerBidderAuctions[bidder].insert(auction.Id);
 
     AuctionPosting* addedAuction = &(_itemsByAuctionId[auction.Id] = std::move(auction));
 
@@ -1076,9 +1091,9 @@ std::map<uint32, AuctionPosting>::node_type AuctionHouseObject::RemoveAuction(Ch
 
     sScriptMgr->OnAuctionRemove(this, auction);
 
-    Trinity::Containers::MultimapErasePair(_playerOwnedAuctions, auction->Owner, auction->Id);
+    EraseAuctionId(_playerOwnedAuctions, auction->Owner, auction->Id);
     for (ObjectGuid bidder : auction->BidderHistory)
-        Trinity::Containers::MultimapErasePair(_playerBidderAuctions, bidder, auction->Id);
+        EraseAuctionId(_playerBidderAuctions, bidder, auction->Id);
 
     if (auctionItr)
         return _itemsByAuctionId.extract((*auctionItr)++);
@@ -1333,9 +1348,10 @@ void AuctionHouseObject::BuildListBiddedItems(WorldPackets::AuctionHouse::Auctio
 {
     // always full list
     std::vector<AuctionPosting const*> auctions;
-    for (auto const& auctionId : Trinity::Containers::MapEqualRange(_playerBidderAuctions, player->GetGUID()))
-        if (AuctionPosting const* auction = Trinity::Containers::MapGetValuePtr(_itemsByAuctionId, auctionId.second))
-            auctions.push_back(auction);
+    if (std::unordered_set<uint32> const* ids = Trinity::Containers::MapGetValuePtr(_playerBidderAuctions, player->GetGUID()))
+        for (uint32 auctionId : *ids)
+            if (AuctionPosting const* auction = Trinity::Containers::MapGetValuePtr(_itemsByAuctionId, auctionId))
+                auctions.push_back(auction);
 
     AuctionPosting::Sorter sorter(player->GetSession()->GetSessionDbcLocale(), sorts);
     std::ranges::sort(auctions, std::cref(sorter));
@@ -1411,9 +1427,10 @@ void AuctionHouseObject::BuildListOwnedItems(WorldPackets::AuctionHouse::Auction
 {
     // always full list
     std::vector<AuctionPosting const*> auctions;
-    for (auto const& auctionId : Trinity::Containers::MapEqualRange(_playerOwnedAuctions, player->GetGUID()))
-        if (AuctionPosting const* auction = Trinity::Containers::MapGetValuePtr(_itemsByAuctionId, auctionId.second))
-            auctions.push_back(auction);
+    if (std::unordered_set<uint32> const* ids = Trinity::Containers::MapGetValuePtr(_playerOwnedAuctions, player->GetGUID()))
+        for (uint32 auctionId : *ids)
+            if (AuctionPosting const* auction = Trinity::Containers::MapGetValuePtr(_itemsByAuctionId, auctionId))
+                auctions.push_back(auction);
 
     AuctionPosting::Sorter sorter(player->GetSession()->GetSessionDbcLocale(), sorts);
     std::ranges::sort(auctions, std::cref(sorter));
@@ -1435,21 +1452,46 @@ void AuctionHouseObject::BuildReplicate(WorldPackets::AuctionHouse::AuctionRepli
     auto throttleItr = _replicateThrottleMap.find(player->GetGUID());
     if (throttleItr != _replicateThrottleMap.end())
     {
-        if (throttleItr->second.Global != global || throttleItr->second.Cursor != cursor || throttleItr->second.Tombstone != tombstone)
+        bool const sameScan = throttleItr->second.Global == global && throttleItr->second.Cursor == cursor && throttleItr->second.Tombstone == tombstone;
+        // Classic 1.60: a full scan from the start (all change numbers 0, as add-ons like Auctionator ask) after an earlier scan
+        // got an empty answer until the cooldown ran out, so the add-on saw 0 items. A new scan may start again once the last
+        // one has finished and the cooldown is over; an unfinished scan is simply restarted from the beginning.
+        bool const freshScan = !global && !cursor && !tombstone;
+        if (!sameScan && !freshScan)
             return;
 
-        if (!throttleItr->second.IsReplicationInProgress() && throttleItr->second.NextAllowedReplication > curTime)
+        if (freshScan && !sameScan)
+        {
+            if (!throttleItr->second.IsReplicationInProgress() && throttleItr->second.NextAllowedReplication > curTime)
+                return;
+
+            // A count of 0 lists everything in one answer and leaves the scan unfinished until the client asks once more, so
+            // without a limit every new request (an add-on calling the scan in a loop) sent the whole auction house again.
+            if (throttleItr->second.Started + ReplicateRestartDelay > curTime)
+                return;
+
+            throttleItr->second = PlayerReplicateThrottleData{};
+            throttleItr->second.NextAllowedReplication = curTime + Seconds(sWorld->getIntConfig(CONFIG_AUCTION_REPLICATE_DELAY));
+            throttleItr->second.Started = curTime;
+            throttleItr->second.Global = sAuctionMgr->GenerateReplicationId();
+        }
+        else if (!throttleItr->second.IsReplicationInProgress() && throttleItr->second.NextAllowedReplication > curTime)
             return;
     }
     else
     {
         throttleItr = _replicateThrottleMap.emplace(player->GetGUID(), PlayerReplicateThrottleData{}).first;
         throttleItr->second.NextAllowedReplication = curTime + Seconds(sWorld->getIntConfig(CONFIG_AUCTION_REPLICATE_DELAY));
+        throttleItr->second.Started = curTime;
         throttleItr->second.Global = sAuctionMgr->GenerateReplicationId();
     }
 
-    if (_itemsByAuctionId.empty() || !count)
+    if (_itemsByAuctionId.empty())
         return;
+
+    // Classic 1.60: a count of 0 asks for everything at once (the answer was empty before).
+    if (!count)
+        count = std::numeric_limits<uint32>::max();
 
     auto itr = _itemsByAuctionId.upper_bound(cursor);
     for (; itr != _itemsByAuctionId.end(); ++itr)
@@ -1457,7 +1499,9 @@ void AuctionHouseObject::BuildReplicate(WorldPackets::AuctionHouse::AuctionRepli
         AuctionPosting const& auction = itr->second;
 
         WorldPackets::AuctionHouse::AuctionItem& auctionItem = replicateResponse.Items.emplace_back();
-        auction.BuildAuctionItem(&auctionItem, false, true, true, auction.Bidder.IsEmpty());
+        // Classic 1.60 has no separate commodity scan, so stackable goods (cloth, herbs, potions: most of what the auction
+        // house bot sells) carry their item too; without it a scanning add-on could not tell what they were.
+        auction.BuildAuctionItem(&auctionItem, true, true, true, auction.Bidder.IsEmpty());
         if (!--count)
             break;
     }
