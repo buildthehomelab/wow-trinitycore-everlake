@@ -19,3 +19,9 @@ Whispering Elixir (268801) count but never reach the bags. Clears the flag.
 loot 8 bottles in Shadowvale and turn 95314 in to Carolai Anise with the bottles counted but not in the bags.
 
 **Verdict:** drop (changes sniffed live data to fix intended behaviour).
+
+**Later note (same day).** #310 (group F batch, file `2026_11_06_60_world_forever_quest_items_in_bags.sql`) clears the
+quest-bound bit on every item objective, after a player report on Karrz1's realm: with the bit our core only counts the
+item in the quest log, the 1.60 client does not show that counter, and 11 Zephras Isle quests could not be finished.
+That covers this quest too, so dropping #180 loses nothing. If #310 is held instead, revisit this one. PTR check for
+both: loot a quest item for one of those Zephras quests and for this quest; it must land in the bags and count.
