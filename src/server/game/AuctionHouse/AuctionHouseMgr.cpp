@@ -1465,8 +1465,14 @@ void AuctionHouseObject::BuildReplicate(WorldPackets::AuctionHouse::AuctionRepli
             if (!throttleItr->second.IsReplicationInProgress() && throttleItr->second.NextAllowedReplication > curTime)
                 return;
 
+            // A count of 0 lists everything in one answer and leaves the scan unfinished until the client asks once more, so
+            // without a limit every new request (an add-on calling the scan in a loop) sent the whole auction house again.
+            if (throttleItr->second.Started + ReplicateRestartDelay > curTime)
+                return;
+
             throttleItr->second = PlayerReplicateThrottleData{};
             throttleItr->second.NextAllowedReplication = curTime + Seconds(sWorld->getIntConfig(CONFIG_AUCTION_REPLICATE_DELAY));
+            throttleItr->second.Started = curTime;
             throttleItr->second.Global = sAuctionMgr->GenerateReplicationId();
         }
         else if (!throttleItr->second.IsReplicationInProgress() && throttleItr->second.NextAllowedReplication > curTime)
@@ -1476,6 +1482,7 @@ void AuctionHouseObject::BuildReplicate(WorldPackets::AuctionHouse::AuctionRepli
     {
         throttleItr = _replicateThrottleMap.emplace(player->GetGUID(), PlayerReplicateThrottleData{}).first;
         throttleItr->second.NextAllowedReplication = curTime + Seconds(sWorld->getIntConfig(CONFIG_AUCTION_REPLICATE_DELAY));
+        throttleItr->second.Started = curTime;
         throttleItr->second.Global = sAuctionMgr->GenerateReplicationId();
     }
 

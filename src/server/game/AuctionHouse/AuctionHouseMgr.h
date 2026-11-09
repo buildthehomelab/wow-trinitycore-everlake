@@ -280,9 +280,13 @@ public:
         uint32 Cursor = 0;
         uint32 Tombstone = 0;
         TimePoint NextAllowedReplication = TimePoint::min();
+        TimePoint Started = TimePoint::min();
 
         bool IsReplicationInProgress() const { return Cursor != Tombstone && Global != 0; }
     };
+
+    // shortest time between two restarts of an unfinished replicate scan (advocaite/TrinityCore#322)
+    static constexpr Seconds ReplicateRestartDelay = 60s;
 
     uint32 GetAuctionHouseId() const;
 
