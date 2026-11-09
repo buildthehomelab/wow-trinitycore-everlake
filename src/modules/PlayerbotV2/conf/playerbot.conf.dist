@@ -1056,6 +1056,16 @@ PlayerbotV2.SessionRhythm.MaxLogoutsPerCycle = 25
 # avoid putting bot chars on the operator's GM account, where they'd
 # trigger the existing "one online char per account" assumption in the
 # Trinity character-select / online-status code paths.
+#
+#    Playerbot.AccountPrefix
+#        Description: Start of the pool account names: "<prefix>0001", "<prefix>0002", ... The names live in the
+#                     login database, which all realms on one login server share, while each realm numbers its own
+#                     pool. Give every realm that runs bots its own prefix, or they take each other's names and
+#                     account creation fails. 1-10 letters, digits or '_'; anything else falls back to the default.
+#                     Never change it on a realm whose pool exists: its accounts keep the old names.
+#        Default:     "PBV2_"
+
+Playerbot.AccountPrefix = "PBV2_"
 
 #-----------------------------------------------------------------------------
 # Player-facing alt summon (Wave E)
