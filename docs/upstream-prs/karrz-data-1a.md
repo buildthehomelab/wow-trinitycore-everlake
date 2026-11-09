@@ -31,7 +31,7 @@ By file name: 120 `forever_*`, 95 `classic_*`, 11 `zephras_*`, the rest Azeroth/
 | 75 files that add, remove or replace `spell_script_names`, or move bosses to C++ scripts (Thekal trio, Rajaxx waves, Alterac Valley assaults, Chromaggus lever) | Their scripts exist only in Karrz's core (150 script names). Loaded alone they strip working retail scripts from 188 spells (e.g. Lay on Hands would lose Forbearance). They go in with those scripts (Karrz scripts batch). |
 | 7 files both sides have, changed by Karrz in comments only | A new hash makes the updater run them again for nothing. |
 | `2026_10_10_01_…_classic_spell_values`, `2026_10_11_06_…_classic_spell_twins` (Karrz filled the tables we create empty) | Spell values: Karrz's later `2026_10_10_21_world_classic_spell_values_v2` (in this batch) refills the table. Spell twins: read only by Karrz's core. |
-| `2026_10_11_01_…_classic_creature_melee`, `2026_10_11_05_…_classic_spell_info` (filled by Karrz, empty in ours) | Our core reads both; filling them changes melee damage of every creature and spell timings: owner decision pending. |
+| `2026_10_11_01_…_classic_creature_melee`, `2026_10_11_05_…_classic_spell_info` (filled by Karrz, empty in ours) | Our core reads both; filling them would give every creature vanilla melee and spells vanilla timings. Owner decision 2026-11-09: keep Forever's own values, so these stay empty (not taken in later batches either). |
 
 ## Our fix-up (`2026_11_09_50_world_karrz_1a_keep_ours`)
 
