@@ -146,6 +146,7 @@
 #include "Util.h"
 #include "Vehicle.h"
 #include "VehiclePackets.h"
+#include "VendorPrice.h"
 #include "Vignette.h"
 #include "VignettePackets.h"
 #include "VMapFactory.h"
@@ -24561,14 +24562,16 @@ bool Player::BuyCurrencyFromVendorSlot(ObjectGuid vendorGuid, uint32 vendorSlot,
         return false;
     }
 
-    if (count % crItem->maxcount)
+    // a currency row without a stack size sells one at a time (and must not divide by zero)
+    uint32 const stackSize = std::max<uint32>(crItem->maxcount, 1);
+    if (count % stackSize)
     {
         SendEquipError(EQUIP_ERR_CANT_BUY_QUANTITY, nullptr, nullptr);
         return false;
     }
 
     uint64 price = 0;
-    uint32 stacks = count / crItem->maxcount;
+    uint32 stacks = count / stackSize;
     ItemExtendedCostEntry const* iece;
     if (crItem->ExtendedCost)
     {
@@ -24581,15 +24584,16 @@ bool Player::BuyCurrencyFromVendorSlot(ObjectGuid vendorGuid, uint32 vendorSlot,
 
         if (iece->Money)
         {
-            uint64 maxStacks = MAX_MONEY_AMOUNT / crItem->maxcount;
-            if (uint64(stacks) > maxStacks)
+            // a price past the money cap is refused, not cut down to a smaller purchase
+            Optional<uint64> currencyPrice = Trinity::VendorPrice::ForCurrency(iece->Money, count, MAX_MONEY_AMOUNT);
+            if (!currencyPrice)
             {
                 TC_LOG_ERROR("entities.player.cheat", "Player::BuyCurrencyFromVendorSlot: Player '{}' ({}) tried to buy currency (ItemID: {}, Count: {}), causing money overflow",
                     GetName(), GetGUID(), currency, count);
-                count = uint32(maxStacks * crItem->maxcount);
-                stacks = maxStacks;
+                SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, creature, currency, 0);
+                return false;
             }
-            price = uint64(iece->Money * count); //it should not exceed MAX_MONEY_AMOUNT
+            price = *currencyPrice;
             if (!HasEnoughMoney(price))
             {
                 SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, creature, currency, 0);
@@ -24599,7 +24603,12 @@ bool Player::BuyCurrencyFromVendorSlot(ObjectGuid vendorGuid, uint32 vendorSlot,
 
         for (uint8 i = 0; i < MAX_ITEM_EXT_COST_ITEMS; ++i)
         {
-            if (iece->ItemID[i] && !HasItemCount(iece->ItemID[i], (iece->ItemCount[i] * stacks)))
+            if (!iece->ItemID[i])
+                continue;
+
+            // the needed count must not wrap round for a large purchase
+            Optional<uint32> needed = Trinity::VendorPrice::TurnInCount(iece->ItemCount[i], stacks);
+            if (!needed || !HasItemCount(iece->ItemID[i], *needed))
             {
                 SendEquipError(EQUIP_ERR_VENDOR_MISSING_TURNINS, nullptr, nullptr);
                 return false;
@@ -24624,7 +24633,7 @@ bool Player::BuyCurrencyFromVendorSlot(ObjectGuid vendorGuid, uint32 vendorSlot,
                 SendEquipError(EQUIP_ERR_VENDOR_MISSING_TURNINS, nullptr, nullptr); // Find correct error
                 return false;
             }
-            else if (!HasCurrency(iece->CurrencyID[i], (iece->CurrencyCount[i] * stacks)))
+            else if (Optional<uint32> needed = Trinity::VendorPrice::TurnInCount(iece->CurrencyCount[i], stacks); !needed || !HasCurrency(iece->CurrencyID[i], *needed))
             {
                 SendEquipError(EQUIP_ERR_VENDOR_MISSING_TURNINS, nullptr, nullptr); // Find correct error
                 return false;
@@ -24801,7 +24810,12 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
 
         for (uint8 i = 0; i < MAX_ITEM_EXT_COST_ITEMS; ++i)
         {
-            if (iece->ItemID[i] && !HasItemCount(iece->ItemID[i], iece->ItemCount[i] * stacks))
+            if (!iece->ItemID[i])
+                continue;
+
+            // the same wrap-round guard as for currency purchases
+            Optional<uint32> needed = Trinity::VendorPrice::TurnInCount(iece->ItemCount[i], stacks);
+            if (!needed || !HasItemCount(iece->ItemID[i], *needed))
             {
                 SendEquipError(EQUIP_ERR_VENDOR_MISSING_TURNINS, nullptr, nullptr);
                 return false;
@@ -24825,7 +24839,7 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
                 SendEquipError(EQUIP_ERR_VENDOR_MISSING_TURNINS, nullptr, nullptr); // Find correct error
                 return false;
             }
-            else if (!HasCurrency(iece->CurrencyID[i], iece->CurrencyCount[i] * stacks))
+            else if (Optional<uint32> needed = Trinity::VendorPrice::TurnInCount(iece->CurrencyCount[i], stacks); !needed || !HasCurrency(iece->CurrencyID[i], *needed))
             {
                 SendEquipError(EQUIP_ERR_VENDOR_MISSING_TURNINS, nullptr, nullptr);
                 return false;
@@ -24872,7 +24886,8 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
                 GetName(), GetGUID().ToString(), pProto->GetId(), count);
             count = uint32(maxCount);
         }
-        price = uint64(buyPricePerItem * count); //it should not exceed MAX_MONEY_AMOUNT
+        // whole numbers: part of a stack (arrows) rounds up instead of down to free, and full stacks cost exactly the stack price
+        price = Trinity::VendorPrice::ForItems(basePrice, pProto->GetBuyCount(), count);
 
         // reputation discount
         price = uint64(floor(price * GetReputationPriceDiscount(creature)));
@@ -24883,6 +24898,7 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
             price -= CalculatePct(price, priceMod);
 
         price = ApplyClassicLegacyPriceMod(price, 0);   // Legacy perk Bartering
+        price = std::max(uint64(1), price);              // discounts never make a priced item free
 
         if (!HasEnoughMoney(price))
         {
