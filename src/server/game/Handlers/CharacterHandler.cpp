@@ -51,6 +51,7 @@
 #include "Map.h"
 #include "MapUtils.h"
 #include "Metric.h"
+#include "NameReservationMgr.h"
 #include "MiscPackets.h"
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
@@ -969,6 +970,9 @@ void WorldSession::HandleCharCreateOpcode(WorldPackets::Character::CreateCharact
         return;
     }
 
+    // Everlake: a bot on this realm holding a name this player may have gives it up (bot module, NameReservationMgr)
+    sNameReservationMgr->TryYield(charCreate.CreateInfo->Name, GetBattlenetAccountId());
+
     std::shared_ptr<WorldPackets::Character::CharacterCreateInfo> createInfo = charCreate.CreateInfo;
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHECK_NAME);
     stmt->setString(0, charCreate.CreateInfo->Name);
@@ -1140,6 +1144,21 @@ void WorldSession::HandleCharCreateOpcode(WorldPackets::Character::CreateCharact
                 return;
             }
 
+            // Everlake: the name belongs to this Battle.net account on every realm; reserved before the character takes
+            // it, rolled back if the character is not saved
+            NameReservationGuard nameReservation;
+            switch (nameReservation.Reserve(createInfo->Name, GetAccountId(), GetBattlenetAccountId()))
+            {
+                case NameReservationMgr::Result::Reserved:
+                    break;
+                case NameReservationMgr::Result::Taken:
+                    SendCharCreate(CHAR_CREATE_NAME_IN_USE);
+                    return;
+                default:
+                    SendCharCreate(CHAR_CREATE_ERROR);
+                    return;
+            }
+
             std::shared_ptr<Player> newChar(new Player(this), [](Player* ptr)
             {
                 ptr->CleanupsBeforeDelete();
@@ -1182,11 +1201,14 @@ void WorldSession::HandleCharCreateOpcode(WorldPackets::Character::CreateCharact
             stmt->setUInt32(2, sRealmList->GetCurrentRealmId().Realm);
             trans->Append(stmt);
 
-            AddTransactionCallback(CharacterDatabase.AsyncCommitTransaction(characterTransaction)).AfterComplete([this, newChar = std::move(newChar), trans, surname](bool success)
+            // from here the commit callback owns the reservation (a session closed before it runs keeps the name reserved)
+            nameReservation.Commit();
+            AddTransactionCallback(CharacterDatabase.AsyncCommitTransaction(characterTransaction)).AfterComplete([this, newChar = std::move(newChar), trans, surname, reservation = nameReservation.GetTicket()](bool success)
             {
                 if (success)
                 {
                     LoginDatabase.CommitTransaction(trans);
+                    sNameReservationMgr->Attach(newChar->GetName(), surname, GetAccountId(), GetBattlenetAccountId(), newChar->GetGUID().GetCounter());
 
                     TC_LOG_INFO("entities.player.character", "Account: {} (IP: {}) Create Character: {} {}", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
                     sScriptMgr->OnPlayerCreate(newChar.get());
@@ -1196,7 +1218,10 @@ void WorldSession::HandleCharCreateOpcode(WorldPackets::Character::CreateCharact
                     SendCharCreate(CHAR_CREATE_SUCCESS, newChar->GetGUID());
                 }
                 else
+                {
+                    sNameReservationMgr->Rollback(reservation);
                     SendCharCreate(CHAR_CREATE_ERROR);
+                }
             });
         };
 
@@ -1979,6 +2004,13 @@ void WorldSession::HandleCheckCharacterNameAvailability(WorldPackets::Character:
         return;
     }
 
+    // Everlake: a name another Battle.net account holds on any realm is in use
+    if (!NameReservation::CanUse(sNameReservationMgr->Check(checkCharacterNameAvailability.Name, GetBattlenetAccountId())))
+    {
+        SendPacket(WorldPackets::Character::CheckCharacterNameAvailabilityResult(checkCharacterNameAvailability.SequenceIndex, CHAR_CREATE_NAME_IN_USE).Write());
+        return;
+    }
+
     // Ensure that there is no character with the desired new name
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHECK_NAME);
     stmt->setString(0, checkCharacterNameAvailability.Name);
@@ -2021,6 +2053,9 @@ void WorldSession::HandleCharRenameOpcode(WorldPackets::Character::CharacterRena
         return;
     }
 
+    // Everlake: a bot on this realm holding a name this player may have gives it up
+    sNameReservationMgr->TryYield(request.RenameInfo->NewName, GetBattlenetAccountId());
+
     // Ensure that there is no character with the desired new name
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_FREE_NAME);
     stmt->setUInt64(0, request.RenameInfo->Guid.GetCounter());
@@ -2055,6 +2090,22 @@ void WorldSession::HandleCharRenameCallBack(std::shared_ptr<WorldPackets::Charac
 
     atLoginFlags &= ~AT_LOGIN_RENAME;
 
+    // Everlake: the new name belongs to this Battle.net account on every realm (a kept name is not checked again, so a
+    // name two accounts had before reservations existed can still be kept, and Attach records it)
+    NameReservationGuard nameReservation;
+    switch (renameInfo->NewName == oldName ? NameReservationMgr::Result::Reserved
+        : nameReservation.Reserve(renameInfo->NewName, GetAccountId(), GetBattlenetAccountId()))
+    {
+        case NameReservationMgr::Result::Reserved:
+            break;
+        case NameReservationMgr::Result::Taken:
+            SendCharRename(CHAR_CREATE_NAME_IN_USE, renameInfo.get());
+            return;
+        default:
+            SendCharRename(CHAR_CREATE_ERROR, renameInfo.get());
+            return;
+    }
+
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
     ObjectGuid::LowType lowGuid = renameInfo->Guid.GetCounter();
 
@@ -2080,6 +2131,8 @@ void WorldSession::HandleCharRenameCallBack(std::shared_ptr<WorldPackets::Charac
     trans->Append(Trinity::StringFormat("UPDATE characters SET surname = '{}' WHERE guid = {}", escapedSurname, lowGuid).c_str());
 
     CharacterDatabase.CommitTransaction(trans);
+    nameReservation.Commit();
+    sNameReservationMgr->Attach(renameInfo->NewName, renameInfo->NewSurname, GetAccountId(), GetBattlenetAccountId(), lowGuid);
 
     TC_LOG_INFO("entities.player.character", "Account: {} (IP: {}) Character:[{}] ({}) Changed name to: {} {}",
         GetAccountId(), GetRemoteAddress(), oldName, renameInfo->Guid.ToString(), renameInfo->NewName, renameInfo->NewSurname);
@@ -2293,6 +2346,10 @@ void WorldSession::HandleCharCustomizeCallback(std::shared_ptr<WorldPackets::Cha
         return;
     }
 
+    // Everlake: a bot on this realm holding a name this player may have gives it up
+    if (customizeInfo->CharName != oldName)
+        sNameReservationMgr->TryYield(customizeInfo->CharName, GetBattlenetAccountId());
+
     // character with this name already exist
     /// @todo: make async
     ObjectGuid newGuid = sCharacterCache->GetCharacterGuidByName(customizeInfo->CharName);
@@ -2303,6 +2360,21 @@ void WorldSession::HandleCharCustomizeCallback(std::shared_ptr<WorldPackets::Cha
             SendCharCustomize(CHAR_CREATE_NAME_IN_USE, customizeInfo.get());
             return;
         }
+    }
+
+    // Everlake: a new name belongs to this Battle.net account on every realm (a kept name is not checked again)
+    NameReservationGuard nameReservation;
+    switch (customizeInfo->CharName == oldName ? NameReservationMgr::Result::Reserved
+        : nameReservation.Reserve(customizeInfo->CharName, GetAccountId(), GetBattlenetAccountId()))
+    {
+        case NameReservationMgr::Result::Reserved:
+            break;
+        case NameReservationMgr::Result::Taken:
+            SendCharCustomize(CHAR_CREATE_NAME_IN_USE, customizeInfo.get());
+            return;
+        default:
+            SendCharCustomize(CHAR_CREATE_ERROR, customizeInfo.get());
+            return;
     }
 
     CharacterDatabasePreparedStatement* stmt = nullptr;
@@ -2336,6 +2408,8 @@ void WorldSession::HandleCharCustomizeCallback(std::shared_ptr<WorldPackets::Cha
     }
 
     CharacterDatabase.CommitTransaction(trans);
+    nameReservation.Commit();
+    sNameReservationMgr->Attach(customizeInfo->CharName, customizeInfo->CharSurname, GetAccountId(), GetBattlenetAccountId(), lowGuid);
 
     sCharacterCache->UpdateCharacterData(customizeInfo->CharGUID, customizeInfo->CharName, customizeInfo->SexID);
     sCharacterCache->UpdateCharacterSurname(customizeInfo->CharGUID, customizeInfo->CharSurname);
@@ -2625,6 +2699,10 @@ void WorldSession::HandleCharRaceOrFactionChangeCallback(std::shared_ptr<WorldPa
         return;
     }
 
+    // Everlake: a bot on this realm holding a name this player may have gives it up
+    if (factionChangeInfo->Name != oldName)
+        sNameReservationMgr->TryYield(factionChangeInfo->Name, GetBattlenetAccountId());
+
     // character with this name already exist
     ObjectGuid newGuid = sCharacterCache->GetCharacterGuidByName(factionChangeInfo->Name);
     if (!newGuid.IsEmpty())
@@ -2640,6 +2718,22 @@ void WorldSession::HandleCharRaceOrFactionChangeCallback(std::shared_ptr<WorldPa
     {
         SendCharFactionChange(CHAR_CREATE_CHARACTER_ARENA_LEADER, factionChangeInfo.get());
         return;
+    }
+
+    // Everlake: a new name belongs to this Battle.net account on every realm (a kept name is not checked again); rolled
+    // back on any return below that comes before the commit
+    NameReservationGuard nameReservation;
+    switch (factionChangeInfo->Name == oldName ? NameReservationMgr::Result::Reserved
+        : nameReservation.Reserve(factionChangeInfo->Name, GetAccountId(), GetBattlenetAccountId()))
+    {
+        case NameReservationMgr::Result::Reserved:
+            break;
+        case NameReservationMgr::Result::Taken:
+            SendCharFactionChange(CHAR_CREATE_NAME_IN_USE, factionChangeInfo.get());
+            return;
+        default:
+            SendCharFactionChange(CHAR_CREATE_ERROR, factionChangeInfo.get());
+            return;
     }
 
     // All checks are fine, deal with race change now
@@ -3077,6 +3171,8 @@ void WorldSession::HandleCharRaceOrFactionChangeCallback(std::shared_ptr<WorldPa
     }
 
     CharacterDatabase.CommitTransaction(trans);
+    nameReservation.Commit();
+    sNameReservationMgr->Attach(factionChangeInfo->Name, factionChangeInfo->Surname, GetAccountId(), GetBattlenetAccountId(), lowGuid);
 
     // update the cache only when the change is saved: a failed attempt left the new race cached, so every retry was
     // checked against the wrong faction
@@ -3251,11 +3347,28 @@ void WorldSession::HandleCharUndeleteOpcode(WorldPackets::Character::UndeleteCha
             }
         }
 
+        // Everlake: the name must still be this Battle.net account's (another account may have it after the grace period)
+        NameReservationGuard nameReservation;
+        switch (nameReservation.Reserve(undeleteInfo->Name, GetAccountId(), GetBattlenetAccountId()))
+        {
+            case NameReservationMgr::Result::Reserved:
+                break;
+            case NameReservationMgr::Result::Taken:
+                SendUndeleteCharacterResponse(CHARACTER_UNDELETE_RESULT_ERROR_NAME_TAKEN_BY_THIS_ACCOUNT, undeleteInfo.get());
+                return;
+            default:
+                SendUndeleteCharacterResponse(CHARACTER_UNDELETE_RESULT_ERROR_UNKNOWN, undeleteInfo.get());
+                return;
+        }
+
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_RESTORE_DELETE_INFO);
         stmt->setString(0, undeleteInfo->Name);
         stmt->setUInt32(1, GetAccountId());
         stmt->setUInt64(2, undeleteInfo->CharacterGuid.GetCounter());
         CharacterDatabase.Execute(stmt);
+        nameReservation.Commit();
+        sNameReservationMgr->Attach(undeleteInfo->Name, sCharacterCache->GetCharacterSurnameByGuid(undeleteInfo->CharacterGuid),
+            GetAccountId(), GetBattlenetAccountId(), undeleteInfo->CharacterGuid.GetCounter());
 
         LoginDatabasePreparedStatement* loginStmt = LoginDatabase.GetPreparedStatement(LOGIN_UPD_LAST_CHAR_UNDELETE);
         loginStmt->setUInt32(0, GetBattlenetAccountId());

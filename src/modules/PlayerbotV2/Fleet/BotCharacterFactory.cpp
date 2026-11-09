@@ -13,6 +13,7 @@
 #include "DBCEnums.h"
 #include "DB2Stores.h"
 #include "DB2Structure.h"
+#include "NameReservationMgr.h"
 #include "RaceMask.h"
 #include <random>
 #include "Log.h"
@@ -303,6 +304,10 @@ BotCharacterFactory::Result BotCharacterFactory::Create(
 
     if (sCharacterCache->GetCharacterCacheByName(normalized))
         return {false, "name already in use", {}};
+
+    // Everlake: a name a player holds on any realm (in use or within its grace period) is never a bot's
+    if (!NameReservation::CanUse(sNameReservationMgr->Check(normalized, 0)))
+        return {false, "name is reserved by a player (name_reservation)", {}};
 
     // Acquire a slot from the dedicated bot account pool. The new char
     // is owned by that pool account, NOT the GM's. AcquireSlot returns 0

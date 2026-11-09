@@ -17,10 +17,12 @@
 
 #include "PlayerDump.h"
 #include "AccountMgr.h"
+#include "BattlenetAccountMgr.h"
 #include "CharacterCache.h"
 #include "Common.h"
 #include "DatabaseEnv.h"
 #include "Log.h"
+#include "NameReservationMgr.h"
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "StringConvert.h"
@@ -889,8 +891,13 @@ DumpReturn PlayerDumpReader::LoadDump(std::istream& input, uint32 account, std::
     if (!normalizePlayerName(name))
         name.clear();
 
+    uint32 bnetAccount = Battlenet::AccountMgr::GetIdByGameAccount(account);
     if (ObjectMgr::CheckPlayerName(name, sWorld->GetDefaultDbcLocale(), true) == CHAR_NAME_SUCCESS)
     {
+        // Everlake: a bot on this realm holding a name this account may have gives it up
+        if (!sNameReservationMgr->IsExempt(account))
+            sNameReservationMgr->TryYield(name, bnetAccount);
+
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHECK_NAME);
         stmt->setString(0, name);
 
@@ -899,6 +906,12 @@ DumpReturn PlayerDumpReader::LoadDump(std::istream& input, uint32 account, std::
     }
     else
         name.clear();
+
+    // Everlake: a name another Battle.net account holds on any realm is in use too: the dump's name with a forced rename
+    NameReservationGuard nameReservation;
+    if (!name.empty() && nameReservation.Reserve(name, account, bnetAccount) != NameReservationMgr::Result::Reserved)
+        name.clear();
+    bool const reservedName = !name.empty();
 
     // name encoded or empty
     newguid = std::to_string(guid);
@@ -1052,6 +1065,9 @@ DumpReturn PlayerDumpReader::LoadDump(std::istream& input, uint32 account, std::
         return DUMP_FILE_BROKEN;
 
     CharacterDatabase.CommitTransaction(trans);
+    nameReservation.Commit();
+    if (reservedName)
+        sNameReservationMgr->Attach(name, "", account, bnetAccount, guid);
 
     // in case of name conflict player has to rename at login anyway
     sCharacterCache->AddCharacterCacheEntry(ObjectGuid::Create<HighGuid::Player>(guid), account, name, gender, race, playerClass, level, false);
