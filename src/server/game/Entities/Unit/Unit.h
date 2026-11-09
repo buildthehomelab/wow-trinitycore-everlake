@@ -1737,6 +1737,9 @@ class TC_GAME_API Unit : public WorldObject
         static void CalcHealAbsorb(HealInfo& healInfo);
 
         void UpdateSpeed(UnitMoveType mtype);
+        // Everlake: speed rate from the best main bonus (percent), the product of the stacking bonuses and the best
+        // non-stacking bonus (both multipliers): the larger multiplier, then the main bonus on top
+        static float CombineSpeedBonuses(float mainSpeedMod, float stackBonus, float nonStackBonus);
         float GetSpeed(UnitMoveType mtype) const;
         float GetSpeedRate(UnitMoveType mtype) const { return m_speed_rate[mtype]; }
         void SetSpeed(UnitMoveType mtype, float newValue);

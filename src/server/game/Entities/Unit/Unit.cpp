@@ -9027,11 +9027,21 @@ void Unit::SetVisible(bool x)
     UpdateObjectVisibility();
 }
 
+float Unit::CombineSpeedBonuses(float mainSpeedMod, float stackBonus, float nonStackBonus)
+{
+    float speed = std::max(nonStackBonus, stackBonus);
+    if (mainSpeedMod)
+        AddPct(speed, mainSpeedMod);
+    return speed;
+}
+
 void Unit::UpdateSpeed(UnitMoveType mtype)
 {
+    // Everlake: bonuses of different kinds multiply (stack_bonus and non_stack_bonus are multipliers, main_speed_mod a
+    // percent applied on top), as before TrinityCore a1845983e3 made them add up; see docs/upstream-prs/trinitycore-a1845983e3.md
     float main_speed_mod  = 0.0f;
-    float stack_bonus     = 0.0f;
-    float non_stack_bonus = 0.0f;
+    float stack_bonus     = 1.0f;
+    float non_stack_bonus = 1.0f;
     float min_speed       = 0.01f;
     float max_speed       = 100.0f;
 
@@ -9048,20 +9058,20 @@ void Unit::UpdateSpeed(UnitMoveType mtype)
             if (IsMounted()) // Use on mount auras
             {
                 main_speed_mod  = GetMaxPositiveAuraModifier(SPELL_AURA_MOD_INCREASE_MOUNTED_SPEED);
-                stack_bonus     = GetTotalAuraModifier(SPELL_AURA_MOD_MOUNTED_SPEED_ALWAYS);
-                non_stack_bonus = GetMaxPositiveAuraModifier(SPELL_AURA_MOD_MOUNTED_SPEED_NOT_STACK);
+                stack_bonus     = GetTotalAuraMultiplier(SPELL_AURA_MOD_MOUNTED_SPEED_ALWAYS);
+                non_stack_bonus += GetMaxPositiveAuraModifier(SPELL_AURA_MOD_MOUNTED_SPEED_NOT_STACK) / 100.0f;
             }
             else
             {
                 main_speed_mod  = std::max(GetMaxPositiveAuraModifier(SPELL_AURA_MOD_INCREASE_SPEED),
                                            GetMaxPositiveAuraModifier(SPELL_AURA_MOD_INCREASE_SPEED_NO_CONTROL));
-                stack_bonus     = GetTotalAuraModifier(SPELL_AURA_MOD_SPEED_ALWAYS);
-                non_stack_bonus = GetMaxPositiveAuraModifier(SPELL_AURA_MOD_SPEED_NOT_STACK);
+                stack_bonus     = GetTotalAuraMultiplier(SPELL_AURA_MOD_SPEED_ALWAYS);
+                non_stack_bonus += GetMaxPositiveAuraModifier(SPELL_AURA_MOD_SPEED_NOT_STACK) / 100.0f;
 
                 // Classic 1.60 Legacy perk The Quick and the Dead 1225500: movement speed while dead (ghost)
                 if (Player const* player = ToPlayer(); player && HasAuraType(SPELL_AURA_GHOST))
                     if (int32 ghostSpeed = player->GetClassicLegacyPerkAmount(1225500, EFFECT_0))
-                        stack_bonus += ghostSpeed;
+                        stack_bonus *= 1.0f + ghostSpeed / 100.0f;
             }
             break;
         }
@@ -9074,7 +9084,7 @@ void Unit::UpdateSpeed(UnitMoveType mtype)
                 stack_bonus *= IsControlledByPlayer()
                     ? playerBaseMoveSpeed[MOVE_RUN] / playerBaseMoveSpeed[MOVE_RUN_BACK]
                     : baseMoveSpeed[MOVE_RUN] / baseMoveSpeed[MOVE_RUN_BACK];
-                stack_bonus += uncontrolled;
+                stack_bonus += uncontrolled / 100.0f;
             }
             break;
         }
@@ -9088,14 +9098,14 @@ void Unit::UpdateSpeed(UnitMoveType mtype)
             if (IsMounted())
             {
                 main_speed_mod  = GetMaxPositiveAuraModifier(SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED);
-                stack_bonus     = GetTotalAuraModifier(SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED_ALWAYS);
-                non_stack_bonus = GetMaxPositiveAuraModifier(SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED_NOT_STACK);
+                stack_bonus     = GetTotalAuraMultiplier(SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED_ALWAYS);
+                non_stack_bonus += GetMaxPositiveAuraModifier(SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED_NOT_STACK) / 100.0f;
             }
             else
             {
                 main_speed_mod  = GetMaxPositiveAuraModifier(SPELL_AURA_MOD_INCREASE_FLIGHT_SPEED);
-                stack_bonus     = GetTotalAuraModifier(SPELL_AURA_MOD_INCREASE_FLIGHT_SPEED_ALWAYS);
-                non_stack_bonus = GetMaxPositiveAuraModifier(SPELL_AURA_MOD_INCREASE_FLIGHT_SPEED_NOT_STACK);
+                stack_bonus     = GetTotalAuraMultiplier(SPELL_AURA_MOD_INCREASE_FLIGHT_SPEED_ALWAYS);
+                non_stack_bonus += GetMaxPositiveAuraModifier(SPELL_AURA_MOD_INCREASE_FLIGHT_SPEED_NOT_STACK) / 100.0f;
             }
             break;
         }
@@ -9105,8 +9115,7 @@ void Unit::UpdateSpeed(UnitMoveType mtype)
     }
 
     // now we ready for speed calculation
-    float speed = 1.0f;
-    AddPct(speed, main_speed_mod + std::max(non_stack_bonus, stack_bonus));
+    float speed = CombineSpeedBonuses(main_speed_mod, stack_bonus, non_stack_bonus);
 
     switch (mtype)
     {
