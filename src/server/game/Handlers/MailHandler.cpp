@@ -30,9 +30,11 @@
 #include "Log.h"
 #include "Mail.h"
 #include "MailPackets.h"
+#include "MailRecipient.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "RealmList.h"
 #include "World.h"
 
 bool WorldSession::CanOpenMailBox(ObjectGuid guid)
@@ -87,8 +89,25 @@ void WorldSession::HandleSendMail(WorldPackets::Mail::SendMail& sendMail)
     }
 
     ObjectGuid receiverGuid;
-    if (normalizePlayerName(sendMail.Info.Target))
-        receiverGuid = sCharacterCache->GetCharacterGuidByName(sendMail.Info.Target);
+    {
+        std::shared_ptr<Realm const> currentRealm = sRealmList->GetCurrentRealm();
+        Trinity::Mail::RecipientName recipient = Trinity::Mail::SplitRecipient(sendMail.Info.Target, currentRealm ? std::string_view(currentRealm->Name) : std::string_view());
+        std::string& recipientName = recipient.Name;
+        std::string const& recipientSurname = recipient.Surname;
+
+        if (!recipientName.empty() && normalizePlayerName(recipientName))
+        {
+            if (!recipientSurname.empty())
+            {
+                // character names are unique in this core, the surname has to match as well
+                CharacterCacheEntry const* entry = sCharacterCache->GetCharacterCacheByName(recipientName);
+                if (entry && StringEqualI(entry->Surname, recipientSurname))
+                    receiverGuid = entry->Guid;
+            }
+            else
+                receiverGuid = sCharacterCache->GetCharacterGuidByName(recipientName);
+        }
+    }
 
     if (!receiverGuid)
     {
