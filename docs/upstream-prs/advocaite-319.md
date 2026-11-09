@@ -34,8 +34,9 @@ and achievement rows (none for 3820 today) are still multiplied. The arithmetic 
 
 **Test.** `tests/game/ClassicTalentRate.cpp` (`[ClassicTalentRate]`): rate 1 unchanged; rate 2 = 2 a level, 102 by 60;
 1.5 = 1, 2, 1... and 76; 0.5 = 0, 1... and 25; the five Talented rows are Unchanged, level rows Level, quest rows Scaled.
-Against #319 as merged, the Talented rows came out as Scaled and those five checks fail. PTR (realm with `Rate.Talent =
-2`): a level 12 character has 6 points and can spend them all; with Talented 5/5 at level 10, 2 + 5 = 7 and Apply Changes
-succeeds; the worldserver log shows ">> Rate.Talent = 2: 102 talent points by the level cap instead of 51".
+Under #319's rule (every row that is not a level row is multiplied) the five Talented rows would be Scaled, so those
+five checks fail against it. PTR (realm with `Rate.Talent = 2`): a level 12 character has 6 points and can spend them
+all; with Talented 5/5 at level 10, 2 + 5 = 7 and Apply Changes succeeds; the worldserver log shows ">> Rate.Talent = 2:
+102 talent points by the level cap instead of 51".
 
 **Verdict:** take, with our change on top.
