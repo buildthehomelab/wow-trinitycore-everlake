@@ -29,6 +29,8 @@ namespace DBUpdaterSql
     // worldserver, sometimes ran nothing at all while exiting with success (2026-10-05). The file is cut into chunks at
     // statement ends (outside strings and comments).
     // Splits SQL text at the `;` that end statements, skipping strings, quoted names and comments; whole statements only.
+    // `DELIMITER x` lines (the mysql command line client's command, used by TrinityCore files that create a procedure) are
+    // followed and dropped: until the next one, statements end at x, and each is returned ending in `;`.
     TC_DATABASE_API std::vector<std::string> SplitStatements(std::string const& text);
 }
 

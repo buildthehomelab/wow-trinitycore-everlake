@@ -16,12 +16,15 @@
  */
 
 #include "SqlStatementSplitter.h"
+#include <cctype>
+#include <string_view>
 
 // splits SQL text at the `;` that end statements, skipping strings, quoted names and comments; whole statements only
 std::vector<std::string> DBUpdaterSql::SplitStatements(std::string const& text)
 {
     std::vector<std::string> statements;
     std::string current;
+    std::string delimiter = ";";
     size_t i = 0;
     size_t const n = text.size();
     auto flush = [&]()
@@ -31,9 +34,38 @@ std::vector<std::string> DBUpdaterSql::SplitStatements(std::string const& text)
         current.clear();
     };
     auto isSpace = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+    auto isBlank = [&]() { return current.find_first_not_of(" \t\r\n") == std::string::npos; };
+    // the mysql command line client's DELIMITER command, at the start of a statement: `DELIMITER ;;` ... `END;;` ... `DELIMITER ;`
+    static constexpr std::string_view delimiterKeyword = "DELIMITER";
+    auto isDelimiterCommand = [&](size_t at)
+    {
+        size_t const length = delimiterKeyword.size();
+        if (at + length >= n || !isSpace(text[at + length]) || text[at + length] == '\n')
+            return false;
+        for (size_t k = 0; k < length; ++k)
+            if (std::toupper(static_cast<unsigned char>(text[at + k])) != delimiterKeyword[k])
+                return false;
+        return true;
+    };
     while (i < n)
     {
         char const c = text[i];
+        if (isBlank() && isDelimiterCommand(i))
+        {
+            size_t lineEnd = text.find('\n', i);
+            if (lineEnd == std::string::npos)
+                lineEnd = n;
+            std::string_view argument(text.data() + i + delimiterKeyword.size(), lineEnd - i - delimiterKeyword.size());
+            while (!argument.empty() && isSpace(argument.front()))
+                argument.remove_prefix(1);
+            while (!argument.empty() && isSpace(argument.back()))
+                argument.remove_suffix(1);
+            if (!argument.empty())
+                delimiter.assign(argument);
+            current.clear();
+            i = lineEnd;
+            continue;
+        }
         // comments: `-- ` (or `--` at the end of the text), `#`, `/* */` (`/*!` version comments are kept as code)
         if (c == '-' && i + 1 < n && text[i + 1] == '-' && (i + 2 >= n || isSpace(text[i + 2])))
         {
@@ -86,8 +118,13 @@ std::vector<std::string> DBUpdaterSql::SplitStatements(std::string const& text)
         }
         current += c;
         ++i;
-        if (c == ';')
+        if (current.size() >= delimiter.size() && current.compare(current.size() - delimiter.size(), delimiter.size(), delimiter) == 0)
+        {
+            // the server knows only `;`: a statement written with another delimiter is sent with `;`
+            if (delimiter != ";")
+                current.replace(current.size() - delimiter.size(), delimiter.size(), ";");
             flush();
+        }
     }
     flush();
     return statements;
