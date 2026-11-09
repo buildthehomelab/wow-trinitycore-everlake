@@ -41,10 +41,12 @@
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "SocialMgr.h"
+#include "StringFormat.h"
 #include "World.h"
 #include "WorldSession.h"
 #include "api/client/v1/club_listener.pb.h"
 #include "api/client/v1/club_membership_listener.pb.h"
+#include <algorithm>
 
 size_t const MAX_GUILD_BANK_TAB_TEXT_LEN = 500;
 
@@ -262,6 +264,29 @@ void Guild::RankInfo::LoadFromDB(Field* fields)
     m_bankMoneyPerDay   = fields[5].GetUInt32();
     if (m_rankId == GuildRankId::GuildMaster)           // Prevent loss of leader rights
         m_rights |= GR_RIGHT_ALL;
+
+    // A rank saved with an empty name (an empty rename, or a guild made without rank names) shows as a blank line in the
+    // guild window and the roster. Give it the default name for its place in the order; it is saved on the next change.
+    if (m_name.empty())
+        m_name = GetDefaultRankName(m_rankOrder);
+}
+
+std::string Guild::RankInfo::GetDefaultRankName(GuildRankOrder rankOrder)
+{
+    uint32 textId = LANG_GUILD_INITIATE;
+    switch (AsUnderlyingType(rankOrder))
+    {
+        case 0: textId = LANG_GUILD_MASTER; break;
+        case 1: textId = LANG_GUILD_OFFICER; break;
+        case 2: textId = LANG_GUILD_VETERAN; break;
+        case 3: textId = LANG_GUILD_MEMBER; break;
+        default: break;
+    }
+
+    std::string name = sObjectMgr->GetTrinityString(textId, DEFAULT_LOCALE);
+    if (name.empty())
+        name = Trinity::StringFormat("Rank {}", AsUnderlyingType(rankOrder) + 1);
+    return name;
 }
 
 void Guild::RankInfo::SaveToDB(CharacterDatabaseTransaction trans) const
@@ -303,7 +328,8 @@ void Guild::RankInfo::CreateMissingTabsIfNeeded(uint8 tabs, CharacterDatabaseTra
 
 void Guild::RankInfo::SetName(std::string_view name)
 {
-    if (m_name == name)
+    // An empty name would leave a blank rank in the guild window; keep the old one.
+    if (name.empty() || m_name == name)
         return;
 
     m_name = name;
@@ -1938,7 +1964,10 @@ void Guild::HandleAddNewRank(WorldSession* session, std::string_view name)
     if (_IsLeader(session->GetPlayer()))
     {
         CharacterDatabaseTransaction trans(nullptr);
-        if (_CreateRank(trans, name, GR_RIGHT_GCHATLISTEN | GR_RIGHT_GCHATSPEAK))
+        std::string rankName(name);
+        if (rankName.empty())
+            rankName = RankInfo::GetDefaultRankName(GuildRankOrder(size));
+        if (_CreateRank(trans, rankName, GR_RIGHT_GCHATLISTEN | GR_RIGHT_GCHATSPEAK))
         {
             WorldPackets::Guild::GuildEventRanksUpdated eventPacket;
             BroadcastPacket(eventPacket.Write());
@@ -1957,7 +1986,8 @@ void Guild::HandleRemoveRank(WorldSession* session, GuildRankOrder rankOrder)
         return rank.GetOrder() == rankOrder;
     });
 
-    if (rankItr == m_ranks.end())
+    // the guild master rank can never go (Validate would rebuild every rank at the next start)
+    if (rankItr == m_ranks.end() || rankItr->GetId() == GuildRankId::GuildMaster)
         return;
 
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
@@ -2656,6 +2686,24 @@ bool Guild::LoadBankItemFromDB(Field* fields)
 }
 
 // Validates guild data loaded from database. Returns false if guild should be deleted.
+bool IsGuildRankSetValid(std::span<std::pair<GuildRankId, GuildRankOrder> const> ranks)
+{
+    if (std::ranges::none_of(ranks, [](std::pair<GuildRankId, GuildRankOrder> const& rank) { return rank.first == GuildRankId::GuildMaster; }))
+        return false;
+
+    std::vector<bool> orderSeen(ranks.size(), false);
+    for (auto const& [rankId, rankOrder] : ranks)
+    {
+        std::size_t order = AsUnderlyingType(rankOrder);
+        if (order >= ranks.size() || orderSeen[order])
+            return false;
+
+        orderSeen[order] = true;
+    }
+
+    return true;
+}
+
 bool Guild::Validate()
 {
     // Validate ranks data
@@ -2674,17 +2722,21 @@ bool Guild::Validate()
     }
     else
     {
-        for (uint8 rankId = 0; rankId < ranks; ++rankId)
+        // A deleted rank leaves a gap in the rank ids (0, 1, 3) while the orders are closed up again (0, 1, 2), so the
+        // sequence check goes by order. Looking the ranks up by id found no rank for the gap and crashed the server at start.
+        std::vector<std::pair<GuildRankId, GuildRankOrder>> rankKeys;
+        rankKeys.reserve(m_ranks.size());
+        for (RankInfo const& rank : m_ranks)
+            rankKeys.emplace_back(rank.GetId(), rank.GetOrder());
+
+        if (!IsGuildRankSetValid(rankKeys))
         {
-            RankInfo* rankInfo = GetRankInfo(GuildRankId(rankId));
-            if (rankInfo->GetId() != GuildRankId(rankId))
-            {
-                TC_LOG_ERROR("guild", "Guild {} has broken rank id {}, creating default set of ranks...", m_id, rankId);
-                broken_ranks = true;
-            }
-            else
-                rankInfo->CreateMissingTabsIfNeeded(_GetPurchasedTabsSize(), trans, true);
+            TC_LOG_ERROR("guild", "Guild {} has no guild master rank or a gap in its rank order, creating default set of ranks...", m_id);
+            broken_ranks = true;
         }
+        else
+            for (RankInfo& rank : m_ranks)
+                rank.CreateMissingTabsIfNeeded(_GetPurchasedTabsSize(), trans, true);
     }
 
     if (broken_ranks)

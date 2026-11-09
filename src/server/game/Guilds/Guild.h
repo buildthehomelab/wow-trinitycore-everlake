@@ -27,6 +27,7 @@
 #include "SharedDefines.h"
 #include "UniqueTrackablePtr.h"
 #include <set>
+#include <span>
 #include <unordered_map>
 
 class GuildAchievementMgr;
@@ -98,6 +99,11 @@ enum class GuildRankId : uint8
 };
 
 enum class GuildRankOrder : uint8 { };
+
+// A guild's ranks, as (id, order) pairs, make a usable set when one of them is the guild master rank (id 0) and the orders run
+// from 0 to count - 1 with none missing or doubled. The ids may have gaps: deleting a rank leaves one (0, 1, 3) while the
+// orders close up again (0, 1, 2).
+TC_GAME_API bool IsGuildRankSetValid(std::span<std::pair<GuildRankId, GuildRankOrder> const> ranks);
 
 enum GuildRankRights
 {
@@ -576,6 +582,7 @@ class TC_GAME_API Guild
                     m_guildId(guildId), m_rankId(rankId), m_rankOrder(rankOrder), m_name(name), m_rights(rights), m_bankMoneyPerDay(money) { }
 
                 void LoadFromDB(Field* fields);
+                static std::string GetDefaultRankName(GuildRankOrder rankOrder);
                 void SaveToDB(CharacterDatabaseTransaction trans) const;
 
                 GuildRankId GetId() const { return m_rankId; }
