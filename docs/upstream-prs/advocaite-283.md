@@ -26,3 +26,10 @@ then no `ItemClass` row), so it fails; with the change all pass. PTR: sell a que
 vendor pays the tooltip price; try disenchanting item 252424 (Black Whelp Slippers) to see whether it is refused.
 
 **Verdict:** take. The user should know about the disenchant side effect (422 rare items lose disenchanting).
+
+**Decision (user, 2026-11-09): keep the selling fix, keep disenchanting.** `Item::GetBaseDisenchantLoot` refused items whose
+sell price is 0, and after #283 that price is the Classic one, so the 422 items lost disenchanting by accident. The check now
+also accepts the retail price (`Item::GetRetailSellPrice`, the formula `GetSellPrice` used before #283), so exactly the items
+that could be disenchanted before still can. Vendors still pay the tooltip price. No unit test for the disenchant half: the
+retail price needs the ItemClass index, which only a full client data load builds. PTR: disenchant 252424 (Black Whelp
+Slippers); it must give materials, and selling it must still be refused.

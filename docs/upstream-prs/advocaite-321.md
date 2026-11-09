@@ -35,3 +35,7 @@ shows "250 of 750" then "350 of 750" for PvP Rank Points; at 750 the rank goes t
 
 **Verdict:** take, with our change on top. Decide whether Everlake keeps the 250/100 defaults (invented, uncapped) or sets
 both to 0 until there is a source.
+
+**Decision (user, 2026-11-09): keep 250 / 100.** No public source gives the real numbers; they are realm settings
+(`Classic.PvPRank.*`), so they change without a rebuild when one turns up. Set both in the realm config so the worldserver
+does not warn about a missing setting at each battleground end.

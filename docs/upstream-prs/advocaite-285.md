@@ -22,3 +22,10 @@ Elwynn (for example 0 0 -1000 0). Expected: you appear at the nearest graveyard 
 battleground the battleground's own under-map handling still runs.
 
 **Verdict:** take. The user may want to decide on the escape risk (a death in combat, a repop out of combat would close it).
+
+**Decision (user, 2026-11-09): taken with a split** (fork PR "decisions 2026-11-09"). Out of combat in the open world the
+player goes back to the graveyard alive, as #285 does. In combat, or inside any instance (dungeon, raid, arena; battlegrounds
+handle it first), the player dies as before #285, so a deliberate fall is no free escape. The rule is
+`Trinity::FallOutOfWorld::For` (`Entities/Player/FallOutOfWorld.h`), tested in `tests/game/FallOutOfWorld.cpp`
+(`[FallOutOfWorld]`). PTR: fall through a hole out of combat (graveyard, alive); again with a mob attacking (dead); and in a
+dungeon (dead).
