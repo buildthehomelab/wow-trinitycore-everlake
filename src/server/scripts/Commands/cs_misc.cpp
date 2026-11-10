@@ -18,6 +18,7 @@
 #include "ScriptMgr.h"
 #include "AccountMgr.h"
 #include "ArenaTeamMgr.h"
+#include "Battleground.h"
 #include "CellImpl.h"
 #include "CharacterCache.h"
 #include "Chat.h"
@@ -420,7 +421,9 @@ public:
             {
                 // all's well, set bg id
                 // when porting out from the bg, it will be reset to 0
-                _player->SetBattlegroundId(target->GetBattlegroundId(), target->GetBattlegroundTypeId(), BATTLEGROUND_QUEUE_NONE);
+                // Player::GetBattleground() finds the instance by its queue id, so take the target's (none = no battleground found)
+                Battleground const* targetBg = target->GetBattleground();
+                _player->SetBattlegroundId(target->GetBattlegroundId(), target->GetBattlegroundTypeId(), targetBg ? targetBg->GetQueueID() : BATTLEGROUND_QUEUE_NONE);
                 // remember current position as entry point for return at bg end teleportation
                 if (!_player->GetMap()->IsBattlegroundOrArena())
                     _player->SetBattlegroundEntryPoint();
@@ -551,7 +554,9 @@ public:
             {
                 // all's well, set bg id
                 // when porting out from the bg, it will be reset to 0
-                target->SetBattlegroundId(_player->GetBattlegroundId(), _player->GetBattlegroundTypeId(), BATTLEGROUND_QUEUE_NONE);
+                // Player::GetBattleground() finds the instance by its queue id, so take ours (none = no battleground found)
+                Battleground const* ownBg = _player->GetBattleground();
+                target->SetBattlegroundId(_player->GetBattlegroundId(), _player->GetBattlegroundTypeId(), ownBg ? ownBg->GetQueueID() : BATTLEGROUND_QUEUE_NONE);
                 // remember current position as entry point for return at bg end teleportation
                 if (!target->GetMap()->IsBattlegroundOrArena())
                     target->SetBattlegroundEntryPoint();
