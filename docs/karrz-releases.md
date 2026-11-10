@@ -50,3 +50,4 @@ pin; record the move here before porting from that release.
 ## Imported
 
 2026-11-08/09: v0.1.12 to v0.1.33 (34 releases), each checked against its zip with `verify.sh`.
+2026-11-10: v0.1.34 (pin unchanged, `f63ffc12b3`), checked with `verify.sh`.
