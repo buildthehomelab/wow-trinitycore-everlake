@@ -13,6 +13,8 @@ local function run(members, inInstance, kind, maxPlayers)
     GetNumGroupMembers = function() return members end,
     IsInInstance = function() return inInstance, kind end,
     GetInstanceInfo = function() return "x", kind, 0, "", maxPlayers end,
+    UI = {},   -- the add-on's window-builder table (defined above the block); the dungeon list hangs off it
+    L = setmetatable({}, { __index = function(_, k) return k end }),   -- English text, as the add-on's L with no locale
   }, { __index = _G })
   setfenv(loadstring(src), env)()()
   local t = { tank = 0, healer = 0, dps = 0 }

@@ -217,12 +217,15 @@ bool ChaseMovementGenerator::Update(Unit* owner, uint32 diff)
             bool success = _path->CalculatePath(x, y, z, owner->CanFly());
             if (!success || (_path->GetPathType() & (PATHFIND_NOPATH /* | PATHFIND_INCOMPLETE*/)))
             {
+                if (_noPathStreak < 255)
+                    ++_noPathStreak;
                 if (cOwner)
                     cOwner->SetCannotReachTarget(true);
                 owner->StopMoving();
                 return true;
             }
 
+            _noPathStreak = 0;
             if (shortenPath)
                 _path->ShortenPathUntilDist(PositionToVector3(target->GetPosition()), maxTarget);
 

@@ -42,6 +42,8 @@ class ChaseMovementGenerator : public MovementGenerator, public AbstractFollower
         MovementGeneratorType GetMovementGeneratorType() const override { return CHASE_MOTION_TYPE; }
 
         void UnitSpeedChanged() override { _lastTargetPosition.reset(); }
+        // repaths in a row that found no path to the target (0 after one that did); read by the bots to give up on a mob they can't reach
+        uint8 GetNoPathStreak() const { return _noPathStreak; }
 
     private:
         static constexpr uint32 RANGE_CHECK_INTERVAL = 100; // time (ms) until we attempt to recalculate
@@ -55,6 +57,7 @@ class ChaseMovementGenerator : public MovementGenerator, public AbstractFollower
         bool _movingTowards = true;
         bool _mutualChase = true;
         bool _throttleRepath = false;   // owner is a playerbot, or a pet / guardian of a player: see Update
+        uint8 _noPathStreak = 0;
 };
 
 #endif
