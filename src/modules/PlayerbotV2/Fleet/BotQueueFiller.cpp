@@ -1265,17 +1265,18 @@ Placement ChoosePlacement(Team team, uint32 need, uint32 bg_type_id, uint8 brack
             best_humans = humans; best_bots = bots;
         }
     };
-    BattlegroundTemplate const* tmpl = sBattlegroundMgr->GetBattlegroundTemplateByTypeId(BattlegroundTypeId(bg_type_id));
-    if (!tmpl) return best;
-    for (int32 map_id : tmpl->MapIDs)
-        for (Battleground* bg : sBattlegroundMgr->GetBGFreeSlotQueueStore(map_id))
-            if (bg && uint32(bg->GetTypeID()) == bg_type_id) consider(bg);
+    if (!sBattlegroundMgr->GetBattlegroundTemplateByTypeId(BattlegroundTypeId(bg_type_id))) return best;
+    // a queue only invites into the instances it made (TrinityCore e5c9acdf34): a player waiting for Warsong Gulch is not put into a
+    // Warsong Gulch match the random queue made, so the candidates are the instances of the player's own queue
+    for (auto const& [queue_id, free_slot_store] : sBattlegroundMgr->GetAllBGFreeSlotQueues())
+        for (Battleground* bg : free_slot_store)
+            if (bg && uint32(bg->GetQueueID().BattlemasterListId) == bg_type_id) consider(bg);
     // full instances leave the free-slot store: reach them through the bots inside
     for (BotId id : Services::Lifecycle().snapshot_ids())
     {
         Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(id));
         Battleground* bg = bot ? bot->GetBattleground() : nullptr;
-        if (bg && uint32(bg->GetTypeID()) == bg_type_id) consider(bg);
+        if (bg && uint32(bg->GetQueueID().BattlemasterListId) == bg_type_id) consider(bg);
     }
     return best;
 }

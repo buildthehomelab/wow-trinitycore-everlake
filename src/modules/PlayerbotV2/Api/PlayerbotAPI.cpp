@@ -9066,8 +9066,7 @@ Result API::bg_port(uint16 bg_type_id, bool accept)
     PVPDifficultyEntry const* bracket = DB2Manager::GetBattlegroundBracketByLevel(
         bg_tmpl->MapIDs.front(), p_->GetLevel());
 
-    Battleground* bg = sBattlegroundMgr->GetBattleground(ginfo.IsInvitedToBGInstanceGUID,
-        bgTypeId == BATTLEGROUND_AA ? BATTLEGROUND_TYPE_NONE : bgTypeId);
+    Battleground* bg = sBattlegroundMgr->GetBattleground(ginfo.IsInvitedToBGInstanceGUID, qid);
 
     if (accept)
     {

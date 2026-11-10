@@ -1166,7 +1166,7 @@ bool BGQueueInviteEvent::Execute(uint64 /*e_time*/, uint32 /*p_time*/)
             BattlegroundMgr::BuildBattlegroundStatusNeedConfirmation(&battlefieldStatus, bg, player, queueSlot, player->GetBattlegroundQueueJoinTime(m_QueueId), INVITE_ACCEPT_WAIT_TIME - INVITATION_REMIND_TIME, m_QueueId);
             player->SendDirectMessage(battlefieldStatus.Write());
 
-            sScriptMgr->OnPlayerBattlegroundInvite(player, m_BgInstanceGUID, m_BgTypeId);
+            sScriptMgr->OnPlayerBattlegroundInvite(player, m_BgInstanceGUID, m_QueueId.BattlemasterListId);
         }
     }
     return true;                                            //event will be deleted
