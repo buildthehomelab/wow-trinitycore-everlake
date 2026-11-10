@@ -9,6 +9,9 @@ Shauren, 2026-10-25. Reviewed 2026-11-09 against `everlake` 029c5dd9ca. Spell da
 - No SQL.
 - **Needs c8c3514884** ("Implement sending destination coords in aura update packets", batch F): it uses `Aura::GetDst()`, which that commit adds. Without it `spell_dk.cpp` does not compile (seen in the batch G local build: "no member named 'GetDst' in 'Aura'").
 
-**Test.** None: no reachable code on Everlake. Not built (not on the branch).
+**Test.** None: no reachable code on Everlake.
 
-**Verdict:** take after batch F (c8c3514884) is in `everlake`; not on the batch G branch. Unreachable on Everlake either way.
+**Update 2026-11-10.** Batch F (c8c3514884, `Aura::GetDst()`) is in `everlake` (134d3d8b17); the pick applies cleanly there
+and `spell_dk.cpp` builds (local UBSan build, batch K).
+
+**Verdict:** take (batch K). Unreachable on Everlake.
