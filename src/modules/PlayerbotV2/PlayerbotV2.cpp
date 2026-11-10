@@ -4132,7 +4132,7 @@ void Module::FireDueBgPorts()
             {
                 // A human of this type is queued and not invited yet: TC's prep timer starts with the first player inside, so
                 // bots going in now would burn the human's wait. Hold until the human has an invitation (80 s expiry above).
-                if (Battleground const* held_bg = sBattlegroundMgr->GetBattleground(it->bg_instance_id, BattlegroundTypeId(it->bg_template_type_id)))
+                if (Battleground const* held_bg = sBattlegroundMgr->FindBattlegroundByInstanceId(it->bg_instance_id))
                     if (Fleet::BotQueueFiller::HasWaitingHuman(it->bg_template_type_id, uint8(held_bg->GetBracketId())))
                     {
                         ++it;
@@ -4153,9 +4153,7 @@ void Module::FireDueBgPorts()
             // Once flagged sticky, the gate stays open for that instance.
             if (!human_in_bg)
             {
-                Battleground* bg = sBattlegroundMgr->GetBattleground(
-                    it->bg_instance_id,
-                    BattlegroundTypeId(it->bg_template_type_id));
+                Battleground* bg = sBattlegroundMgr->FindBattlegroundByInstanceId(it->bg_instance_id);
                 if (bg)
                 {
                     for (auto const& [guid, _] : bg->GetPlayers())

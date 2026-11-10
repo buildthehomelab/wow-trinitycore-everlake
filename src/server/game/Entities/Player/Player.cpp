@@ -961,12 +961,14 @@ void Player::Update(uint32 p_time)
 
     // The pet remembered at login comes back a moment after the player is in the world, as a summon during play does. Created while the
     // Classic 1.60 client is still on its loading screen, the client froze on the pet (a warlock's demon out at logout).
+    // The companion out at logout (TrinityCore 2ae8e29d6c) waits for the same moment.
     if (m_petResummonDelay)
     {
         if (p_time >= m_petResummonDelay)
         {
             m_petResummonDelay = 0;
             ResummonPetTemporaryUnSummonedIfAny();
+            ResummonBattlePetTemporaryUnSummonedIfAny();
         }
         else
             m_petResummonDelay -= p_time;
@@ -18983,8 +18985,8 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         // "SELECT c.guid, account, name, race, class, gender, level, xp, money, inventorySlots, inventoryBagFlags, bagSlotFlags1, bagSlotFlags2, bagSlotFlags3, bagSlotFlags4, bagSlotFlags5, "
         // "bankSlots, bankTabs, bankBagFlags, restState, playerFlags, playerFlagsEx, "
         // "position_x, position_y, position_z, map, orientation, taximask, createTime, createMode, cinematic, totaltime, leveltime, rest_bonus, logout_time, is_logout_resting, resettalents_cost, "
-        // "resettalents_time, primarySpecialization, trans_x, trans_y, trans_z, trans_o, transguid, extra_flags, summonedPetNumber, at_login, zone, online, death_expire_time, taxi_path, dungeonDifficulty, "
-        // "totalKills, todayKills, yesterdayKills, chosenTitle, watchedFaction, drunk, "
+        // "resettalents_time, primarySpecialization, trans_x, trans_y, trans_z, trans_o, transguid, extra_flags, summonedPetNumber, lastSummonedBattlePet, at_login, zone, online, death_expire_time, "
+        // "taxi_path, dungeonDifficulty, totalKills, todayKills, yesterdayKills, chosenTitle, watchedFaction, drunk, "
         // "health, power1, power2, power3, power4, power5, power6, power7, power8, power9, power10, instance_id, activeTalentGroup, lootSpecId, exploredZones, knownTitles, actionBars, "
         // "raidDifficulty, legacyRaidDifficulty, fishingSteps, honor, honorLevel, honorRestState, honorRestBonus, numRespecs, "
         // "personalTabardEmblemStyle, personalTabardEmblemColor, personalTabardBorderStyle, personalTabardBorderColor, personalTabardBackgroundColor, transmogOutfitEquippedId, transmogOutfitLocked "
@@ -19032,6 +19034,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         ObjectGuid::LowType transguid;
         uint16 extra_flags;
         uint32 summonedPetNumber;
+        int64 lastSummonedBattlePet;
         uint16 at_login;
         uint16 zone;
         uint8 online;
@@ -19114,6 +19117,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
             transguid = fields[i++].GetUInt64();
             extra_flags = fields[i++].GetUInt16();
             summonedPetNumber = fields[i++].GetUInt32();
+            lastSummonedBattlePet = fields[i++].GetInt64();
             at_login = fields[i++].GetUInt16();
             zone = fields[i++].GetUInt16();
             online = fields[i++].GetUInt8();
@@ -19330,7 +19334,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     {
         Battleground* currentBg = nullptr;
         if (m_bgData.bgInstanceID)                                                //saved in Battleground
-            currentBg = sBattlegroundMgr->GetBattleground(m_bgData.bgInstanceID, BATTLEGROUND_TYPE_NONE);
+            currentBg = sBattlegroundMgr->GetBattleground(m_bgData.bgInstanceID, m_bgData.queueId);
 
         player_at_bg = currentBg && currentBg->IsPlayerInBattleground(GetGUID());
 
@@ -19647,6 +19651,10 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     // Classic 1.60: stable slots bought (BuyStableSlot)
     if (QueryResult stableSlots = CharacterDatabase.PQuery("SELECT slots FROM character_stable_slots WHERE guid = {}", GetGUID().GetCounter()))
         SetNumStableSlots(std::min<uint8>((*stableSlots)[0].GetUInt8(), MAX_CLASSIC_STABLE_SLOTS));
+
+    // companion pet summoned at last logout, resummoned once the player is in world
+    if (fields.lastSummonedBattlePet)
+        m_temporaryUnsummonedBattlePet = ObjectGuid::Create<HighGuid::BattlePet>(fields.lastSummonedBattlePet);
 
     // Honor system
     // Update Honor kills data
@@ -20092,7 +20100,9 @@ void Player::_LoadAuras(PreparedQueryResult auraResult, PreparedQueryResult effe
 
     /*
                     0         1      2           3                4           5           6            7           8              9          10             11
-    SELECT casterGuid, itemGuid, spell, effectMask, recalculateMask, difficulty, stackCount, maxDuration, remainTime, remainCharges, castItemId, castItemLevel FROM character_aura WHERE guid = ?
+    SELECT casterGuid, itemGuid, spell, effectMask, recalculateMask, difficulty, stackCount, maxDuration, remainTime, remainCharges, castItemId, castItemLevel,
+                         12            13            14            15            16
+           dstLocationMapId, dstLocationX, dstLocationY, dstLocationZ, dstLocationO FROM character_aura WHERE guid = ?
     */
     if (auraResult)
     {
@@ -20119,6 +20129,7 @@ void Player::_LoadAuras(PreparedQueryResult auraResult, PreparedQueryResult effe
             uint8 remainCharges = fields[9].GetUInt8();
             uint32 castItemId = fields[10].GetUInt32();
             int32 castItemLevel = fields[11].GetInt32();
+            WorldLocation dst(fields[12].GetInt32(), fields[13].GetFloat(), fields[14].GetFloat(), fields[15].GetFloat(), fields[16].GetFloat());
 
             SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(key.SpellId, difficulty);
             if (!spellInfo)
@@ -20155,6 +20166,10 @@ void Player::_LoadAuras(PreparedQueryResult auraResult, PreparedQueryResult effe
             else
                 remainCharges = 0;
 
+            if ((dst.GetMapId() != MAPID_INVALID && !sMapStore.HasRecord(dst.GetMapId()))
+                || !Trinity::IsValidMapCoord(dst.GetPositionX(), dst.GetPositionY(), dst.GetPositionZ(), dst.GetOrientation()))
+                dst = WorldLocation();
+
             AuraLoadEffectInfo& info = effectInfo[key];
             ObjectGuid castId = ObjectGuid::Create<HighGuid::Cast>(SPELL_CAST_SOURCE_NORMAL, GetMapId(), spellInfo->Id, GetMap()->GenerateLowGuid<HighGuid::Cast>());
             AuraCreateInfo createInfo(castId, spellInfo, difficulty, key.EffectMask, this);
@@ -20162,7 +20177,8 @@ void Player::_LoadAuras(PreparedQueryResult auraResult, PreparedQueryResult effe
                 .SetCasterGUID(casterGuid)
                 .SetBaseAmount(info.BaseAmounts.data())
                 .SetCastItem(itemGuid, castItemId, castItemLevel)
-                .SetStackAmount(stackCount);
+                .SetStackAmount(stackCount)
+                .SetDst(&dst);
 
             if (Aura* aura = Aura::TryCreate(createInfo))
             {
@@ -21749,6 +21765,7 @@ void Player::SaveToDB(LoginDatabaseTransaction loginTransaction, CharacterDataba
             stmt->setUInt32(index++, petStable->GetCurrentPet() && petStable->GetCurrentPet()->Health > 0 ? petStable->GetCurrentPet()->PetNumber : 0); // summonedPetNumber
         else
             stmt->setUInt32(index++, 0); // summonedPetNumber
+        stmt->setInt64(index++, (GetSummonedBattlePetGUID().IsEmpty() ? m_temporaryUnsummonedBattlePet : GetSummonedBattlePetGUID()).GetCounter()); // lastSummonedBattlePet
         stmt->setUInt16(index++, (uint16)m_atLoginFlags);
         stmt->setUInt16(index++, GetZoneId());
         stmt->setInt64(index++, m_deathExpireTime);
@@ -22044,6 +22061,11 @@ void Player::_SaveAuras(CharacterDatabaseTransaction trans)
         stmt->setUInt8(index++, aura->GetCharges());
         stmt->setUInt32(index++, aura->GetCastItemId());
         stmt->setInt32(index++, aura->GetCastItemLevel());
+        stmt->setInt32(index++, aura->GetDst().GetMapId());
+        stmt->setFloat(index++, aura->GetDst().GetPositionX());
+        stmt->setFloat(index++, aura->GetDst().GetPositionY());
+        stmt->setFloat(index++, aura->GetDst().GetPositionZ());
+        stmt->setFloat(index++, aura->GetDst().GetOrientation());
         trans->Append(stmt);
 
         for (AuraEffect const* effect : aura->GetAuraEffects())
@@ -26805,7 +26827,7 @@ Battleground* Player::GetBattleground() const
     if (GetBattlegroundId() == 0)
         return nullptr;
 
-    return sBattlegroundMgr->GetBattleground(GetBattlegroundId(), m_bgData.bgTypeID);
+    return sBattlegroundMgr->GetBattleground(GetBattlegroundId(), m_bgData.queueId);
 }
 
 uint32 Player::GetBattlegroundQueueJoinTime(BattlegroundQueueTypeId bgQueueTypeId) const
