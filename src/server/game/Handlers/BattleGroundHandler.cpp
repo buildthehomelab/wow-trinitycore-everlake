@@ -658,6 +658,7 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPackets::Battleground::Battl
     if (!bgTemplate)
     {
         TC_LOG_ERROR("network", "Battleground: template bg (all arenas) not found");
+        ChatHandler(this).PSendSysMessage(LANG_ARENA_DISABLED);
         return;
     }
 
@@ -683,6 +684,19 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPackets::Battleground::Battl
         return;
 
     Group* grp = _player->GetGroup();
+
+    // The queue takes the party as one team and does not count it, so a player alone queued for 2v2 got a 1 vs 2 match.
+    // A 2v2 needs a party of exactly 2 and a 3v3 a party of exactly 3 (real players or bots).
+    uint32 const partySize = grp ? grp->GetMembersCount() : 1u;
+    if (!sBattlegroundMgr->isArenaTesting() && partySize != arenatype)
+    {
+        WorldPackets::Battleground::BattlefieldStatusFailed battlefieldStatus;
+        BattlegroundMgr::BuildBattlegroundStatusFailed(&battlefieldStatus, bgQueueTypeId, _player, 0, ERR_ARENA_TEAM_PARTY_SIZE);
+        SendPacket(battlefieldStatus.Write());
+        ChatHandler(this).PSendSysMessage("A %uv%u arena needs a party of exactly %u (you have %u).", uint32(arenatype), uint32(arenatype), uint32(arenatype), partySize);
+        return;
+    }
+
     if (!grp)
     {
         grp = new Group();
