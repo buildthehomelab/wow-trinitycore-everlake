@@ -24,8 +24,8 @@ result always carries the bag result, attachment and count.
   `HandleMailReturnToSender` already used the same check on `everlake`. `MailCommandResult::Write` is unchanged; the
   three fields were zero in the cases that now get values.
 
-**Test.** `tests/game/ClassicWhoWords.cpp` ([ClassicWhoWords]): a Classic who request with 7 words is read whole (fails
-with TrinityCore's bound of 4: the read throws; see the PR for the run), and one word still works. PTR checks: `/who`
+**Test.** `tests/game/ClassicWhoWords.cpp` ([ClassicWhoWords]): a Classic who request with 7 words is read whole (with
+TrinityCore's bound of 4 put back it fails: "Attempted to read more array elements from packet 7 than allowed 4"), and one word still works. PTR checks: `/who`
 with five words; send a mail with plain text; shift-click an item while typing a mail body and send; delete a read mail.
 
 **Verdict:** take, with our fix for the who word count.
