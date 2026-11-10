@@ -58,7 +58,7 @@ Changed defaults that reach Everlake as they are:
 
 | Setting | Before | Now |
 |---|---|---|
-| `Playerbot.World.Pvp.Enable` | (no world PvP) | 1: world bots flag, hunt and attack in border and contested zones |
+| `Playerbot.World.Pvp.Enable` | (no world PvP) | 1: world bots flag, hunt and attack in border and contested zones (owner decision 2026-11-10: keep on) |
 | `PlayerbotV2.Guilds.Enabled` | 0 | 1: bot guilds, which invite by whisper (`PlayerbotV2.Guilds.InvitePlayers = 0` keeps real players out) |
 | `Playerbot.World.PoolMax` | 700 | 3000 sleeping bot characters built up in the background |
 | `Playerbot.Arena.BotOpponents` | (none) | 1 |
