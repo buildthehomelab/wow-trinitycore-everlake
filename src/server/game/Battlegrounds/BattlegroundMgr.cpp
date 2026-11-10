@@ -248,7 +248,10 @@ Battleground* BattlegroundMgr::GetBattleground(uint32 instanceId, BattlegroundQu
 
     BattlegroundDataContainer::const_iterator begin, end;
 
-    if (battlegroundTemplate->MapIDs.size() > 1)
+    // A queue that picks another template ("All Arenas" 6, the random battlegrounds) has its matches stored under the picked
+    // template, so look through all of them, also when it lists just one map (Classic: "All Arenas" has only map 2995, played as
+    // Mak'gora Arena 1169). Before, an arena match was never found here: Enter did nothing and the invite never ran out.
+    if (battlegroundTemplate->MapIDs.size() > 1 || queueId.BattlemasterListId == BATTLEGROUND_AA || IsRandomBattleground(queueId.BattlemasterListId))
     {
         begin = bgDataStore.begin();
         end = bgDataStore.end();
@@ -465,7 +468,10 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
         bgTemplate.BattlemasterEntry = bl;
         bgTemplate.MapIDs            = std::move(mapsByBattleground[bgTypeId]);
 
-        if (bgTemplate.MapIDs.size() == 1)
+        // Only a battleground that is played itself needs start points. "All Arenas" (6) and the random battlegrounds pick another
+        // template, even when they list just one map (Classic: "All Arenas" has only map 2995); with start points 0 they were dropped
+        // here and every arena join failed.
+        if (bgTemplate.MapIDs.size() == 1 && bgTypeId != BATTLEGROUND_AA && !IsRandomBattleground(bgTypeId))
         {
             uint32 startId = fields[1].GetUInt32();
             if (WorldSafeLocsEntry const* start = sObjectMgr->GetWorldSafeLoc(startId))
@@ -491,13 +497,18 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
                 continue;
             }
 
-            // this key combination is not unique for brawl battlegrounds
-            // it is not a problem for now because currently no "random brawl" exists
-            _battlegroundMapTemplates[{ bgTemplate.MapIDs.front(), GetKeyFlags(bl->GetFlags()) }] = &_battlegroundTemplates[bgTypeId];
         }
 
         if (bgTemplate.MapIDs.empty())
             TC_LOG_ERROR("bg.battleground", "Battleground ID {} has no map in BattlemasterListXMap, nobody can join it.", bgTypeId);
+        // "All Arenas" (6) and the random battlegrounds are queues that pick another template; they must not take the place
+        // of that template when they list only one map (Classic: "All Arenas" plays only map 2995, Mak'gora Arena 1169)
+        else if (bgTemplate.MapIDs.size() == 1 && bgTypeId != BATTLEGROUND_AA && !IsRandomBattleground(bgTypeId))
+        {
+            // this key combination is not unique for brawl battlegrounds
+            // it is not a problem for now because currently no "random brawl" exists
+            _battlegroundMapTemplates[{ bgTemplate.MapIDs.front(), GetKeyFlags(bl->GetFlags()) }] = &_battlegroundTemplates[bgTypeId];
+        }
 
         ++count;
     }
