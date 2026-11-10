@@ -767,6 +767,10 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPackets::Battleground::Battl
     }
 
     sBattlegroundMgr->ScheduleQueueUpdate(matchmakerRating, bgQueueTypeId, bracketEntry->GetBracketId());
+
+    // same hook as the battleground join, so a module can find opponents for the party (PlayerbotV2 forms a bot team)
+    if (!err)
+        sScriptMgr->OnPlayerBattlegroundQueueJoin(_player, bgTypeId, bracketEntry->GetBracketId());
 }
 
 void WorldSession::HandleReportPvPAFK(WorldPackets::Battleground::ReportPvPPlayerAFK& reportPvPPlayerAFK)
