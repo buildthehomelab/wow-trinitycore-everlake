@@ -30,6 +30,7 @@
 #include "IteratorPair.h"
 #include "ItemEnchantmentMgr.h"
 #include "MapReference.h"
+#include "MirrorTimer.h"
 #include "PetDefines.h"
 #include "PlayerTaxi.h"
 #include "QuestDef.h"
@@ -191,8 +192,6 @@ enum PlayerUnderwaterState
     UNDERWATER_INLAVA                   = 0x02,             // terrain type is lava and player is afflicted by it
     UNDERWATER_INSLIME                  = 0x04,             // terrain type is lava and player is afflicted by it
     UNDERWATER_INDARKWATER              = 0x08,             // terrain type is dark water and player is afflicted by it
-
-    UNDERWATER_EXIST_TIMERS             = 0x10
 };
 
 enum BuyBankSlotResult
@@ -597,15 +596,6 @@ enum PlayerFieldByte2Flags
     PLAYER_FIELD_BYTE2_STEALTH              = 0x20,
     PLAYER_FIELD_BYTE2_INVISIBILITY_GLOW    = 0x40
 };
-
-enum MirrorTimerType
-{
-    FATIGUE_TIMER      = 0,
-    BREATH_TIMER       = 1,
-    FIRE_TIMER         = 2 // feign death
-};
-#define MAX_TIMERS      3
-#define DISABLED_MIRROR_TIMER   -1
 
 // 2^n values
 enum PlayerExtraFlags
@@ -1666,8 +1656,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         Item* GetItemFromBuyBackSlot(uint32 slot);
         void RemoveItemFromBuyBackSlot(uint32 slot, bool del);
         void SendEquipError(InventoryResult msg, Item const* item1 = nullptr, Item const* item2 = nullptr, uint32 itemId = 0) const;
-        void SendBuyError(BuyResult msg, Creature* creature, uint32 item, uint32 param) const;
-        void SendSellError(SellResult msg, Creature* creature, ObjectGuid guid) const;
+        void SendBuyError(BuyResult msg, Creature const* creature, uint32 vendorslot) const;
+        void SendSellError(SellResult msg, Creature const* creature, ObjectGuid guid) const;
         void AddWeaponProficiency(uint32 newflag) { m_WeaponProficiency |= newflag; }
         void AddArmorProficiency(uint32 newflag) { m_ArmorProficiency |= newflag; }
         uint32 GetWeaponProficiency() const { return m_WeaponProficiency; }
@@ -2387,6 +2377,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         bool UpdatePosition(Position const& pos, bool teleport = false) override { return UpdatePosition(pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), pos.GetOrientation(), teleport); }
         void ProcessPositionDataChanged(PositionFullTerrainStatus const& data) override;
         void UpdateLiquidMirrorTimerFlagsOnPositionChange(Optional<LiquidData> const& newLiquidData);
+        void UpdateLiquidMirrorTimerValuesOnAura();
         void AtEnterCombat() override;
         void AtExitCombat() override;
 
@@ -2433,8 +2424,6 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void DurabilityRepairAll(bool takeCost, float discountMod, bool guildBank);
         void DurabilityRepair(uint16 pos, bool takeCost, float discountMod);
 
-        void UpdateMirrorTimers();
-        void StopMirrorTimers();
         bool IsMirrorTimerActive(MirrorTimerType type) const;
 
         bool CanJoinConstantChannelInZone(ChatChannelsEntry const* channel, AreaTableEntry const* zone) const;
@@ -2849,7 +2838,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void SendCinematicStart(uint32 CinematicSequenceId) const;
         void SendMovieStart(uint32 movieId);
 
-        uint32 DoRandomRoll(uint32 minimum, uint32 maximum);
+        int32 DoRandomRoll(int32 minimum, int32 maximum);
         uint8 GetItemLimitCategoryQuantity(ItemLimitCategoryEntry const* limitEntry) const;
 
         void UpdateItemLevelAreaBasedScaling();
@@ -3298,10 +3287,11 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         /***              ENVIRONMENTAL SYSTEM                 ***/
         /*********************************************************/
         void HandleSobering();
-        void SendMirrorTimer(MirrorTimerType Type, uint32 MaxValue, uint32 CurrentValue, int32 Regen);
-        void StopMirrorTimer(MirrorTimerType Type);
-        void HandleDrowning(uint32 time_diff);
-        int32 getMaxTimer(MirrorTimerType timer) const;
+        void SendMirrorTimer(MirrorTimerType type, int32 value, int32 maxValue, int32 scale, int32 spellId, bool paused);
+        void PauseMirrorTimer(MirrorTimerType type, bool paused);
+        void StopMirrorTimer(MirrorTimerType type);
+        void UpdateMirrorTimers(uint32 diff);
+        int32 GetMirrorTimerMaxValue(MirrorTimerType type) const;
 
         /*********************************************************/
         /***                  HONOR SYSTEM                     ***/
@@ -3479,9 +3469,9 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         uint32 m_lastFallTime;
         float  m_lastFallZ;
 
-        std::array<int32, MAX_TIMERS> m_MirrorTimer;
+        std::array<MirrorTimer, MIRROR_TIMER_MAX> m_mirrorTimers;
+        int32 m_environmentalDamageTimer;
         uint8 m_MirrorTimerFlags;
-        uint8 m_MirrorTimerFlagsLast;
 
         // Current teleport data
         TeleportLocation m_teleport_dest;
