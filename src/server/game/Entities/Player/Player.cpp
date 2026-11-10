@@ -24645,7 +24645,7 @@ bool Player::BuyCurrencyFromVendorSlot(ObjectGuid vendorGuid, uint32 vendorSlot,
             {
                 TC_LOG_ERROR("entities.player.cheat", "Player::BuyCurrencyFromVendorSlot: Player '{}' ({}) tried to buy currency (ItemID: {}, Count: {}), causing money overflow",
                     GetName(), GetGUID(), currency, count);
-                SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, creature, currency);
+                SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, creature, vendorSlot);
                 return false;
             }
             price = *currencyPrice;
