@@ -48,6 +48,8 @@ enum DemonHunterSpells
     SPELL_DH_BLADE_WARD                            = 442715,
     SPELL_DH_BLUR                                  = 212800,
     SPELL_DH_BLUR_TRIGGER                          = 198589,
+    SPELL_DH_BURN_IT_OUT_TALENT                    = 1266316,
+    SPELL_DH_BURN_IT_OUT_DISPEL                    = 1266618,
     SPELL_DH_BURNING_ALIVE                         = 207739,
     SPELL_DH_BURNING_ALIVE_TARGET_SELECTOR         = 207760,
     SPELL_DH_BURNING_HATRED                        = 320374,
@@ -67,6 +69,7 @@ enum DemonHunterSpells
     SPELL_DH_COLLECTIVE_ANGUISH_EYE_BEAM_DAMAGE    = 391058,
     SPELL_DH_COLLECTIVE_ANGUISH_FEL_DEVASTATION    = 393831,
     SPELL_DH_CONSUME_ENERGIZE                      = 1261710,
+    SPELL_DH_CONSUME_MAGIC                         = 1277738,
     SPELL_DH_CONSUME_SOUL_DEVOURER                 = 1223423,
     SPELL_DH_CONSUME_SOUL_HAVOC_DEMON              = 228556,
     SPELL_DH_CONSUME_SOUL_HAVOC_LESSER             = 228542,
@@ -83,7 +86,6 @@ enum DemonHunterSpells
     SPELL_DH_DARKNESS_ABSORB                       = 209426,
     SPELL_DH_DEFLECTING_SPIKES                     = 321028,
     SPELL_DH_DEMON_BLADES_DMG                      = 203796,
-    SPELL_DH_DEMON_MUZZLE_PROC                     = 394933,
     SPELL_DH_DEMON_SPIKES                          = 203819,
     SPELL_DH_DEMON_SPIKES_TRIGGER                  = 203720,
     SPELL_DH_DEMONIC                               = 213410,
@@ -249,6 +251,8 @@ enum DemonHunterSpells
     SPELL_DH_SIGIL_OF_SPITE_AOE                    = 389860,
     SPELL_DH_SOULMONGER_ABSORB                     = 391234,
     SPELL_DH_SOUL_BARRIER                          = 227225,
+    SPELL_DH_SOUL_CLEANSE_TALENT                   = 1266496,
+    SPELL_DH_SOUL_CLEANSE_DISPEL                   = 1266617,
     SPELL_DH_SOUL_CLEAVE                           = 228477,
     SPELL_DH_SOUL_CLEAVE_DMG                       = 228478,
     SPELL_DH_SOUL_FRAGMENT_COUNTER                 = 203981,
@@ -264,6 +268,7 @@ enum DemonHunterSpells
     SPELL_DH_SPIRIT_BOMB_VISUAL                    = 218678,
     SPELL_DH_STUDENT_OF_SUFFERING_TALENT           = 452412,
     SPELL_DH_STUDENT_OF_SUFFERING_AURA             = 453239,
+    SPELL_DH_SWALLOWED_ANGER                       = 320313,
     SPELL_DH_TACTICAL_RETREAT_ENERGIZE             = 389890,
     SPELL_DH_TACTICAL_RETREAT_TALENT               = 389688,
     SPELL_DH_THE_HUNT_DAMAGE_DEVOURER              = 1246168,
@@ -436,6 +441,33 @@ class spell_dh_blade_dance_damage : public SpellScript
     void Register() override
     {
         OnHit += SpellHitFn(spell_dh_blade_dance_damage::HandleHitTarget);
+    }
+};
+
+// 1266316 - Burn It Out (attached to 258920 - Immolation Aura and 1241937 - Soul Immolation)
+class spell_dh_burn_it_out : public SpellScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_DH_BURN_IT_OUT_TALENT, SPELL_DH_BURN_IT_OUT_DISPEL });
+    }
+
+    bool Load() override
+    {
+        return GetCaster()->HasAura(SPELL_DH_BURN_IT_OUT_TALENT);
+    }
+
+    void HandleBurnItOut() const
+    {
+        GetCaster()->CastSpell(GetCaster(), SPELL_DH_BURN_IT_OUT_DISPEL, CastSpellExtraArgsInit{
+            .TriggerFlags = TRIGGERED_IGNORE_CAST_IN_PROGRESS | TRIGGERED_DONT_REPORT_CAST_ERROR,
+            .TriggeringSpell = GetSpell()
+        });
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_dh_burn_it_out::HandleBurnItOut);
     }
 };
 
@@ -1078,28 +1110,6 @@ class spell_dh_deflecting_spikes : public SpellScript
     void Register() override
     {
         OnObjectTargetSelect += SpellObjectTargetSelectFn(spell_dh_deflecting_spikes::HandleParryChance, EFFECT_0, TARGET_UNIT_CASTER);
-    }
-};
-
-// 388111 - Demon Muzzle
-class spell_dh_demon_muzzle : public AuraScript
-{
-    bool Validate(SpellInfo const* /*spellInfo*/) override
-    {
-        return ValidateSpellInfo({ SPELL_DH_DEMON_MUZZLE_PROC });
-    }
-
-    static void HandleProc(AuraScript const&, AuraEffect const*, ProcEventInfo const& procEvent)
-    {
-        procEvent.GetActor()->CastSpell(procEvent.GetActionTarget(), SPELL_DH_DEMON_MUZZLE_PROC, CastSpellExtraArgsInit{
-            .TriggerFlags = TRIGGERED_IGNORE_CAST_IN_PROGRESS | TRIGGERED_DONT_REPORT_CAST_ERROR,
-            .TriggeringSpell = procEvent.GetProcSpell()
-        });
-    }
-
-    void Register() override
-    {
-        OnEffectProc += AuraEffectProcFn(spell_dh_demon_muzzle::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
     }
 };
 
@@ -2851,6 +2861,33 @@ class spell_dh_soul_carver_aura : public AuraScript
     }
 };
 
+// 1266496 - Soul Cleanse (attached to 258920 - Immolation Aura and 1241937 - Soul Immolation)
+class spell_dh_soul_cleanse : public SpellScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_DH_SOUL_CLEANSE_TALENT, SPELL_DH_SOUL_CLEANSE_DISPEL });
+    }
+
+    bool Load() override
+    {
+        return GetCaster()->HasAura(SPELL_DH_SOUL_CLEANSE_TALENT);
+    }
+
+    void HandleSoulCleanse() const
+    {
+        GetCaster()->CastSpell(GetCaster(), SPELL_DH_SOUL_CLEANSE_DISPEL, CastSpellExtraArgsInit{
+            .TriggerFlags = TRIGGERED_IGNORE_CAST_IN_PROGRESS | TRIGGERED_DONT_REPORT_CAST_ERROR,
+            .TriggeringSpell = GetSpell()
+        });
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_dh_soul_cleanse::HandleSoulCleanse);
+    }
+};
+
 // 210788 - Soul Fragments
 class spell_dh_soul_fragments_damage_taken_tracker : public AuraScript
 {
@@ -3005,6 +3042,30 @@ class spell_dh_spontaneous_immolation : public AuraScript
     void Register() override
     {
         OnProc += AuraProcFn(spell_dh_spontaneous_immolation::HandleProc);
+    }
+};
+
+// 320313 - Swallowed Anger (attached to 278326 - Consume Magic)
+class spell_dh_swallowed_anger : public SpellScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_DH_CONSUME_MAGIC, SPELL_DH_SWALLOWED_ANGER });
+    }
+
+    bool Load() override
+    {
+        return GetCaster()->HasAura(SPELL_DH_SWALLOWED_ANGER);
+    }
+
+    void OnSuccessfulDispel(SpellEffIndex /*effIndex*/) const
+    {
+        GetCaster()->CastSpell(GetCaster(), SPELL_DH_CONSUME_MAGIC, TRIGGERED_IGNORE_CAST_IN_PROGRESS | TRIGGERED_DONT_REPORT_CAST_ERROR);
+    }
+
+    void Register() override
+    {
+        OnEffectSuccessfulDispel += SpellEffectFn(spell_dh_swallowed_anger::OnSuccessfulDispel, EFFECT_ALL, SPELL_EFFECT_DISPEL);
     }
 };
 
@@ -3359,6 +3420,7 @@ void AddSC_demon_hunter_spell_scripts()
     RegisterSpellScript(spell_dh_army_unto_oneself);
     RegisterSpellScript(spell_dh_blade_dance);
     RegisterSpellScript(spell_dh_blade_dance_damage);
+    RegisterSpellScript(spell_dh_burn_it_out);
     RegisterSpellScript(spell_dh_burning_hatred);
     RegisterSpellScript(spell_dh_calcified_spikes);
     RegisterSpellScript(spell_dh_calcified_spikes_periodic);
@@ -3381,7 +3443,6 @@ void AddSC_demon_hunter_spell_scripts()
     RegisterSpellScript(spell_dh_darkglare_boon);
     RegisterSpellScript(spell_dh_darkness);
     RegisterSpellScript(spell_dh_deflecting_spikes);
-    RegisterSpellScript(spell_dh_demon_muzzle);
     RegisterSpellScriptWithArgs(spell_dh_demonic, "spell_dh_demonic_havoc", SPELL_DH_METAMORPHOSIS_TRANSFORM);
     RegisterSpellScriptWithArgs(spell_dh_demonic, "spell_dh_demonic_vengeance", SPELL_DH_METAMORPHOSIS_VENGEANCE_TRANSFORM);
     RegisterSpellScript(spell_dh_demonic_appetite);
@@ -3455,6 +3516,7 @@ void AddSC_demon_hunter_spell_scripts()
     RegisterSpellScriptWithArgs(spell_dh_elysian_decree, "spell_dh_sigil_of_spite", SPELL_DH_SIGIL_OF_SPITE);
     RegisterSpellScript(spell_dh_soulmonger);
     RegisterSpellAndAuraScriptPair(spell_dh_soul_carver, spell_dh_soul_carver_aura);
+    RegisterSpellScript(spell_dh_soul_cleanse);
     RegisterSpellScript(spell_dh_soul_fragments_damage_taken_tracker);
     RegisterSpellScript(spell_dh_soul_furnace);
     RegisterSpellScript(spell_dh_soul_furnace_conduit);
@@ -3462,6 +3524,7 @@ void AddSC_demon_hunter_spell_scripts()
     RegisterSpellScript(spell_dh_soul_sigils);
     RegisterSpellScript(spell_dh_spontaneous_immolation);
     RegisterSpellScript(spell_dh_student_of_suffering);
+    RegisterSpellScript(spell_dh_swallowed_anger);
     RegisterSpellScript(spell_dh_tactical_retreat);
     RegisterAreaTriggerAI(at_dh_the_hunt);
     RegisterSpellScript(spell_dh_unhindered_assault);
