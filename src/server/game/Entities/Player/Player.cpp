@@ -961,12 +961,14 @@ void Player::Update(uint32 p_time)
 
     // The pet remembered at login comes back a moment after the player is in the world, as a summon during play does. Created while the
     // Classic 1.60 client is still on its loading screen, the client froze on the pet (a warlock's demon out at logout).
+    // The companion out at logout (TrinityCore 2ae8e29d6c) waits for the same moment.
     if (m_petResummonDelay)
     {
         if (p_time >= m_petResummonDelay)
         {
             m_petResummonDelay = 0;
             ResummonPetTemporaryUnSummonedIfAny();
+            ResummonBattlePetTemporaryUnSummonedIfAny();
         }
         else
             m_petResummonDelay -= p_time;
