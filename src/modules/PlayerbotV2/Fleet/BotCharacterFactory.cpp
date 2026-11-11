@@ -302,12 +302,9 @@ BotCharacterFactory::Result BotCharacterFactory::Create(
     if (sObjectMgr->IsReservedName(normalized))
         return {false, "name is reserved", {}};
 
-    if (sCharacterCache->GetCharacterCacheByName(normalized))
-        return {false, "name already in use", {}};
-
-    // Everlake: a name a player holds on any realm (in use or within its grace period) is never a bot's
-    if (!NameReservation::CanUse(sNameReservationMgr->Check(normalized, "", 0)))
-        return {false, "name is reserved by a player (name_reservation)", {}};
+    std::string surname = Fleet::BotNamePool::AcquireSurname(normalized, race);
+    if (surname.empty())
+        return {false, "no available full name (local characters or player reservations)", {}};
 
     // Acquire a slot from the dedicated bot account pool. The new char
     // is owned by that pool account, NOT the GM's. AcquireSlot returns 0
@@ -343,6 +340,7 @@ BotCharacterFactory::Result BotCharacterFactory::Create(
     createInfo->Class = charClass;
     createInfo->Sex   = gender;
     createInfo->Name  = normalized;
+    createInfo->Surname = surname;
 
     for (UF::ChrCustomizationChoice const& c : RollCustomizations(race, gender, charClass))
         createInfo->Customizations.push_back(c);
@@ -393,7 +391,16 @@ BotCharacterFactory::Result BotCharacterFactory::Create(
     // defer the LoginBot call by one world tick - by then the async worker
     // has committed and LoadFromDB sees the row. See BotPopulationManager
     // for the deferred-login queue.
-    newChar->SaveToDB(true);
+    auto characterTransaction = CharacterDatabase.BeginTransaction();
+    auto loginTransaction = LoginDatabase.BeginTransaction();
+    newChar->SaveToDB(loginTransaction, characterTransaction, true);
+    // Surnames live in characters/cache, rather than Player. Save alongside the insert.
+    std::string escapedSurname = surname;
+    CharacterDatabase.EscapeString(escapedSurname);
+    characterTransaction->Append(fmt::format("UPDATE characters SET surname = '{}' WHERE guid = {}",
+        escapedSurname, newGuidLow).c_str());
+    CharacterDatabase.CommitTransaction(characterTransaction);
+    LoginDatabase.CommitTransaction(loginTransaction);
 
     ObjectGuid newGuid = ObjectGuid::Create<HighGuid::Player>(newGuidLow);
 
@@ -408,6 +415,7 @@ BotCharacterFactory::Result BotCharacterFactory::Create(
         charClass,
         newChar->GetLevel(),
         false /*isDeleted*/);
+    sCharacterCache->UpdateCharacterSurname(newGuid, surname);
 
     // Mark as a V2 bot. The shared_ptr deleter will run CleanupsBeforeDelete
     // on the Player when this function returns; the row in `characters` and

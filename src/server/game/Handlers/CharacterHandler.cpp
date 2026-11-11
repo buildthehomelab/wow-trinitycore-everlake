@@ -971,14 +971,14 @@ void WorldSession::HandleCharCreateOpcode(WorldPackets::Character::CreateCharact
         return;
     }
 
-    // Everlake: a bot on this realm holding a name this player may have gives it up (bot module, NameReservationMgr)
-    sNameReservationMgr->TryYield(charCreate.CreateInfo->Name, charCreate.CreateInfo->Surname, GetBattlenetAccountId());
-
     std::shared_ptr<WorldPackets::Character::CharacterCreateInfo> createInfo = charCreate.CreateInfo;
     // Classic 1.60: the same name (or the same surname) may be used by several characters,
     // only the exact name + surname combination has to be unique (same 48 character limit as when saving)
     if (utf8length(charCreate.CreateInfo->Surname) > 48)
         charCreate.CreateInfo->Surname.clear();
+
+    // Everlake: a bot on this realm holding a name this player may have gives it up (bot module, NameReservationMgr)
+    sNameReservationMgr->TryYield(charCreate.CreateInfo->Name, charCreate.CreateInfo->Surname, GetBattlenetAccountId());
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHECK_NAME_SURNAME);
     stmt->setString(0, charCreate.CreateInfo->Name);
@@ -1145,6 +1145,7 @@ void WorldSession::HandleCharCreateOpcode(WorldPackets::Character::CreateCharact
             }
 
             // Check name uniqueness in the same step as saving to database
+            sNameReservationMgr->TryYield(createInfo->Name, createInfo->Surname, GetBattlenetAccountId());
             if (sCharacterCache->GetCharacterCacheByFullName(createInfo->Name, createInfo->Surname))
             {
                 SendCharCreate(CHAR_CREATE_NAME_IN_USE);
@@ -2027,7 +2028,18 @@ void WorldSession::HandleCheckCharacterNameAvailability(WorldPackets::Character:
     _queryProcessor.AddCallback(CharacterDatabase.AsyncQuery(stmt)
         .WithPreparedCallback([this, sequenceIndex = checkCharacterNameAvailability.SequenceIndex](PreparedQueryResult result)
     {
-        SendPacket(WorldPackets::Character::CheckCharacterNameAvailabilityResult(sequenceIndex, result ? CHAR_CREATE_NAME_IN_USE : RESPONSE_SUCCESS).Write());
+        // Preview availability without moving a bot. Only an actual create request makes it yield.
+        ResponseCodes response = RESPONSE_SUCCESS;
+        if (result)
+            do
+            {
+                if (!sNameReservationMgr->IsExempt(result->Fetch()[0].GetUInt32()))
+                {
+                    response = CHAR_CREATE_NAME_IN_USE;
+                    break;
+                }
+            } while (result->NextRow());
+        SendPacket(WorldPackets::Character::CheckCharacterNameAvailabilityResult(sequenceIndex, response).Write());
     }));
 }
 

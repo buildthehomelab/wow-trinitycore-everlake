@@ -284,10 +284,24 @@ NameReservation::Claim NameReservationMgr::Check(std::string const& name, std::s
     if (!EnsureTables())
         return NameReservation::Claim::Taken;
 
+    // Always return one row, even for an unreserved name. A failed query must not look like a free name.
+    QueryResult result = LoginDatabase.PQuery(
+        "SELECT r.`battlenet_account`, IFNULL(UNIX_TIMESTAMP(r.`freed_at`), 0), "
+        "(SELECT COUNT(*) FROM `name_reservation_character` c WHERE c.`name` = r.`name` AND c.`surname` = r.`surname`), "
+        "clock.`now` FROM (SELECT UNIX_TIMESTAMP() AS `now`) clock LEFT JOIN `name_reservation` r ON {}",
+        FullNameWhere("r", Escaped(name), Escaped(surname)));
+    if (!result)
+        return NameReservation::Claim::Taken;
+    Field* fields = result->Fetch();
     NameReservation::Row row;
-    time_t created = 0, now = 0;
-    ReadRow(Escaped(name), Escaped(surname), row, created, now);
-    return NameReservation::Evaluate(row, bnetAccountId, now, GetGracePeriod());
+    row.Exists = !fields[0].IsNull();
+    if (row.Exists)
+    {
+        row.Owner = fields[0].GetUInt32();
+        row.FreedAt = time_t(fields[1].GetUInt64());
+        row.Users = fields[2].GetUInt32();
+    }
+    return NameReservation::Evaluate(row, bnetAccountId, time_t(fields[3].GetUInt64()), GetGracePeriod());
 }
 
 std::unordered_set<std::string> NameReservationMgr::FindHeld(std::vector<std::string> const& names)
@@ -334,11 +348,10 @@ std::unordered_set<std::string> NameReservationMgr::FindHeld(std::vector<std::st
 
 bool NameReservationMgr::TryYield(std::string const& name, std::string const& surname, uint32 bnetAccountId)
 {
-    if (!_yieldHandler || !IsEnabled())
+    if (!_yieldHandler)
         return false;
 
-    // the character with exactly this full name (bots have none, so only a player asking for "Bob" with no surname
-    // can take a bot's name)
+    // The character with exactly this full name; bot surnames participate in the same lookup.
     CharacterCacheEntry const* holderEntry = sCharacterCache->GetCharacterCacheByFullName(name, surname);
     if (!holderEntry)
         return false;

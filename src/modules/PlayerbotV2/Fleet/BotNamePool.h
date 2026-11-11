@@ -33,6 +33,9 @@ public:
     // explicitly qualify with `wowc_playerbot.playerbots_names`.
     static std::string Acquire(uint8 gender);
 
+    // Full-name allocation: excludes local characters and player reservations on every realm.
+    static std::string AcquireSurname(std::string const& name, uint8 race);
+
     // Bind a previously-acquired name to a created character. Stores
     // the character's guid in used_by_guid so the row can be reverse-
     // looked-up from `.playerbot wipe` and from ReconcileOnBoot.
@@ -51,11 +54,10 @@ public:
 
     // Everlake name reservation (NameReservationMgr, login database). Bots never reserve a name and never take one a
     // player holds:
-    //  - Acquire skips held names;
+    //  - AcquireSurname skips held full names;
     //  - pool accounts are exempt from reserving (a GM rename or dump load onto a bot account reserves nothing);
-    //  - a player who may claim a name an offline bot on this realm has gets it: the bot is renamed on the spot.
-    //    An online bot keeps it until the next start, when RenameBotsHoldingReservedNames renames it.
-    // Call once at module start, after the account pool is loaded and before any bot logs in.
+    //  - a player who may claim a bot's full name gets it immediately, even if the bot is online.
+    // Startup also assigns surnames to legacy bots. Call after the account pool loads, before bots log in.
     static void RegisterNameReservationHooks();
     static uint32 RenameBotsHoldingReservedNames();
 
