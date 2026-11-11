@@ -348,7 +348,7 @@ std::unordered_set<std::string> NameReservationMgr::FindHeld(std::vector<std::st
 
 bool NameReservationMgr::TryYield(std::string const& name, std::string const& surname, uint32 bnetAccountId)
 {
-    if (!_yieldHandler || !IsEnabled())
+    if (!_yieldHandler)
         return false;
 
     // The character with exactly this full name; bot surnames participate in the same lookup.

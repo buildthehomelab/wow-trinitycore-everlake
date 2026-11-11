@@ -2,10 +2,8 @@
 #include "BotSurnames.h"
 #include "BotAccountMgr.h"
 #include "../Services.h"
-#include "../Session/BotSessionMgr.h"
 #include "CharacterCache.h"
 #include "NameReservationMgr.h"
-#include "ObjectAccessor.h"
 
 #include "Config.h"
 #include "DatabaseEnv.h"
@@ -254,17 +252,18 @@ std::string BotNamePool::AcquireSurname(std::string const& name, uint8 race)
 namespace
 {
 // Only surnames change: identity, first-name pool ownership, equipment and progress stay intact.
-bool RenameOfflineBot(ObjectGuid guid, std::string const& name, uint8 race)
+bool ReplaceBotSurname(ObjectGuid guid, std::string const& name, uint8 race)
 {
-    if (ObjectAccessor::FindConnectedPlayer(guid) || Services::SessionMgr().IsHeadless(guid))
-        return false;
-
     std::string surname = BotNamePool::AcquireSurname(name, race);
     if (surname.empty())
         return false;
 
-    CharacterDatabase.DirectPExecute("UPDATE characters SET surname = '{}' WHERE guid = {} AND online = 0",
+    CharacterDatabase.DirectPExecute("UPDATE characters SET surname = '{}' WHERE guid = {}",
         EscapeForSql(surname), guid.GetCounter());
+    // Player saves do not write surname. Verify persistence before releasing the name in the cache.
+    auto saved = CharacterDatabase.PQuery("SELECT surname FROM characters WHERE guid = {}", guid.GetCounter());
+    if (!saved || saved->Fetch()[0].GetString() != surname)
+        return false;
     sCharacterCache->UpdateCharacterSurname(guid, surname);
     TC_LOG_INFO("playerbot.v2", "[BotNamePool] Bot {} now uses surname {} ({})",
         name, surname, guid.ToString());
@@ -285,12 +284,7 @@ void BotNamePool::RegisterNameReservationHooks()
         // a player's character, or a bot alt on a player's own account, keeps its name
         if (!entry || !Services::Accounts().is_pool_account(entry->AccountId))
             return false;
-        if (!RenameOfflineBot(holder, name, entry->Race))
-        {
-            TC_LOG_INFO("playerbot.v2", "[BotNamePool] Bot {} is online: it keeps the name a player asked for until the next start", name);
-            return false;
-        }
-        return true;
+        return ReplaceBotSurname(holder, name, entry->Race);
     });
 }
 
@@ -311,7 +305,7 @@ uint32 BotNamePool::RenameBotsHoldingReservedNames()
         std::string name = f[1].GetString();
         std::string surname = f[3].GetString();
         if (surname.empty() || !NameReservation::CanUse(sNameReservationMgr->Check(name, surname, 0)))
-            if (RenameOfflineBot(ObjectGuid::Create<HighGuid::Player>(f[0].GetUInt64()), name, f[2].GetUInt8()))
+            if (ReplaceBotSurname(ObjectGuid::Create<HighGuid::Player>(f[0].GetUInt64()), name, f[2].GetUInt8()))
                 ++renamed;
     } while (r->NextRow());
 

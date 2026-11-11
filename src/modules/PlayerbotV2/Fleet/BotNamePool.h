@@ -56,8 +56,7 @@ public:
     // player holds:
     //  - AcquireSurname skips held full names;
     //  - pool accounts are exempt from reserving (a GM rename or dump load onto a bot account reserves nothing);
-    //  - a player who may claim a name an offline bot on this realm has gets it: the bot is renamed on the spot.
-    //    An online bot keeps it until the next start, when RenameBotsHoldingReservedNames renames it.
+    //  - a player who may claim a bot's full name gets it immediately, even if the bot is online.
     // Startup also assigns surnames to legacy bots. Call after the account pool loads, before bots log in.
     static void RegisterNameReservationHooks();
     static uint32 RenameBotsHoldingReservedNames();
