@@ -1,6 +1,6 @@
 #include "BotNamePool.h"
+#include "BotSurnames.h"
 #include "BotAccountMgr.h"
-#include "BotComposition.h"
 #include "../Services.h"
 #include "../Session/BotSessionMgr.h"
 #include "CharacterCache.h"
@@ -159,21 +159,7 @@ std::string BotNamePool::Acquire(uint8 gender)
     {
         if (!bucket || bucket->empty()) continue;
         NameEntry e = PopRandom_locked(*bucket);
-        // Everlake: a name a player holds on any realm is skipped. It stays is_used=0 in the table and is looked at
-        // again after the next start (the player's grace period may have run out by then).
-        uint32 skipped = 0;
-        while (!NameReservation::CanUse(sNameReservationMgr->Check(e.name, "", 0)))
-        {
-            g_name_to_meta.erase(e.name);
-            if (++skipped > 64 || bucket->empty())
-            {
-                e.name.clear();
-                break;
-            }
-            e = PopRandom_locked(*bucket);
-        }
-        if (e.name.empty())
-            continue;
+        // Reservation belongs to the full name. The factory checks it once a surname is chosen.
         // Async-persist the claim. PExecute doesn't block; ordering is
         // fine because the in-memory pop already prevents re-issue.
         CharacterDatabase.Execute(fmt::format(
@@ -256,27 +242,32 @@ void BotNamePool::ReconcileOnBoot()
     Load_locked();
 }
 
+std::string BotNamePool::AcquireSurname(std::string const& name, uint8 race)
+{
+    return BotSurnames::Pick(race, g_rng, [&](std::string const& surname)
+    {
+        return !sCharacterCache->GetCharacterCacheByFullName(name, surname)
+            && NameReservation::CanUse(sNameReservationMgr->Check(name, surname, 0));
+    });
+}
+
 namespace
 {
-// A bot keeps its character; only the name changes. Offline only: an online bot would save its old name back.
-bool RenameOfflineBot(ObjectGuid guid, std::string const& oldName, uint8 gender)
+// Only surnames change: identity, first-name pool ownership, equipment and progress stay intact.
+bool RenameOfflineBot(ObjectGuid guid, std::string const& name, uint8 race)
 {
     if (ObjectAccessor::FindConnectedPlayer(guid) || Services::SessionMgr().IsHeadless(guid))
         return false;
 
-    std::string newName = BotNamePool::Acquire(gender);
-    if (newName.empty())
-        newName = BotComposition::RollUniqueName();
-    if (newName.empty() || !NameReservation::CanUse(sNameReservationMgr->Check(newName, "", 0)))
+    std::string surname = BotNamePool::AcquireSurname(name, race);
+    if (surname.empty())
         return false;
 
-    CharacterDatabase.DirectPExecute("UPDATE characters SET name = '{}' WHERE guid = {} AND online = 0",
-        EscapeForSql(newName), guid.GetCounter());
-    sCharacterCache->UpdateCharacterData(guid, newName);
-    BotNamePool::BindToCharacter(newName, guid.GetCounter());
-    BotNamePool::Release(oldName);
-    TC_LOG_INFO("playerbot.v2", "[BotNamePool] Bot {} renamed to {}: a player holds the name ({})",
-        oldName, newName, guid.ToString());
+    CharacterDatabase.DirectPExecute("UPDATE characters SET surname = '{}' WHERE guid = {} AND online = 0",
+        EscapeForSql(surname), guid.GetCounter());
+    sCharacterCache->UpdateCharacterSurname(guid, surname);
+    TC_LOG_INFO("playerbot.v2", "[BotNamePool] Bot {} now uses surname {} ({})",
+        name, surname, guid.ToString());
     return true;
 }
 } // anonymous
@@ -294,7 +285,7 @@ void BotNamePool::RegisterNameReservationHooks()
         // a player's character, or a bot alt on a player's own account, keeps its name
         if (!entry || !Services::Accounts().is_pool_account(entry->AccountId))
             return false;
-        if (!RenameOfflineBot(holder, name, entry->Sex))
+        if (!RenameOfflineBot(holder, name, entry->Race))
         {
             TC_LOG_INFO("playerbot.v2", "[BotNamePool] Bot {} is online: it keeps the name a player asked for until the next start", name);
             return false;
@@ -305,32 +296,26 @@ void BotNamePool::RegisterNameReservationHooks()
 
 uint32 BotNamePool::RenameBotsHoldingReservedNames()
 {
-    if (!sNameReservationMgr->IsEnabled())
-        return 0;
-
+    // Also upgrades legacy bots with no surname, even when name reservation is disabled.
     QueryResult r = CharacterDatabase.Query(
-        "SELECT c.guid, c.name, c.gender FROM characters c JOIN playerbot_v2_account a ON a.account_id = c.account "
-        "WHERE c.name IS NOT NULL AND c.name <> ''");
+        "SELECT c.guid, c.name, c.race, c.surname FROM characters c "
+        "JOIN playerbot_v2_account a ON a.account_id = c.account "
+        "WHERE c.name IS NOT NULL AND c.name <> '' AND c.online = 0 AND c.deleteDate IS NULL");
     if (!r)
         return 0;
 
-    struct Bot { ObjectGuid guid; uint8 gender; };
-    std::unordered_map<std::string, Bot> bots;
-    std::vector<std::string> names;
+    uint32 renamed = 0;
     do
     {
         Field* f = r->Fetch();
         std::string name = f[1].GetString();
-        bots[name] = { ObjectGuid::Create<HighGuid::Player>(f[0].GetUInt64()), f[2].GetUInt8() };
-        names.push_back(std::move(name));
+        std::string surname = f[3].GetString();
+        if (surname.empty() || !NameReservation::CanUse(sNameReservationMgr->Check(name, surname, 0)))
+            if (RenameOfflineBot(ObjectGuid::Create<HighGuid::Player>(f[0].GetUInt64()), name, f[2].GetUInt8()))
+                ++renamed;
     } while (r->NextRow());
 
-    uint32 renamed = 0;
-    for (std::string const& name : sNameReservationMgr->FindHeld(names))
-        if (RenameOfflineBot(bots[name].guid, name, bots[name].gender))
-            ++renamed;
-
-    TC_LOG_INFO("server.loading", "[PlayerbotV2] Bot names: {} of {} bots renamed (a player holds the name)", renamed, uint32(names.size()));
+    TC_LOG_INFO("server.loading", "[PlayerbotV2] Bot names: {} surnames assigned or replaced", renamed);
     return renamed;
 }
 
