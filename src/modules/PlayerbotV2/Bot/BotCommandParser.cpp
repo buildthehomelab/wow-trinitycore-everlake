@@ -21,8 +21,11 @@
 #include "dtQueryFilterTC.h"     // /roadstats reads RoadStats counters
 #include "../Fleet/OwnerRegistry.h"
 #include "CcDeny.h"
+#include "Raid/BossTactics.h"
+#include "Raid/RaidEncounters.h"
 #include "OwnerPicks.h"
 #include "../Fleet/PlayerCraftOrders.h"
+#include "../Api/BotTradeShop.h"   // CountBagRot for "sell junk"
 #include "BotAddressResolver.h"
 #include "Placement.h"
 #include "ClassicUpkeep.h"   // Classic::IsMeleeSpec for the Positions tab order
@@ -1372,6 +1375,15 @@ struct VendorPick
     float x = 0.f, y = 0.f, z = 0.f;
 };
 
+// "sell junk" with the vendor further than 5 yards: the bot walks there, and TickVendorRuns sells once it is in reach.
+struct VendorRun { ObjectGuid vendor; std::string to; uint32 started_ms = 0; };
+std::unordered_map<BotId, VendorRun> g_vendor_runs;   // world thread
+
+void NoteVendorRun(BotId bot, ObjectGuid vendor, std::string to)
+{
+    g_vendor_runs[bot] = VendorRun{ vendor, std::move(to), GameTime::GetGameTimeMS() };
+}
+
 VendorPick PickVendor(Player* sender, Player* bot, uint32 flag)
 {
     VendorPick out;
@@ -1550,36 +1562,54 @@ bool OwnerWordOrder(Player* sender, Player* bot, std::string const& n)
     }
 
     // ---- sell grey / repair -----------------------------------------------------------------------------------------
-    if (n == "sell grey" || n == "sell gray" || n == "sell junk" || n == "sell trash" || n == "s *")
+    if (n == "sell grey" || n == "sell gray" || n == "sell junk" || n == "sell trash" || n == "s *" || n == "sell your junk")
     {
-        auto snap = Services::Snapshots().latest(bid);
-        uint32 greys = 0;
-        if (snap)
-            for (auto const& it : snap->inventory.bag_items)
-                if (it.quality == 0)
-                    ++greys;
-        VendorPick const v = PickVendor(sender, bot, UNIT_NPC_FLAG_VENDOR);
-        if (v.guid.IsEmpty())
+        // Everything a vendor visit sells (CountBagRot / sell_trash), not only greys: Gun's bags were full of things a vendor
+        // takes and the order said "nothing grey to sell" (2026-11-09).
+        uint32 const junk = ::Playerbot::CountBagRot(bot);
+        if (junk == 0)
         {
-            say(me + ": no vendor within 60 yards - select one and say it again, or walk me to one");
+            say(fmt::format("{}: nothing to sell, my bags only hold things I keep ({} free slots)", me, bot->GetFreeInventorySlotCount()));
             return true;
         }
-        if (greys == 0)
+        VendorPick v = PickVendor(sender, bot, UNIT_NPC_FLAG_VENDOR);
+        if (v.guid.IsEmpty())
         {
-            say(me + ": nothing grey to sell");
+            // Not in the bot's 60 yard scan: the nearest friendly vendor in the town (a bank square, a market street).
+            std::list<Creature*> found;
+            FindCreatureOptions opt;
+            opt.IgnorePhases = false;
+            bot->GetCreatureListWithOptionsInGrid(found, 200.0f, opt);
+            Creature const* best = nullptr;
+            for (Creature const* c : found)
+                if (c->IsAlive() && c->HasNpcFlag(UNIT_NPC_FLAG_VENDOR) && !c->IsHostileTo(bot)
+                    && (!best || bot->GetDistance(c) < bot->GetDistance(best)))
+                    best = c;
+            if (best)
+            {
+                v.guid = best->GetGUID();
+                v.name = best->GetName();
+                v.dist = bot->GetDistance(best);
+                best->GetPosition(v.x, v.y, v.z);
+            }
+        }
+        if (v.guid.IsEmpty())
+        {
+            say(me + ": no vendor near here - select one and say it again, or walk me to one");
             return true;
         }
         if (v.dist > 5.0f)
         {
-            // Walk the last stretch; the sale itself needs the vendor in reach, so ask again once there.
+            // Walk there and sell on arrival (TickVendorRuns): one order is enough.
             Push(bot, MoveToIntent{v.x, v.y, v.z, /*run=*/true});
             if (BotAI* ai = Services::Registry().ai(bid))
                 ai->enter_manual(BotAI::OwnerCommand::Stay, ObjectGuid::Empty, GameTime::GetGameTimeMS());
-            say(fmt::format("{}: walking to {} ({:.0f} yards); say 'sell grey' again when I am there", me, v.name, v.dist));
+            NoteVendorRun(bid, v.guid, sender->GetName());
+            say(fmt::format("{}: walking to {} ({:.0f} yards) to sell {} thing(s)", me, v.name, v.dist, junk));
             return true;
         }
         Push(bot, VendorSellTrashIntent{v.guid});
-        say(fmt::format("{}: selling {} grey stack(s) to {}", me, greys, v.name));
+        say(fmt::format("{}: selling {} thing(s) to {}", me, junk, v.name));
         return true;
     }
     if (n == "repair")
@@ -1853,6 +1883,151 @@ bool BotCommandParser::ApplyCcOrder(Player* sender, std::string const& line, cha
     TC_LOG_INFO("playerbot.v2", "[cc_order] {} ({}): {} {} for {}", sender->GetName(), via ? via : "?", order->deny ? "deny" : "allow",
                 what, who);
     Playerbot::BotLanguage::LocalizedHandler(sender->GetSession()).PSendSysMessage("%s", answer.c_str());
+    return true;
+}
+
+namespace {
+
+std::string BossName(uint32 entry)
+{
+    CreatureTemplate const* ct = sObjectMgr->GetCreatureTemplate(entry);
+    return ct ? ct->Name : std::to_string(entry);
+}
+
+// The raid boss a "tactics" line is about: the typed name among every raid the bots know (the player's own raid first, so a name
+// shared by two raids means the one he stands in), else his target when it is one of his raid's bosses. 0 = none.
+uint32 TacticsBoss(Player* sender, std::string const& typed, uint32& bossMap)
+{
+    uint32 const here = sender->GetMapId();
+    std::vector<uint32_t> maps = Raid::RuleMaps();
+    std::stable_partition(maps.begin(), maps.end(), [here](uint32_t m) { return m == here; });
+    if (!typed.empty())
+    {
+        for (uint32_t m : maps)
+            if (Raid::RaidRules const* rules = Raid::RulesForMap(m))
+                for (uint32_t boss : rules->bosses)
+                    if (Raid::BossNameMatches(typed, BossName(boss)))
+                    {
+                        bossMap = m;
+                        return boss;
+                    }
+        return 0;
+    }
+    if (Raid::RaidRules const* rules = Raid::RulesForMap(here))
+        if (Unit const* target = sender->GetSelectedUnit(); target && target->GetTypeId() == TYPEID_UNIT)
+            if (std::find(rules->bosses.begin(), rules->bosses.end(), target->GetEntry()) != rules->bosses.end())
+            {
+                bossMap = here;
+                return target->GetEntry();
+            }
+    return 0;
+}
+
+std::string BossList(uint32 mapId)
+{
+    std::string out;
+    if (Raid::RaidRules const* rules = Raid::RulesForMap(mapId))
+        for (uint32_t boss : rules->bosses)
+            out += (out.empty() ? "" : ", ") + BossName(boss);
+    return out;
+}
+
+constexpr char const* kTacticsWords = "adds first, boss first, any order, no aoe, aoe ok, no fear (or sheep, banish, shackle, sap, cc), "
+                                      "fear ok, tank here, tank anywhere, clear";
+
+} // namespace
+
+bool BotCommandParser::ApplyTacticsOrder(Player* sender, std::string const& line, char const* via)
+{
+    auto const order = Raid::ParseTacticsOrder(line);
+    if (!order || !sender || !sender->GetSession())
+        return false;
+    // Plain party or raid chat that only starts with the word ("tactics are hard lol") is talk, not an order: it is answered only
+    // when it changes a plan, names a boss the bots know, or is the bare word. A whisper or a ';' line is always answered.
+    bool const chat = via && (std::strcmp(via, "party") == 0 || std::strcmp(via, "raid") == 0);
+    if (chat && !order->Changes() && !order->unknown.empty())
+        return false;
+    uint32 const account = sender->GetSession()->GetAccountId();
+    if (account == 0)
+        return false;
+    OwnerRegistry& owners = Services::Owners();
+    Playerbot::BotLanguage::LocalizedHandler say(sender->GetSession());
+    // Each sentence is its own line, so each one is found in the language catalog as it is.
+    auto const tell = [&say](std::string const& line) { say.PSendSysMessage("%s", line.c_str()); };
+
+    // "tactics" alone, nothing targeted: every boss this account has a plan for.
+    uint32 bossMap = 0;
+    uint32 const boss = TacticsBoss(sender, order->boss, bossMap);
+    if (!boss && order->boss.empty() && order->Show())
+    {
+        std::string list;
+        for (auto const& [entry, stored] : owners.AllBossTactics(account))
+            list += (list.empty() ? "" : "; ") + BossName(entry) + " (" + Raid::DescribeTactics(Raid::ParseStoredTactics(stored)) + ")";
+        std::string const answer = list.empty()
+            ? std::string("You have no boss tactics yet. Example: tactics Lucifron: adds first, no aoe, tank here")
+            : "Your boss tactics: " + list + ".";
+        tell(answer);
+        return true;
+    }
+    if (!boss && chat && !order->Changes())
+        return false;
+    if (!boss)
+    {
+        std::string const here = BossList(sender->GetMapId());
+        tell(order->boss.empty() ? std::string("Which boss? Target the boss, or name it: tactics Lucifron: adds first.")
+                                 : fmt::format("I don't know a raid boss called \"{}\".", order->boss));
+        tell(here.empty() ? std::string("Boss tactics are for the raids the bots know (Molten Core, Onyxia, Blackwing Lair, Zul'Gurub, "
+                                        "Ahn'Qiraj, Naxxramas).")
+                          : "Bosses here: " + here + ".");
+        return true;
+    }
+
+    std::string const name = BossName(boss);
+    Raid::BossTactics plan = Raid::ParseStoredTactics(owners.BossTacticsOf(account, boss));
+    if (order->Show())
+    {
+        std::string const answer = plan.Empty()
+            ? fmt::format("No tactics for {} yet. Example: tactics {}: adds first, no aoe, tank here", name, name)
+            : fmt::format("Tactics for {}: {}.", name, Raid::DescribeTactics(plan));
+        tell(answer);
+        return true;
+    }
+
+    std::vector<std::string> notes;
+    Raid::TacticsOrder use = *order;
+    if (use.tank_here && sender->GetMapId() != bossMap)
+    {
+        use.tank_here = false;
+        notes.emplace_back("Say \"tank here\" inside the raid, standing where the boss should be tanked.");
+    }
+    else if (use.tank_here && Raid::RulesPlaceTank(bossMap, boss))
+    {
+        use.tank_here = false;
+        notes.emplace_back("\"tank here\" is not used: the bots already have a set tank place for this fight.");
+    }
+    if (!use.unknown.empty())
+    {
+        std::string unknown;
+        for (std::string const& u : use.unknown)
+            unknown += (unknown.empty() ? "\"" : ", \"") + u + "\"";
+        notes.push_back(fmt::format("Not a tactic I know: {}. Words: {}.", unknown, kTacticsWords));
+    }
+    if (use.Changes())
+    {
+        Raid::ApplyTacticsOrder(plan, use, sender->GetMapId(), sender->GetPositionX(), sender->GetPositionY(), sender->GetPositionZ());
+        owners.SetBossTactics(account, boss, Raid::SerializeTactics(plan));
+        TC_LOG_INFO("playerbot.v2", "[tactics] {} ({}): {} = {}", sender->GetName(), via ? via : "?", name, Raid::SerializeTactics(plan));
+    }
+    std::string answer;
+    if (!use.Changes())
+        answer = fmt::format("Tactics for {} unchanged ({}).", name, Raid::DescribeTactics(plan));
+    else if (plan.Empty())
+        answer = fmt::format("Tactics for {} cleared.", name);
+    else
+        answer = fmt::format("Tactics for {}: {}. Your bots use them every time you fight {}.", name, Raid::DescribeTactics(plan), name);
+    tell(answer);
+    for (std::string const& note : notes)
+        tell(note);
     return true;
 }
 
@@ -2188,6 +2363,9 @@ bool BotCommandParser::Dispatch(Player* sender, Player* bot, std::string const& 
     // A crowd-control order ("@warlock no fear", "off cc") is the owner's, not each bot's: stored once, answered once.
     if (ApplyCcOrder(sender, msg, via))
         return true;
+    // A boss plan ("tactics Lucifron: adds first, no aoe") is the owner's too.
+    if (ApplyTacticsOrder(sender, msg, via))
+        return true;
     // Resolve squad-address prefix (all:/tank:/mage:/Areon:/...).
     // Single-recipient is the most common path — short-circuit so we
     // don't pay the snapshot lookups when the owner just `/w Areon come`.
@@ -2308,6 +2486,37 @@ static void ConfirmWhisperOrder(Player* sender, Player* bot, std::string const& 
     else
         text = fmt::format("{}: {} ok", me, n);
     Push(bot, WhisperIntent{sender->GetName(), std::move(text)});
+}
+
+void BotCommandParser::TickVendorRuns(uint32 now_ms)
+{
+    for (auto it = g_vendor_runs.begin(); it != g_vendor_runs.end();)
+    {
+        BotId const id = it->first;
+        VendorRun const& run = it->second;
+        Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(id));
+        Creature* vendor = bot && bot->IsInWorld() ? ObjectAccessor::GetCreature(*bot, run.vendor) : nullptr;
+        bool done = false;
+        if (!bot || !bot->IsAlive() || !vendor || !Services::HasIntents(id))
+            done = true;
+        else if (bot->IsWithinDistInMap(vendor, INTERACTION_DISTANCE))
+        {
+            uint32 const junk = ::Playerbot::CountBagRot(bot);
+            Push(bot, VendorSellTrashIntent{vendor->GetGUID()});
+            Push(bot, WhisperIntent{run.to, fmt::format("{}: at {}, selling {} thing(s)", bot->GetName(), vendor->GetName(), junk)});
+            TC_LOG_INFO("playerbot.v2", "[owner_order] {} reached {}: sells {} bag stack(s)", bot->GetName(), vendor->GetName(), junk);
+            done = true;
+        }
+        else if (now_ms - run.started_ms > 60000u)
+        {
+            Push(bot, WhisperIntent{run.to, fmt::format("{}: I couldn't get to {}, walk me closer and ask again", bot->GetName(),
+                                                        vendor->GetName())});
+            TC_LOG_INFO("playerbot.v2", "[owner_order] {} did not reach {} in a minute ({:.0f} yards left)", bot->GetName(),
+                        vendor->GetName(), bot->GetDistance(vendor));
+            done = true;
+        }
+        it = done ? g_vendor_runs.erase(it) : std::next(it);
+    }
 }
 
 bool BotCommandParser::ControlsForGroupOrder(Player const* sender, Player const* bot)
@@ -4736,7 +4945,17 @@ bool BotCommandParser::DispatchSingleImpl(Player* sender, Player* bot, std::stri
         // The owner's Attack is the group's go whoever may open (live MC 2026-10-11: the marked mob was idle, only the main tank got the
         // order, and the other 38 bots never saw an Attack): PveGroupCoordinator latches the raid's release from it.
         if (BotAI* attack_ai = Services::Registry().ai(bot->GetGUID().GetCounter()))
+        {
             attack_ai->note_owner_attack(GameTime::GetGameTimeMS());
+            // An Attack while the panel's Passive is on was dropped without a word: every bot but the healer stood still and "ignored"
+            // the orders (Discord 2026-11-09). The owner's own Attack ends Passive: the bot goes to defensive and says so.
+            if (attack_ai->owner_no_fight() && attack_ai->set_owner_stance(BotAI::OwnerStance::Passive))
+            {
+                TC_LOG_INFO("playerbot.v2", "[owner_order] {} <- {}: attack ends passive (now defensive)", bot->GetName(), sender->GetName());
+                Push(bot, WhisperIntent{sender->GetName(),
+                    "I was on Passive (I attack nothing), so your Attack sets me to Defensive. The stance button on the bot panel sets it too."});
+            }
+        }
         // Raid map, nobody fighting the unit yet: only the main tank opens (RaidPullGateAllows); the others wait for
         // the normal pull gate or assist once it is in combat.
         if (!RaidPullGateAllows(bot, target))

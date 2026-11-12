@@ -53,14 +53,17 @@ import urllib.request
 ACTIONS = ["follow", "stay", "resume", "attack", "stop_attack", "flee", "go_to", "accept_quest", "turn_in", "drop_quest",
            "share_quest", "unstuck", "sit", "stand", "mount", "dismount", "emote", "cast", "order", "trade", "step",
            "sign_charter"]
+# When the model twice asks for an action that can't happen: an honest line instead of its promise.
+CANT_LINES = ["can't do that right now, sorry", "hm, can't right now", "sorry, that won't work right now",
+              "no can do right now, sorry"]
 # The orders a reply may give through the bots' own command words (the server checks them again: BotBridgeFormat SafeOrder).
 ORDERS = ["follow", "stay", "hold", "resume", "come", "disengage", "flee", "attack", "assist", "mount", "dismount", "sit", "stand",
           "release", "passive", "defensive", "aggressive", "accept", "accept all", "turn in", "turnin", "share", "quests",
-          "quest list", "loot", "loot all", "sell grey", "repair", "equip upgrades", "upgrades", "use your best gear",
+          "quest list", "loot", "loot all", "sell grey", "sell junk", "repair", "equip upgrades", "upgrades", "use your best gear",
           "wear your best gear", "gear", "inventory", "stats", "who", "buff", "heal", "jump", "wave", "salute", "dance",
           "pull", "pull back", "pullback", "fall back", "fallback", "back", "rally here", "spread", "spread out", "spaced out",
           "stack", "tight", "close", "max dps", "save mana", "normal"]
-ORDER_PREFIXES = ["use ", "drop quest ", "equip ", "craft ", "formation ", "spacing ", "distance ", "follow distance "]
+ORDER_PREFIXES = ["use ", "drop quest ", "equip ", "craft ", "formation ", "spacing ", "distance ", "follow distance ", "tactics "]
 # step: the ways a bot can move a few yards, and the words a model or a player uses for them.
 STEP_DIRS = {"back": "back", "backward": "back", "backwards": "back", "behind": "back", "forward": "forward",
              "forwards": "forward", "ahead": "forward", "front": "forward", "left": "left", "right": "right", "away": "away",
@@ -73,6 +76,7 @@ PLACE_WORDS = ["auction house", "flight master", "flight path", "stable master",
                "bank", "inn", "auctioneer", "vendor", "merchant", "repair", "trainer", "graveyard", "mail", "ah"]
 EMOTES = ["wave", "hello", "bye", "bow", "thank", "cheer", "laugh", "dance", "salute", "point", "yes", "nod", "no", "cry",
           "roar", "flex", "kneel", "applaud", "shy", "talk", "question", "exclamation", "rude", "chicken", "beg", "shout", "eat"]
+TALK_TIMEOUT_S = 20    # bots' own talk: dropped sooner than a player's answer
 MAX_AGE_S = 50          # the server drops answers older than ReplyMaxAgeSec (60 s by default)
 HISTORY_LINES = 6       # lines of each conversation the model sees
 POLL_S = 0.2            # how often the events file is read
@@ -343,20 +347,28 @@ def opinion_text(o, player, owner=False):
 def fixed_answer(event):
     if event.get("_moment"):
         # a moment with no model: the fixed line the server would have said (or nothing)
-        return {"say": event["example"]} if event.get("example") else None
+        # (the server's lines are English: a Russian player gets none rather than English)
+        return {"say": event["example"]} if event.get("example") and not wants_russian(event) else None
     text = event.get("text", "").lower()
     who = event.get("from", "there")
     can = event.get("can")
+    # A crowd or a slow PC gives these instead of the model's line: they must be in his language too ("hey Dasha, bit busy
+    # in <Russian city> right now" to a Russian player, GLIPT 2026-11-09).
+    ru = wants_russian(event)
     def allowed(act):
         return can is None or act in can
-    if "follow" in text and allowed("follow"):
-        return {"say": "sure, right behind you", "do": "follow"}
-    if ("wait" in text or "stay" in text) and allowed("stay"):
-        return {"say": "ok, I'll wait here", "do": "stay"}
-    if "attack" in text and event.get("speaker_target_kind") == "hostile" and allowed("attack"):
-        return {"say": "on it", "do": "attack", "target": "speaker_target"}
-    if (text.startswith("hi") or "hello" in text) and allowed("emote"):
-        return {"say": "hey %s" % who, "do": "emote", "emote": "wave"}
+    def has(*words):
+        return any(w in text for w in words)
+    if has("follow", "за мной", "следуй", "иди за") and allowed("follow"):
+        return {"say": "иду за тобой" if ru else "sure, right behind you", "do": "follow"}
+    if has("wait", "stay", "жди", "стой", "подожди") and allowed("stay"):
+        return {"say": "ок, жду тут" if ru else "ok, I'll wait here", "do": "stay"}
+    if has("attack", "атак", "бей") and event.get("speaker_target_kind") == "hostile" and allowed("attack"):
+        return {"say": "щас" if ru else "on it", "do": "attack", "target": "speaker_target"}
+    if (text.startswith("hi") or has("hello", "привет", "здравств", "хай")) and allowed("emote"):
+        return {"say": ("привет, %s" if ru else "hey %s") % who, "do": "emote", "emote": "wave"}
+    if ru:
+        return {"say": "привет, %s, щас немного занят, чуть позже" % who}
     return {"say": "hey %s, bit busy in %s right now" % (who, event.get("zone", "the world"))}
 
 
@@ -404,9 +416,9 @@ class ChatApi:
             log("model service %s: %s" % (self.url, "ready, model " + self.model if self.up else "not reachable, fixed answers for now"))
         return self.up
 
-    def chat(self, system, user):
+    def chat(self, system, user, timeout=None, max_tokens=None):
         # 160 tokens is room for the longest answer (a line, an action and a memory); fewer would cut the JSON off
-        body = {"model": self.model, "temperature": 0.8, "max_tokens": 160,
+        body = {"model": self.model, "temperature": 0.8, "max_tokens": max_tokens or 160,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
         for attempt in (0, 1, 2):
             if self.json_mode:
@@ -420,7 +432,7 @@ class ChatApi:
             req = urllib.request.Request(self.url + "/chat/completions", data=json.dumps(body).encode("utf-8"), headers=self._headers())
             try:
                 t0 = time.time()
-                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
                     out = json.load(r)
                 with self.lock:
                     self.avg_s = 0.8 * self.avg_s + 0.2 * (time.time() - t0)
@@ -458,6 +470,88 @@ class ChatApi:
             pass
 
 
+class BackupApi:
+    """The local model first, a second service only when needed (optional, off by default): when the local one is not
+    running, fails or times out, or when it is so busy that a player would get the quick fixed line. The second service is
+    whatever the player set in BotBridge\\backup.txt (or --backup-url): his own key for an online service (DeepSeek, Willzor's
+    API, any OpenAI-style one) or a bigger model on another PC. Nothing goes there unless he set it."""
+
+    def __init__(self, primary, backup):
+        self.primary, self.backup = primary, backup
+        self.used = 0
+
+    def __getattr__(self, name):          # avg_s, timeout, up, warm, no_think, next_check... are the local model's
+        return getattr(self.primary, name)
+
+    def __setattr__(self, name, value):
+        if name in ("primary", "backup", "used"):
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self.primary, name, value)
+
+    def check(self):
+        return self.primary.check() or self.backup.check()
+
+    def chat(self, system, user, timeout=None, backup_first=False):
+        if backup_first or not self.primary.check():
+            return self._backup(system, user, timeout, "the local model is busy" if backup_first else "the local model is down")
+        try:
+            return self.primary.chat(system, user, timeout)
+        except (OSError, ValueError) as e:
+            return self._backup(system, user, timeout, "the local model failed (%s)" % e)
+
+    def _backup(self, system, user, timeout, why):
+        if not self.backup.check():
+            raise OSError("%s and the backup service is not reachable" % why)
+        self.used += 1
+        if self.used <= 3 or self.used % 50 == 0:
+            log("backup service answers (%s; %d so far)" % (why, self.used))
+        return self.backup.chat(system, user, timeout)
+
+    def for_event(self, event):
+        """This event's model: the backup first when the main loop sent it there (the local model is too busy)."""
+        return _BackupFirst(self) if event.get("_backup") else self
+
+
+class _BackupFirst:
+    def __init__(self, api):
+        self._api = api
+
+    def __getattr__(self, name):
+        return getattr(self._api, name)
+
+    def chat(self, system, user, timeout=None):
+        return self._api.chat(system, user, timeout, backup_first=True)
+
+
+def read_backup_settings(folder, opts):
+    """url / model / key of the optional second service: --backup-url etc., else backup.txt next to this program (the
+    repack's bot-bridge folder, beside models.txt) or in the BotBridge folder ("url = ...", "model = ...", "key = ..." lines,
+    # comments). Empty url: no second service (the default)."""
+    got = {"url": opts.backup_url or "", "model": opts.backup_model or "", "key": opts.backup_key or ""}
+    if got["url"]:
+        return got
+    for path in (os.path.join(os.path.dirname(os.path.abspath(__file__)), "backup.txt"), os.path.join(folder, "backup.txt")):
+        found = {}
+        try:
+            with open(path, encoding="utf-8-sig") as f:
+                for line in f:
+                    line = line.split("#", 1)[0].strip()
+                    if "=" in line:
+                        k, v = (x.strip() for x in line.split("=", 1))
+                        if k.lower() in got and v:
+                            found[k.lower()] = v.strip('"')
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            log("could not read %s (%s)" % (path, e))
+            continue
+        if found.get("url"):        # the shipped template (url empty) does not hide the other file
+            got.update({k: found.get(k, "") or got[k] for k in got})
+            return got
+    return got
+
+
 # ---- prompt and answer ----
 
 def spell_key(name):
@@ -482,22 +576,32 @@ def mostly_cyrillic(text):
     return cyr > 0 and cyr >= lat
 
 
-def language_line(text):
+# The language each player last wrote in (True: Russian), for a line or a moment that shows none of its own.
+player_russian = {}
+
+
+def wants_russian(event):
+    """True when the bot should answer this player in Russian: his line is mostly Cyrillic; or it has no letters (a moment,
+    "?", a link) and his last line was Russian, or he has written nothing yet and his game client is Russian ("locale").
+    A Russian player who writes English gets English. GLIPT (Russian client) got English answers, 2026-11-09."""
+    player = event.get("from", "")
+    text = re.sub(r"\|H.*?\|h|\|c\w+:|\|c[0-9a-fA-F]{8}|\|r", "", event.get("text", "") or "")
+    if any(ch.isalpha() for ch in text):
+        russian = mostly_cyrillic(text)
+        if player:
+            player_russian[player] = russian
+        return russian
+    if player in player_russian:
+        return player_russian[player]
+    return str(event.get("locale", "")).lower() == "ruru"
+
+
+def language_line(russian):
     # Small models answer an English prompt in English unless the language is named outright (the realm's own chat
     # model does the same, BotChatModel.cpp LanguageLine).
-    if mostly_cyrillic(text):
+    if russian:
         return "The player writes in Russian: write your \"say\" in Russian, the way Russian players write in game chat."
     return "Answer in the language of the message you answer."
-
-
-def last_line_of(bot, player):
-    """The last thing `player` said to `bot` (from the recent chat), or empty."""
-    with history_lock:
-        past = list(history[(bot, player)])
-    for line in reversed(past):
-        if line.startswith(player + ": "):
-            return line[len(player) + 2:]
-    return ""
 
 
 def time_ago(seconds):
@@ -568,14 +672,20 @@ def static_rules(actions_on, swearing):
               "emote needs \"emote\", one of: " + ", ".join(EMOTES) + ".\n"
               "order gives one of your own bot orders, exactly these words: \"order\": one of " + ", ".join(ORDERS) +
               ", or \"use <object>\", \"drop quest <name>\", \"equip <item>\", \"craft <item> <count>\" (make or conjure "
-              "something for him: \"craft water 20\", \"craft food 20\", a potion; you hand it over when it is done). Use it for "
+              "something for him: \"craft water 20\", \"craft food 20\", a potion; you hand it over when it is done), or "
+              "\"tactics <boss>: <plan>\" when he tells the group how to fight a raid boss; it is kept for that boss (\"on "
+              "Lucifron kill the adds before him and nobody fear\" is \"tactics lucifron: adds first, no fear\"; plan words: "
+              "adds first, boss first, no aoe, no fear, no sheep, tank here, clear). Use it for "
               "what the player asks that no other action covers (come here, jump, loot, repair, sell grey, buff me, heal me, use "
               "the altar, make me water...).\n"
               "trade opens a trade window with the player and puts in things from your bags: \"items\": what he asked for "
               "(\"linen cloth\", \"water\", \"food\", \"potions\", \"bags\", \"gear\"), or leave it out for whatever helps "
               "him. He accepts in the window. Use it when he asks you to trade or give him something. YOUR BAGS below says what "
               "you really carry: never say you give him something that is not there. Water or food you don't have but can "
-              "conjure: trade with \"items\":\"water\" (or \"food\") still works, you conjure it first and then trade.\n"
+              "conjure: trade with \"items\":\"water\" (or \"food\") still works, you conjure it first and then trade. When YOUR "
+              "BAGS says your bags are FULL you can't conjure or make anything: say so; to sell your junk use the order "
+              "\"sell junk\" (you walk to the nearest vendor and sell it there), not the auction house. Your line is read before the action "
+              "happens: say what you are about to do (\"one sec, conjuring\"), not that it is done.\n"
               "cast needs \"spell\" (a name from YOUR SPELLS). damage spells need \"ref\" of a hostile from NEAR or "
               "\"target\":\"speaker_target\"; heal, buff and resurrect go on the player who asks (\"target\":\"speaker\") "
               "or on you (\"target\":\"self\"); a campfire spell needs nothing more. If asked for a spell you don't have, "
@@ -605,8 +715,8 @@ def build_prompt(event, actions_on, minds, swearing):
     mind = minds.get(bot)
     p = mind["persona"]
     moment = bool(event.get("_moment"))
-    # A moment has no line of the player's: his last line decides the language (a Russian player gets Russian).
-    lang_text = event.get("text", "") or last_line_of(bot, player)
+    # A moment has no line of the player's: his last line, else his game client, decides the language (wants_russian).
+    russian = wants_russian(event)
     facts = event.get("prompt") or ("You are %s, a level %s %s %s in World of Warcraft."
                                     % (bot, event.get("level", "?"), event.get("race", ""), event.get("class", "")))
     owner = bool(event.get("from_is_owner"))
@@ -617,13 +727,18 @@ def build_prompt(event, actions_on, minds, swearing):
     system = static_rules(actions_on, swearing)
     system += ("You are %s, a level %s %s %s. Who you are: %s. How you write: %s. You are %s in chat. %s\n"
                % (bot, event.get("level", "?"), event.get("race", ""), event.get("class", ""),
-                  p.get("temper_text", ""), p.get("style_text", ""), p.get("chatty", "normal"), language_line(lang_text)))
+                  p.get("temper_text", ""), p.get("style_text", ""), p.get("chatty", "normal"), language_line(russian)))
     # The player who brought this bot (its owner, the leader of its group): orders from him are what the bot is there for. A bot
     # that answered "piss off" to "mount up" and did nothing felt broken (chris, 2026-11-08).
     if owner:
         system += ("%s is your friend and leads your group; you play together. When %s asks you to do something you can do, "
                    "do it (put it in \"do\") and say a short, cheeky okay. If you can't, say why in a friendly way. A request "
                    "or an order is not rude.\n" % (player, player))
+    if event.get("group_order") and actions_on:
+        # "all go to the bank and wait" in party: the server has every bot of the group do the action this answer picks.
+        system += ("%s gives this order to your whole group: you and %s. Pick ONE action from \"You can do now\" that does it; "
+                   "the others do the same. Say one short line for the group, the way a player answers for his friends "
+                   "(\"on our way\", \"ok, all sitting\").\n" % (player, event.get("group") or "the others"))
     system += "Facts about you from the game: " + facts + "\n"
     if actions_on and can:
         system += ("You can do now: " + ", ".join(can) + ". Do one of these only when the player asks for it or it clearly fits"
@@ -633,6 +748,10 @@ def build_prompt(event, actions_on, minds, swearing):
 
     lines = ["You are in %s%s. Your quest: %s." % (event.get("zone", "?"),
              (", " + event["area"]) if event.get("area") else "", (event.get("quest") or {}).get("name", "none"))]
+    if event.get("doing"):
+        # "what are you doing?" / "where are you off to?": the game's answer, not a made-up one (chris, 2026-11-09)
+        lines.append("What you are doing right now: %s. When asked, say this in your own words; don't invent anything "
+                     "else." % event["doing"])
     if event.get("weather") or event.get("time_of_day"):
         lines.append("Weather here: %s. Time of day: %s." % (event.get("weather", "clear"), event.get("time_of_day", "day")))
     opinion = minds.opinion(bot, player)
@@ -667,6 +786,9 @@ def build_prompt(event, actions_on, minds, swearing):
         lines.append("YOUR LAST CHANNEL POST: %s. If %s answers it: for a sale say he can whisper you \"what do you have\" and "
                      "then \"buy\" with the number, and open a trade with the gold; for a group, tell him to invite you."
                      % (event["your_post"], player))
+    # Not only after a channel post: the model never saw its spells, said "here's your water" and asked for "cast water"
+    # (Gun, 2026-11-09).
+    if actions_on and not moment:
         if spells and can and "cast" in can:
             lines.append("YOUR SPELLS: " + ", ".join("%s (%s)" % (s.get("name"), s.get("kind")) for s in spells))
         if event.get("speaker_target"):
@@ -690,7 +812,7 @@ def build_prompt(event, actions_on, minds, swearing):
         lines.append(ask)
     else:
         lines.append("%s (%s): %s" % (player, event.get("channel", "say"), event.get("text", "")))
-    if mostly_cyrillic(lang_text):
+    if russian:
         lines.append("(Answer in Russian.)")
     return system, "\n".join(lines)
 
@@ -718,9 +840,36 @@ def to_int(v):
         return None
 
 
-def clean_action(data, event):
-    """The action of the model's answer as reply fields, or {} when it doesn't fit the event."""
-    act = str(data.get("do", "") or "").strip().lower()
+CONJURE_RE = re.compile(r"^conjure (water|food|refreshment|mana \w+ water)?")
+
+
+def find_spell(wanted, spells):
+    """The spell of YOUR SPELLS the model meant: its exact name, else the one spell whose name has all its words ("water" is
+    Conjure Water, "intellect" is Arcane Intellect)."""
+    if not wanted:
+        return None
+    exact = next((s for s in spells if spell_key(s.get("name", "")) == wanted), None)
+    if exact:
+        return exact
+    words = wanted.split()
+    some = [s for s in spells if all(w in spell_key(s.get("name", "")).split() for w in words)]
+    return some[0] if len(some) == 1 else None
+
+
+def clean_action(data, event, why=None):
+    """The action of the model's answer as reply fields, or {} when it doesn't fit the event; then `why` (a list) gets the
+    reason, for the second ask."""
+    def drop(reason):
+        if why is not None:
+            why.append(reason)
+        return {}
+    act = " ".join(str(data.get("do", "") or "").strip().lower().split())
+    # "trade water", "cast frostbolt", "emote wave": the action and its thing in one word (Gun, 2026-11-09)
+    if " " in act and act.split(" ", 1)[0] in ACTIONS:
+        act, rest = act.split(" ", 1)
+        field = {"trade": "items", "cast": "spell", "emote": "emote", "order": "order", "go_to": "place", "step": "dir"}.get(act)
+        if field and not data.get(field):
+            data = dict(data, **{field: rest})
     if act == "cast_spell":
         act = "cast"
     step_dir = ""
@@ -729,8 +878,17 @@ def clean_action(data, event):
     if act in STEP_ALIASES:
         act, step_dir = "step", STEP_ALIASES[act]
     can = event.get("can")
-    if act not in ACTIONS or (can is not None and act not in can):
-        return {}
+    if act not in ACTIONS:
+        return drop("\"%s\" is not an action" % act)
+    if act == "cast":
+        # Conjured water or food for the player only reaches him by trade, and the trade conjures it first when the bags have
+        # none: a cast would make it for the bot and leave him waiting.
+        spell = find_spell(spell_key(data.get("spell", "")), event.get("spells") or [])
+        if spell and CONJURE_RE.match(spell_key(spell.get("name", ""))) and (can is None or "trade" in can):
+            kind = "food" if "food" in spell_key(spell["name"]) else "water"
+            act, data = "trade", dict(data, items=kind)
+    if can is not None and act not in can:
+        return drop("%s is not something you can do for %s now" % (act, event.get("from", "him")))
     near = {n.get("ref"): n for n in (event.get("near") or [])}
     ref = to_int(data.get("ref"))
     target = str(data.get("target", "") or "").lower()
@@ -794,9 +952,9 @@ def clean_action(data, event):
         action["emote"] = emote
     elif act == "cast":
         wanted = spell_key(data.get("spell", ""))
-        spell = next((s for s in (event.get("spells") or []) if spell_key(s.get("name", "")) == wanted), None)
+        spell = find_spell(wanted, event.get("spells") or [])
         if not wanted or not spell:
-            return {}
+            return drop("you have no spell called \"%s\"" % data.get("spell", ""))
         action["spell"] = spell["name"]
         if spell.get("kind") == "damage":
             if ref in near and near[ref].get("kind") == "hostile":
@@ -842,6 +1000,7 @@ def typing_delay(say, rng, acting):
 
 
 def answer(event, api, actions_on, minds, opts):
+    api = api.for_event(event) if hasattr(api, "for_event") else api
     started = time.time()
     bot, player = event.get("bot", ""), event.get("from", "")
     swearing = bool(event.get("swearing")) and not opts.no_swearing
@@ -861,11 +1020,29 @@ def answer(event, api, actions_on, minds, opts):
             log("line of %s %s" % (bot, why))
         reply = {"say": say} if say else {}
         if actions_on:
-            reply.update(clean_action(data, event))
+            why = []
+            reply.update(clean_action(data, event, why))
             wanted = str(data.get("do", "") or "").strip()
             if wanted and "do" not in reply:
-                log("%s wanted to %s for %s, but it does not fit (can: %s): only the line is said"
-                    % (bot, wanted, player, ", ".join(event.get("can") or []) or "nothing"))
+                # The line was written for an action that will not happen ("here's your water" three times, no trade: Gun,
+                # 2026-11-09). One more ask with the reason; whatever comes back must not promise what does not happen.
+                reason = why[0] if why else "it does not fit"
+                log("%s wanted to %s for %s, but %s: asking again" % (bot, wanted, player, reason))
+                again = None
+                try:
+                    again = parse_json(api.chat(system, user + "\n(Your last answer wanted to do \"%s\", but %s. Answer again: "
+                                                "use an action from \"You can do now\" that really does it, or say honestly that "
+                                                "you can't, and why.)" % (wanted, reason)))
+                except (OSError, ValueError) as e:
+                    log("second ask failed (%s)" % e)
+                second = clean_action(again, event) if again else {}
+                say2, why2 = check_line(str((again or {}).get("say", "")).strip().strip('"').replace("\n", " ")[:200], swearing)
+                if again and say2 and (second or not str(again.get("do", "") or "").strip()) and not why2:
+                    reply = {"say": say2}
+                    reply.update(second)
+                else:
+                    reply = {"say": random.choice(CANT_LINES)}
+                log("%s -> %s second answer: %s%s" % (player, bot, reply.get("say", ""), " {do: %s}" % reply["do"] if "do" in reply else ""))
         now = time.time()
         if event.get("_moment"):
             remember_moment(minds, bot, player, event, now)
@@ -881,6 +1058,23 @@ def answer(event, api, actions_on, minds, opts):
                                0.4 + 0.15 * abs(mood), now)
             minds.save(bot)
         reply = reply if (reply.get("say") or reply.get("do")) else None
+    if reply and reply.get("say") and wants_russian(event) and not mostly_cyrillic(reply["say"]):
+        # Small models slip into English now and then (qwen2.5:3b, Geshka 2026-11-09): one more ask, else a Russian line.
+        log("%s's line for %s is not Russian (%s): asking again" % (bot, player, reply["say"]))
+        try:
+            again = parse_json(api.chat(system, user + "\n(Your \"say\" was in English. Write it again in Russian.)"))
+            say2, why2 = check_line(str((again or {}).get("say", "")).strip().strip('"').replace("\n", " ")[:200], swearing)
+        except (OSError, ValueError) as e:
+            log("second ask failed (%s)" % e)
+            say2, why2 = "", "failed"
+        if say2 and not why2 and mostly_cyrillic(say2):
+            reply["say"] = say2
+        elif event.get("_moment"):
+            reply.pop("say", None)
+        elif "do" in reply:
+            reply["say"] = "ок"   # the action speaks for itself
+        else:
+            reply["say"] = (fixed_answer(event) or {}).get("say", "")
     if not reply and event.get("_moment") and data:
         log("%s -> %s [%s, %.1f s, moment %s]: (says nothing)" % (bot, player, source, time.time() - started, event.get("what")))
         return   # the model chose to say nothing about it: fine, people don't comment on everything
@@ -921,6 +1115,8 @@ def answer(event, api, actions_on, minds, opts):
 def answer_talk(event, api, minds, opts):
     """A world bot's next line in a talk with other bots (a gathering by the city gate): the scene and the lines so far come
     from the server; the bot's own persona decides how it writes. No line when the model is down or busy: the talk just ends."""
+    # Bots' own talk and posts never go to the backup service: it is there for players' answers (and may cost its owner).
+    api = getattr(api, "primary", api)
     started = time.time()
     bot = event.get("bot", "")
     if not api.check():
@@ -935,14 +1131,20 @@ def answer_talk(event, api, minds, opts):
     system += "Now: " + str(event.get("scene", "")) + "\n"
     if event.get("weather") or event.get("time_of_day"):
         system += "Weather here: %s. Time of day: %s.\n" % (event.get("weather", "clear"), event.get("time_of_day", "day"))
+    # The players around read it: a Russian realm gets Russian street talk and posts ("locale" is theirs, from the server).
+    russian = str(event.get("locale", "")).lower() == "ruru"
+    if russian:
+        system += language_line(True).replace("The player writes", "The players here write") + "\n"
     talk = str(event.get("talk", "") or "").strip()
     user = ("The talk so far:\n%s\nYour next line (answer the others, don't repeat what was said):" % talk) if talk else \
         "Start the talk with one line."
+    if russian:
+        user += "\n(Answer in Russian.)"
     try:
-        data = parse_json(api.chat(system, user))
+        # A talk line is never worth a long wait: on a slow PC it would hold the model while a player's line waits.
+        data = parse_json(api.chat(system, user, timeout=min(api.timeout, TALK_TIMEOUT_S)))
     except (OSError, ValueError) as e:
         log("talk line of %s failed (%s)" % (bot, e))
-        api.next_check = 0
         return
     say = str((data or {}).get("say", "")).strip().strip('"').replace("\n", " ")[:200]
     if ":" in say[:24] and say.split(":", 1)[0].strip().lower() == bot.lower():
@@ -950,6 +1152,9 @@ def answer_talk(event, api, minds, opts):
     say, why = check_line(say, swearing)
     if why:
         log("talk line of %s %s" % (bot, why))
+    if russian and say and not mostly_cyrillic(say):
+        log("talk line of %s not in Russian, not said: %s" % (bot, say))
+        return
     if not say:
         return
     rng = random.Random()
@@ -961,6 +1166,65 @@ def answer_talk(event, api, minds, opts):
     channel = event.get("channel") if event.get("channel") in ("say", "general", "trade") else "say"
     write_reply(event["_folder"], {"reply_to": event["id"], "say": say, "channel": channel, "delay_ms": int(max(0.0, wait) * 1000)})
     log("%s [%s, %.1f s]: %s" % (bot, "talk" if channel == "say" else channel, time.time() - started, say))
+
+
+def answer_raid_line(event, api, opts):
+    """A bot's raid chat line about something that just happened in the fight (the raid leader reacting to a mistake, a raider
+    after a wipe). Fast or nothing: the server says its fixed line itself when this one is not back within wait_ms (2.5 s), so
+    the prompt is short, the answer is a few words, and a slow model simply loses. No persona text of anyone's goes in: the
+    lines stay game banter, never about a person, never a slur (check_line still filters what comes back)."""
+    api = getattr(api, "primary", api)   # never the paid backup for banter
+    started = event["_seen"]
+    budget = int(event.get("wait_ms", 2500) or 2500) / 1000.0 - 0.3
+    if budget - (time.time() - started) < 0.4 or not api.check():
+        return
+    bot = event.get("bot", "")
+    swearing = bool(event.get("swearing")) and not opts.no_swearing
+    harsh = str(event.get("mood", "mild")) == "harsh"
+    leader = str(event.get("role", "")) == "raid leader"
+    russian = str(event.get("locale", "")).lower() == "ruru"
+    system = ("You are %s, a level %s %s in a World of Warcraft raid, writing in raid chat like a real player. %s "
+              "Write ONE short line (at most 12 words), lowercase, no emoji, no quotes. Only about the game and this mistake: "
+              "never about the person behind the character, never insults about real life, never slurs, no threats. "
+              "Answer as JSON: {\"say\": \"...\"}."
+              % (bot, event.get("level", "60"), event.get("class", ""),
+                 ("You are the raid leader and you %s." % ("freak out at every mistake, loud and dramatic, CAPS now and then, but it "
+                                                           "is all in good fun" if harsh else "tease people about mistakes, "
+                                                           "calm and a bit dry")) if leader else
+                 ("You just wiped with your raid; you %s." % ("blame someone a bit, half joking" if harsh else
+                                                              "make an excuse, a joke or own up"))))
+    if russian:
+        system += " " + language_line(True)
+    user = "Just now: %s.\nThe kind of line meant (don't copy it): %s" % (event.get("detail", "something happened"), event.get("example", ""))
+    if russian:
+        user += "\n(Answer in Russian.)"
+    try:
+        data = parse_json(api.chat(system, user, timeout=max(0.4, budget - (time.time() - started)), max_tokens=48))
+    except (OSError, ValueError) as e:
+        log("raid line of %s: no line in time (%s); the server says its own" % (bot, e))
+        return
+    say = str((data or {}).get("say", "")).strip().strip('"').replace("\n", " ")[:160]
+    if ":" in say[:24] and say.split(":", 1)[0].strip().lower() == bot.lower():
+        say = say.split(":", 1)[1].strip()
+    say, why = check_line(say, swearing)
+    if why:
+        log("raid line of %s %s" % (bot, why))
+    if not say or (russian and not mostly_cyrillic(say)):
+        return
+    took = time.time() - started
+    if took > budget:
+        log("raid line of %s came after %.1f s; the server says its own" % (bot, took))
+        return
+    delay = max(0, int(event.get("delay_ms", 0) or 0) - int(took * 1000))
+    write_reply(event["_folder"], {"reply_to": event["id"], "say": say, "channel": event.get("channel", "raid"), "delay_ms": delay})
+    log("%s [raid %s, %.1f s]: %s" % (bot, event.get("what", ""), took, say))
+
+
+def safe_raid_line(event, api, opts):
+    try:
+        answer_raid_line(event, api, opts)
+    except Exception as e:   # a raid line is never worth stopping the program for; the server says its fixed line
+        log("raid line for %s failed: %r" % (event.get("bot"), e))
 
 
 def safe_talk(event, api, minds, opts):
@@ -1006,6 +1270,10 @@ def main():
     ap.add_argument("--no-typing-delay", action="store_true", help="answer as soon as the model is done")
     ap.add_argument("--minds", default=None, help="where personas, memories and opinions are kept (default FOLDER\\minds)")
     ap.add_argument("--think", action="store_true", help="let thinking models think before they answer (slower; off by default)")
+    ap.add_argument("--backup-url", default=None, help="a second OpenAI-style service, used only when the local model is down, "
+                    "fails or is too busy (off by default; also BotBridge\\backup.txt)")
+    ap.add_argument("--backup-model", default=None, help="the second service's model name")
+    ap.add_argument("--backup-key", default=os.environ.get("BOT_BRIDGE_BACKUP_KEY", ""), help="the second service's key")
     ap.add_argument("--log", default=None, help="write what this program prints to this file too (the launcher's ai-bots\\program.log)")
     opts = ap.parse_args()
     if opts.log:
@@ -1022,12 +1290,23 @@ def main():
     actions_on = not opts.no_actions
     api = ChatApi(url, opts.model, opts.key, opts.timeout)
     api.no_think = not opts.think
+    backup = read_backup_settings(folder, opts)
+    has_backup = bool(backup["url"] and backup["model"])
+    if backup["url"] and not backup["model"]:
+        log("backup service %s has no model name: not used (add \"model = ...\")" % backup["url"])
+    if has_backup:
+        second = ChatApi(backup["url"], backup["model"], backup["key"], min(opts.timeout, 30))
+        second.no_think = True
+        second.can_warm = False
+        api = BackupApi(api, second)
+        log("backup service: %s at %s, only when the local model is down, fails or is too busy" % (backup["model"], backup["url"]))
     minds = Minds(opts.minds or os.path.join(folder, "minds"))
     if api.check():
         threading.Thread(target=api.warm, daemon=True).start()   # loads the model now, not on the first player's line
     last_warm, last_chat = time.time(), 0.0
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, opts.workers) + 1)   # one more for warm()
-    pending = set()
+    # one more for warm(); with a backup service, room for the answers it takes while the local model is busy
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, opts.workers) * (2 if has_backup else 1) + 1)
+    pending, chat_pending = set(), set()
     log("bot bridge: folder %s, model %s at %s, actions %s" % (folder, opts.model, url, "on" if actions_on else "off"))
 
     current, offset, last_ping, carry = None, 0, 0.0, b""
@@ -1066,7 +1345,11 @@ def main():
                     e["_seen"], e["_folder"] = time.time(), folder
                     # The model can't keep up (a slow PC, or a crowd talking at once): when this one would wait more than
                     # MAX_WAIT_S for its turn, it gets the quick fixed answer instead.
-                    if len(pending) >= opts.workers * 4 or len(pending) * api.avg_s / max(1, opts.workers) > MAX_WAIT_S:
+                    busy = len(pending) >= opts.workers * 4 or len(pending) * api.avg_s / max(1, opts.workers) > MAX_WAIT_S
+                    if busy and has_backup and len(pending) < opts.workers * 8:
+                        e["_backup"] = True     # the second service answers this one instead of the quick fixed line
+                        busy = False
+                    if busy:
                         reply = fixed_answer(e)
                         if reply is None:
                             continue
@@ -1076,16 +1359,27 @@ def main():
                         write_reply(folder, reply)
                         log("%s -> %s [fixed, model busy]: %s" % (e.get("from"), e.get("bot"), reply.get("say", "")))
                         continue
-                    pending.add(pool.submit(safe_answer, e, api, actions_on, minds, opts))
+                    fut = pool.submit(safe_answer, e, api, actions_on, minds, opts)
+                    pending.add(fut)
+                    chat_pending.add(fut)
                     last_chat = time.time()
                 elif kind == "talk":
                     # World bots chatting with each other: only when no player's line waits (players always come first).
                     pending = {p for p in pending if not p.done()}
-                    if len(pending) >= opts.workers:
+                    chat_pending = {p for p in chat_pending if not p.done()}
+                    # Not even next to a player's answer: two at once on a small card made his take 41 s (Geshka, 2026-11-09).
+                    if len(pending) >= opts.workers or chat_pending:
                         log("talk line of %s skipped: players' chat comes first" % e.get("bot"))
                         continue
                     e["_seen"], e["_folder"] = time.time(), folder
                     pending.add(pool.submit(safe_talk, e, api, minds, opts))
+                elif kind == "raid_line":
+                    # A raid line has 2.5 s or the server says its fixed one: only when the model is free right now.
+                    pending = {p for p in pending if not p.done()}
+                    if len(pending) >= opts.workers:
+                        continue
+                    e["_seen"], e["_folder"] = time.time(), folder
+                    pending.add(pool.submit(safe_raid_line, e, api, opts))
                 elif kind == "action_result":
                     log("action %s for %s: %s" % (e.get("act"), e.get("bot"),
                         "done, " + e.get("detail", "") if e.get("ok") else "refused, " + e.get("why", "")))

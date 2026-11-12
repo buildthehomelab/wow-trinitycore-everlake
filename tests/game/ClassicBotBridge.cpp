@@ -459,10 +459,15 @@ TEST_CASE("BotBridge: an order is one of the safe parser words", "[BotBridge]")
     CHECK(SafeOrder("/drop quest  Wolves", norm, why));
     CHECK(norm == "drop quest wolves");
     CHECK(SafeOrder("use altar", norm, why));
+    CHECK(SafeOrder("Sell junk", norm, why));   // walks to a vendor and sells everything a vendor takes
+    CHECK(norm == "sell junk");
     CHECK_FALSE(SafeOrder("use", norm, why));
     CHECK(SafeOrder("Craft water 20", norm, why));
     CHECK(norm == "craft water 20");
     CHECK_FALSE(SafeOrder("craft", norm, why));
+    CHECK(SafeOrder("Tactics Lucifron: adds first, no fear", norm, why));   // the player's plan for a raid boss
+    CHECK(norm == "tactics lucifron: adds first, no fear");
+    CHECK_FALSE(SafeOrder("tactics", norm, why));
     for (char const* w : { "pull", "Pull back!", "fall back", "rally here", "spread out", "stack", "max dps", "save mana" })
         CHECK(SafeOrder(w, norm, why));
     CHECK(SafeOrder("formation circle", norm, why));
@@ -615,6 +620,61 @@ TEST_CASE("BotBridge: orders and trades are only the owner's or the group leader
     self.owned = true;
     self.owned_bots_allowed = true;
     CHECK(CheckActionContext(Act::Order, self) != nullptr);
+}
+
+TEST_CASE("BotBridge: the line with an action is only said when it is true", "[BotBridge]")
+{
+    // done: the program's line as it is
+    CHECK(LineAfterAction(Act::Trade, true, false, {}, "here's your water") == "here's your water");
+    // done, but the conjure order speaks for itself: no "here's your water" next to "My bags are full..." (Gun, 2026-11-09)
+    CHECK(LineAfterAction(Act::Trade, true, true, {}, "here's your water").empty());
+    // refused: why, in the bot's words
+    CHECK(LineAfterAction(Act::Trade, false, false, "come closer so we can trade", "here's your water") == "Sorry, come closer so we can trade.");
+    CHECK(LineAfterAction(Act::Mount, false, false, "I'm already mounted", "mounting up") == "Sorry, I'm already mounted.");
+    // reasons written for the program never reach the player
+    CHECK(LineAfterAction(Act::Attack, false, false, "that ref is unknown, gone or older than 60 seconds", "on it") == "Sorry, I can't do that right now.");
+    CHECK(LineAfterAction(Act::Order, false, false, "too soon after this bot's last action", "ok") == "Sorry, I can't do that right now.");
+    CHECK(LineAfterAction(Act::Cast, false, false, "spells are turned off on this server (Playerbot.Bridge.Actions.Spells)", "sure")
+          == "Sorry, I can't do that here.");
+    CHECK(LineAfterAction(Act::Follow, false, false, "this bot belongs to a player: it only acts when its owner asks", "coming")
+          == "Sorry, I can't do that right now.");
+    // nobody to tell
+    CHECK(LineAfterAction(Act::Follow, false, false, "the player who asked is gone", "coming").empty());
+    // a greeting stays a greeting when only its wave was refused
+    CHECK(LineAfterAction(Act::Emote, false, false, "one emote every 10 seconds", "hey there") == "hey there");
+    CHECK(LineAfterAction(Act::Sit, false, false, "I'm not ready yet", "taking a break") == "taking a break");
+}
+
+TEST_CASE("BotBridge: a group order's action is one every bot can take", "[BotBridge]")
+{
+    for (Act a : { Act::Follow, Act::Stay, Act::GoTo, Act::Sit, Act::Emote, Act::Order, Act::Step, Act::Attack, Act::SignCharter })
+        CHECK(IsGroupAct(a));
+    // one bot's things: its bags, its spells, its quest log
+    for (Act a : { Act::Trade, Act::Cast, Act::AcceptQuest, Act::TurnIn, Act::DropQuest, Act::ShareQuest, Act::Unstuck, Act::None })
+        CHECK_FALSE(IsGroupAct(a));
+}
+
+TEST_CASE("BotBridge: what a bot is doing, in a player's words", "[BotBridge]")
+{
+    CHECK(ActivityFromRule("idle:pursue_quest_goal") == "doing a quest");
+    CHECK(ActivityFromRule("idle:quest_path") == "doing a quest");
+    CHECK(ActivityFromRule("idle:walk_to_quest_ender") == "handing in a quest");
+    CHECK(ActivityFromRule("idle:travel_to_vendor") == "on the way to a vendor to sell junk");
+    CHECK(ActivityFromRule("idle:bags_full_recover") == "on the way to a vendor to sell junk");
+    CHECK(ActivityFromRule("idle:walk_to_known_mailbox") == "checking my mail");
+    CHECK(ActivityFromRule("idle:inn_rest") == "taking a break at the inn");
+    CHECK(ActivityFromRule("idle:walk_to_flightmaster") == "catching a flight");
+    CHECK(ActivityFromRule("idle:grind_roam") == "killing mobs for xp");
+    CHECK(ActivityFromRule("idle:gathering") == "hanging out with some people, chatting");
+    CHECK(ActivityFromRule("idle:dungeon_tank_advance_boss") == "in a dungeon run with my group");
+    CHECK(ActivityFromRule("idle:craft_order_fulfill") == "making something someone ordered");
+    CHECK(ActivityFromRule("idle:ah_post_surplus") == "doing some business at the auction house");
+    CHECK(ActivityFromRule("idle:town_errand") == "running errands in town");
+    // a retreat is not a rest; a rule a player would not talk about says nothing
+    CHECK(ActivityFromRule("combat:pull_back_retreat") == "fighting");
+    CHECK(ActivityFromRule("idle:pull_back_hold").empty());
+    CHECK(ActivityFromRule("idle:watchdog_escape").empty());
+    CHECK(ActivityFromRule("").empty());
 }
 
 #endif // TESTS_HAVE_PLAYERBOT_V2

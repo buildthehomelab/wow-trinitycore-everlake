@@ -57,6 +57,7 @@
 #include "Bot/ChannelChat.h"
 #include "Bot/GroupOrderText.h"
 #include "Bot/CcDeny.h"
+#include "Bot/Raid/BossTactics.h"
 #include "Util.h"
 #include "Bot/AddonHint.h"
 #include "Bot/BotTextMgr.h"
@@ -240,6 +241,16 @@ void DriveTeleportAck(Player* p)
     // are unused beyond the debug log. Forge the minimum payload.
     if (p->GetTeleportState() == TeleportState::WaitingForTeleportAck)
     {
+        // Same as the far teleport above: the walk the bot was on keeps its spline, and the spline moved the bot straight back onto
+        // its old way after the ack set it down at the new spot. A catch-up in the Stormwind canals showed it (Discord 2026-11-09): two
+        // bots "brought" to their player 186 y away were 133 y from the spot a moment later, still walking the old way, and to the
+        // player the group warped about. The move ends first; the bot's rules give it the next one from where it now stands.
+        if (!p->IsInFlight() && !p->GetTransport())
+        {
+            p->StopMoving();
+            p->GetMotionMaster()->Clear();
+            p->GetMotionMaster()->MoveIdle();
+        }
         WorldPacket data(CMSG_MOVE_TELEPORT_ACK, 8 + 4 + 4);
         data << p->GetGUID();
         data << int32(0);
@@ -2746,7 +2757,10 @@ void Module::OnWorldUpdate(std::chrono::milliseconds diff)
     {
         last_player_craft_at_ = player_craft_total_;
         if (Services::Initialized())
+        {
             ::Playerbot::V2::PlayerCraftOrders::Tick(GameTime::GetGameTimeMS());
+            BotCommandParser::TickVendorRuns(GameTime::GetGameTimeMS());   // "sell junk": sells on arrival
+        }
     }
 
     // 3. Schedule tick for due bots.
@@ -4382,14 +4396,19 @@ void Module::OnPartyChat(Player* sender, Group* group, std::string const& msg, b
     {
         // The owner's crowd-control orders ("no fear", "@warlock no fear", "@mages no sheep", "off cc"): stored once for the
         // sender, answered once, from a player who commands a bot in this group (anyone else's "no fear" stays chatter).
-        if (CcDeny::ParseOrder(msg))
+        // The same for a boss plan ("tactics Lucifron: adds first, no aoe, tank here"; Bot/Raid/BossTactics.h).
+        bool const cc_order = CcDeny::ParseOrder(msg).has_value();
+        bool const tactics_order = !cc_order && Raid::ParseTacticsOrder(msg).has_value();
+        if (cc_order || tactics_order)
         {
             bool commands_a_bot = false;
             for (GroupReference const& itr : group->GetMembers())
                 if (Player const* m = itr.GetSource(); m && m != sender && Services::Registry().has(m->GetGUID().GetCounter()) &&
                                                        BotCommandParser::ControlsForGroupOrder(sender, m))
                 { commands_a_bot = true; break; }
-            if (commands_a_bot && BotCommandParser::ApplyCcOrder(sender, msg, "party"))
+            if (commands_a_bot && cc_order && BotCommandParser::ApplyCcOrder(sender, msg, "party"))
+                return;
+            if (commands_a_bot && tactics_order && BotCommandParser::ApplyTacticsOrder(sender, msg, raid_chat ? "raid" : "party"))
                 return;
         }
         // A bare group order ("follow", "stay", ...) in party or raid chat goes to every bot of the sender's in the
@@ -4419,6 +4438,38 @@ bool Module::GroupHasBotNamed(Group const* group, std::string_view name)
         if (StringEqualI(member->GetName(), name)) return true;
     }
     return false;
+}
+
+bool Module::AskModelSquadOrder(Player* sender, Group* group, std::string const& body)
+{
+    if (!sender || !group || body.empty() || !BotBridge::ChatOn())
+        return false;
+    // "Name:rest" / "squad:rest" (AddressedGroupOrder), or a ';' line with no name. A role or class prefix ("tank: ...") stays the
+    // parser's: the program does not pick bots by role.
+    std::string name, text = body;
+    if (auto const colon = body.find(':'); colon != std::string::npos && body.find(' ') > colon)
+    {
+        name = body.substr(0, colon);
+        text = body.substr(colon + 1);
+        if (StringEqualI(name, "squad") || StringEqualI(name, "all") || StringEqualI(name, "everyone"))
+            name.clear();
+        else if (!GroupHasBotNamed(group, name))
+            return false;
+    }
+    text.erase(0, text.find_first_not_of(' '));
+    text.erase(text.find_last_not_of(' ') + 1);
+    if (text.empty())
+        return false;
+    std::vector<Player*> bots;
+    for (GroupReference const& itr : group->GetMembers())
+    {
+        Player* m = itr.GetSource();
+        if (!m || m == sender || !Services::Registry().has(m->GetGUID().GetCounter()) || !m->IsInWorld())
+            continue;
+        if (!name.empty() ? StringEqualI(m->GetName(), name) : BotCommandParser::ControlsForGroupOrder(sender, m))
+            bots.push_back(m);
+    }
+    return BotBridge::AskGroupOrder(sender, bots, group->isRaidGroup() ? "raid" : "party", text);
 }
 
 void Module::DispatchSquadLine(Player* sender, Group* group, std::string const& body, bool answer_unknown)
@@ -4467,7 +4518,7 @@ void Module::DispatchSquadLine(Player* sender, Group* group, std::string const& 
     if (!primary)
         primary = any_group_bot;
     if (!primary) return;
-    if (!BotCommandParser::Dispatch(sender, primary, body, "party;") && answer_unknown)
+    if (!BotCommandParser::Dispatch(sender, primary, body, "party;") && !AskModelSquadOrder(sender, group, body) && answer_unknown)
     {
         // A ";" line is meant as an order: an unknown or refused one answers instead of vanishing. (A plain whisper falls
         // through to the social reactor and a bare party word is chatter, so only this explicit route replies.)

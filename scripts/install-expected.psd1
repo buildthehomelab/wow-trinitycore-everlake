@@ -12,7 +12,7 @@
         'Instance.IgnoreRaid'               = '1'
         'Network.SkipBuildAuthKeyCheck'     = '1'
         'Updates.EnableDatabases'           = '15'
-        'Realm.AlsoAcceptBuilds'             = '70862,70840,70790,70755,70685,70658,70634,70630,70532'
+        'Realm.AlsoAcceptBuilds'             = '70888,70862,70840,70790,70755,70685,70658,70634,70630,70532'
     }
     playerbot = @{
         'Playerbot.SharedDatabase'          = 'playerbot'
@@ -40,6 +40,6 @@
         BindIP                              = '127.0.0.1'
         'LoginREST.ExternalAddress'         = 'trinity.actual.battle.net'
         'Realm.CfgContentSetID'             = '137'
-        'Realm.AlsoAcceptBuilds'            = '70862,70840,70790,70755,70685,70658,70634,70630,70532'
+        'Realm.AlsoAcceptBuilds'            = '70888,70862,70840,70790,70755,70685,70658,70634,70630,70532'
     }
 }

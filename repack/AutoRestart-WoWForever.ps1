@@ -69,6 +69,18 @@ while (-not (Test-Path $flag)) {
         try { Test-GamePorts $root; Log 'Port 8085 looks free now. If this happens again, restart the PC, or in Terminal (Admin) run: net stop winnat   then   net start winnat' } catch { Log "$_" }
         break
     }
+    # A settings problem stops the worldserver during start-up, and it stops the same way on every restart: say so plainly, with the
+    # server's own line, instead of "crashed" (Discord 2026-11-09).
+    $tail40 = if (Test-Path (Join-Path $server 'logs\Server.log')) { Get-Content (Join-Path $server 'logs\Server.log') -Tail 40 -ErrorAction SilentlyContinue } else { @() }
+    $confLines = @($tail40 | Where-Object { $_ -match '(?i)(\.conf\b|config(uration)? file|invalid value|Cannot connect to|Unknown database|Access denied for user|could not (load|open))' })
+    # Only a stop before the world was up counts: after "World initialized" a stop is a crash, and start-up warnings in the log are old news.
+    $started = $since -and (Test-WorldInitialized (Join-Path $server 'logs') $since)
+    if ($confLines.Count -gt 0 -and -not $started) {
+        Log 'worldserver stopped on a settings or database problem, not a crash. The server says:'
+        $confLines | Select-Object -Last 5 | ForEach-Object { Log ("   " + $_.Trim()) }
+        Log 'Fix that setting (Check-Config.cmd shows the file and line), then start the server again. Not restarting: it would stop the same way.'
+        break
+    }
     $now = Get-Date; $crashes.Add($now)
     $recent = @($crashes | Where-Object { ($now - $_).TotalMinutes -le 10 })
     if ($recent.Count -ge 5) { Log 'Crashed 5 times within 10 minutes: not restarting again. Use bug-bundle.ps1 and report it.'; break }

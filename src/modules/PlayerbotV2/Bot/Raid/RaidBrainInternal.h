@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "BossTactics.h"
 #include "RaidEncounters.h"
 #include "RaidOrder.h"
 #include "ObjectGuid.h"
@@ -45,6 +46,10 @@ struct Plan
     std::vector<Unit*> enemies;    // alive creatures in combat with the group, sorted by guid
     bool emergency = false;        // somebody under 45% health: healers keep healing
     ObjectGuid ruleFocus;          // kill focus an encounter rule demands (Brain::FocusFor), set by PublishTargets
+    // The player's boss plans (BossTactics, "tactics Lucifron: adds first") for the bosses in this fight that have one, from the
+    // group's real players (the leader's first).
+    std::vector<std::pair<Unit*, BossTactics>> tactics;
+    uint16_t tacticsCcDeny = 0;    // the CcDeny kinds those plans leave out (the crowd-control election skips them)
 };
 
 bool Matches(Who who, Member const& m, Player* mainTank);
@@ -55,7 +60,9 @@ bool Controlled(Unit* u);
 // Path queries are capped per plan pass (all bots together, see ResetPathProbes): urgent probes (leaving a hazard,
 // a carrier run, scripted mechanics, a breath / cone) may use the whole cap, the rest (spread, role spots, stay near)
 // stop early so an escape never finds the pass's budget spent.
-bool Usable(Player* bot, float x, float y, float zHint, float& outZ, bool urgent = false, bool hazard = false);
+// `fixedPlace`: a place the encounter fixes (a fixed tank row's slot). The ground, path and detour checks stay; the bot need not see it
+// from where it stands (the path walks round what is between) and it need not be in the fight area round the main tank (the row is wider).
+bool Usable(Player* bot, float x, float y, float zHint, float& outZ, bool urgent = false, bool hazard = false, bool fixedPlace = false);
 void ResetPathProbes();
 bool SetMove(RaidOrder& out, float x, float y, float z, char const* reason);
 // Best nearby point that increases the distance to every raid member in `others`.

@@ -2089,6 +2089,31 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
                     assign(ot->second, m, "off_tank_mob");
                     break;
                 }
+        // A boss hitting a bot tank is that tank's, whatever it was given before: it does not walk off after another mob with the boss
+        // in tow. zg_hakkar 0.1.35 final: Cause Insanity confused the main tank, Hakkar turned to the off tank, which had just been given a
+        // loose Son of Hakkar 57 y away (why=loose_nearest); it walked out to the Son with Hakkar behind it, Hakkar left his platform
+        // (z < 45.8, classic_boss_hakkar.cpp) and evaded at 57-64% in 2 of 4 runs. The tank that held the boss before takes another mob below.
+        for (Member const* t : tanks)
+        {
+            if (!t->is_bot || !t->alive || user_sym.count(t->guid_low)) continue;
+            for (auto const& m : mobs)
+            {
+                // Not a boss the rules give one tank by name (Majordomo's off tank, above): that one is taunted back to its tank.
+                if (!(m.u->is_dungeon_boss || m.u->is_boss_rank) || m.u->victim != t->src->guid || Raid::NoTank(map_id, m.u->entry) ||
+                    Raid::OffTankMob(map_id, m.u->entry) || raid_forbids(t->guid_low, m.u->guid))
+                    continue;
+                if (auto sit = sticky.find(t->guid_low); sit != sticky.end() && sit->second == m.u->guid) break;
+                // Its previous mob goes back to the pool, and the boss leaves the tank that held it before.
+                for (auto it = sticky.begin(); it != sticky.end();)
+                {
+                    if (it->first != t->guid_low && it->second != m.u->guid) { ++it; continue; }
+                    taken.erase(std::remove(taken.begin(), taken.end(), it->second), taken.end());
+                    it = sticky.erase(it);
+                }
+                assign(t, m, "boss_on_it");
+                break;
+            }
+        }
         // The main tank chooses first: the mob it already hits (its pull), else the mob engaged with it, else the
         // nearest. Without this a spare tank that ran at the pull target before the main tank had a victim of its own
         // would be handed the main tank's mob, and the main tank the next one.
@@ -2250,6 +2275,9 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
                 for (auto const& u : sn->combat.nearby_enemies)
                 {
                     if (u.hp <= 0 || u.is_player || u.untargetable || u.is_pacified || u.unit_in_combat) continue;
+                    // A player's pet is no pack mob: one that reads as an enemy belongs to a raider under a mind control and goes back to
+                    // its master's side when the charm ends (bwl_nefarian 1111b: the tanks reserved the warlocks' pets and held for them).
+                    if (u.player_owned) continue;
                     if (!u.victim.IsEmpty() || find_mob(u.guid) || (u.is_cc_locked && member_of(u.cc_caster))) continue;
                     bool known = false;
                     for (NearbyUnit const* p : pack)
@@ -2769,7 +2797,10 @@ void PveGroupCoordinator::PlanRaidTanks(uint64 bkey, uint64 group_low, uint32 ma
         {
             if (!e.tank || !e.alive) continue;
             if (!tanks.empty()) tanks += ", ";
-            tanks += e.src->name + " " + std::to_string(pct_hp(*e.src)) + "%>";
+            // Where it stands: a tank 40-50 y from the healers' post is out of their reach (bwl_nefarian 1110a: the healers stepped toward
+            // tanks 40-51 y off for sight and never healed, and the log could not say where the tanks were).
+            tanks += e.src->name + " " + std::to_string(pct_hp(*e.src)) + "% @" + std::to_string(int32(e.src->x)) + "," +
+                     std::to_string(int32(e.src->y)) + ">";
             if (Mob const* v = find_mob(e.src->victim))
                 tanks += MobName(v->u->entry) + " " + std::to_string(Pct(v->u->hp, v->u->max_hp)) + "%";
             else

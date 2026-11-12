@@ -1,12 +1,12 @@
-# Raid sweep for Zul'Gurub: by default all nine ZG bosses in raid order (Arlokk is summoned at the gong's spot, Gahz'ranka by the
-# Mudskunk Lure's event) and two Molten Core regression checks of the shared fight-script code. -Runs overrides the list.
+# Raid sweep for Zul'Gurub: by default all thirteen ZG bosses in raid order (Arlokk is summoned at the gong's spot, Gahz'ranka by the
+# Mudskunk Lure's event, the four Edge of Madness bosses in front of the Brazier of Madness) and two Molten Core regression checks of the shared fight-script code. -Runs overrides the list.
 # Run from the TrinityCore checkout's scripts\ folder with the realm up, SOAP on, and NOBODY logged in:
 #   powershell -ExecutionPolicy Bypass -File <path>\sweep-zg.ps1 [-Out <folder>] [-Runs name1,name2,...]
 # Each run's new Playerbot.log and Scenario.log lines are saved as <n>-<scenario>-Playerbot.log / -Scenario.log, plus summary.txt.
 # Read-only for the server: it only sends `playerbot scenario run/status/result/abort` over SOAP (run-scenario.ps1).
 param([string]$Out = 'C:\Users\chris\wow forever\sweep-zg',
       [string[]]$Runs = @('zg_jeklik', 'zg_venoxis', 'zg_marli', 'zg_mandokir', 'zg_thekal', 'zg_arlokk', 'zg_jindo', 'zg_gahzranka',
-                          'zg_hakkar', 'mc_lucifron', 'mc_geddon'))
+                          'zg_grilek', 'zg_hazzarah', 'zg_renataki', 'zg_wushoolay', 'zg_hakkar', 'mc_lucifron', 'mc_geddon'))
 . "$PSScriptRoot\common.ps1"
 $logs = Join-Path $root "$installFolder\logs"
 New-Item -ItemType Directory -Force -Path $Out | Out-Null

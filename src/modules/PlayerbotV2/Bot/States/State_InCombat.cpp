@@ -1081,7 +1081,9 @@ bool LooseMobEscape(BotAI& ai, BotSnapshotView const& s, GroupSnapshotView const
     const float mdx = mob->x - bx, mdy = mob->y - by, mdz = mob->z - bz;
     const float mob_d2 = mdx * mdx + mdy * mdy + mdz * mdz;
 
-    if (!s.is_casting())
+    // A bot the raid brain told to keep the mob (the Son of Hakkar puller) drops no threat: it only walks the mob to its tank.
+    bool const keep_aggro = s.raw().raid_order.active && s.raw().raid_order.keep_aggro;
+    if (!s.is_casting() && !keep_aggro)
     {
         uint32 drop = 0;
         bool on_target = false;
@@ -3171,7 +3173,9 @@ void DispatchInCombat(BotAI& ai,
     // hazard / avoid circle, never while casting or rooted.
     if (snapshot.is_in_raid() && !snapshot.in_battleground() && !snapshot.victim().IsEmpty() &&
         ai.effective_role(snapshot) == Role::Dps && !IsMeleeSpec(snapshot.cls(), snapshot.spec()) &&
-        !snapshot.is_casting() && !snapshot.is_rooted())
+        !snapshot.is_casting() && !snapshot.is_rooted() &&
+        // ... not off a raid camp post (Nefarian): the enemies come to the tanks' arc round it, a step in is walked back by the post.
+        !(snapshot.raw().raid_order.active && !snapshot.raw().raid_order.post_enemy.IsEmpty()))
     {
         NearbyUnit const* vu = snapshot.victim_info();
         if (vu && vu->hp > 0 && vu->in_los)
@@ -3445,6 +3449,9 @@ void DispatchInCombat(BotAI& ai,
         // Outside the raid rules a tank in the group's fight picks up its own mobs (GroupFightPick): no wait for a plan's assignment.
         if (th_po.active && th_po.tank_hold && th_po.tank_target.IsEmpty() && snapshot.is_alive() && !(ai.group_fight() && !snapshot.raid_rules()) &&
             !snapshot.is_casting() && snapshot.attackers_count() == 0 &&
+            // ... unless the raid brain sent it onto an enemy (RaidOrder::attack_target: the off-tank taking an idle Son of Hakkar before
+            // Blood Siphon); it walks in and attacks, and the hold would drop that target every tick until the mob hit it ...
+            (!snapshot.raw().raid_order.active || snapshot.raw().raid_order.attack_target.IsEmpty()) &&
             // ... unless a mob nobody was given stands on a group member: that one is this tank's to pick up or taunt, whatever the plan
             // holds it for (n24 mc_garr: Mctankwb sat in tank_hold 7 y from a Firesworn on a healer, taunt ready, for a minute).
             !snapshot.pickup_candidate())

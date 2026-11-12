@@ -130,7 +130,14 @@ std::unordered_map<BotId, uint32> g_last_line_ms;
 uint32      g_bad_lines = 0;
 uint32      g_last_bad_warn_ms = 0;
 struct ChatAsk { BotId bot = 0; std::string sender; ObjectGuid sender_guid; bool sender_is_bot = false; std::string channel; uint32 asked_ms = 0;
-                 uint64 talk_key = 0; };   // talk_key: a bot-to-bot talk line (AskTalk), kept for TakeTalk
+                 uint64 talk_key = 0;         // a bot-to-bot talk line (AskTalk), kept for TakeTalk
+                 std::vector<BotId> group;    // a group order (AskGroupOrder): the other bots that take the answer's action too
+                 uint32 deadline_ms = 0; };   // a raid line (AskRaidLine): an answer at or after this time is dropped (the fixed line was said)
+// Raid lines the program answered in time (AskRaidLine / RaidLineAnswered), by event id.
+std::unordered_set<uint64> g_raid_answered;
+// The group's part of a group order: each other bot runs the answer's action a moment after the first (HandleGroupFollowups).
+struct GroupFollowup { BotId bot = 0; ChatAsk ask; Reply reply; uint32 read_ms = 0, due_ms = 0; };
+std::vector<GroupFollowup> g_group_followups;
 // Channel posts (QueuePost): what the server asked for, by event id, until the answer comes; a bot's last post (for a player who
 // whispers about it); the answers by other bots waiting for their time.
 constexpr uint64 kNoTalkKey = ~uint64(0);   // ChatAsk::talk_key of a talk line nobody takes back (a greeting)
@@ -1075,7 +1082,8 @@ std::string FindPlace(Player* bot, std::string const& place, float radius, Posit
 // "trade me some stuff": the bot opens a trade window with the player who asked (its owner, or the player leading its group:
 // CheckActionContext) and puts in what he asked for, or what helps him (TradeShop::PickGifts). The game's own trade does the rest:
 // nothing changes hands until he presses Accept, and the bot accepts once he has (API::trade_with, BotTrade::Decide).
-std::string RunTrade(Player* bot, Player* speaker, std::string const& items, std::string& detail)
+// `speaks_later`: the bot tells him itself how it goes (the conjure order), so the program's line is not said.
+std::string RunTrade(Player* bot, Player* speaker, std::string const& items, std::string& detail, bool& speaks_later)
 {
     if (!speaker)
         return "nobody asked";
@@ -1100,6 +1108,7 @@ std::string RunTrade(Player* bot, Player* speaker, std::string const& items, std
         if (make && bot->GetClass() == CLASS_MAGE)
         {
             ::Playerbot::V2::PlayerCraftOrders::Order(speaker, bot, std::string("craft ") + make + " 20");
+            speaks_later = true;   // the order whispers what it makes (or why it can't), and trades when done
             detail = std::string("no ") + make + " in my bags: conjuring some for " + speaker->GetName() + " (a craft order; it trades when done)";
             return {};
         }
@@ -1140,7 +1149,8 @@ std::string RunTrade(Player* bot, Player* speaker, std::string const& items, std
 // or the program acting by itself) the same intents are queued directly, with shorter holds.
 Petition* CharterOf(Player* player);
 
-std::string RunAction(ConfigReader::BridgeConfig const& cfg, Player* bot, Player* speaker, Action const& a, uint32 now_ms, std::string& detail)
+std::string RunAction(ConfigReader::BridgeConfig const& cfg, Player* bot, Player* speaker, Action const& a, uint32 now_ms, std::string& detail,
+                      bool& speaks_later)
 {
     BotId const id = bot->GetGUID().GetCounter();
     BotAI* ai = Services::Registry().ai(id);
@@ -1516,7 +1526,7 @@ std::string RunAction(ConfigReader::BridgeConfig const& cfg, Player* bot, Player
             detail = "order \"" + a.order + "\"";
             return order(a.order.c_str());
         case Act::Trade:
-            return RunTrade(bot, speaker, a.items, detail);
+            return RunTrade(bot, speaker, a.items, detail, speaks_later);
         case Act::SignCharter:
         {
             // As his "Request Signature": the same checks and the same result in his charter window (BotSignOfferedCharter).
@@ -1591,10 +1601,17 @@ std::string RunAction(ConfigReader::BridgeConfig const& cfg, Player* bot, Player
     }
 }
 
+struct ActionOutcome
+{
+    bool ok = false;
+    bool speaks_later = false;   // the action tells the player itself how it goes
+    std::string why;             // refused: why not
+};
+
 // One reply's action: every check, then RunAction, then an action_result event. `ask` is the chat_in it answers (nullptr: the
 // program acts on its own), `read_ms` when the line was read.
-void HandleAction(ConfigReader::BridgeConfig const& cfg, BotId bot_id, std::string const& bot_name, uint64 reply_to, ChatAsk const* ask,
-                  Reply const& r, uint32 read_ms, uint32 now_ms)
+ActionOutcome HandleAction(ConfigReader::BridgeConfig const& cfg, BotId bot_id, std::string const& bot_name, uint64 reply_to, ChatAsk const* ask,
+                           Reply const& r, uint32 read_ms, uint32 now_ms)
 {
     Action const& a = r.action;
     auto refuse = [&](std::string why)
@@ -1602,6 +1619,9 @@ void HandleAction(ConfigReader::BridgeConfig const& cfg, BotId bot_id, std::stri
         g_act_gate.NoteRefused(bot_id, now_ms);
         TC_LOG_INFO("playerbot.v2", "[bridge] action {} for {} refused: {}", a.act == Act::None ? "?" : ActName(a.act), bot_name, why);
         WriteActionResult(bot_id, bot_name, reply_to, a.act, why, {});
+        ActionOutcome out;
+        out.why = std::move(why);
+        return out;
     };
     if (!cfg.actions)
         return refuse("actions are turned off on this server (Playerbot.Bridge.Actions.Enable)");
@@ -1637,12 +1657,15 @@ void HandleAction(ConfigReader::BridgeConfig const& cfg, BotId bot_id, std::stri
         return refuse(why);
 
     std::string detail;
-    std::string const why = RunAction(cfg, bot, speaker, a, now_ms, detail);
+    ActionOutcome out;
+    std::string const why = RunAction(cfg, bot, speaker, a, now_ms, detail, out.speaks_later);
     if (!why.empty())
         return refuse(why);
     TC_LOG_INFO("playerbot.v2", "[bridge] action {} for {}{}: {}", ActName(a.act), bot_name,
                 speaker ? " (asked by " + speaker->GetName() + ")" : std::string(), detail);
     WriteActionResult(bot_id, bot_name, reply_to, a.act, {}, detail);
+    out.ok = true;
+    return out;
 }
 
 // Once a second: a world bot following a player it does not belong to lets go when the time is up, or when the player is gone
@@ -1668,8 +1691,60 @@ void CheckLeashes(uint32 now_ms)
     }
 }
 
+// A group order's action for the rest of the group, one bot every 300 ms (a group that all turns at once looks scripted). A ref
+// is the answering bot's (its NEAR list): each bot gets its own ref for the same thing.
+void QueueGroupFollowups(BotId first, ChatAsk const& ask, Reply const& r, uint32 read_ms, uint32 now_ms)
+{
+    ObjectGuid ref_guid;
+    uint8 ref_kind = 0;
+    if (r.action.ref)
+        if (auto const* e = g_refs.Find(first, r.action.ref, now_ms))
+        {
+            ref_guid = e->id;
+            ref_kind = e->kind;
+        }
+    uint32 due = now_ms;
+    for (BotId b : ask.group)
+    {
+        if (b == first)
+            continue;
+        GroupFollowup f;
+        f.bot = b;
+        f.ask = ask;
+        f.ask.bot = b;
+        f.ask.group.clear();
+        f.reply = r;
+        f.reply.say.clear();
+        if (r.action.ref)
+            f.reply.action.ref = ref_guid.IsEmpty() ? 0 : g_refs.Add(b, ref_guid, ref_kind, now_ms);
+        f.read_ms = read_ms;
+        f.due_ms = (due += 300);
+        g_group_followups.push_back(std::move(f));
+    }
+}
+
+void HandleGroupFollowups(ConfigReader::BridgeConfig const& cfg, uint32 now_ms)
+{
+    for (std::size_t i = 0; i < g_group_followups.size();)
+    {
+        GroupFollowup& f = g_group_followups[i];
+        if (int32(now_ms - f.due_ms) < 0)
+        {
+            ++i;
+            continue;
+        }
+        GroupFollowup const done = std::move(f);
+        g_group_followups.erase(g_group_followups.begin() + std::ptrdiff_t(i));
+        Player* p = FindBot(done.bot);
+        if (!p || !Services::HasIntents(done.bot))
+            continue;
+        HandleAction(cfg, done.bot, p->GetName(), done.reply.reply_to, &done.ask, done.reply, done.read_ms, now_ms);   // logs itself
+    }
+}
+
 void HandleReplies(ConfigReader::BridgeConfig const& cfg, uint32 now_ms)
 {
+    HandleGroupFollowups(cfg, now_ms);
     std::erase_if(g_chat, [&](auto const& kv) { return now_ms - kv.second.asked_ms > cfg.reply_max_age_sec * 1000u; });
     for (uint32 n = 0; n < kRepliesPerTick && !g_reply_lines.empty(); ++n)
     {
@@ -1714,6 +1789,13 @@ void HandleReplies(ConfigReader::BridgeConfig const& cfg, uint32 now_ms)
                 continue;
             }
             ask = it->second;
+            if (ask.deadline_ms && int32(now_ms - ask.deadline_ms) >= 0)
+            {
+                // A raid line that came too late: the caller said its fixed line at the deadline.
+                TC_LOG_INFO("playerbot.v2", "[bridge] raid line {} came {} ms late, dropped", r.reply_to, now_ms - ask.deadline_ms);
+                g_chat.erase(it);
+                continue;
+            }
             bot = ask.bot;
             if (Player* p = FindBot(bot))
                 bot_name = p->GetName();
@@ -1750,6 +1832,31 @@ void HandleReplies(ConfigReader::BridgeConfig const& cfg, uint32 now_ms)
         }
         if (!Services::HasIntents(bot))
             continue;
+        // The action runs first: the line is said only when it is true (LineAfterAction).
+        if (has_action && !ask.talk_key)
+        {
+            ActionOutcome const done = HandleAction(cfg, bot, bot_name, r.reply_to, answers ? &ask : nullptr, r, read_ms, now_ms);
+            if (answers && !ask.group.empty() && r.action_error.empty() && IsGroupAct(r.action.act))
+                QueueGroupFollowups(bot, ask, r, read_ms, now_ms);
+            std::string const said = text;
+            text = LineAfterAction(r.action.act, done.ok, done.speaks_later, done.why, text);
+            if (!answers && !done.ok)
+                text.clear();   // a line of the program's own: nobody asked, nobody needs a "sorry"
+            if (text != said)
+                TC_LOG_INFO("playerbot.v2", "[bridge] {}'s line \"{}\" {} (action {})", bot_name, said,
+                            text.empty() ? "not said" : "said as \"" + text + "\"", done.ok ? "speaks for itself" : "refused");
+            if ((channel == "say" || channel == "yell") && !text.empty() && !done.ok && answers && !ask.sender.empty())
+            {
+                channel = "whisper";   // a "sorry" goes to the one who asked, not to the whole street
+                to = ask.sender;
+            }
+        }
+        if (!text.empty() && ask.deadline_ms)
+        {
+            if (g_raid_answered.size() > 512)
+                g_raid_answered.clear();
+            g_raid_answered.insert(r.reply_to);
+        }
         if (!text.empty())
         {
             g_last_line_ms[bot] = now_ms;
@@ -1762,8 +1869,6 @@ void HandleReplies(ConfigReader::BridgeConfig const& cfg, uint32 now_ms)
             }
             Say(bot, channel, to, std::move(text), now_ms, r.delay_ms);
         }
-        if (has_action && !ask.talk_key)
-            HandleAction(cfg, bot, bot_name, r.reply_to, answers ? &ask : nullptr, r, read_ms, now_ms);
     }
     if (g_last_line_ms.size() > 4096)
         std::erase_if(g_last_line_ms, [&](auto const& kv) { return now_ms - kv.second > 600000u; });
@@ -1853,6 +1958,43 @@ std::string SocialText(Player* bot, Player* sender)
 
 // What the bot carries that a player may ask for, in words for the program: "food: Darnassian Bleu x3; drink: none; potions: none;
 // bandages: none; can conjure: water, food". A model that does not know the bags promised water it did not have (Gun, 2026-11-08).
+// What the bot is doing right now, in words, for "what are you doing?" / "where are you going?": the live state first (dead,
+// fighting what, on a flight, an owner's order), else the bot logic's last rule (ActivityFromRule). Before, the model only had
+// the zone and the first quest of the log and made the rest up.
+std::string DoingText(Player* bot)
+{
+    if (!bot->IsAlive())
+        return "dead, waiting to get back to my body";
+    if (bot->IsInCombat())
+    {
+        Unit const* v = bot->GetVictim();
+        return v ? "fighting " + std::string(v->GetName()) : std::string("in a fight");
+    }
+    if (bot->IsInFlight())
+        return "on a flight";
+    BotAI const* ai = Services::Registry().ai(bot->GetGUID().GetCounter());
+    uint32 const now = GameTime::GetGameTimeMS();
+    std::string out;
+    if (ai && ai->is_manual_mode(now))
+        switch (ai->owner_command())
+        {
+            case BotAI::OwnerCommand::Follow:    out = "following you"; break;
+            case BotAI::OwnerCommand::Hold:
+            case BotAI::OwnerCommand::Stay:      out = "waiting here, as told"; break;
+            case BotAI::OwnerCommand::Engage:    out = "attacking, as told"; break;
+            case BotAI::OwnerCommand::Disengage: out = "holding back, as told"; break;
+            case BotAI::OwnerCommand::Action:    out = "doing what I was told"; break;
+            case BotAI::OwnerCommand::None:      break;
+        }
+    if (out.empty() && ai && ai->last_rule_fired())
+        out = ActivityFromRule(ai->last_rule_fired());
+    if (out.empty())
+        return {};
+    if (bot->IsMounted())
+        out += ", on my mount";
+    return out;
+}
+
 std::string CarryText(Player* bot)
 {
     std::vector<std::pair<std::string, uint32>> food, drink, potions, bandages;
@@ -1907,6 +2049,10 @@ std::string CarryText(Player* bot)
     bool const bread = Classic::BestMageConjure(Classic::ConsumableKind::Food, knows) != 0;
     if (water || bread)
         s += std::string("; can conjure: ") + (water ? "water" : "") + (water && bread ? ", " : "") + (bread ? "food" : "");
+    // Gun promised water three times with full bags: a conjure that cannot fit makes nothing (2026-11-09).
+    uint32 const free_slots = bot->GetFreeInventorySlotCount();
+    s += free_slots ? "; free bag slots: " + std::to_string(free_slots)
+                    : std::string("; bags FULL (0 free slots): you can't conjure, make or take anything until you sell or drop something");
     return s;
 }
 
@@ -1941,6 +2087,38 @@ Player* MomentListener(Player* bot)
     return first;
 }
 
+// The language of the player's game client ("ruRU", "enUS"): the program answers a Russian client in Russian when his line
+// gives no language of its own (a moment, "ok", a link). GLIPT greeted his group in Russian and got English (2026-11-09).
+std::string ClientLocale(Player const* player)
+{
+    WorldSession const* s = player ? player->GetSession() : nullptr;
+    LocaleConstant const l = s ? s->GetSessionDbcLocale() : LOCALE_enUS;
+    return l < TOTAL_LOCALES ? localeNames[l] : "enUS";
+}
+
+// The language most real players on the bot's map play in, for lines no one player asked for (a street talk, a General or
+// Trade post): a Russian realm got English posts (Geshka, 2026-11-09). No player there: the realm's own language.
+std::string ListenersLocale(Player const* bot)
+{
+    std::array<uint32, TOTAL_LOCALES> count{};
+    if (Map* map = bot ? bot->GetMap() : nullptr)
+        for (MapReference const& ref : map->GetPlayers())
+        {
+            Player const* p = ref.GetSource();
+            if (p && p->GetSession() && !Services::Registry().has(p->GetGUID().GetCounter()))
+            {
+                LocaleConstant const l = p->GetSession()->GetSessionDbcLocale();
+                if (l < TOTAL_LOCALES)
+                    ++count[l];
+            }
+        }
+    std::size_t best = std::size_t(sWorld->GetDefaultDbcLocale());
+    for (std::size_t l = 0; l < count.size(); ++l)
+        if (count[l] > count[best])
+            best = l;
+    return best < TOTAL_LOCALES ? localeNames[best] : "enUS";
+}
+
 void WriteMoment(ConfigReader::BridgeConfig const& cfg, Moment const& m, uint32 now_ms)
 {
     Player* bot = FindBot(m.bot);
@@ -1958,6 +2136,7 @@ void WriteMoment(ConfigReader::BridgeConfig const& cfg, Moment const& m, uint32 
         e.fields.emplace_back("example", m.example);
     e.fields.emplace_back("channel", "party");
     e.fields.emplace_back("to", to->GetName());
+    e.fields.emplace_back("locale", ClientLocale(to));
     bool const owned = Services::Owners().GetOwner(m.bot).account_id != 0;
     e.numbers.emplace_back("to_is_owner", owned && OwnsBot(to, m.bot) ? 1 : 0);
     if (cfg.actions)
@@ -2029,6 +2208,7 @@ uint64 WriteChannelTalk(ConfigReader::BridgeConfig const& cfg, Player* bot, uint
     e.fields.emplace_back("channel", ChannelWord(channel_id));
     e.fields.emplace_back("scene", scene);
     e.fields.emplace_back("talk", "");
+    e.fields.emplace_back("locale", ListenersLocale(bot));
     if (!keep.empty())
         e.fields.emplace_back("keep", keep);
     if (cfg.swearing)
@@ -2362,6 +2542,7 @@ bool BotBridge::AskTalk(Player* bot, std::string const& scene, std::string const
     e.fields.emplace_back("channel", "say");
     e.fields.emplace_back("scene", scene.size() > 1500 ? scene.substr(0, 1500) : scene);
     e.fields.emplace_back("talk", chat.size() > 1500 ? chat.substr(chat.size() - 1500) : chat);
+    e.fields.emplace_back("locale", ListenersLocale(bot));
     if (Services::Config().bridge().swearing)
         e.numbers.emplace_back("swearing", 1);
     e.fields.emplace_back("weather", WeatherWord(bot->GetMap() ? bot->GetMap()->GetZoneWeather(bot->GetZoneId()) : WEATHER_STATE_FINE));
@@ -2372,6 +2553,60 @@ bool BotBridge::AskTalk(Player* bot, std::string const& scene, std::string const
     g_chat[e.id] = ChatAsk{ bot->GetGUID().GetCounter(), std::string(), ObjectGuid::Empty, false, "say", now_ms, key ? key : kNoTalkKey };
     g_talk_minute.push_back(now_ms);
     return true;
+}
+
+uint64 BotBridge::AskRaidLine(Player* bot, std::string const& what, std::string const& detail, std::string const& example,
+                              std::string const& mood, std::string const& role, uint32 delay_ms, uint32 wait_ms)
+{
+    if (!ChatOn() || !bot || !bot->GetGroup())
+        return 0;
+    uint32 const now_ms = GameTime::GetGameTimeMS();
+    // Players come first: while two of their lines wait for an answer, the fixed line is said.
+    std::size_t waiting = 0;
+    for (auto const& kv : g_chat)
+        if (!kv.second.talk_key && !kv.second.deadline_ms && !kv.second.sender_is_bot && !kv.second.sender.empty() &&
+            now_ms - kv.second.asked_ms < 20000)
+            ++waiting;
+    if (waiting >= 2)
+        return 0;
+    Group const* group = bot->GetGroup();
+    std::string const channel = group->isRaidGroup() ? "raid" : "party";
+    // The language most of the group's real players read (one line goes to all of them).
+    std::array<uint32, TOTAL_LOCALES> count{};
+    for (GroupReference const& ref : group->GetMembers())
+        if (Player const* m = ref.GetSource(); m && m->GetSession() && !Services::Registry().has(m->GetGUID().GetCounter()))
+            if (LocaleConstant const l = m->GetSession()->GetSessionDbcLocale(); l < TOTAL_LOCALES)
+                ++count[l];
+    std::size_t best = 0;
+    for (std::size_t l = 0; l < count.size(); ++l)
+        if (count[l] > count[best])
+            best = l;
+    Event e;
+    e.type = "raid_line";
+    FillBot(e, bot, 0);
+    e.fields.emplace_back("what", what);
+    e.fields.emplace_back("detail", detail);
+    e.fields.emplace_back("example", example);
+    e.fields.emplace_back("mood", mood);
+    e.fields.emplace_back("role", role);
+    e.fields.emplace_back("channel", channel);
+    e.fields.emplace_back("locale", best < TOTAL_LOCALES ? localeNames[best] : "enUS");
+    e.numbers.emplace_back("delay_ms", delay_ms);
+    e.numbers.emplace_back("wait_ms", wait_ms);
+    if (Services::Config().bridge().swearing)
+        e.numbers.emplace_back("swearing", 1);
+    Write(e);
+    if (g_chat.size() > 2048)
+        g_chat.clear();
+    ChatAsk ask{ bot->GetGUID().GetCounter(), std::string(), ObjectGuid::Empty, true, channel, now_ms };
+    ask.deadline_ms = now_ms + wait_ms;
+    g_chat[e.id] = std::move(ask);
+    return e.id;
+}
+
+bool BotBridge::RaidLineAnswered(uint64 id)
+{
+    return id && g_raid_answered.erase(id) > 0;
 }
 
 bool BotBridge::QueueGreet(BotId bot, ObjectGuid player)
@@ -2419,7 +2654,8 @@ bool BotBridge::ChatOn()
     return Enabled() && g_started && g_client_alive && Services::Config().bridge().chat;
 }
 
-uint64 BotBridge::ReportChat(Player* bot, Player* sender, std::string const& channel, std::string const& text, std::string const& prompt)
+uint64 BotBridge::ReportChat(Player* bot, Player* sender, std::string const& channel, std::string const& text, std::string const& prompt,
+                             std::vector<BotId> const& group)
 {
     if (!ChatOn() || !bot || !sender)
         return 0;
@@ -2427,7 +2663,22 @@ uint64 BotBridge::ReportChat(Player* bot, Player* sender, std::string const& cha
     e.type = "chat_in";
     FillBot(e, bot, 0);
     e.fields.emplace_back("channel", channel);
+    std::vector<BotId> others;
+    if (!group.empty())
+    {
+        // "all go to the inn": the others the order is for, by name, so the line can speak for the group ("on our way").
+        std::string names;
+        for (BotId g : group)
+            if (Player* p = FindBot(g); p && g != bot->GetGUID().GetCounter())
+            {
+                others.push_back(g);
+                names += (names.empty() ? "" : ", ") + p->GetName();
+            }
+        e.numbers.emplace_back("group_order", 1);
+        e.fields.emplace_back("group", names);
+    }
     e.fields.emplace_back("from", sender->GetName());
+    e.fields.emplace_back("locale", ClientLocale(sender));
     e.numbers.emplace_back("from_is_bot", Services::Registry().has(sender->GetGUID().GetCounter()) ? 1 : 0);
     e.fields.emplace_back("text", text.size() > 500 ? text.substr(0, 500) : text);
     if (Services::Config().bridge().prompt_in_chat && !prompt.empty())
@@ -2466,6 +2717,8 @@ uint64 BotBridge::ReportChat(Player* bot, Player* sender, std::string const& cha
     if (auto lp = g_last_post.find(bot_id); lp != g_last_post.end() && now_ms - lp->second.ms < 900000u)
         e.fields.emplace_back("your_post", fmt::format("{} minutes ago you wrote in {}: {}", (now_ms - lp->second.ms) / 60000u,
                                                        lp->second.channel, lp->second.text));
+    if (std::string const doing = DoingText(bot); !doing.empty())
+        e.fields.emplace_back("doing", doing);
     // Guild and group: "want to join my guild?", "sign my charter?", "wanna quest?" get a true answer (also without actions).
     if (!from_bot)
         e.fields.emplace_back("social", SocialText(bot, sender));
@@ -2477,8 +2730,31 @@ uint64 BotBridge::ReportChat(Player* bot, Player* sender, std::string const& cha
     Write(e);
     if (g_chat.size() > 2048)
         g_chat.clear();
-    g_chat[e.id] = ChatAsk{ bot_id, sender->GetName(), sender->GetGUID(), from_bot, channel, now_ms };
+    g_chat[e.id] = ChatAsk{ bot_id, sender->GetName(), sender->GetGUID(), from_bot, channel, now_ms, 0, std::move(others) };
     return e.id;
+}
+
+bool BotBridge::AskGroupOrder(Player* sender, std::vector<Player*> const& group, std::string const& channel, std::string const& text)
+{
+    if (!ChatOn() || !Services::Config().bridge().actions || !sender || group.empty() || text.empty())
+        return false;
+    std::vector<BotId> ids;
+    for (Player const* p : group)
+        if (p)
+            ids.push_back(p->GetGUID().GetCounter());
+    // The one who answers: a bot the sender owns when there is one (his companion speaks for his group), else the first.
+    Player* talker = group.front();
+    for (Player* p : group)
+        if (p && OwnsBot(sender, p->GetGUID().GetCounter()))
+        {
+            talker = p;
+            break;
+        }
+    uint64 const id = ReportChat(talker, sender, channel, text, {}, ids.size() > 1 ? ids : std::vector<BotId>{});
+    if (id)
+        TC_LOG_INFO("playerbot.v2", "[bridge] group order from {} for {} bot(s), {} answers: \"{}\"", sender->GetName(), ids.size(),
+                    talker->GetName(), text.substr(0, 80));
+    return id != 0;
 }
 
 void BotBridge::ReportStuck(BotId bot, std::string detail)
