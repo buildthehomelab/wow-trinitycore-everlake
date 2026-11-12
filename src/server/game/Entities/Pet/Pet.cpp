@@ -42,7 +42,9 @@
 #include "Util.h"
 #include "World.h"
 #include "WorldSession.h"
+#include <algorithm>
 #include <sstream>
+#include <unordered_set>
 
 #define PET_XP_FACTOR 0.05f
 
@@ -336,18 +338,21 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
     {
         uint32 savedhealth = petInfo->Health;
         uint32 savedmana = petInfo->Mana;
+        // Classic 1.60: hunter pets have no mana; their curmana column keeps the happiness (pets saved before: content).
+        // A dead pet gets it too: loaded without it (its corpse had gone, a relog, a mount or a teleport), Revive Pet brought
+        // it back at 0 happiness, it lost loyalty every tick and a new pet ran away for good soon after (player report, 5 Nov).
+        if (HasHappiness())
+        {
+            SetMaxPower(POWER_HAPPINESS, HAPPINESS_MAX);
+            SetPower(POWER_HAPPINESS, savedmana ? std::min<int32>(savedmana, HAPPINESS_MAX) : HAPPINESS_MAX / 2);
+        }
+
         if (!savedhealth && getPetType() == HUNTER_PET)
             setDeathState(JUST_DIED);
         else
         {
             SetHealth(savedhealth);
-            // Classic 1.60: hunter pets have no mana; their curmana column keeps the happiness (pets saved before: content)
-            if (HasHappiness())
-            {
-                SetMaxPower(POWER_HAPPINESS, HAPPINESS_MAX);
-                SetPower(POWER_HAPPINESS, savedmana ? std::min<int32>(savedmana, HAPPINESS_MAX) : HAPPINESS_MAX / 2);
-            }
-            else
+            if (!HasHappiness())
                 SetPower(POWER_MANA, savedmana);
         }
     }
@@ -414,6 +419,9 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
             GetSpellHistory()->LoadFromDB<Pet>(holder.GetPreparedResult(PetLoadQueryHolder::COOLDOWNS), holder.GetPreparedResult(PetLoadQueryHolder::CHARGES));
             LearnPetPassives();
             InitLevelupSpellsForLevel();
+            // Classic 1.60: a beast tamed before it kept its wild abilities has none (auto attack only); give them now
+            if (getPetType() == HUNTER_PET && !KnowsActiveSpell())
+                LearnTameSpells();
             if (GetMap()->IsBattleArena())
                 RemoveArenaAuras();
 
@@ -437,6 +445,10 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
         }
 
         SetGroupUpdateFlag(GROUP_UPDATE_PET_FULL);
+
+        TC_LOG_INFO("entities.pet", "Pet loaded for {}: number {} entry {} type {} level {} display {} scale {} spells {} specialization {}", owner->GetName(),
+            GetCharmInfo() ? GetCharmInfo()->GetPetNumber() : 0, GetEntry(), uint32(getPetType()), uint32(GetLevel()), GetDisplayId(), GetObjectScale(),
+            m_spells.size(), GetSpecialization());
 
         if (getPetType() == HUNTER_PET)
         {
@@ -668,9 +680,19 @@ void Pet::Update(uint32 diff)
         {
             // unsummon pet that lost owner
             Player* owner = GetOwner();
-            if ((!IsWithinDistInMap(owner, GetMap()->GetVisibilityRange()) && !isPossessed()) || (isControlled() && !owner->GetPetGUID()))
+            bool const outOfSight = !IsWithinDistInMap(owner, GetMap()->GetVisibilityRange()) && !isPossessed();
+            if (outOfSight && isControlled() && owner->GetPetGUID() == GetGUID() && CatchUpWithOwner())
+                break;
+            // The owner went where the pet could not follow (a boat or zeppelin, a taxi, a teleport): the pet was dismissed for good and
+            // a warlock found the Imp gone after the trip (player report, 3 Nov). Put it away like a mount-up does; it comes back once the
+            // owner stands on the ground again.
+            if (outOfSight && isControlled() && owner->GetPetGUID() == GetGUID() && ParkForOwnerTravel())
+                return;
+            if (outOfSight || (isControlled() && !owner->GetPetGUID()))
             //if (!owner || (!IsWithinDistInMap(owner, GetMap()->GetVisibilityDistance()) && (owner->GetCharmGUID() && (owner->GetCharmGUID() != GetGUID()))) || (isControlled() && !owner->GetPetGUID()))
             {
+                TC_LOG_INFO("entities.pet", "Pet {} ({}) of {} dismissed: {}", GetName(), GetEntry(), owner->GetName(),
+                    outOfSight ? "out of its owner's sight" : "owner has no pet");
                 Remove(PET_SAVE_NOT_IN_SLOT, true);
                 return;
             }
@@ -776,6 +798,45 @@ void Pet::Update(uint32 diff)
             break;
     }
     Creature::Update(diff);
+}
+
+bool Pet::CatchUpWithOwner()
+{
+    Player* owner = GetOwner();
+    if (!owner || !owner->IsInWorld() || !owner->IsAlive() || !IsInWorld() || !IsAlive() || m_removed || isPossessed())
+        return false;
+    if (owner->GetMap() != GetMap() || !InSamePhase(owner) || owner->GetTransport() != GetTransport())
+        return false;
+    if (owner->IsInFlight() || owner->IsBeingTeleported() || owner->IsPetNeedBeTemporaryUnsummoned())
+        return false;
+    if (GetCharmInfo() && GetCharmInfo()->HasCommandState(COMMAND_STAY))
+        return false;                                       // told to stay there: dismissed as before
+
+    // A fight it was left at stays behind, or the pet would run straight back to it and drop out of sight again.
+    CombatStop(true);
+    StopMoving();
+    float x, y, z;
+    owner->GetClosePoint(x, y, z, GetCombatReach(), PET_FOLLOW_DIST, GetFollowAngle());
+    NearTeleportTo(x, y, z, owner->GetOrientation());
+    TC_LOG_INFO("entities.pet", "Pet {} ({}) of {} fell out of sight, set down next to its owner at ({:.0f},{:.0f},{:.0f})",
+        GetName(), GetEntry(), owner->GetName(), x, y, z);
+    return true;
+}
+
+bool Pet::ParkForOwnerTravel()
+{
+    Player* owner = GetOwner();
+    if (!owner || !owner->IsInWorld() || !owner->IsAlive() || !IsInWorld() || !IsAlive() || m_removed || isPossessed() || isTemporarySummoned())
+        return false;
+    if (GetCharmInfo() && GetCharmInfo()->HasCommandState(COMMAND_STAY))
+        return false;                                       // told to stay there: dismissed as before
+    if (owner->GetMap() != GetMap())
+        return false;
+
+    TC_LOG_INFO("entities.pet", "Pet {} ({}) of {} could not follow its owner (transport, flight or teleport), put away until the owner is back on the ground",
+        GetName(), GetEntry(), owner->GetName());
+    owner->ParkPetForTravel();
+    return true;
 }
 
 void Pet::Remove(PetSaveMode mode, bool returnreagent)
@@ -973,6 +1034,8 @@ bool Pet::ModifyLoyalty(int32 addvalue)
             // vanilla: a Rebellious pet that keeps losing loyalty runs away for good
             m_loyaltyPoints = 0;
             Player* owner = GetOwner();
+            TC_LOG_INFO("entities.pet", "Pet {} ({}) of {} ran away: Rebellious and unhappy (happiness {})", GetName(), GetEntry(),
+                owner->GetName(), GetPower(POWER_HAPPINESS));
             ChatHandler(owner->GetSession()).SendSysMessage("Your pet has run away");
             Remove(PET_SAVE_AS_DELETED);
             return false;
@@ -989,9 +1052,12 @@ bool Pet::ModifyLoyalty(int32 addvalue)
     {
         m_loyaltyLevel = loyaltyLevel;
         UpdateTrainingPoints();
-        if (Player* owner = GetOwner())
-            owner->UpdateStablePetLoyalty(m_charmInfo->GetPetNumber(), m_loyaltyLevel, m_loyaltyPoints);
     }
+
+    // the client reads loyalty only from the stable pet values: sent on level changes alone, the points it shows never moved
+    // between loyalty levels ("pets do not gain loyalty experience")
+    if (Player* owner = GetOwner())
+        owner->UpdateStablePetLoyalty(m_charmInfo->GetPetNumber(), m_loyaltyLevel, m_loyaltyPoints);
     return true;
 }
 
@@ -1061,6 +1127,178 @@ void Pet::UpdateTrainingPoints()
     auto unitData = m_values.ModifyValue(&Unit::m_unitData);
     SetUpdateFieldValue(unitData.ModifyValue(&UF::UnitData::ClassicTrainingPointsUsed), uint16(std::min<uint32>(GetTrainingPointsUsed(), 0xFFFF)));
     SetUpdateFieldValue(unitData.ModifyValue(&UF::UnitData::ClassicTrainingPointsTotal), uint16(std::min<uint32>(GetTrainingPointsTotal(), 0xFFFF)));
+}
+
+uint32 Pet::GetTrainerTaughtPetSpell(uint32 trainerSpellId)
+{
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(trainerSpellId, DIFFICULTY_NONE);
+    if (!spellInfo)
+        return 0;
+
+    for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+        if (effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) && effect.TriggerSpell && effect.TargetA.GetTarget() == TARGET_UNIT_PET)
+            return effect.TriggerSpell;
+    return 0;
+}
+
+bool Pet::IsTrainerTaughtPetSpell(uint32 petSpellId)
+{
+    static std::unordered_set<uint32> const taught = []
+    {
+        std::unordered_set<uint32> result;
+        sSpellMgr->ForEachSpellInfo([&](SpellInfo const* spellInfo)
+        {
+            if (uint32 petSpell = GetTrainerTaughtPetSpell(spellInfo->Id))
+                result.insert(petSpell);
+        });
+        return result;
+    }();
+    return taught.contains(petSpellId);
+}
+
+// "I wish to untrain my pet." on the pet trainer menus: GossipOptionID 96000000 + MenuID (sql/custom/world 2026_10_28_20)
+bool Pet::IsPetUntrainGossipOption(int32 gossipOptionId)
+{
+    return gossipOptionId >= 96000000 && gossipOptionId < 97000000;
+}
+
+bool Pet::KnowsSpellOrHigherRank(uint32 spellId) const
+{
+    if (HasSpell(spellId))
+        return true;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, DIFFICULTY_NONE);
+    if (!spellInfo || !spellInfo->IsRanked())
+        return false;
+
+    for (auto const& [knownId, petSpell] : m_spells)
+    {
+        if (petSpell.state == PETSPELL_REMOVED)
+            continue;
+        if (SpellInfo const* known = sSpellMgr->GetSpellInfo(knownId, DIFFICULTY_NONE))
+            if (known->IsDifferentRankOf(spellInfo) && known->IsHighRankOf(spellInfo))
+                return true;
+    }
+    return false;
+}
+
+uint32 Pet::UntrainTrainerSpells()
+{
+    std::vector<uint32> spells;
+    for (auto const& [spellId, petSpell] : m_spells)
+        if (petSpell.state != PETSPELL_REMOVED && IsTrainerTaughtPetSpell(spellId))
+            spells.push_back(spellId);
+
+    if (spells.empty())
+        return 0;
+
+    unlearnSpells(spells, false, true);
+    InitLevelupSpellsForLevel();                            // gives back the family spells its level grants (Growl) if a trained rank replaced them
+    if (Player* owner = GetOwner())
+        owner->PetSpellInitialize();
+    return uint32(spells.size());
+}
+
+std::vector<uint32> const* Pet::GetTameSpells(uint32 creatureEntry)
+{
+    static std::unordered_map<uint32, std::vector<uint32>> const spells = []
+    {
+        std::unordered_map<uint32, std::vector<uint32>> result;
+        if (QueryResult query = WorldDatabase.Query("SELECT CreatureEntry, SpellId FROM classic_pet_tame_spell ORDER BY CreatureEntry, SpellId"))
+        {
+            do
+            {
+                Field* fields = query->Fetch();
+                uint32 spellId = fields[1].GetUInt32();
+                if (!sSpellMgr->GetSpellInfo(spellId, DIFFICULTY_NONE))
+                {
+                    TC_LOG_ERROR("sql.sql", "Table `classic_pet_tame_spell` has unknown spell {} for creature {}, skipped.", spellId, fields[0].GetUInt32());
+                    continue;
+                }
+                result[fields[0].GetUInt32()].push_back(spellId);
+            } while (query->NextRow());
+        }
+        TC_LOG_INFO("server.loading", ">> Loaded the abilities of {} Classic tameable beasts", result.size());
+        return result;
+    }();
+
+    auto itr = spells.find(creatureEntry);
+    return itr != spells.end() ? &itr->second : nullptr;
+}
+
+uint32 Pet::GetBeastTrainingTeachSpell(uint32 petSpellId)
+{
+    // the hunter's Beast Training ranks (skill line 261, e.g. 17254 Bite Rank 1) each have a Learn Spell effect on the pet
+    static constexpr uint32 SKILL_LINE_BEAST_TRAINING = 261;
+    static std::unordered_map<uint32, uint32> const teachSpells = []
+    {
+        std::unordered_map<uint32, uint32> result;
+        sSpellMgr->ForEachSpellInfo([&](SpellInfo const* spellInfo)
+        {
+            if (spellInfo->Difficulty != DIFFICULTY_NONE)
+                return;
+            if (uint32 petSpell = GetTrainerTaughtPetSpell(spellInfo->Id))
+                if (IsPartOfSkillLine(SKILL_LINE_BEAST_TRAINING, spellInfo->Id))
+                    result.emplace(petSpell, spellInfo->Id);
+        });
+        return result;
+    }();
+
+    auto itr = teachSpells.find(petSpellId);
+    return itr != teachSpells.end() ? itr->second : 0;
+}
+
+void Pet::LearnTameSpells()
+{
+    if (getPetType() != HUNTER_PET)
+        return;
+
+    std::vector<uint32> const* spells = GetTameSpells(GetEntry());
+    if (!spells)
+        return;
+
+    for (uint32 spellId : *spells)
+        if (!KnowsSpellOrHigherRank(spellId))
+            learnSpell(spellId);                            // replaces a lower rank of it
+}
+
+bool Pet::KnowsActiveSpell() const
+{
+    for (auto const& [spellId, petSpell] : m_spells)
+    {
+        if (petSpell.state == PETSPELL_REMOVED)
+            continue;
+        if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, DIFFICULTY_NONE))
+            if (!spellInfo->IsPassive())
+                return true;
+    }
+    return false;
+}
+
+void Pet::CheckLearning(uint32 spellId)
+{
+    if (getPetType() != HUNTER_PET)
+        return;
+
+    Player* owner = GetOwner();
+    if (!owner)
+        return;
+
+    // only what the beast knew in the wild teaches its hunter; ranks the hunter taught it are known already
+    std::vector<uint32> const* tameSpells = GetTameSpells(GetEntry());
+    if (!tameSpells || std::find(tameSpells->begin(), tameSpells->end(), spellId) == tameSpells->end())
+        return;
+
+    uint32 teachSpell = GetBeastTrainingTeachSpell(spellId);
+    if (!teachSpell || owner->HasSpell(teachSpell))
+        return;
+
+    if (!roll_chance(10))
+        return;
+
+    owner->LearnSpell(teachSpell, false);
+    TC_LOG_DEBUG("entities.pet", "Pet::CheckLearning: {} learned Beast Training spell {} from its pet {} (entry {}) using spell {}",
+        owner->GetName(), teachSpell, GetGUID().ToString(), GetEntry(), spellId);
 }
 
 bool Pet::CreateBaseAtTamed(CreatureTemplate const* cinfo, Map* map)
@@ -1338,6 +1576,23 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
                 }
             }
             break;
+        }
+    }
+
+    // Classic 1.60 (vanilla): a creature's own pet or guardian has the stats of a vanilla creature of its level, class level stats times its own
+    // multipliers (VMaNGOS Pet::InitStatsForLevel), not the client's damage per second up to 1.5 times over; health, mana and armor of a
+    // pet_levelstats row win. Its health is the create health alone (no flat health left from the level it was created at).
+    if (!IsPet() && !GetOwner()->IsCharmedOwnedByPlayerOrPlayer() && sObjectMgr->GetCreatureClassicStats(cinfo->Entry)
+        && sObjectMgr->GetCreatureClassicClassLevelStats(petlevel, cinfo->unit_class))
+    {
+        UpdateLevelDependantStats();
+        SetStatFlatModifier(UNIT_MOD_HEALTH, BASE_VALUE, 0.0f);
+        if (pInfo)
+        {
+            SetCreateHealth(std::max(1u, uint32(pInfo->health * GetHealthMod(cinfo->Classification))));
+            SetCreateMana(pInfo->mana);
+            if (pInfo->armor > 0)
+                SetStatFlatModifier(UNIT_MOD_ARMOR, BASE_VALUE, float(pInfo->armor));
         }
     }
 
@@ -1830,6 +2085,7 @@ void Pet::unlearnSpells(std::vector<uint32> const& spellIds, bool learn_prev, bo
         if (Player* o = GetOwner())
             if (WorldSession* sess = o->GetSession())
                 sess->SendPacket(packet.Write());
+
         UpdateTrainingPoints();
     }
 }
@@ -2098,7 +2354,15 @@ float Pet::GetNativeObjectScale() const
     if (creatureFamily && creatureFamily->MinScale > 0.0f && creatureFamily->MaxScale > 0.0f && getPetType() == HUNTER_PET)
         return PetScaling::FamilyScale(*creatureFamily, GetLevel());
 
-    return Guardian::GetNativeObjectScale();
+    // a template without a scale would give the pet ObjectScale 0, which the client asserts on ("scale > FLT_EPSILON") when it draws the pet
+    float const scale = Guardian::GetNativeObjectScale();
+    if (!(scale > 0.01f))
+    {
+        TC_LOG_ERROR("entities.pet", "Pet::GetNativeObjectScale: creature {} has scale {}, using 1", GetEntry(), scale);
+        return 1.0f;
+    }
+
+    return scale;
 }
 
 void Pet::SetDisplayId(uint32 modelId, bool setNative /*= false*/)

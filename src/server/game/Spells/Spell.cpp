@@ -24,6 +24,7 @@
 #include "BattlePetMgr.h"
 #include "CellImpl.h"
 #include "CharmInfo.h"
+#include "ClassicAutoShot.h"
 #include "ClassicOpcodes.h"
 #include "CollectionMgr.h"
 #include "CombatLogPackets.h"
@@ -64,6 +65,8 @@
 #include "TradeData.h"
 #include "TraitPackets.h"
 #include "TransmogMgr.h"
+#include <mutex>
+#include <unordered_set>
 #include "UniqueTrackablePtr.h"
 #include "Util.h"
 #include "VMapFactory.h"
@@ -3306,6 +3309,16 @@ void Spell::DoSpellEffectHit(Unit* unit, SpellEffectInfo const& spellEffectInfo,
                         {
                             hitInfo.AuraDuration *= m_spellValue->DurationMul;
 
+                            // Classic 1.60 Legacy perk Better Living Through Chemistry 1225504: "Increases the duration of beneficial effects
+                            // from elixirs and flasks by $s1%" (the item cast is a consumable of the elixir or flask subclass)
+                            if (hitInfo.Positive && m_castItemEntry)
+                                if (Player const* targetPlayer = unit->ToPlayer())
+                                    if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(m_castItemEntry);
+                                        proto && proto->GetClass() == ITEM_CLASS_CONSUMABLE
+                                        && (proto->GetSubClass() == ITEM_SUBCLASS_ELIXIR || proto->GetSubClass() == ITEM_SUBCLASS_FLASK))
+                                        if (int32 pct = targetPlayer->GetClassicLegacyPerkAmount(1225504, EFFECT_0); pct > 0)
+                                            AddPct(hitInfo.AuraDuration, pct);
+
                             // Haste modifies duration of channeled spells
                             if (m_spellInfo->IsChanneled())
                                 caster->ModSpellDurationTime(m_spellInfo, hitInfo.AuraDuration, this);
@@ -4002,6 +4015,12 @@ void Spell::_cast(bool skipCheck)
         m_scriptResult.SetResult(SPELL_CAST_OK);
 
     CallScriptAfterCastHandlers();
+
+    // Classic 1.60 (vanilla): a hunter pet using an ability it knew in the wild may teach it to its hunter
+    if (!IsTriggered())
+        if (Unit* unitCaster = m_caster->ToUnit())
+            if (Pet* pet = unitCaster->ToPet())
+                pet->CheckLearning(m_spellInfo->Id);
 
     if (std::vector<int32> const* spell_triggered = sSpellMgr->GetSpellLinked(SPELL_LINK_CAST, m_spellInfo->Id))
     {
@@ -5739,6 +5758,21 @@ void Spell::TakeReagents()
     if (p_caster->CanNoReagentCast(m_spellInfo))
         return;
 
+    // Classic 1.60 Legacy perk Optimization 1225460: "Materials used by your Engineering, Blacksmithing, Leatherworking, and Tailoring recipes
+    // have a $s1% chance per item to be refunded on completing the recipe." A refunded material is simply not taken.
+    int32 refundChance = p_caster->GetClassicLegacyPerkAmount(1225460, EFFECT_0);
+    if (refundChance > 0)
+    {
+        SkillLineAbilityMapBounds bounds = sSpellMgr->GetSkillLineAbilityMapBounds(m_spellInfo->Id);
+        bool const optimizedRecipe = std::any_of(bounds.first, bounds.second, [](auto const& pair)
+        {
+            uint32 const skill = pair.second->SkillLine;
+            return skill == SKILL_ENGINEERING || skill == SKILL_BLACKSMITHING || skill == SKILL_LEATHERWORKING || skill == SKILL_TAILORING;
+        });
+        if (!optimizedRecipe)
+            refundChance = 0;
+    }
+
     for (uint32 x = 0; x < MAX_SPELL_REAGENTS; ++x)
     {
         if (m_spellInfo->Reagent[x] <= 0)
@@ -5769,6 +5803,17 @@ void Spell::TakeReagents()
         // if GetItemTarget is also spell reagent
         if (m_targets.GetItemTargetEntry() == itemid)
             m_targets.SetItemTarget(nullptr);
+
+        if (refundChance > 0)
+        {
+            uint32 refunded = 0;
+            for (uint32 i = 0; i < uint32(m_spellInfo->ReagentCount[x]); ++i)
+                if (roll_chance(refundChance))
+                    ++refunded;
+            itemcount -= std::min(refunded, itemcount);
+            if (!itemcount)
+                continue;
+        }
 
         p_caster->DestroyItemCount(itemid, itemcount, true);
     }
@@ -5918,6 +5963,10 @@ SpellCastResult Spell::CheckCast(bool strict, int32* param1 /*= nullptr*/, int32
             }
 
             if ((IsAutoRepeat() || m_spellInfo->CategoryId == 76) && !m_caster->ToUnit()->isAttackReady(RANGED_ATTACK))
+                return SPELL_FAILED_DONT_REPORT;
+
+            // Classic 1.60: Auto Shot waits for its half-second wind-up like it waits for the swing timer (queued, shot on a later update)
+            if (m_spellInfo->Id == ClassicAutoShot::SpellId && !m_caster->ToUnit()->IsClassicAutoShotWindupDone())
                 return SPELL_FAILED_DONT_REPORT;
         }
     }
@@ -8005,6 +8054,37 @@ SpellCastResult Spell::CheckItems(int32* param1 /*= nullptr*/, int32* param2 /*=
                     return SPELL_FAILED_CANT_BE_SALVAGED_SKILL;
                 break;
             }
+            case SPELL_EFFECT_SALVAGE_ITEM:
+            {
+                // Classic 1.60 (Forever) Stock Crate: the picked material must be one of the crate's bundles, in full
+                if (!sSpellMgr->IsClassicCrateSpell(m_spellInfo->Id))
+                    break;
+                Item* item = m_targets.GetItemTarget();
+                if (!item || item->GetOwnerGUID() != player->GetGUID())
+                    return SPELL_FAILED_BAD_TARGETS;
+                SpellMgr::ClassicCrateBundle const* bundle = sSpellMgr->GetClassicCrateBundle(m_spellInfo->Id, item->GetEntry());
+                if (!bundle)
+                    return SPELL_FAILED_BAD_TARGETS;
+                if (!player->HasItemCount(bundle->ItemId, bundle->Count))
+                {
+                    if (param1 && param2)
+                    {
+                        *param1 = bundle->ItemId;
+                        *param2 = bundle->Count;
+                    }
+                    return SPELL_FAILED_NEED_MORE_ITEMS;
+                }
+                if (!LootTemplates_Spell.HaveLootFor(m_spellInfo->Id))
+                    return SPELL_FAILED_BAD_TARGETS;
+                break;
+            }
+            case SPELL_EFFECT_LOOT:
+            {
+                // nothing to give: refuse an item's cast so the item (a Waylaid Crate, a sealed writ) is not used up for nothing
+                if (m_CastItem && !LootTemplates_Spell.HaveLootFor(m_spellInfo->Id))
+                    return SPELL_FAILED_BAD_TARGETS;
+                break;
+            }
             case SPELL_EFFECT_PROSPECTING:
             {
                 Item* item = m_targets.GetItemTarget();
@@ -8760,7 +8840,27 @@ void Spell::PreprocessSpellLaunch(TargetInfo& targetInfo)
     {
         if (!critChance)
             critChance = m_originalCaster->SpellCritChanceDone(this, nullptr, m_spellSchoolMask, m_attackType);
+        float const critDone = critChance;
         critChance = unit->SpellCritChanceTaken(m_originalCaster, this, nullptr, m_spellSchoolMask, critChance, m_attackType);
+        // A player's ability that crits at least half the time: name what gives the chance, once per spell (damage_parity 146: Sinister
+        // Strike and Backstab crit 97-100 % of landed hits while white swings crit 24 %).
+        if (critChance >= 50.0f && m_originalCaster->GetTypeId() == TYPEID_PLAYER && sLog->ShouldLog("playerbot.v2", LOG_LEVEL_INFO))
+        {
+            static std::mutex certainCritMutex;
+            static std::unordered_set<uint32> certainCritLogged;
+            std::lock_guard<std::mutex> lock(certainCritMutex);
+            if (certainCritLogged.insert(m_spellInfo->Id).second)
+            {
+                std::string mods;
+                for (AuraType type : { SPELL_AURA_ADD_FLAT_MODIFIER, SPELL_AURA_ADD_PCT_MODIFIER, SPELL_AURA_ADD_FLAT_MODIFIER_BY_SPELL_LABEL, SPELL_AURA_ADD_PCT_MODIFIER_BY_SPELL_LABEL })
+                    for (AuraEffect const* eff : m_originalCaster->GetAuraEffectsByType(type))
+                        if (eff->GetMiscValue() == int32(SpellModOp::CritChance) && eff->IsAffectingSpell(m_spellInfo))
+                            mods += fmt::format(" {}({}) type {}: {}", eff->GetId(), eff->GetSpellInfo()->SpellName ? (*eff->GetSpellInfo()->SpellName)[sWorld->GetDefaultDbcLocale()] : "", int(type), eff->GetAmount());
+                TC_LOG_INFO("playerbot.v2", "[certain_crit] spell {} ({}) crit chance {:.1f}% (before the target's auras {:.1f}%, character sheet {:.1f}%, spell value {:.1f}%) spell mods:{}", m_spellInfo->Id,
+                    m_spellInfo->SpellName ? (*m_spellInfo->SpellName)[sWorld->GetDefaultDbcLocale()] : "", critChance, critDone,
+                    m_originalCaster->GetUnitCriticalChanceDone(m_attackType), m_spellValue->CriticalChance, mods.empty() ? " none" : mods);
+            }
+        }
     }
 
     targetInfo.IsCrit = roll_chance(critChance);

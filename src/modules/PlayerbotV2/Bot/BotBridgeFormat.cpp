@@ -753,7 +753,7 @@ bool SafeOrder(std::string const& raw, std::string& norm, std::string& why)
     static constexpr std::string_view kExact[] = {
         "follow", "stay", "hold", "resume", "come", "disengage", "flee", "attack", "assist", "mount", "dismount", "sit", "stand",
         "release", "passive", "defensive", "aggressive", "accept", "accept all", "turn in", "turnin", "share", "quests",
-        "quest list", "loot", "loot all", "sell grey", "repair", "equip upgrades", "upgrades", "use your best gear",
+        "quest list", "loot", "loot all", "sell grey", "sell junk", "repair", "equip upgrades", "upgrades", "use your best gear",
         "wear your best gear", "gear", "inventory", "stats", "who", "buff", "heal", "jump", "wave", "salute", "dance",
         // The fight's group words: the tank's pull and pull back, falling back to (and setting) the rally point, the group's spacing,
         // and ike3's tactics.
@@ -766,8 +766,9 @@ bool SafeOrder(std::string const& raw, std::string& norm, std::string& why)
     // Orders with words after them: an object to use, a quest to drop, an item to put on, something to make or conjure for the asker
     // ("craft water 20": PlayerCraftOrders, the same as his whisper).
     // "formation circle", "spacing tight", "distance 10" set how the group stands (BotCommandParser OrderFormation / OrderDistance).
+    // "tactics lucifron: adds first, no aoe" keeps the player's plan for a raid boss (Raid/BossTactics.h).
     static constexpr std::string_view kWithArgs[] = { "use ", "drop quest ", "equip ", "craft ", "formation ", "spacing ", "distance ",
-                                                      "follow distance " };
+                                                      "follow distance ", "tactics " };
     for (std::string_view w : kWithArgs)
         if (norm.size() > w.size() && norm.compare(0, w.size(), w) == 0)
             return true;
@@ -831,6 +832,105 @@ PlaceKind ParsePlace(std::string const& place, std::string& rest)
         rest += word;
     }
     return kind;
+}
+
+std::string ActivityFromRule(std::string_view rule)
+{
+    std::string r(rule);
+    for (char& c : r)
+        c = char(std::tolower(static_cast<unsigned char>(c)));
+    auto has = [&r](std::initializer_list<char const*> words)
+    {
+        for (char const* w : words)
+            if (r.find(w) != std::string::npos)
+                return true;
+        return false;
+    };
+    if (r.empty())
+        return {};
+    // first the ones whose words would also match a broader group below
+    if (r == "idle:gathering")
+        return "hanging out with some people, chatting";
+    if (has({ "craft_order" }))
+        return "making something someone ordered";
+    if (has({ "dungeon", "boss" }))
+        return "in a dungeon run with my group";
+    if (has({ "bags_full", "vendor", "sell" }))
+        return "on the way to a vendor to sell junk";
+    if (has({ "repair" }))
+        return "getting my gear repaired";
+    if (has({ "ah_", "auction" }))
+        return "doing some business at the auction house";
+    if (has({ "mail" }))
+        return "checking my mail";
+    if (has({ "bank" }))
+        return "at the bank";
+    if (has({ "inn_", "_inn", "innkeeper" }))
+        return "taking a break at the inn";
+    if (has({ "trainer" }))
+        return "visiting my trainer";
+    if (has({ "flight", "taxi" }))
+        return "catching a flight";
+    if (has({ "transport", "dock", "boat", "zeppelin", "portal", "elevator" }))
+        return "travelling";
+    if (has({ "turnin", "quest_ender" }))
+        return "handing in a quest";
+    if (has({ "quest", "wq_" }))
+        return "doing a quest";
+    if (has({ "grind", "roam" }))
+        return "killing mobs for xp";
+    if (has({ "herb", "mining", "mine_", "skin", "gather_node", "fish" }))
+        return "gathering stuff";
+    if (has({ "pvp", "duel" }))
+        return "up for some pvp";
+    if (has({ "lfg", "yell_lfg", "group_find" }))
+        return "looking for a group";
+    if (has({ "party_follow", "follow" }))
+        return "following my group";
+    if (has({ "_rest", "rest_", "drink", "res_sick" }))   // not "eat": "pull_back_retreat"
+        return "resting a bit";
+    if (has({ "town_errand", "town_linger", "wander", "rpg", "service", "watch_walk" }))
+        return "running errands in town";
+    if (has({ "travel", "walk_to", "hub" }))
+        return "on my way somewhere";
+    if (r.rfind("combat:", 0) == 0)
+        return "fighting";
+    return {};
+}
+
+bool IsGroupAct(Act a)
+{
+    switch (a)
+    {
+        case Act::Follow: case Act::Stay: case Act::Resume: case Act::Attack: case Act::StopAttack: case Act::Flee: case Act::GoTo:
+        case Act::Sit: case Act::Stand: case Act::Mount: case Act::Dismount: case Act::Emote: case Act::Order: case Act::Step:
+        case Act::SignCharter:
+            return true;
+        default:
+            return false;
+    }
+}
+
+std::string LineAfterAction(Act a, bool ok, bool speaks_later, std::string const& why, std::string const& said)
+{
+    if (ok)
+        return speaks_later ? std::string() : said;
+    if (a == Act::Emote || a == Act::Sit || a == Act::Stand)
+        return said;
+    if (why.empty() || why == "the player who asked is gone")
+        return {};
+    if (why.find("turned off on this server") != std::string::npos)
+        return "Sorry, I can't do that here.";
+    // Reasons written for the program, not for a player: config keys, refs, rate limits, a moment that passed.
+    static constexpr std::string_view kForProgram[] = { "Playerbot.", "ref", "chat_in", "\"", "too old", "no such action",
+        "too many", "too soon", "every ", "not ready", "not online", "no action", ": ", "(" };
+    for (std::string_view w : kForProgram)
+        if (why.find(w) != std::string::npos)
+            return "Sorry, I can't do that right now.";
+    std::string out = "Sorry, " + why;
+    if (out.back() != '.' && out.back() != '!' && out.back() != '?')
+        out += '.';
+    return out;
 }
 
 char const* CheckActionContext(Act a, ActionContext const& ctx)

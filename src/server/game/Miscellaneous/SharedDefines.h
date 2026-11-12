@@ -5931,6 +5931,7 @@ enum SkillType
     SKILL_POLEARMS                                  = 229,
     SKILL_PET_SCORPID                               = 236,
     SKILL_PET_TURTLE                                = 251,
+    SKILL_BEAST_TRAINING                            = 261, // Classic 1.60: hunter Beast Training (pet ability ranks), gone from retail
     SKILL_PET_GENERIC_HUNTER                        = 270,
     SKILL_PLATE_MAIL                                = 293,
     SKILL_LANGUAGE_GNOMISH                          = 313,
@@ -5946,6 +5947,7 @@ enum SkillType
     SKILL_RAPTOR_RIDING                             = 533,
     SKILL_MECHANOSTRIDER_PILOTING                   = 553,
     SKILL_UNDEAD_HORSEMANSHIP                       = 554,
+    SKILL_LOCKPICKING                               = 633, // Classic 1.60: rogue skill line, gone from retail
     SKILL_PET_BAT                                   = 653,
     SKILL_PET_HYENA                                 = 654,
     SKILL_PET_BIRD_OF_PREY                          = 655,
@@ -6275,6 +6277,7 @@ constexpr SkillType SkillByLockType(LockType locktype)
         case LOCKTYPE_MINING_2:
         case LOCKTYPE_ELUSIVE_MINING:                 return SKILL_MINING;
         case LOCKTYPE_FISHING:                        return SKILL_FISHING;
+        case LOCKTYPE_LOCKPICKING:                    return SKILL_LOCKPICKING; // Classic 1.60: Pick Lock checks the Lockpicking skill
         case LOCKTYPE_INSCRIPTION:                    return SKILL_INSCRIPTION;
         case LOCKTYPE_ARCHAEOLOGY:                    return SKILL_ARCHAEOLOGY;
         case LOCKTYPE_LUMBER_MILL:                    return SKILL_LOGGING;

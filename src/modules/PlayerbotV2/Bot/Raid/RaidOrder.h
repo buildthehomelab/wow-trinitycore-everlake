@@ -68,6 +68,10 @@ struct RaidOrder
     // Melee soak (Patchwerk): keep attacking this enemy whatever the rotation would pick.
     ObjectGuid attack_target;
 
+    // The bot carries the enemy on it to its tank instead of dropping threat (Feign Death, Vanish, Fade): the bot that pulled a Son of
+    // Hakkar brings it up to the raid, where the off-tank picks it up and it dies next to the crowd.
+    bool keep_aggro = false;
+
     // Mind-controlled creature (Razuvious' understudies): what the bot makes it do. The bot itself only holds the channel.
     ObjectGuid charm_attack;      // attack and chase this enemy
     uint32_t   charm_spell = 0;   // cast this creature spell now (Taunt, Shield Wall)
@@ -85,6 +89,10 @@ struct RaidOrder
 
     // Pause the rotation (Nefarian's priest call). Movement and elected jobs still run.
     bool hold_rotation = false;
+
+    // The player's boss plan (BossTactics "no fear", "no sheep"): CcDeny kinds left out during this fight, added to the owner's own
+    // crowd-control orders by the snapshot builder.
+    uint16_t cc_deny = 0;
 
     // A boss fight script (RaidFightScript.h) owns this DPS bot's target and start: the tank-first threat holds and the skull / kill-focus
     // pickers stand down, the bot attacks script_focus (empty: the generic rules pick). Never set on tanks or healers.

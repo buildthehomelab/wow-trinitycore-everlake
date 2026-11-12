@@ -442,18 +442,29 @@ Item* AuctionHouseMgr::GetAItem(ObjectGuid itemGuid)
     return Trinity::Containers::MapGetValuePtr(_itemsByGuid, itemGuid);
 }
 
+// Rate.Auction.Deposit (worldserver.conf, 1 = normal, 0 = no deposit) was read but never used, so changing it did nothing.
+static uint64 ApplyAuctionDepositRate(uint64 deposit)
+{
+    float rate = sWorld->getRate(RATE_AUCTION_DEPOSIT);
+    if (rate == 1.0f)
+        return deposit;
+    return uint64(std::max(0.0, std::floor(double(deposit) * rate)));
+}
+
 uint64 AuctionHouseMgr::GetCommodityAuctionDeposit(ItemTemplate const* item, Minutes time, uint32 quantity, uint32 depositRate /*= 5*/)
 {
     uint32 sellPrice = item->GetSellPrice();
     // Classic 1.60: deposit DepositRate% of the vendor price per 2 hours (AuctionHouse.db2: 5 at the faction houses, 25 at the
     // neutral goblin house, like vanilla), at least 1 copper, no silver rounding
-    return uint64(std::max(1.0, std::floor(depositRate / 100.0 * quantity * sellPrice))) * (time.count() / (MIN_AUCTION_TIME / MINUTE));
+    uint64 deposit = uint64(std::max(1.0, std::floor(depositRate / 100.0 * quantity * sellPrice))) * (time.count() / (MIN_AUCTION_TIME / MINUTE));
+    return ApplyAuctionDepositRate(deposit);
 }
 
 uint64 AuctionHouseMgr::GetItemAuctionDeposit(Player const* player, Item const* item, Minutes time, uint32 depositRate /*= 5*/)
 {
     uint32 sellPrice = item->GetSellPrice(player);
-    return uint64(std::max(1.0, std::floor(sellPrice * (depositRate / 100.0)))) * (time.count() / (MIN_AUCTION_TIME / MINUTE));
+    uint64 deposit = uint64(std::max(1.0, std::floor(sellPrice * (depositRate / 100.0)))) * (time.count() / (MIN_AUCTION_TIME / MINUTE));
+    return ApplyAuctionDepositRate(deposit);
 }
 
 std::string AuctionHouseMgr::BuildItemAuctionMailSubject(AuctionMailType type, AuctionPosting const* auction)
@@ -1178,20 +1189,24 @@ void AuctionHouseObject::BuildListBuckets(WorldPackets::AuctionHouse::AuctionLis
         boost::from_block_range(knownPetBits.begin(), knownPetBits.end(), knownPetSpecies);
     }
 
-    AuctionsResultBuilder<AuctionsBucketData> builder(offset, player->GetSession()->GetSessionDbcLocale(), sorts, AuctionHouseResultLimits::Browse);
+    LocaleConstant const locale = player->GetSession()->GetSessionDbcLocale();
+    AuctionsResultBuilder<AuctionsBucketData> builder(offset, locale, sorts, AuctionHouseResultLimits::Browse);
 
+    // FullName is kept lower case with the locale's accents folded (wstrCaseAccentInsensitiveParse); the searched text is folded the
+    // same way, so "Льняная ткань" from a shift-click finds "льняная ткань" (fbsionika, ruRU, 2026-11-01).
+    std::wstring const searched = wstrCaseAccentInsensitiveParse(name, locale);
     for (std::pair<AuctionsBucketKey const, AuctionsBucketData> const& bucket : _buckets)
     {
         AuctionsBucketData const* bucketData = &bucket.second;
-        if (!name.empty())
+        if (!searched.empty())
         {
             if (filters.HasFlag(AuctionHouseFilterMask::ExactMatch))
             {
-                if (bucketData->FullName[player->GetSession()->GetSessionDbcLocale()] != name)
+                if (bucketData->FullName[locale] != searched)
                     continue;
             }
             else
-                if (bucketData->FullName[player->GetSession()->GetSessionDbcLocale()].find(name) == std::wstring::npos)
+                if (bucketData->FullName[locale].find(searched) == std::wstring::npos)
                     continue;
         }
 
@@ -1453,26 +1468,22 @@ void AuctionHouseObject::BuildReplicate(WorldPackets::AuctionHouse::AuctionRepli
     if (throttleItr != _replicateThrottleMap.end())
     {
         bool const sameScan = throttleItr->second.Global == global && throttleItr->second.Cursor == cursor && throttleItr->second.Tombstone == tombstone;
-        // Classic 1.60: a full scan from the start (all change numbers 0, as add-ons like Auctionator ask) after an earlier scan
-        // got an empty answer until the cooldown ran out, so the add-on saw 0 items. A new scan may start again once the last
-        // one has finished and the cooldown is over; an unfinished scan is simply restarted from the beginning.
+        // Classic 1.60: a full scan from the start (all change numbers 0, as add-ons like Auctionator ask) may start again once
+        // the cooldown of the last one is over. A scan that asks for everything at once (count 0) may never send the follow-up
+        // request that marks it finished, so "restart an unfinished scan at once" let every new request rebuild the whole
+        // auction list, item data included, with no cooldown at all; with the auction house bot's thousands of listings that
+        // can slow the auction house down for everyone. The cooldown now holds for every new scan.
         bool const freshScan = !global && !cursor && !tombstone;
         if (!sameScan && !freshScan)
             return;
 
         if (freshScan && !sameScan)
         {
-            if (!throttleItr->second.IsReplicationInProgress() && throttleItr->second.NextAllowedReplication > curTime)
-                return;
-
-            // A count of 0 lists everything in one answer and leaves the scan unfinished until the client asks once more, so
-            // without a limit every new request (an add-on calling the scan in a loop) sent the whole auction house again.
-            if (throttleItr->second.Started + ReplicateRestartDelay > curTime)
+            if (throttleItr->second.NextAllowedReplication > curTime)
                 return;
 
             throttleItr->second = PlayerReplicateThrottleData{};
             throttleItr->second.NextAllowedReplication = curTime + Seconds(sWorld->getIntConfig(CONFIG_AUCTION_REPLICATE_DELAY));
-            throttleItr->second.Started = curTime;
             throttleItr->second.Global = sAuctionMgr->GenerateReplicationId();
         }
         else if (!throttleItr->second.IsReplicationInProgress() && throttleItr->second.NextAllowedReplication > curTime)
@@ -1482,7 +1493,6 @@ void AuctionHouseObject::BuildReplicate(WorldPackets::AuctionHouse::AuctionRepli
     {
         throttleItr = _replicateThrottleMap.emplace(player->GetGUID(), PlayerReplicateThrottleData{}).first;
         throttleItr->second.NextAllowedReplication = curTime + Seconds(sWorld->getIntConfig(CONFIG_AUCTION_REPLICATE_DELAY));
-        throttleItr->second.Started = curTime;
         throttleItr->second.Global = sAuctionMgr->GenerateReplicationId();
     }
 

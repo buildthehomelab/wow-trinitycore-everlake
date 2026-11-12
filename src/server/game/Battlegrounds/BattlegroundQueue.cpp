@@ -881,7 +881,7 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundBra
             });
 
     // PlayerbotV2: the queued fill goes to the battleground a real player is in or has been invited to first, not to the
-    // oldest half-empty instance (Karrz, WSG 2026-10-09: his side filled only in the last half minute of the prep timer
+    // oldest half-empty instance (playtest, WSG 2026-10-09: his side filled only in the last half minute of the prep timer
     // because the bots spread over older instances). Instances with a human come first, the order is otherwise kept.
     // Only when bots take part (queued, or inside one of the instances).
     std::vector<uint32> human_instances;
@@ -900,8 +900,6 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundBra
             }
         }
 
-    // battleground with free slot for player should be always in the beggining of the queue
-    // maybe it would be better to create bgfreeslotqueue for each bracket_id
     BGFreeSlotQueueContainer& bgQueues = sBattlegroundMgr->GetBGFreeSlotQueueStore(m_queueId);
     // std::list::sort is stable; the key is "has no human", so false (a human present) sorts first.
     // real players in the instance (inside, or invited to it)
@@ -1166,7 +1164,7 @@ bool BGQueueInviteEvent::Execute(uint64 /*e_time*/, uint32 /*p_time*/)
             BattlegroundMgr::BuildBattlegroundStatusNeedConfirmation(&battlefieldStatus, bg, player, queueSlot, player->GetBattlegroundQueueJoinTime(m_QueueId), INVITE_ACCEPT_WAIT_TIME - INVITATION_REMIND_TIME, m_QueueId);
             player->SendDirectMessage(battlefieldStatus.Write());
 
-            sScriptMgr->OnPlayerBattlegroundInvite(player, m_BgInstanceGUID, m_QueueId.BattlemasterListId);
+            sScriptMgr->OnPlayerBattlegroundInvite(player, m_BgInstanceGUID, bg->GetTypeID());
         }
     }
     return true;                                            //event will be deleted

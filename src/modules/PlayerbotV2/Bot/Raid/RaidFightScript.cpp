@@ -30,7 +30,69 @@ std::unordered_map<uint64_t, FightState> g_fights;   // (group, map)
 std::unordered_map<uint64_t, uint64_t> g_ownPick;     // bot -> its last pick when it could not take the raid's focus (Fight::schoolAware)
 
 constexpr uint32_t kFightGapMs = 8000;   // no engaged enemy for this long: the next pull starts a new fight
+constexpr float kCampSpellReach = 30.0f;  // Fight::campReach: an enemy farther than this is not one a bot at the camp casts at
 constexpr uint8_t kSkullIcon = 7, kCrossIcon = 6;
+
+std::unordered_map<uint64_t, uint64_t> g_jobPick;   // bot -> the enemy of its area job (Who::AoeShare row) it was last given
+
+// The enemy of this member's area job: the first Priority row for Who::AoeShare that names it while one of that row's enemies is up. Its
+// previous one while it lives and it may hit it, else one that hits a raider who is no tank (the healers and casters it walks into), then
+// the nearest. One in the member's sight before one behind a wall. None: no job now.
+Unit* AreaJobTarget(Plan& plan, Member const& m, RaidOrder const& o)
+{
+    if (!plan.rules)
+        return nullptr;
+    uint64_t const self = m.p->GetGUID().GetCounter();
+    auto const usable = [&](Unit* e, uint32_t entry)
+    {
+        return e->GetEntry() == entry && e->IsAlive() && e->GetVictim() && !e->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE) &&
+               std::find(o.forbidden_targets.begin(), o.forbidden_targets.end(), e->GetGUID()) == o.forbidden_targets.end();
+    };
+    for (Priority const& row : plan.rules->priority)
+    {
+        if (row.who != Who::AoeShare || row.value <= 0 || !Matches(row.who, m, plan.mainTank))
+            continue;
+        if (auto prev = g_jobPick.find(self); prev != g_jobPick.end())
+            for (Unit* e : plan.enemies)
+                if (e->GetGUID().GetCounter() == prev->second && usable(e, row.enemy))
+                    return e;
+        Unit* best = nullptr;
+        bool bestSeen = false, bestOnRaider = false;
+        float bestDist = 0.f;
+        for (Unit* e : plan.enemies)
+        {
+            if (!usable(e, row.enemy))
+                continue;
+            bool const seen = m.p->IsWithinLOSInMap(e);
+            Member const* vm = nullptr;
+            if (Player* vp = e->GetVictim()->ToPlayer())
+                vm = FindMember(plan, vp);
+            bool const onRaider = vm && !vm->tank;
+            float const dist = m.p->GetExactDist2d(e);
+            bool better = !best;
+            if (!better && seen != bestSeen)
+                better = seen;
+            else if (!better && onRaider != bestOnRaider)
+                better = onRaider;
+            else if (!better)
+                better = dist < bestDist;
+            if (better)
+            {
+                best = e;
+                bestSeen = seen;
+                bestOnRaider = onRaider;
+                bestDist = dist;
+            }
+        }
+        if (best)
+        {
+            g_jobPick[self] = best->GetGUID().GetCounter();
+            return best;
+        }
+    }
+    g_jobPick.erase(self);
+    return nullptr;
+}
 
 } // namespace
 
@@ -137,6 +199,21 @@ void ApplyFightScript(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& order
         // Fight::freeAura: this bot has its own enemy the others cannot see (a Shade of Jin'do); the generic rules keep it.
         if (fight->freeAura && m.p->HasAura(fight->freeAura))
             continue;
+        // An area job the encounter hands this bot (a Priority row for Who::AoeShare) while its enemy is up: the script names that enemy, so
+        // the row's target and the area spells around it win over the script's single focus. bwl_nefarian 1111e: at 20% Nefarian raised
+        // 29-41 Bone Constructs, the script kept every caster on him (122 attack starts on Nefarian to 28 on the constructs after the rise),
+        // the constructs walked into the healers and casters and killed 20-25 raiders in 40-55 s, and both runs wiped with him at 3% and 9%.
+        // Handing the bot back to the generic rules was not enough (1111f run 1: the job's mages 22 attack starts on Nefarian to 4 on the
+        // constructs, warlocks 23 to 4, all 12 healers dead at 550-557 s): their pick is only a fallback, and it steers a bot with no target,
+        // never one already on Nefarian. A named target is attacked whatever the bot was on.
+        if (Unit* job = AreaJobTarget(plan, m, o))
+        {
+            o.script_owns = true;
+            o.script_focus = job->GetGUID();
+            o.fallback_target = job->GetGUID();
+            o.hold_target = ObjectGuid::Empty;
+            continue;
+        }
         if (forced)
         {
             o.script_owns = true;
@@ -173,6 +250,24 @@ void ApplyFightScript(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& order
                 e.eligible = false;
             e.held = std::find(held.begin(), held.end(), enemy) != held.end();
             view.push_back(e);
+        }
+        // Fight::campReach: only the enemies at the camp this bot can see, while there is one (see RaidFightScript.h, Nefarian).
+        // Else the ones in its sight and spell reach (it is not sent walking: its post would walk it back), else every one.
+        if (fight->campReach > 0.f)
+        {
+            std::vector<bool> atCamp(view.size(), false), seen(view.size(), false);
+            bool anyAtCamp = false, anySeen = false;
+            for (size_t i = 0; i < mine.size(); ++i)
+            {
+                if (!view[i].eligible || !m.p->IsWithinDistInMap(mine[i], kCampSpellReach) || !m.p->IsWithinLOSInMap(mine[i]))
+                    continue;
+                seen[i] = anySeen = true;
+                if (Dist2D(mine[i]->GetPositionX(), mine[i]->GetPositionY(), fight->campX, fight->campY) <= fight->campReach)
+                    atCamp[i] = anyAtCamp = true;
+            }
+            if (anyAtCamp || anySeen)
+                for (size_t i = 0; i < view.size(); ++i)
+                    view[i].eligible = anyAtCamp ? atCamp[i] : seen[i];
         }
         // The raid's focus is this bot's previous pick while it can take it; a bot that cannot keeps its own pick until that one dies.
         uint64_t previous = st.focus.IsEmpty() ? 0 : st.focus.GetCounter();

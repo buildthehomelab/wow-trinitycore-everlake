@@ -2050,6 +2050,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         UF::TraitConfig const* GetClassicSpecGroupConfig(bool secondary) const;   // Classic 1.60 dual spec
         bool ActivateClassicSpecGroup(bool secondary);
         bool PurchaseClassicDualSpec();
+        bool UntrainClassicPet(int64 cost);
         static bool IsClassicDualSpecGossipOption(int32 gossipOptionId);
         TalentLearnResult LearnTalent(uint32 talentId, int32* spellOnCooldown);
         bool AddTalent(TalentEntry const* talent, uint8 spec, bool learning);
@@ -2223,7 +2224,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void SendRaidGroupOnlyMessage(RaidGroupReason reason, int32 delay) const;
 
         bool UpdateSkillPro(uint16 skillId, int32 chance, uint32 step);
-        bool UpdateCraftSkill(SpellInfo const* spellInfo);
+        // skillLineIsSkillup: a spell row without a SkillupSkillLineID levels its own SkillLine (Classic 1.60 Comprehension 3012)
+        bool UpdateCraftSkill(SpellInfo const* spellInfo, bool skillLineIsSkillup = false);
         bool UpdateGatherSkill(uint32 skillId, uint32 skillValue, uint32 redLevel, uint32 multiplicator = 1, WorldObject const* object = nullptr);
         bool UpdateFishingSkill(int32 expansion);
         // Classic 1.60: weapon and defense skills grow in melee / ranged combat (vanilla rules)
@@ -2453,6 +2455,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         static uint32 GetClassicProfessionSkill(uint32 skill);
         void SyncClassicProfessionChildSkills(uint32 skill);
         void UpdateClassicLegacyUnlock();
+        void UpdateClassicPvPRank();
         void UpdateClassicProfessionTitles();
         static bool IsClassicCertificationSkill(uint32 skillId);
         // Classic 1.60 Legacy perks (Legacy trait trees 1187 Professions, 1188 Adventure, 1189 Progression)
@@ -2826,6 +2829,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         uint32 GetTemporaryUnsummonedPetNumber() const { return m_temporaryUnsummonedPetNumber; }
         void SetTemporaryUnsummonedPetNumber(uint32 petnumber) { m_temporaryUnsummonedPetNumber = petnumber; }
         void DelayPetResummon(uint32 ms) { m_petResummonDelay = ms; }
+        void ParkPetForTravel();
+        void UpdateParkedPet(uint32 diff);
         Optional<ReactStates> GetTemporaryPetReactState() const { return m_temporaryPetReactState; }
         void DisablePetControlsOnMount(ReactStates reactState, CommandStates commandState);
         void EnablePetControlsOnDismount();
@@ -3489,6 +3494,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         uint32 m_temporaryUnsummonedPetNumber;
         uint32 m_botSheathIdleMs = 0;                       // bot only: ms with weapons drawn and no fight
         uint32 m_petResummonDelay;                          // ms until the pet remembered at login is summoned (0 = none pending)
+        bool m_petParkedForTravel;                          // pet put away because it could not follow the owner (boat, taxi, teleport)
+        uint32 m_petParkedCheckTimer;
         Optional<ReactStates> m_temporaryPetReactState;
         uint32 m_oldpetspell;
         ObjectGuid m_temporaryUnsummonedBattlePet;
