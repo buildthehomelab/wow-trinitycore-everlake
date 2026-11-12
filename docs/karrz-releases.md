@@ -1,14 +1,41 @@
-# Karrz releases as git history
+# Karrz: git and releases
 
-[Karrz1/Karrz-playerbots-wow-forever](https://github.com/Karrz1/Karrz-playerbots-wow-forever) publishes WoW Forever
-Bots near-daily, but its git `main` stopped on 2026-10-21. The real source of each release is only in the release
-asset `wow-forever-source-<version>.zip`. To read and port that work like any other upstream, every release is
-imported as one commit on branch **`karrz-releases`** of this fork.
+Karrz1 publishes WoW Forever Bots in two places, and they are not the same code:
+
+| source | what it is | what only it has |
+|---|---|---|
+| **Karrz git**: [Karrz1/TrinityCore](https://github.com/Karrz1/TrinityCore) `forever` (core) and `forever-bots` (core + bots, `forever` merged in) | real commit history on advocaite `forever` `f63ffc12b3` | the commits made after the latest release |
+| **Karrz releases**: [Karrz1/Karrz-playerbots-wow-forever](https://github.com/Karrz1/Karrz-playerbots-wow-forever) release asset `wow-forever-source-<version>.zip` (git `main` there stopped on 2026-10-21) | one source snapshot per release, near-daily | features kept out of git: for 0.1.35, bot hiring (`src/modules/PlayerbotV2/Fleet/Hire*`, `sql/playerbot_v2/0037_hired_bots.sql`) and the Ring of Law + Mak'gora arena hotfixes |
+
+We track both:
+
+1. **Karrz git comes into `everlake` by git merge.** Starting with 0.1.35, `everlake` merges a Karrz `forever-bots`
+   commit as a real merge parent (0.1.35: `9fe2e33df0`, the last commit before the release; that merge is in progress
+   on 2026-11-12), so each later Karrz update is again a merge of the newer commits, reviewed like any upstream pull
+   request (`docs/upstream-prs.md`).
+2. **Every release is imported** as one commit on branch **`karrz-releases`** (below), so the zips can be read and
+   diffed like git.
+3. **Release-only work is ported by hand**: what a release has that Karrz git does not comes into `everlake` in its
+   own reviewed pull request, logged in `docs/upstream-prs/karrz-*.md`.
+
+The daily **Upstream check** (`.github/workflows/everlake-upstream-check.yml`, one issue kept up to date) shows what
+is left on each side:
+
+- **(d) Karrz releases**: releases with no `karrz-v<version>` tag on `karrz-releases` yet, with date and the start of
+  their notes. Import them as below.
+- **(e) Release-only files**: the newest imported release against the last Karrz `forever-bots` commit before it
+  was published (whitespace and line endings ignored; `sql/old`, `.github`, `repack/`, `scripts/`, `tools/` left
+  out). Files "only in zip" or "differ" are the release-only work to port in step 3; "only in git" are files the zip
+  drops.
+- **(f) Karrz git**: `forever` / `forever-bots` commits that are not ancestors of `everlake`, newest first, marked
+  when the same patch or the same subject is already in `everlake` (work that came in by hand or through advocaite
+  before the merges) and when advocaite's branches have them too (then (c) lists them as well). It comes last
+  because it is the long one: the issue body is cut at 60,000 characters, the run summary has everything.
 
 ## The branch
 
 - Root: advocaite `forever` `f63ffc12b3` (2026-10-09), the commit every release names in its `UPSTREAM_PIN`.
-  All 34 releases (v0.1.12 to v0.1.33) keep that pin, so the branch is one straight line.
+  Every release so far (v0.1.12 to v0.1.35) keeps that pin, so the branch is one straight line.
 - One commit per release, oldest first, author Karrz1, dated when the release was published. The commit message
   holds the release notes as Karrz1 published them and the zip's sha256 (checked against the release's
   `SHA256SUMS.txt`). A release whose source did not change (only binaries did) is an empty commit, to keep its notes.
@@ -27,9 +54,9 @@ git diff karrz-v0.1.32.1 karrz-v0.1.33 -- src/modules/PlayerbotV2 # what one rel
 git diff f63ffc12b3 karrz-v0.1.33 -- sql/custom/world             # all of Karrz's world data
 ```
 
-`karrz-releases` is never merged into `everlake` as a whole: it is a hard fork on a 2026-10-09 core. Changes come
-into `everlake` in reviewed batches by area (bots, core, scripts, world data, hotfixes), each logged like the
-upstream pull requests in `docs/upstream-prs.md`.
+`karrz-releases` is never merged into `everlake`: its commits are snapshots, not Karrz's history. Karrz git is what
+gets merged (step 1 above); from `karrz-releases` only the release-only work comes in, in reviewed batches by area
+(bots, core, scripts, world data, hotfixes), each logged like the upstream pull requests in `docs/upstream-prs.md`.
 
 ## Importing a new release
 
@@ -51,3 +78,4 @@ pin; record the move here before porting from that release.
 
 2026-11-08/09: v0.1.12 to v0.1.33 (34 releases), each checked against its zip with `verify.sh`.
 2026-11-10: v0.1.34 (pin unchanged, `f63ffc12b3`), checked with `verify.sh`.
+2026-11-12: v0.1.35 (pin unchanged, `f63ffc12b3`), tag `karrz-v0.1.35` = `6dae366c19`.

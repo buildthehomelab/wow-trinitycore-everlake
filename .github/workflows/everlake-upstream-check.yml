@@ -1,10 +1,11 @@
 # Everlake: once a day, list what upstream has that `everlake` has not sorted yet (docs/core-fork.md in
 # wow-project-everlake, "Staying current"): advocaite pull requests with no review log and whether each still merges,
-# TrinityCore master commits not in `everlake` (by patch id) and not logged, and advocaite branch commits not in
-# `everlake`. The list goes to the run's summary and, when the repository has issues turned on, into one issue that is
-# kept up to date. Nothing is merged, pushed or built.
-# Only GitHub's own token: it can read the public upstreams and write the issue; no personal token (see
-# everlake-mirrors.yml).
+# TrinityCore master commits not in `everlake` (by patch id) and not logged, advocaite branch commits not in
+# `everlake`, and Karrz (docs/karrz-releases.md): releases not imported on `karrz-releases` yet, the files only the
+# newest imported release zip has, and Karrz git commits not in `everlake`. The list goes to the run's summary and,
+# when the repository has issues turned on, into one issue that is kept up to date. Nothing is merged, pushed or built.
+# Only GitHub's own token: it can read the public upstreams and their releases and write the issue; no personal token
+# (see everlake-mirrors.yml).
 name: Everlake upstream check
 
 on:
