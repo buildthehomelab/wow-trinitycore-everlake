@@ -40,12 +40,25 @@ struct Parts
 TC_GAME_API bool Split(std::string_view text, Parts& parts);
 
 // Readies a player name the client sent for the by-name lookups (ObjectAccessor, CharacterCache), which take full names:
-// "bob", "Bob " (the unit menu, no surname), "bob smith" and "Bob Smith-Realm" become "Bob" or "Bob Smith". The realm
-// suffix (after the last '-') is dropped and the name normalised, but the surname is kept: normalizePlayerName keeps
-// only the first word, and a lookup by that alone finds another Bob (one with no surname), or nobody when several are
-// online.
+// "bob", "Bob " (the unit menu, no surname), "bob smith", "Bob-Smith" and "Bob Smith-Realm" become "Bob" or "Bob Smith".
+// The 1.60 client keeps the surname where retail keeps the realm, so names it builds outside the unit menu (friends list,
+// chat links: UnitPopupSharedUtil.GetFullPlayerName) come as "Name-Surname". A suffix after the last '-' is dropped only
+// when it names this realm (realmName, spaces ignored, as GetNormalizedRealmName); otherwise "Name-Surname" is read as
+// name and surname. The name is normalised, the surname kept: normalizePlayerName keeps only the first word, and a lookup
+// by that alone finds another Bob (one with no surname), or nobody when several are online.
 // False when it is empty or not a valid name.
+TC_GAME_API bool Normalize(std::string& text, std::string_view realmName);
+
+// As above, with this realm's name
 TC_GAME_API bool Normalize(std::string& text);
+
+// For packets that carry the surname in a string of its own after the name (1.60 whisper, party invite): "Bob" + "Smith"
+// is "Bob Smith", ready for Normalize. The second string is ignored when it is blank or names this realm (where retail
+// sends the realm), or when the name already has a surname.
+TC_GAME_API std::string WithSurname(std::string_view name, std::string_view surname, std::string_view realmName);
+
+// As above, with this realm's name
+TC_GAME_API std::string WithSurname(std::string_view name, std::string_view surname);
 
 // Surnames are equal when they differ only in case (any script, not just ASCII)
 TC_GAME_API bool SurnameEquals(std::string_view a, std::string_view b);
