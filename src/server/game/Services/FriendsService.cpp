@@ -19,6 +19,7 @@
 #include "BattlenetRpcErrorCodes.h"
 #include "CharacterCache.h"
 #include "DatabaseEnv.h"
+#include "FullName.h"
 #include "GameTime.h"
 #include "Log.h"
 #include "MapUtils.h"
@@ -167,6 +168,22 @@ namespace
         LoginDatabase.EscapeString(upper);
         if (QueryResult result = LoginDatabase.PQuery("SELECT id, battle_tag FROM battlenet_accounts WHERE UPPER(battle_tag) = '{}' OR email = '{}' LIMIT 1", upper, upper))
             return AccountInfo{ (*result)[0].GetUInt32(), (*result)[1].IsNull() ? "" : (*result)[1].GetString() };
+        return {};
+    }
+
+    // A character's full name ("Ora Brightleaf", "Ora-Brightleaf"): the Add Friend box sends one when the text holds no '#' or '@'
+    // (C_BattleNet.SendTitleFriendInviteByName, as title friends are on). The request goes to that character's Battle.net account;
+    // a character with none (a bot) is not found.
+    Optional<AccountInfo> FindAccountByCharacterName(std::string name)
+    {
+        if (!Trinity::FullName::Normalize(name))
+            return {};
+        CharacterCacheEntry const* character = sCharacterCache->GetCharacterCacheByName(name);
+        if (!character || character->IsDeleted)
+            return {};
+        if (QueryResult result = LoginDatabase.PQuery("SELECT battlenet_account FROM account WHERE id = {}", character->AccountId))
+            if (!(*result)[0].IsNull() && (*result)[0].GetUInt32() != 0)
+                return GetAccount((*result)[0].GetUInt32());
         return {};
     }
 
@@ -484,7 +501,11 @@ uint32 FriendsService::HandleSendInvitation(friends::v2::client::SendInvitationR
     else if (target.has_email())
         invitee = FindAccount(target.email());
     else if (target.has_name())
+    {
         invitee = FindAccount(target.name());
+        if (!invitee && target.name().find_first_of("#@") == std::string::npos)
+            invitee = FindAccountByCharacterName(target.name());
+    }
 
     if (!invitee)
         return ERROR_FRIENDS_RECEIVED_INVITATION_UNDELIVERABLE;
