@@ -1125,7 +1125,10 @@ void Player::Update(uint32 p_time)
     Pet* pet = GetPet();
     // A pet out of sight on the same map (stuck on the terrain, left at a fight) is set down next to its owner, the way a player's pet
     // catches up in Classic; before, it was dismissed and a warlock's Imp just vanished while fighting or travelling (player report, 3 Nov).
-    if (pet && !pet->IsWithinDistInMap(this, GetMap()->GetVisibilityRange()) && !pet->isPossessed() && !pet->CatchUpWithOwner())
+    // On a boat or zeppelin it cannot catch up: put it away until the owner is on the ground, as Pet::Update does. This update usually
+    // runs before the pet's own, so without this the pet was dismissed at sea.
+    if (pet && !pet->IsWithinDistInMap(this, GetMap()->GetVisibilityRange()) && !pet->isPossessed() && !pet->CatchUpWithOwner()
+        && !pet->ParkForOwnerTravel())
     //if (pet && !pet->IsWithinDistInMap(this, GetMap()->GetVisibilityDistance()) && (GetCharmGUID() && (pet->GetGUID() != GetCharmGUID())))
     {
         TC_LOG_INFO("entities.pet", "Pet {} ({}) of {} dismissed: out of its owner's sight", pet->GetName(), pet->GetEntry(), GetName());

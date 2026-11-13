@@ -26,6 +26,7 @@
 #include "InstanceScript.h"
 #include "Log.h"
 #include "Map.h"
+#include "MotionMaster.h"
 #include "ObjectMgr.h"
 #include "PetFollowPosition.h"
 #include "PetPackets.h"
@@ -809,8 +810,6 @@ bool Pet::CatchUpWithOwner()
         return false;
     if (owner->IsInFlight() || owner->IsBeingTeleported() || owner->IsPetNeedBeTemporaryUnsummoned())
         return false;
-    if (GetCharmInfo() && GetCharmInfo()->HasStayCommand())
-        return false;                                       // told to stay there: dismissed as before
 
     // A fight it was left at stays behind, or the pet would run straight back to it and drop out of sight again.
     CombatStop(true);
@@ -818,6 +817,20 @@ bool Pet::CatchUpWithOwner()
     float x, y, z;
     owner->GetClosePoint(x, y, z, GetCombatReach(), PET_FOLLOW_DIST, GetFollowAngle());
     NearTeleportTo(x, y, z, owner->GetOrientation());
+
+    // A pet told to Stay or sent off with Move To comes along too, instead of being dismissed: it is back on Follow, and the pet
+    // bar shows that.
+    if (CharmInfo* charmInfo = GetCharmInfo(); charmInfo && charmInfo->HasStayCommand())
+    {
+        charmInfo->ResetToFollow();
+        GetMotionMaster()->MoveFollow(owner, PET_FOLLOW_DIST, GetFollowAngle());
+
+        WorldPackets::Pet::PetMode petMode;
+        petMode.PetGUID = GetGUID();
+        petMode.ReactState = GetReactState();
+        petMode.CommandState = COMMAND_FOLLOW;
+        owner->SendDirectMessage(petMode.Write());
+    }
     TC_LOG_INFO("entities.pet", "Pet {} ({}) of {} fell out of sight, set down next to its owner at ({:.0f},{:.0f},{:.0f})",
         GetName(), GetEntry(), owner->GetName(), x, y, z);
     return true;
@@ -828,8 +841,7 @@ bool Pet::ParkForOwnerTravel()
     Player* owner = GetOwner();
     if (!owner || !owner->IsInWorld() || !owner->IsAlive() || !IsInWorld() || !IsAlive() || m_removed || isPossessed() || isTemporarySummoned())
         return false;
-    if (GetCharmInfo() && GetCharmInfo()->HasStayCommand())
-        return false;                                       // told to stay there: dismissed as before
+    // A pet told to Stay or Move To is put away too; like every resummoned pet it comes back on Follow.
     if (owner->GetMap() != GetMap())
         return false;
 

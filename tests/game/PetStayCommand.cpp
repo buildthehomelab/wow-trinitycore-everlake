@@ -46,3 +46,25 @@ TEST_CASE("Move To stores the clicked spot as the stay position", "[PetStayComma
     CHECK(y == 554.25f);
     CHECK(z == 93.75f);
 }
+
+TEST_CASE("A Stay or Move To pet that catches up with its owner goes back on Follow", "[PetStayCommand]")
+{
+    // Pet::CatchUpWithOwner sets a Stay or Move To pet down next to its owner instead of dismissing it, then resets it to Follow.
+    CommandStates const command = GENERATE(COMMAND_STAY, COMMAND_MOVE_TO);
+    Creature pet(false);
+    CharmInfo charmInfo(&pet);
+    charmInfo.SetCommandState(command);
+    charmInfo.SetIsAtStay(true);
+    charmInfo.SetIsCommandAttack(true);
+
+    charmInfo.ResetToFollow();
+
+    CHECK(charmInfo.HasCommandState(COMMAND_FOLLOW));
+    CHECK_FALSE(charmInfo.HasStayCommand());
+    CHECK_FALSE(charmInfo.IsAtStay());
+    CHECK_FALSE(charmInfo.IsCommandAttack());
+    CHECK(charmInfo.IsReturning());
+    // Not a clicked Follow: the pet may still fight back on the way (PetAI::CanAttack).
+    CHECK_FALSE(charmInfo.IsCommandFollow());
+    CHECK_FALSE(charmInfo.IsFollowing());
+}

@@ -131,6 +131,16 @@ struct TC_GAME_API CharmInfo
         bool IsReturning();
         void SaveStayPosition();
         void SetStayPosition(float x, float y, float z) { _stayX = x; _stayY = y; _stayZ = z; }
+        // Back on Follow, heading for the owner. Unlike the owner clicking Follow, the pet still defends itself on the way.
+        void ResetToFollow()
+        {
+            _CommandState = COMMAND_FOLLOW;
+            _isCommandAttack = false;
+            _isCommandFollow = false;
+            _isAtStay = false;
+            _isFollowing = false;
+            _isReturning = true;
+        }
         void GetStayPosition(float &x, float &y, float &z);
 
     private:
