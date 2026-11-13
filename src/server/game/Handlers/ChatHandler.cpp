@@ -130,7 +130,13 @@ void WorldSession::HandleChatMessageOpcode(WorldPackets::Chat::ChatMessage& chat
 
 void WorldSession::HandleChatMessageWhisperOpcode(WorldPackets::Chat::ChatMessageWhisper& chatMessageWhisper)
 {
-    HandleChatMessage(CHAT_MSG_WHISPER, Language(chatMessageWhisper.Language), chatMessageWhisper.Text, chatMessageWhisper.Target, chatMessageWhisper.TargetGUID);
+    TC_LOG_DEBUG("network", "CMSG_CHAT_MESSAGE_WHISPER: {} whispers target \"{}\" surname \"{}\" guid {}", GetPlayerInfo(),
+        chatMessageWhisper.Target, chatMessageWhisper.TargetSurname, chatMessageWhisper.TargetGUID.ToString());
+
+    // the friends list and chat links send the surname apart from the name: without it the whisper went to another
+    // character with that name (a bot or player with no surname) or to nobody
+    HandleChatMessage(CHAT_MSG_WHISPER, Language(chatMessageWhisper.Language), chatMessageWhisper.Text,
+        Trinity::FullName::WithSurname(chatMessageWhisper.Target, chatMessageWhisper.TargetSurname), chatMessageWhisper.TargetGUID);
 }
 
 void WorldSession::HandleChatMessageChannelOpcode(WorldPackets::Chat::ChatMessageChannel& chatMessageChannel)

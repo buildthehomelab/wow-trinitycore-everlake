@@ -17,6 +17,7 @@
 
 #include "FullName.h"
 #include "ObjectMgr.h"
+#include "RealmList.h"
 #include "Util.h"
 
 namespace
@@ -53,6 +54,24 @@ namespace
         wstrToLower(folded);
         return true;
     }
+
+    // true when text names the realm: case and blanks ignored, as the client's GetNormalizedRealmName drops the spaces
+    bool IsRealmName(std::string_view text, std::string_view realmName)
+    {
+        std::wstring a, b;
+        if (realmName.empty() || !Folded(text, a) || !Folded(realmName, b))
+            return false;
+        std::erase_if(a, IsBlank);
+        std::erase_if(b, IsBlank);
+        return !a.empty() && a == b;
+    }
+
+    std::string CurrentRealmName()
+    {
+        if (std::shared_ptr<Realm const> realm = sRealmList->GetCurrentRealm())
+            return realm->NormalizedName;
+        return {};
+    }
 }
 
 bool Trinity::FullName::Split(std::string_view text, Parts& parts)
@@ -76,19 +95,60 @@ bool Trinity::FullName::Split(std::string_view text, Parts& parts)
     return normalizePlayerName(parts.Name);
 }
 
-bool Trinity::FullName::Normalize(std::string& text)
+bool Trinity::FullName::Normalize(std::string& text, std::string_view realmName)
 {
-    // "Name Surname-Realm": the realm goes after the last '-' (realm names have none), and is dropped whatever it names
-    // (cross-realm lookups aren't supported, as before). The client only adds it for a player it thinks is on another realm.
-    std::string_view withoutRealm(text);
-    withoutRealm = withoutRealm.substr(0, withoutRealm.rfind('-'));
+    std::string_view full(text);
+
+    // "Name-Realm" / "Name Surname-Realm": the realm goes after the last '-' (realm names have none). Cross-realm lookups
+    // aren't supported, so it is dropped.
+    if (std::size_t const dash = full.rfind('-'); dash != std::string_view::npos && IsRealmName(full.substr(dash + 1), realmName))
+        full = full.substr(0, dash);
+
+    std::string joined(full);
+
+    // "Name-Surname" (the 1.60 client's realm slot holds the surname): names are letters only, so the first '-' of a text
+    // with no blank ends the name. "Name Surname-Jones" (a blank first) is a surname with a '-' in it.
+    std::size_t const start = joined.find_first_not_of(" \t");
+    std::size_t const firstDash = joined.find('-');
+    if (firstDash != std::string::npos && joined.find_first_of(" \t", start) > firstDash)
+    {
+        if (firstDash == start)
+            return false;   // "-Surname": no name
+        joined[firstDash] = ' ';
+    }
 
     Parts parts;
-    if (!Split(withoutRealm, parts))
+    if (!Split(joined, parts))
         return false;
 
     text = parts.HasSurname ? parts.Name + ' ' + parts.Surname : parts.Name;
     return true;
+}
+
+bool Trinity::FullName::Normalize(std::string& text)
+{
+    return Normalize(text, CurrentRealmName());
+}
+
+std::string Trinity::FullName::WithSurname(std::string_view name, std::string_view surname, std::string_view realmName)
+{
+    std::wstring wide;
+    if (!Utf8toWStr(surname, wide) || Trimmed(wide).empty() || IsRealmName(surname, realmName))
+        return std::string(name);
+
+    std::wstring wideName;
+    if (!Utf8toWStr(name, wideName))
+        return std::string(name);
+    wideName = Trimmed(wideName);
+    if (wideName.find_first_of(L" \t-") != std::wstring::npos)
+        return std::string(name);   // already "Name Surname" or "Name-Surname"
+
+    return std::string(name) + ' ' + std::string(surname);
+}
+
+std::string Trinity::FullName::WithSurname(std::string_view name, std::string_view surname)
+{
+    return WithSurname(name, surname, CurrentRealmName());
 }
 
 bool Trinity::FullName::SurnameEquals(std::string_view a, std::string_view b)

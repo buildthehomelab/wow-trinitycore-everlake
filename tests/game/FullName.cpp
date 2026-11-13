@@ -134,17 +134,22 @@ TEST_CASE("The character cache finds every Bob by full name, in any capitals", "
 
 namespace
 {
-    std::string Normalized(std::string text)
+    std::string Normalized(std::string text, std::string_view realmName = "Everlake")
     {
-        REQUIRE(Normalize(text));
+        REQUIRE(Normalize(text, realmName));
         return text;
+    }
+
+    bool Normalizes(std::string text, std::string_view realmName = "Everlake")
+    {
+        return Normalize(text, realmName);
     }
 }
 
 TEST_CASE("A name the client sent keeps its surname for the lookups", "[FullName]")
 {
-    // the friends list and unit menu send "Name Surname" (or "Name " with no surname) as the whisper, friend, ignore and
-    // guild invite target; normalizePlayerName alone kept only "Bob", so a lookup found another Bob or nobody
+    // typed names and the unit menu send "Name Surname" (or "Name " with no surname); normalizePlayerName alone kept only
+    // "Bob", so a lookup found another Bob or nobody
     CHECK(Normalized("Bob Smith") == "Bob Smith");
     CHECK(Normalized("bob smith") == "Bob smith");      // the surname compares without regard to case later (Pick)
     CHECK(Normalized("  BOB   Smith  ") == "Bob Smith");
@@ -152,17 +157,48 @@ TEST_CASE("A name the client sent keeps its surname for the lookups", "[FullName
     CHECK(Normalized("Bob ") == "Bob");
     CHECK(Normalized("bob") == "Bob");
 
-    // a realm after the last '-' is dropped
+    // this realm after the last '-' is dropped, in any case and with or without its spaces
     CHECK(Normalized("Bob-Everlake") == "Bob");
+    CHECK(Normalized("Bob-everlake") == "Bob");
     CHECK(Normalized("Bob Smith-Everlake") == "Bob Smith");
     CHECK(Normalized("Bob Smith-Jones-Everlake") == "Bob Smith-Jones");
+    CHECK(Normalized("Bob-EverlakeTwo", "Everlake Two") == "Bob");
 
-    std::string empty;
-    CHECK_FALSE(Normalize(empty));
-    std::string blank = "   ";
-    CHECK_FALSE(Normalize(blank));
-    std::string realmOnly = "-Everlake";
-    CHECK_FALSE(Normalize(realmOnly));
+    CHECK_FALSE(Normalizes(""));
+    CHECK_FALSE(Normalizes("   "));
+    CHECK_FALSE(Normalizes("-Everlake"));
+}
+
+TEST_CASE("Name-Surname from the friends list and chat links is a name and surname", "[FullName]")
+{
+    // the 1.60 client keeps the surname in retail's realm slot, so outside the unit menu it builds "Name-Surname"
+    CHECK(Normalized("Ora-Brightleaf") == "Ora Brightleaf");
+    CHECK(Normalized("ora-brightleaf") == "Ora brightleaf");
+    CHECK(Normalized("Ora-Brightleaf-Everlake") == "Ora Brightleaf");
+    CHECK(Normalized(" Ora-Brightleaf ") == "Ora Brightleaf");
+    // a '-' after the first blank belongs to the surname
+    CHECK(Normalized("Bob Smith-Jones") == "Bob Smith-Jones");
+    // with no realm known, every suffix is a surname
+    CHECK(Normalized("Ora-Brightleaf", "") == "Ora Brightleaf");
+
+    CHECK_FALSE(Normalizes("-Brightleaf"));
+    CHECK_FALSE(Normalizes("-Brightleaf", ""));
+}
+
+TEST_CASE("A surname sent apart from the name joins it", "[FullName]")
+{
+    // whisper and party invite carry the surname in a 9 bit string of its own, where retail carries the realm
+    CHECK(WithSurname("Ora", "Brightleaf", "Everlake") == "Ora Brightleaf");
+    CHECK(WithSurname("Ora", "", "Everlake") == "Ora");
+    CHECK(WithSurname("Ora", "  ", "Everlake") == "Ora");
+    // the realm in that slot is no surname
+    CHECK(WithSurname("Ora", "Everlake", "Everlake") == "Ora");
+    CHECK(WithSurname("Ora", "everlake two", "Everlake Two") == "Ora");
+    // a name that already has its surname keeps it
+    CHECK(WithSurname("Ora Brightleaf", "Brightleaf", "Everlake") == "Ora Brightleaf");
+    CHECK(WithSurname("Ora-Brightleaf", "Everlake", "Everlake") == "Ora-Brightleaf");
+
+    CHECK(Normalized(WithSurname("ora", "Brightleaf", "Everlake")) == "Ora Brightleaf");
 }
 
 TEST_CASE("A whispered full name finds that character, not another with the same name", "[FullName]")
@@ -176,8 +212,17 @@ TEST_CASE("A whispered full name finds that character, not another with the same
     sCharacterCache->AddCharacterCacheEntry(bot, 2, "Ora", 0, 1, 1, 10, false);
 
     std::string target = "Ora Brightleaf ";
-    REQUIRE(Normalize(target));
+    REQUIRE(Normalize(target, "Everlake"));
     CHECK(sCharacterCache->GetCharacterGuidByName(target) == brightleaf);
+
+    // the friends list whisper: "Ora-Brightleaf", which reaches the server as "Ora" + surname "Brightleaf"
+    std::string fromFriendsList = WithSurname("Ora", "Brightleaf", "Everlake");
+    REQUIRE(Normalize(fromFriendsList, "Everlake"));
+    CHECK(sCharacterCache->GetCharacterGuidByName(fromFriendsList) == brightleaf);
+
+    std::string dashed = "Ora-Brightleaf";
+    REQUIRE(Normalize(dashed, "Everlake"));
+    CHECK(sCharacterCache->GetCharacterGuidByName(dashed) == brightleaf);
 
     // before: the surname was cut off and the lookup took the Ora with no surname
     std::string firstWordOnly = "Ora Brightleaf ";
