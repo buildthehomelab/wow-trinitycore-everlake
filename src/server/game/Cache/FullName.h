@@ -39,6 +39,14 @@ struct Parts
 // (normalizePlayerName); false when it is empty or not a valid name.
 TC_GAME_API bool Split(std::string_view text, Parts& parts);
 
+// Readies a player name the client sent for the by-name lookups (ObjectAccessor, CharacterCache), which take full names:
+// "bob", "Bob " (the unit menu, no surname), "bob smith" and "Bob Smith-Realm" become "Bob" or "Bob Smith". The realm
+// suffix (after the last '-') is dropped and the name normalised, but the surname is kept: normalizePlayerName keeps
+// only the first word, and a lookup by that alone finds another Bob (one with no surname), or nobody when several are
+// online.
+// False when it is empty or not a valid name.
+TC_GAME_API bool Normalize(std::string& text);
+
 // Surnames are equal when they differ only in case (any script, not just ASCII)
 TC_GAME_API bool SurnameEquals(std::string_view a, std::string_view b);
 

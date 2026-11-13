@@ -33,6 +33,7 @@
 #include "LanguageMgr.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
+#include "FullName.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "Player.h"
@@ -300,18 +301,16 @@ ChatMessageResult WorldSession::HandleChatMessage(ChatMsg type, Language lang, s
             }
             else
             {
-                // the unit menu hands over "Name " (name + empty surname): trim it, or the lookup says "No player named"
-                while (!target.empty() && (target.back() == ' ' || target.back() == '\t'))
-                    target.pop_back();
-                ExtendedPlayerName extName = ExtractExtendedPlayerName(target);
-
-                if (!normalizePlayerName(extName.Name))
+                // the unit menu hands over "Name " or "Name Surname": keep the surname, or the lookup finds another Name
+                // (a bot or player with no surname) or nobody (Trinity::FullName::Normalize)
+                std::string fullName = target;
+                if (!Trinity::FullName::Normalize(fullName))
                 {
                     SendChatPlayerNotfoundNotice(target);
                     break;
                 }
 
-                receiver = ObjectAccessor::FindConnectedPlayerByName(extName.Name);
+                receiver = ObjectAccessor::FindConnectedPlayerByName(fullName);
             }
             if (!receiver || (lang != LANG_ADDON && !receiver->isAcceptWhispers() && receiver->GetSession()->HasPermission(rbac::RBAC_PERM_CAN_FILTER_WHISPERS) && !receiver->IsInWhisperWhiteList(sender->GetGUID())))
             {
@@ -581,12 +580,11 @@ void WorldSession::HandleChatAddonMessage(ChatMsg type, std::string prefix, std:
             }
             else
             {
-                ExtendedPlayerName extName = ExtractExtendedPlayerName(target);
-
-                if (!normalizePlayerName(extName.Name))
+                std::string fullName = target;
+                if (!Trinity::FullName::Normalize(fullName))
                     break;
 
-                receiver = ObjectAccessor::FindConnectedPlayerByName(extName.Name);
+                receiver = ObjectAccessor::FindConnectedPlayerByName(fullName);
             }
             if (!receiver)
             {

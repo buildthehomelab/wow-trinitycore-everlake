@@ -76,6 +76,21 @@ bool Trinity::FullName::Split(std::string_view text, Parts& parts)
     return normalizePlayerName(parts.Name);
 }
 
+bool Trinity::FullName::Normalize(std::string& text)
+{
+    // "Name Surname-Realm": the realm goes after the last '-' (realm names have none), and is dropped whatever it names
+    // (cross-realm lookups aren't supported, as before). The client only adds it for a player it thinks is on another realm.
+    std::string_view withoutRealm(text);
+    withoutRealm = withoutRealm.substr(0, withoutRealm.rfind('-'));
+
+    Parts parts;
+    if (!Split(withoutRealm, parts))
+        return false;
+
+    text = parts.HasSurname ? parts.Name + ' ' + parts.Surname : parts.Name;
+    return true;
+}
+
 bool Trinity::FullName::SurnameEquals(std::string_view a, std::string_view b)
 {
     std::wstring foldedA, foldedB;
