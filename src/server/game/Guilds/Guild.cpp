@@ -30,6 +30,7 @@
 #include "Config.h"
 #include "DB2Stores.h"
 #include "DatabaseEnv.h"
+#include "FullName.h"
 #include "GameTime.h"
 #include "GuildMgr.h"
 #include "GuildPackets.h"
@@ -1552,6 +1553,26 @@ void Guild::HandleSetEmblem(WorldSession* session, EmblemInfo const& emblemInfo)
 
         HandleQuery(session);
     }
+}
+
+Guild::Member* Guild::GetMember(std::string_view name)
+{
+    Trinity::FullName::Parts parts;
+    if (!Trinity::FullName::Split(name, parts))
+        return nullptr;
+
+    std::vector<Member*> candidates;
+    std::vector<std::string> surnames;
+    for (auto& [guid, member] : m_members)
+    {
+        if (member.GetName() != parts.Name)
+            continue;
+        candidates.push_back(&member);
+        surnames.push_back(sCharacterCache->GetCharacterSurnameByGuid(guid));
+    }
+
+    std::size_t picked = Trinity::FullName::Pick(std::vector<std::string_view>(surnames.begin(), surnames.end()), parts);
+    return picked < candidates.size() ? candidates[picked] : nullptr;
 }
 
 void Guild::HandleSetNewGuildMaster(WorldSession* session, std::string_view name, bool isSelfPromote)

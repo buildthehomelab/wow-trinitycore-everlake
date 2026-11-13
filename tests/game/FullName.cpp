@@ -19,6 +19,7 @@
 #include "CharacterCache.h"
 #include "FullName.h"
 #include "ObjectGuid.h"
+#include "ObjectMgr.h"
 #include <string>
 #include <vector>
 
@@ -129,4 +130,61 @@ TEST_CASE("The character cache finds every Bob by full name, in any capitals", "
 
     sCharacterCache->DeleteCharacterCacheEntry(smith, "Bob");
     CHECK(sCharacterCache->GetCharacterGuidByName("Bob").IsEmpty());
+}
+
+namespace
+{
+    std::string Normalized(std::string text)
+    {
+        REQUIRE(Normalize(text));
+        return text;
+    }
+}
+
+TEST_CASE("A name the client sent keeps its surname for the lookups", "[FullName]")
+{
+    // the friends list and unit menu send "Name Surname" (or "Name " with no surname) as the whisper, friend, ignore and
+    // guild invite target; normalizePlayerName alone kept only "Bob", so a lookup found another Bob or nobody
+    CHECK(Normalized("Bob Smith") == "Bob Smith");
+    CHECK(Normalized("bob smith") == "Bob smith");      // the surname compares without regard to case later (Pick)
+    CHECK(Normalized("  BOB   Smith  ") == "Bob Smith");
+    CHECK(Normalized("Ora of the Glade") == "Ora of the Glade");
+    CHECK(Normalized("Bob ") == "Bob");
+    CHECK(Normalized("bob") == "Bob");
+
+    // a realm after the last '-' is dropped
+    CHECK(Normalized("Bob-Everlake") == "Bob");
+    CHECK(Normalized("Bob Smith-Everlake") == "Bob Smith");
+    CHECK(Normalized("Bob Smith-Jones-Everlake") == "Bob Smith-Jones");
+
+    std::string empty;
+    CHECK_FALSE(Normalize(empty));
+    std::string blank = "   ";
+    CHECK_FALSE(Normalize(blank));
+    std::string realmOnly = "-Everlake";
+    CHECK_FALSE(Normalize(realmOnly));
+}
+
+TEST_CASE("A whispered full name finds that character, not another with the same name", "[FullName]")
+{
+    ObjectGuid const brightleaf = ObjectGuid::Create<HighGuid::Player>(UI64LIT(900011));
+    ObjectGuid const bot = ObjectGuid::Create<HighGuid::Player>(UI64LIT(900012));
+
+    // a player friend "Ora Brightleaf" and a bot called just "Ora"
+    sCharacterCache->AddCharacterCacheEntry(brightleaf, 1, "Ora", 0, 1, 1, 10, false);
+    sCharacterCache->UpdateCharacterSurname(brightleaf, "Brightleaf");
+    sCharacterCache->AddCharacterCacheEntry(bot, 2, "Ora", 0, 1, 1, 10, false);
+
+    std::string target = "Ora Brightleaf ";
+    REQUIRE(Normalize(target));
+    CHECK(sCharacterCache->GetCharacterGuidByName(target) == brightleaf);
+
+    // before: the surname was cut off and the lookup took the Ora with no surname
+    std::string firstWordOnly = "Ora Brightleaf ";
+    REQUIRE(normalizePlayerName(firstWordOnly));
+    CHECK(firstWordOnly == "Ora");
+    CHECK(sCharacterCache->GetCharacterGuidByName(firstWordOnly) == bot);
+
+    sCharacterCache->DeleteCharacterCacheEntry(bot, "Ora");
+    sCharacterCache->DeleteCharacterCacheEntry(brightleaf, "Ora");
 }

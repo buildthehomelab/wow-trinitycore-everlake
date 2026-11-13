@@ -45,6 +45,7 @@
 #include "MiscPackets.h"
 #include "Object.h"
 #include "ObjectAccessor.h"
+#include "FullName.h"
 #include "ObjectMgr.h"
 #include "OutdoorPvP.h"
 #include "Player.h"
@@ -872,7 +873,7 @@ void WorldSession::HandleWhoIsOpcode(WorldPackets::Who::WhoIsRequest& packet)
         return;
     }
 
-    if (packet.CharName.empty() || !normalizePlayerName(packet.CharName))
+    if (packet.CharName.empty() || !Trinity::FullName::Normalize(packet.CharName))
     {
         SendNotification(LANG_NEED_CHARACTER_NAME);
         return;

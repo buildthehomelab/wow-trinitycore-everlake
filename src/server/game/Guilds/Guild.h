@@ -940,14 +940,8 @@ class TC_GAME_API Guild
             return (itr != m_members.end()) ? &itr->second : nullptr;
         }
 
-        inline Member* GetMember(std::string_view name)
-        {
-            for (auto itr = m_members.begin(); itr != m_members.end(); ++itr)
-                if (itr->second.GetName() == name)
-                    return &itr->second;
-
-            return nullptr;
-        }
+        // "Bob" or "Bob Smith": several members may be called Bob, the full name picks one (Trinity::FullName::Pick)
+        Member* GetMember(std::string_view name);
 
         static void _DeleteMemberFromDB(CharacterDatabaseTransaction trans, ObjectGuid::LowType lowguid);
 
