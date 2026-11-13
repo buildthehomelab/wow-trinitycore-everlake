@@ -5,7 +5,7 @@
 in his git at `9fe2e33df0` but missed by the earlier batches, or that only his git has, never reached `everlake`. Git now treats
 it as dropped on purpose: a later Karrz merge will not show it as a conflict. #47 found two cases (adventurer camp Boosted Rest,
 restored there; the Eclipse cast time modifier). This audit looks for the rest.
-**Base:** #47's branch `claude/karrz-git-1112` (`dbba638449`), still open when this was written.
+**Base:** #47's branch `claude/karrz-git-1112` (`dbba638449`); #47 merged into `everlake` as `8f857617ae` while this was built.
 **Verdict:** 14 gaps restored, 4 left out with a reason written down here; everything else that differs is already recorded.
 
 ## How it was checked
