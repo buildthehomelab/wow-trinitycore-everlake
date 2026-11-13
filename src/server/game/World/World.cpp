@@ -707,6 +707,10 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "Load.Locales"sv, .DefaultValue = true, .Index = CONFIG_LOAD_LOCALES },
         { .Name = "Classic.MountIndoorsRules"sv, .DefaultValue = true, .Index = CONFIG_CLASSIC_MOUNT_INDOORS_RULES },
         { .Name = "Classic.SecuredBagSlotsForAll"sv, .DefaultValue = true, .Index = CONFIG_CLASSIC_SECURED_BAG_SLOTS_FOR_ALL },
+        { .Name = "Classic.ForeverCreatureHealth"sv, .DefaultValue = false, .Index = CONFIG_CLASSIC_FOREVER_CREATURE_HEALTH },
+        { .Name = "Classic.ForeverKillXp"sv, .DefaultValue = false, .Index = CONFIG_CLASSIC_FOREVER_KILL_XP },
+        { .Name = "Classic.AutoEquipNewBags"sv, .DefaultValue = false, .Index = CONFIG_CLASSIC_AUTO_EQUIP_NEW_BAGS },
+        { .Name = "Classic.CreatureHealth.Raids"sv, .DefaultValue = false, .Index = CONFIG_CLASSIC_CREATURE_HEALTH_RAIDS },
     } };
 
     static constexpr ConfigOptionLoadDefinitionArray<uint32, INT_CONFIG_VALUE_COUNT> ints =
@@ -817,6 +821,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "WorldBossLevelDiff"sv, .DefaultValue = 3, .Index = CONFIG_WORLD_BOSS_LEVEL_DIFF },
         { .Name = "Quests.LowLevelHideDiff"sv, .DefaultValue = 4, .Index = CONFIG_QUEST_LOW_LEVEL_HIDE_DIFF, .Max = MAX_LEVEL },
         { .Name = "Quests.HighLevelHideDiff"sv, .DefaultValue = 7, .Index = CONFIG_QUEST_HIGH_LEVEL_HIDE_DIFF, .Max = MAX_LEVEL },
+        { .Name = "Quests.LogSize"sv, .DefaultValue = 35, .Index = CONFIG_QUEST_LOG_SIZE, .Min = 1, .Max = 40 }, // MAX_QUEST_LOG_SIZE
         { .Name = "Battleground.Random.ResetHour"sv, .DefaultValue = 6, .Index = CONFIG_RANDOM_BG_RESET_HOUR, .Min = 0, .Max = 23 },
         { .Name = "Calendar.DeleteOldEventsHour"sv, .DefaultValue = 6, .Index = CONFIG_CALENDAR_DELETE_OLD_EVENTS_HOUR, .Min = 0, .Max = 23 },
         { .Name = "Guild.ResetHour"sv, .DefaultValue = 6, .Index = CONFIG_GUILD_RESET_HOUR, .Min = 0, .Max = 23 },
@@ -908,6 +913,13 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "BlackMarket.MaxAuctions"sv, .DefaultValue = 12, .Index = CONFIG_BLACKMARKET_MAXAUCTIONS },
         { .Name = "BlackMarket.UpdatePeriod"sv, .DefaultValue = 24, .Index = CONFIG_BLACKMARKET_UPDATE_PERIOD },
         { .Name = "Pvp.FactionBalance.LevelCheckDiff"sv, .DefaultValue = 0, .Index = CONFIG_FACTION_BALANCE_LEVEL_CHECK_DIFF },
+        { .Name = "Classic.CreatureSpellLevelScaling"sv, .DefaultValue = 2, .Index = CONFIG_CLASSIC_CREATURE_SPELL_LEVEL_SCALING, .Max = 2 },
+        { .Name = "Classic.Respawn.Level1to10Pct"sv, .DefaultValue = 50, .Index = CONFIG_CLASSIC_RESPAWN_LEVEL_1_10_PCT, .Min = 10, .Max = 1000 },
+        { .Name = "Classic.Respawn.Level11to20Pct"sv, .DefaultValue = 70, .Index = CONFIG_CLASSIC_RESPAWN_LEVEL_11_20_PCT, .Min = 10, .Max = 1000 },
+        { .Name = "Classic.Respawn.Level21to30Pct"sv, .DefaultValue = 85, .Index = CONFIG_CLASSIC_RESPAWN_LEVEL_21_30_PCT, .Min = 10, .Max = 1000 },
+        { .Name = "Classic.Respawn.Level31to60Pct"sv, .DefaultValue = 100, .Index = CONFIG_CLASSIC_RESPAWN_LEVEL_31_60_PCT, .Min = 10, .Max = 1000 },
+        { .Name = "Classic.CreatureHealth.RaiseFromLevel"sv, .DefaultValue = 20, .Index = CONFIG_CLASSIC_CREATURE_HEALTH_RAISE_FROM_LEVEL, .Min = 1, .Max = 59 },
+        { .Name = "Classic.CreatureHealth.RaiseAt60Pct"sv, .DefaultValue = 20, .Index = CONFIG_CLASSIC_CREATURE_HEALTH_RAISE_AT_60_PCT, .Max = 200 },
     } };
 
     static constexpr ConfigOptionLoadDefinitionArray<uint64, INT64_CONFIG_VALUE_COUNT> int64s =
@@ -986,6 +998,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "Rate.XP.BattlegroundKill"sv, .DefaultValue = 1.0f, .Index = RATE_XP_BG_KILL },
         { .Name = "Rate.XP.Quest"sv, .DefaultValue = 1.0f, .Index = RATE_XP_QUEST },
         { .Name = "Rate.XP.Explore"sv, .DefaultValue = 1.0f, .Index = RATE_XP_EXPLORE },
+        { .Name = "Rate.XP.DungeonKill"sv, .DefaultValue = 1.8f, .Index = RATE_XP_DUNGEON_KILL, .Min = 0.0f },
         { .Name = "XP.Boost.Rate"sv, .DefaultValue = 2.0f, .Index = RATE_XP_BOOST },
         { .Name = "Rate.RepairCost"sv, .DefaultValue = 1.0f, .Index = RATE_REPAIRCOST, .Min = 0.0f },
         { .Name = "Rate.Reputation.Gain"sv, .DefaultValue = 1.0f, .Index = RATE_REPUTATION_GAIN },
@@ -1018,9 +1031,10 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "Rate.Rest.Offline.InTavernOrCity"sv, .DefaultValue = 1.0f, .Index = RATE_REST_OFFLINE_IN_TAVERN_OR_CITY },
         { .Name = "Rate.Rest.Offline.InWilderness"sv, .DefaultValue = 1.0f, .Index = RATE_REST_OFFLINE_IN_WILDERNESS },
         { .Name = "Rate.Damage.Fall"sv, .DefaultValue = 1.0f, .Index = RATE_DAMAGE_FALL },
-        { .Name = "Rate.Auction.Time"sv, .DefaultValue = 1.0f, .Index = RATE_AUCTION_TIME },
-        { .Name = "Rate.Auction.Deposit"sv, .DefaultValue = 1.0f, .Index = RATE_AUCTION_DEPOSIT },
-        { .Name = "Rate.Auction.Cut"sv, .DefaultValue = 1.0f, .Index = RATE_AUCTION_CUT },
+        { .Name = "Rate.Auction.Time"sv, .DefaultValue = 1.0f, .Index = RATE_AUCTION_TIME, .Min = 0.01f },
+        { .Name = "Rate.Auction.Deposit"sv, .DefaultValue = 1.0f, .Index = RATE_AUCTION_DEPOSIT, .Min = 0.0f },
+        { .Name = "Rate.Auction.Cut"sv, .DefaultValue = 1.0f, .Index = RATE_AUCTION_CUT, .Min = 0.0f },
+        { .Name = "Rate.Mining.Amount"sv, .DefaultValue = 1.0f, .Index = RATE_MINING_AMOUNT, .Min = 0.0f },
         { .Name = "Rate.Honor"sv, .DefaultValue = 1.0f, .Index = RATE_HONOR },
         { .Name = "Rate.InstanceResetTime"sv, .DefaultValue = 1.0f, .Index = RATE_INSTANCE_RESET_TIME },
         { .Name = "Rate.MoveSpeed"sv, .DefaultValue = 1.0f, .Index = RATE_MOVESPEED, .Min = 0.01f },
@@ -1442,6 +1456,8 @@ bool World::SetInitialWorldSettings()
 
     TC_LOG_INFO("server.loading", "Loading classic spell values...");
     sSpellMgr->LoadClassicSpellInfo();
+    sSpellMgr->LoadClassicTwinChannels();
+    sSpellMgr->LoadClassicSpellEffects();
     sSpellMgr->LoadClassicSpellValues();
     sSpellMgr->LoadClassicSpellCosts();
 
@@ -1570,6 +1586,12 @@ bool World::SetInitialWorldSettings()
 
     TC_LOG_INFO("server.loading", "Loading Item set names...");                // must be after LoadItemPrototypes
     sObjectMgr->LoadItemTemplateAddon();
+
+    TC_LOG_INFO("server.loading", "Loading Classic item durability...");      // must be after LoadItemTemplates
+    sObjectMgr->LoadClassicItemDurability();
+
+    TC_LOG_INFO("server.loading", "Loading Classic crate bundles...");        // must be after LoadSpellInfoStore and LoadItemTemplates
+    sSpellMgr->LoadClassicCrateBundles();
 
     TC_LOG_INFO("misc", "Loading Item Scripts...");                 // must be after LoadItemPrototypes
     sObjectMgr->LoadItemScriptNames();

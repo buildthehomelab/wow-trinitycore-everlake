@@ -1531,7 +1531,10 @@ void GameObject::Update(uint32 diff)
 
                     // Type 0 despawns after being triggered, type 1 does not.
                     /// @todo This is activation radius. Casting radius must be selected from spell data.
-                    float radius = goInfo->trap.radius / 2.f; // this division seems to date back to when the field was called diameter, don't think it is still relevant.
+                    // Vanilla object data (VMaNGOS) reads the field as a radius: the Rookery Egg (175124) hatches a whelp
+                    // at 3 yards, not 1.5. Keep the halving for owned (player-summoned) traps, whose templates come from
+                    // the client data.
+                    float radius = GetOwner() ? goInfo->trap.radius / 2.f : goInfo->trap.radius;
                     if (!radius)
                         break;
 
@@ -3997,10 +4000,29 @@ void GameObject::SetLootState(LootState state, Unit* unit)
     }
 }
 
+bool GameObject::IsMiningVein() const
+{
+    LockEntry const* lock = sLockStore.LookupEntry(GetGOInfo()->GetLockId());
+    if (!lock)
+        return false;
+
+    for (uint8 i = 0; i < MAX_LOCK_CASE; ++i)
+        if (lock->Type[i] == LOCK_KEY_SKILL && (lock->Index[i] == LOCKTYPE_MINING || lock->Index[i] == LOCKTYPE_MINING_2))
+            return true;
+
+    return false;
+}
+
 void GameObject::RollChestOpens()
 {
     GameObjectTemplate const* goInfo = GetGOInfo();
     m_goValue.Chest.MaxOpens = urand(goInfo->chest.minRestock, std::max(goInfo->chest.minRestock, goInfo->chest.maxRestock));
+
+    // Rate.Mining.Amount (worldserver.conf, 1 = normal, 2 = double): how many times a mining vein can be mined before it is gone
+    float miningRate = sWorld->getRate(RATE_MINING_AMOUNT);
+    if (miningRate != 1.0f && IsMiningVein())
+        m_goValue.Chest.MaxOpens = std::max<uint32>(1, uint32(std::lround(std::max<uint32>(1, m_goValue.Chest.MaxOpens) * miningRate)));
+
     m_goValue.Chest.Opens = 0;
 }
 

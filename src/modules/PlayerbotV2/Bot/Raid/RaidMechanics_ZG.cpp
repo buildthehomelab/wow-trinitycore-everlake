@@ -1,12 +1,15 @@
 // Scripted Zul'Gurub mechanics that the rule tables cannot express. See RaidBrainInternal.h and ZgHakkar.h.
 //
-//  * Hakkar's Blood Siphon: 25 s before each siphon the DPS kill one Son of Hakkar (ZgForcedFocus, taken by the fight script), and once it
+//  * Hakkar's Blood Siphon: 45 s before each siphon the DPS kill one Son of Hakkar (ZgForcedFocus, taken by the fight script), and once it
 //    is low every raider but Hakkar's tank and a Corrupted Blood carrier stands next to it (ZgMechanicsMove), so its death gives them
 //    Poisonous Blood. One [raid_siphon] line opens each kill window (Sons in the fight, idle, dead; who is poisoned) and one says how many
 //    carried the poison when the siphon came, so a run shows whether it worked.
-//  * The Sons stand idle round the room until somebody hits one. When a kill window opens with no Son in the fight, one ranged bot
-//    (a hunter first, then a mage, then a warlock) pulls the idle Son nearest to Hakkar with one ranged shot (ZgMechanicsElect), walking
-//    into reach first (ZgMechanicsMove); the Son runs at it, into the raid, and the window goes on as above.
+//  * The Sons stand idle round the room, below Hakkar's platform, until somebody hits one. When a kill window opens with no Son in the
+//    fight, a ranged bot (a hunter first, then a mage, then a warlock; ZgMechanicsElect) walks into reach (ZgMechanicsMove) and pulls the
+//    idle Son nearest to Hakkar with one shot. The Son runs at it; the puller keeps it (RaidOrder::keep_aggro: no Feign Death, Vanish or
+//    Fade, which made the Son leave the fight in sweep-zg-1109y) and walks it to its tank, the off-tank picks it up on the platform and
+//    the DPS kill it there. No tank walks down to a Son: Cause Insanity turns Hakkar onto the off-tank, and an off-tank below the platform
+//    took him out of his room (he evades below z 45.8; sweep-zg-1109w).
 
 #include "RaidBrainInternal.h"
 #include "ZgHakkar.h"
@@ -219,9 +222,25 @@ void ZgMechanicsElect(Election& e, uint32_t now)
     SiphonClock* c = Clock(e.plan, now, hakkar, t);
     if (!c)
         return;
+    // A Son of Hakkar on a raider who is not a tank: that raider carries it to its tank and drops no threat (Feign Death, Vanish, Fade),
+    // so the Son reaches the raid on Hakkar's platform, the off-tank picks it up there and it dies next to the crowd.
+    for (Unit* u : e.plan.enemies)
+    {
+        if (u->GetEntry() != kSonOfHakkar || !u->IsAlive())
+            continue;
+        Unit* v = u->GetVictim();
+        for (Member& m : e.plan.members)
+            if (m.p == v && !m.tank)
+                if (RaidOrder* o = e.OrderOf(m.p))
+                    o->keep_aggro = true;
+    }
     Creature* son = SonToPull(e.plan, *c, hakkar, t);
     if (!son)
         return;
+    // No tank walks down to the Sons. Their spots lie below Hakkar's platform, and Cause Insanity (24327) wipes the main tank's threat, so
+    // Hakkar turns on the off-tank: an off-tank sent down to a Son took him off the platform with it and he evaded at 47% (sweep-zg-1109w
+    // run 1, Mctankwb at z 40.7; the boss leaves the fight below z 45.8). A ranged bot pulls with one shot instead and keeps the Son on it
+    // (keep_aggro above) until the off-tank, who stays up with the raid, takes it.
     // The puller: kept while it can still pull, busy or not (its own walk into reach makes it "busy" for the election, which hands every
     // bot with a move order no job; checking that here swapped the puller each pass, the one walking in lost the job to the other hunter
     // and the other's walk took it back: sweep-zg-1109c, Mchunta and Mchuntb "pull" 122 times in turn, no shot fired). Else the free

@@ -41,7 +41,13 @@ public:
 
     // World thread. Writes a chat_in event for `bot` and returns its id (0 when not written). `channel` is say/party/raid/whisper,
     // `prompt` the bot description the built-in chat model would have used (a program may use it or ignore it).
-    static uint64 ReportChat(Player* bot, Player* sender, std::string const& channel, std::string const& text, std::string const& prompt);
+    // `group`: the line is an order to these bots of the sender's (bot itself among them): the program picks one action and every
+    // one of them runs it (each with its own checks), while only `bot` answers.
+    static uint64 ReportChat(Player* bot, Player* sender, std::string const& channel, std::string const& text, std::string const& prompt,
+                             std::vector<BotId> const& group = {});
+    // World thread. A party / raid order the bot command parser does not know ("all go to the bank and wait"): to the program
+    // when it answers chat with actions on, as a group order for `group` (one bot: an order to that bot only). False: not sent.
+    static bool AskGroupOrder(Player* sender, std::vector<Player*> const& group, std::string const& channel, std::string const& text);
 
     // Any thread. A bot problem; `detail` says what went wrong in words. quest_id 0: the bot's current quest is looked up.
     static void ReportStuck(BotId bot, std::string detail);
@@ -68,6 +74,15 @@ public:
     // Any thread (idle:react_to_passerby): `bot` just waved at the real player `player` walking past; with Talk on the program may
     // add a short /say line to him (a greeting, a word about his mount). Counted with the talk (Gathering.ChatModelPerMinute).
     static bool QueueGreet(BotId bot, ObjectGuid player);
+
+    // World thread (Raid/RaidBanter.h). With a program answering chat, asks it for `bot`'s raid chat line about something that just
+    // happened in the fight: `what` a word (wipe, stood_in_bad ...), `detail` in plain words, `example` the fixed line, `mood` mild or
+    // harsh, `role` "raid leader" or "raider", `delay_ms` when the line should show. A line that comes back later than wait_ms after
+    // the ask is dropped, so the caller can say `example` itself at that time when RaidLineAnswered(id) is still false. 0: not asked.
+    static uint64 AskRaidLine(Player* bot, std::string const& what, std::string const& detail, std::string const& example,
+                              std::string const& mood, std::string const& role, uint32 delay_ms, uint32 wait_ms);
+    // True once when the program answered ask `id` in time (the answer is forgotten then).
+    static bool RaidLineAnswered(uint64 id);
 
     // Any thread (the bot worker's channel suggestions, BotTextMgr Suggest). With Talk on, a world bot's post in General (channel 1)
     // or Trade (2) is written by the program from `detail` (what it is about, in words); `link_name` / `link`: an item or quest whose

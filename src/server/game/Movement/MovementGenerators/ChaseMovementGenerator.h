@@ -42,7 +42,8 @@ class ChaseMovementGenerator : public MovementGenerator, public AbstractFollower
         MovementGeneratorType GetMovementGeneratorType() const override { return CHASE_MOTION_TYPE; }
 
         void UnitSpeedChanged() override { _lastTargetPosition.reset(); }
-        // repaths in a row that found no path to the target (0 after one that did); read by the bots to give up on a mob they can't reach
+        // Path builds to the target that failed in a row (NoPath); 0 after one that built. A playerbot drops a target it cannot
+        // path to instead of standing still beside the fight.
         uint8 GetNoPathStreak() const { return _noPathStreak; }
 
     private:

@@ -255,6 +255,14 @@ bool ItemCanGoIntoBag(ItemTemplate const* pProto, ItemTemplate const* pBagProto)
     switch (pBagProto->GetClass())
     {
         case ITEM_CLASS_CONTAINER:
+            // Classic 1.60: a profession bag lists the families it holds in its own BagFamily. The skinning satchel (277114,
+            // a leatherworking container) holds family 0x2000000, which is on every leather, hide and scale and on the
+            // skinning tools, while the old leatherworking bit 0x8 is only on a few of them. So when the bag names its
+            // families, the item has to share one of them (the herb, mining, enchanting and soul bags name the same bit as below).
+            if (pBagProto->GetSubClass() != ITEM_SUBCLASS_CONTAINER && pBagProto->GetSubClass() != ITEM_SUBCLASS_REAGENT_CONTAINER
+                && pBagProto->GetBagFamily())
+                return (pProto->GetBagFamily() & pBagProto->GetBagFamily()) != 0;
+
             switch (pBagProto->GetSubClass())
             {
                 case ITEM_SUBCLASS_CONTAINER:
@@ -2466,6 +2474,9 @@ Optional<uint32> Item::GetDisenchantLootId() const
     if (_bonusData.DisenchantLootId)
         return _bonusData.DisenchantLootId;
 
+    if (HasOwnDisenchantLoot(GetTemplate()))
+        return GetEntry();
+
     // ignore temporary item level scaling (pvp or timewalking)
     uint32 itemLevel = GetItemLevel(GetTemplate(), _bonusData, _bonusData.RequiredLevel, GetModifier(ITEM_MODIFIER_TIMEWALKER_LEVEL), 0, 0, 0, false, 0, 0);
 
@@ -2474,6 +2485,14 @@ Optional<uint32> Item::GetDisenchantLootId() const
         return {};
 
     return disenchantLoot->ID;
+}
+
+// Classic 1.60: WoW Forever flags a few items ITEM_FLAG2_DISENCHANT_TO_LOOT_TABLE: the enchanting lesson items (Hexed Pendant,
+// Crude Wax Effigy), which no ItemDisenchantLoot row covers (trade goods), and some Hyjal epics. Such an item disenchants into
+// its own disenchant_loot_template entry, keyed by its item id, when it has one; without one it keeps the ItemDisenchantLoot table.
+bool Item::HasOwnDisenchantLoot(ItemTemplate const* itemTemplate)
+{
+    return itemTemplate->HasFlag(ITEM_FLAG2_DISENCHANT_TO_LOOT_TABLE) && LootTemplates_Disenchant.HaveLootFor(itemTemplate->GetId());
 }
 
 Optional<uint16> Item::GetDisenchantSkillRequired() const
@@ -2486,7 +2505,13 @@ Optional<uint16> Item::GetDisenchantSkillRequired() const
 
     ItemDisenchantLootEntry const* disenchantLoot = GetBaseDisenchantLoot(GetTemplate(), GetQuality(), itemLevel);
     if (!disenchantLoot)
+    {
+        // an item with a loot entry of its own needs only the Disenchant spell
+        if (HasOwnDisenchantLoot(GetTemplate()))
+            return 0;
+
         return {};
+    }
 
     return disenchantLoot->SkillRequired;
 }

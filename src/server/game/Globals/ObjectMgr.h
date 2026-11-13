@@ -1101,6 +1101,7 @@ class TC_GAME_API ObjectMgr
         std::pair<uint8, uint8> const* GetCreatureClassicLevel(uint32 entry) const;
         ClassicCreatureStats const* GetCreatureClassicStats(uint32 entry) const;
         ClassicCreatureClassLevelStats const* GetCreatureClassicClassLevelStats(uint8 level, uint8 unitClass) const;
+        int8 const* GetSpellClassicSummonLevelOffset(uint32 spellId) const;
         void LoadItemClassicBlock();
         uint32 GetItemClassicBlock(uint32 entry) const;
         void LoadShop();
@@ -1324,6 +1325,7 @@ class TC_GAME_API ObjectMgr
         void LoadInstanceSpawnGroups();
         void LoadItemTemplates();
         void LoadItemTemplateAddon();
+        void LoadClassicItemDurability();
         void LoadItemScriptNames();
         void LoadQuestTemplateLocale();
         void LoadQuestObjectivesLocale();
@@ -1901,6 +1903,7 @@ class TC_GAME_API ObjectMgr
         std::unordered_map<uint32, std::pair<uint8, uint8>> _creatureClassicLevelStore;
         std::unordered_map<uint32, ClassicCreatureStats> _creatureClassicStatsStore;
         std::unordered_map<uint16, ClassicCreatureClassLevelStats> _creatureClassicClassLevelStatsStore;
+        std::unordered_map<uint32, int8> _spellClassicSummonLevelOffsetStore;
         std::unordered_map<uint32, CreatureClassicMelee> _creatureClassicMeleeStore;
         std::unordered_map<uint32, uint32> _itemClassicBlockStore;
         std::map<uint32, ShopGroup> _shopGroupStore;

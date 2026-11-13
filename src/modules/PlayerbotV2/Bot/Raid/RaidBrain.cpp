@@ -10,6 +10,9 @@
 #include "Api/BotLanguage.h"
 #include "DispelWorth.h"
 #include "RaidBrainInternal.h"
+#include "RaidBanter.h"
+#include "RaidCallouts.h"
+#include "../BotBridge.h"
 #include "RaidEncounters.h"
 #include "RaidGeometry.h"
 #include "RaidReadiness.h"
@@ -419,7 +422,7 @@ bool MagmaAt(Map* map, PhaseShift const& phase, float x, float y, float z, float
 // as far as the ground allows: a point in lava, with no ground, with no sight of the bot or no path is refused, and the fight-area and
 // engaged-reach limits are not applied (MC Geddon 2026-10-13 650994ea: seven raiders inside Inferno's circle "found no way out" with the
 // fight area and the engaged reach refusing 7-14 of their probes, and then stood in it).
-bool Usable(Player* bot, float x, float y, float zHint, float& outZ, bool urgent, bool hazard)
+bool Usable(Player* bot, float x, float y, float zHint, float& outZ, bool urgent, bool hazard, bool fixedPlace)
 {
     g_usableWhy = 0;
     if (!hazard && InsideAny(g_keepOut, x, y, 0.0f))   // a way out of a hazard may use the cave rim: a whelp pack can be survived, a breath cannot
@@ -448,9 +451,9 @@ bool Usable(Player* bot, float x, float y, float zHint, float& outZ, bool urgent
         if (MagmaAt(map, bot->GetPhaseShift(), x, y, height + 0.05f, surface))
             return g_usableWhy = 4, false;
     }
-    if (!bot->IsWithinLOS(x, y, height + bot->GetCollisionHeight()))
+    if (!fixedPlace && !bot->IsWithinLOS(x, y, height + bot->GetCollisionHeight()))
         return g_usableWhy = 5, false;
-    if (!hazard && !InFightArea(bot, x, y, height, urgent))
+    if (!hazard && !fixedPlace && !InFightArea(bot, x, y, height, urgent))
         return g_usableWhy = 6, false;
     ++(urgent ? g_urgentProbes : g_pathProbes);
     PathGenerator path(bot);
@@ -693,6 +696,7 @@ bool Escape(Player* bot, std::vector<Circle> const& circles, RaidOrder& out, std
 
 // Best nearby point that increases the distance to every raid member in `others`.
 std::string g_clearestWhy;
+constexpr float kCarrierFloorDz = 4.0f;   // a carrier run ends on the carrier's own floor: no more than this above or below it
 
 bool Clearest(Player* bot, std::vector<Player*> const& others, float wanted, RaidOrder& out, char const* reason,
               std::vector<Circle> const& avoid, bool urgent)
@@ -741,7 +745,7 @@ bool Clearest(Player* bot, std::vector<Player*> const& others, float wanted, Rai
         }
     std::stable_sort(candidates.begin(), candidates.end(), [](Candidate const& a, Candidate const& b) { return a.score > b.score; });
 
-    int pathChecks = 0, snapChecks = 0, offMesh = 0;
+    int pathChecks = 0, snapChecks = 0, offMesh = 0, offFloor = 0;
     for (Candidate const& c : candidates)
     {
         if (pathChecks >= (urgent ? 14 : 12))
@@ -778,6 +782,14 @@ bool Clearest(Player* bot, std::vector<Player*> const& others, float wanted, Rai
             ++why[g_usableWhy];
             continue;
         }
+        // A carrier stays on the floor it stands on: a run down a stair or off a ledge takes it out of the boss's room and into what waits
+        // below. zg_hakkar (sweep-zg-1109z run 2): a healer with Corrupted Blood ran from Hakkar's platform (z 52.9) down to z 40.8, woke a
+        // Son of Hakkar there, the off-tank went down for the Son with Hakkar after it, and Hakkar evaded at 88% (he leaves the fight below z 45.8).
+        if (g_carrierRun && std::fabs(pz - bot->GetPositionZ()) > kCarrierFloorDz)
+        {
+            ++offFloor;
+            continue;
+        }
         return SetMove(out, cx, cy, pz, reason);
     }
 
@@ -787,6 +799,8 @@ bool Clearest(Player* bot, std::vector<Player*> const& others, float wanted, Rai
     w << "not better " << skippedNear << ", in hazard " << skippedAvoid;
     if (offMesh)
         w << ", off navmesh " << offMesh;
+    if (offFloor)
+        w << ", another floor " << offFloor;
     for (int i = 1; i < 9; ++i)
         if (why[i])
             w << ", " << kUsableWhyName[i] << " " << why[i];
@@ -1276,6 +1290,199 @@ std::unordered_map<uint64_t, uint32_t> g_lastTankSpot;
 constexpr float kFixedSpotFetchReach = 15.0f;   // a fixed row's tank goes after a loose add this close; further out it waits at its slot
 constexpr float kFixedSpotFreshScan = 100.0f;   // ... and the adds just spawned within this reach, in nobody's combat yet, are off limits too
 
+// An add of a fixed row that has reached the raid: it stands in melee with a raider, wherever that raider is (another tank's pile, a melee DPS
+// beside it, a healer). bwl_nefarian 1109y: a drakonid held at a neighbour's pile (on the arc's far side, 23-26 y from the centre) or on a
+// raider outside the arc counted as "still coming" for every tank further than 15 y; the main tank stood at its slot with nothing for 40 s
+// ("Mctankwa 100%>-") while Mctankwb and Mctankda held three and four each, and those two died first in all three runs.
+bool ReachedRaid(Plan const& plan, Unit* add)
+{
+    Unit* const v = add->GetVictim();
+    if (!v || !v->IsAlive())
+        return false;
+    Player* const vp = v->ToPlayer();
+    if (!vp || std::none_of(plan.members.begin(), plan.members.end(), [&](Member const& m) { return m.p == vp; }))
+        return false;
+    return add->IsWithinMeleeRange(v);
+}
+
+// Whether a fixed row's tank goes after <add>, an add of the rule not on it: one that has reached the raid (ReachedRaid), one inside the
+// arc (among the raid, on a healer or a caster at the camp), or one within the fetch reach of the tank that is also near the arc (it
+// intercepts an add running past its slot). Everything else is still on its way in, and the tank waits for it at its slot. The fetch reach
+// alone, measured from the tank wherever it stood, kept a tank at a drakonid door: every new drakonid spawned within 15 y of it, it
+// turned on each one and never walked back (bwl_nefarian 1109y: Mctankwb fought at -7597,-1195 beside the west door, 63 y from the
+// healers' post, from 20 s into the pull until it died; Mctankda died 45 y north of the camp).
+bool FetchesAdd(Plan const& plan, TankSpot const& rule, Player* bot, Unit* add)
+{
+    // One another tank of the row already holds is that tank's, at its place: going after it is a taunt from melee range (Taunt reaches
+    // 4 y here) across the arc, and the two tanks taunt it back and forth. bwl_nefarian 1111i run 1: the tank planner handed adds on a tank
+    // to another tank (10 of 22 assignments in run 1, 18 of 72 and 17 of 68 in runs 2 and 3; "Mctankwa takes Red Drakonid (474) 100% on
+    // Mctankwb dist=10y why=nearest", "Mctankwa takes Chromatic Drakonid (472) on Mctankwb dist=35y"), two tanks stood on one drakonid
+    // from 24 s to 57 s at (-7555,-1199), north of every place, and all four tanks died there at 188-208 s.
+    if (Unit* const v = add->GetVictim(); v && v != bot && v->IsAlive())
+        if (Player* const vp = v->ToPlayer())
+            if (std::any_of(plan.members.begin(), plan.members.end(), [&](Member const& m) { return m.p == vp && m.tank; }))
+                return false;
+    if (ReachedRaid(plan, add))
+        return true;
+    if (rule.reach <= 0.0f)
+        return bot->IsWithinDistInMap(add, kFixedSpotFetchReach);
+    float const fromCentre = Dist2D(add->GetPositionX(), add->GetPositionY(), rule.x, rule.y);
+    return fromCentre <= rule.reach || (fromCentre <= rule.reach + kFixedSpotFetchReach && bot->IsWithinDistInMap(add, kFixedSpotFetchReach));
+}
+
+// A fixed arc's slots are laid on the points the healers' post sees. bwl_nefarian 1111a/b: in the 15 s before each tank death the healers'
+// casts failed on line of sight more often than they were cast (r6d run 2: 202 failures to 143 heals; run 3: 216 to 107; 1111a run 3: 217
+// to 76), and the line of sight steps the healers took pointed at the slot north of the camp (-7547,-1214). Turning a blind slot a quarter
+// step along the arc (1111e) was too little: the 1111f profile round (-7552,-1236) r 23 from the post (-7552,-1245) is seen at 10..65 and
+// 115..190 degrees and blind at 70..110, where the two middle slots of four sat, (-7547,-1214) and (-7556,-1213); the tanks there fought
+// 37-62 y from the post. The slots now go on seen ground only, in their order along the arc, a step apart (a smaller gap only when the
+// seen ground is too short for that), each as near its even place as the rest allow.
+constexpr float kArcEyeHeight = 2.0f;           // eye height above the post's floor for both ends of the sight line
+constexpr int kArcHalfDeg = 90;                 // the arc is probed this far either side of rowDeg (further when the even slots reach past it)
+constexpr int kArcMarginDeg = 3;                // a slot keeps this many degrees of seen ground either side (1.2 y at r 23): a tank a step off it is still seen
+constexpr uint32_t kArcSightMs = 5000;          // the layout is probed again after this long
+constexpr float kArcGapShares[] = { 1.0f, 0.75f, 0.5f };   // the gap between neighbours as a share of the even step, tried in order
+struct ArcLayout { uint32_t at = 0; std::vector<float> deg; };   // each slot's angle from rowDeg in degrees; empty: the even layout
+std::unordered_map<uint64_t, ArcLayout> g_arcLayout; // (group, anchor, slot count) -> the layout in use
+constexpr uint32_t kArcProfileMs = 60000;            // the whole arc's sight profile is logged this often
+std::unordered_map<uint64_t, uint32_t> g_arcProfile; // (group, anchor) -> when it was last logged
+
+// Slots on the given ground (sample angles, ascending), in order, neighbours at least gap apart, least summed distance from their even
+// places; empty when they do not fit.
+std::vector<float> LayArc(std::vector<int> const& ground, std::vector<float> const& even, float gap)
+{
+    size_t const n = even.size(), g = ground.size();
+    if (!n || g < n)
+        return {};
+    constexpr float kNone = std::numeric_limits<float>::max();
+    std::vector<std::vector<float>> cost(n, std::vector<float>(g, kNone));
+    std::vector<std::vector<int>> from(n, std::vector<int>(g, -1));
+    for (size_t k = 0; k < g; ++k)
+        cost[0][k] = std::abs(float(ground[k]) - even[0]);
+    for (size_t i = 1; i < n; ++i)
+    {
+        float bestPrev = kNone;
+        int bestAt = -1;
+        size_t q = 0;
+        for (size_t k = 0; k < g; ++k)
+        {
+            // every sample at least gap before this one is open to the previous slot
+            for (; q < k && float(ground[k] - ground[q]) >= gap - 0.001f; ++q)
+                if (cost[i - 1][q] < bestPrev)
+                {
+                    bestPrev = cost[i - 1][q];
+                    bestAt = int(q);
+                }
+            if (bestAt < 0)
+                continue;
+            cost[i][k] = bestPrev + std::abs(float(ground[k]) - even[i]);
+            from[i][k] = bestAt;
+        }
+    }
+    int at = -1;
+    for (size_t k = 0; k < g; ++k)
+        if (cost[n - 1][k] < kNone && (at < 0 || cost[n - 1][k] < cost[n - 1][at]))
+            at = int(k);
+    if (at < 0)
+        return {};
+    std::vector<float> slots(n);
+    for (size_t i = n; i-- > 0;)
+    {
+        slots[i] = float(ground[at]);
+        at = from[i][at];
+    }
+    return slots;
+}
+
+// This slot's angle (radians) on the arc: on ground the healers' post sees (above), else its even place.
+float SeenArcAngle(Plan const& plan, TankSpot const& rule, Player* bot, uint32_t now, uint32_t slot, uint32_t slots, float step)
+{
+    float const rowRad = rule.rowDeg * (float(M_PI) / 180.0f);
+    float const evenRad = rowRad + (float(slot) - float(slots - 1) * 0.5f) * step;
+    Stand const* post = nullptr;
+    for (Stand const& s : plan.rules->stand)
+        if (s.who == Who::Healer && s.enemy == rule.anchor)
+        {
+            post = &s;
+            break;
+        }
+    if (!post)
+        return evenRad;
+    uint64_t const key = (plan.groupLow << 32) ^ (uint64_t(rule.anchor) << 8) ^ uint64_t(slots);
+    ArcLayout& layout = g_arcLayout[key];
+    if (!layout.at || now - layout.at >= kArcSightMs)
+    {
+        layout.at = now ? now : 1u;
+        float const stepDeg = step * (180.0f / float(M_PI));
+        std::vector<float> even(slots);
+        for (uint32_t i = 0; i < slots; ++i)
+            even[i] = (float(i) - float(slots - 1) * 0.5f) * stepDeg;
+        int const half = std::max(kArcHalfDeg, int(std::ceil(std::abs(even.front()))));
+        float const eye = post->z + kArcEyeHeight;
+        std::vector<char> seen(size_t(2 * half + 1), 0);
+        for (int deg = -half; deg <= half; ++deg)
+        {
+            float const t = rowRad + float(deg) * (float(M_PI) / 180.0f);
+            seen[size_t(deg + half)] = bot->GetMap()->isInLineOfSight(bot->GetPhaseShift(), post->x, post->y, eye, rule.x + rule.reach * std::cos(t),
+                                                                      rule.y + rule.reach * std::sin(t), eye, LINEOFSIGHT_ALL_CHECKS,
+                                                                      VMAP::ModelIgnoreFlags::Nothing) ? 1 : 0;
+        }
+        // Once a minute per arc: which points of the whole arc the post sees, every 5 degrees across the half circle round rowDeg ('#' seen,
+        // '.' not), and from where to where.
+        if (uint32_t& profiled = g_arcProfile[(plan.groupLow << 32) ^ rule.anchor]; !profiled || now - profiled >= kArcProfileMs)
+        {
+            profiled = now ? now : 1u;
+            std::string seenAt;
+            for (int deg = -kArcHalfDeg; deg <= kArcHalfDeg; deg += 5)
+                seenAt += seen[size_t(deg + half)] ? '#' : '.';
+            TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] arc for entry {} round ({:.0f},{:.0f}) r {:.0f}, seen from the healers' post ({:.0f},{:.0f}) at "
+                        "{:.0f}..{:.0f} degrees: {}", rule.enemy, rule.x, rule.y, rule.reach, post->x, post->y, rule.rowDeg - 90.0f, rule.rowDeg + 90.0f, seenAt);
+        }
+        // The seen ground with its margin, else the bare seen ground.
+        std::vector<int> inner, bare;
+        for (int deg = -half; deg <= half; ++deg)
+        {
+            if (!seen[size_t(deg + half)])
+                continue;
+            bare.push_back(deg);
+            bool clear = true;
+            for (int d = -kArcMarginDeg; d <= kArcMarginDeg && clear; ++d)
+                clear = deg + d < -half || deg + d > half || seen[size_t(deg + d + half)];
+            if (clear)
+                inner.push_back(deg);
+        }
+        std::vector<float> laid;
+        float gapShare = 0.0f;
+        for (std::vector<int> const* ground : { &inner, &bare })
+        {
+            for (float share : kArcGapShares)
+                if (!(laid = LayArc(*ground, even, stepDeg * share)).empty())
+                {
+                    gapShare = share;
+                    break;
+                }
+            if (!laid.empty())
+                break;
+        }
+        if (laid != layout.deg)
+        {
+            std::string at;
+            for (float d : laid)
+                at += (at.empty() ? "" : ", ") + std::to_string(int(std::lround(rule.rowDeg + d)));
+            if (laid.empty())
+                TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] {} slots for entry {}: the healers' post ({:.0f},{:.0f}) sees too little of the arc, "
+                            "they keep their even places", slots, rule.enemy, post->x, post->y);
+            else
+                TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] {} slots for entry {} laid where the healers' post ({:.0f},{:.0f}) sees them, at {} degrees "
+                            "(gap {:.0f} of the even {:.0f})", slots, rule.enemy, post->x, post->y, at, stepDeg * gapShare, stepDeg);
+        }
+        layout.deg = std::move(laid);
+    }
+    if (slot >= layout.deg.size())
+        return evenRad;
+    return rowRad + layout.deg[slot] * (float(M_PI) / 180.0f);
+}
+
 // waitFor (fixed rows): set to the loose add this tank waits for at its slot instead of walking out to it.
 bool TankSpotFor(Plan const& plan, TankSpot const& rule, Player* bot, uint32_t now, float& outX, float& outY, Unit** waitFor = nullptr)
 {
@@ -1290,9 +1497,8 @@ bool TankSpotFor(Plan const& plan, TankSpot const& rule, Player* bot, uint32_t n
         // -7515,-1153), 41 yards and more from the healers' post, and the healers ran after them and back.
         if (Unit* const v = bot->GetVictim(); v && v->IsAlive() && v->GetVictim() != bot)
         {
-            // An add already inside the arc is among the raid, on a healer or a caster at the camp: the tank fetches it as well.
-            if (bot->IsWithinDistInMap(v, kFixedSpotFetchReach) ||
-                (rule.reach > 0.0f && Dist2D(v->GetPositionX(), v->GetPositionY(), rule.x, rule.y) <= rule.reach))
+            // One the tank goes after (FetchesAdd): it fetches it and brings it back.
+            if (FetchesAdd(plan, rule, bot, v))
                 return false;
             if (waitFor)
                 *waitFor = v;
@@ -1361,7 +1567,7 @@ bool TankSpotFor(Plan const& plan, TankSpot const& rule, Player* bot, uint32_t n
     {
         // An arc round (x, y): every slot <reach> from the centre, neighbours <spacing> apart, the middle one on rowDeg.
         float const step = 2.0f * std::asin(std::min(1.0f, rule.spacing / (2.0f * rule.reach)));
-        float const a = rule.rowDeg * (float(M_PI) / 180.0f) + offset * step;
+        float const a = SeenArcAngle(plan, rule, bot, now, uint32_t(at - holders.begin()), uint32_t(holders.size()), step);
         outX = rule.x + rule.reach * std::cos(a);
         outY = rule.y + rule.reach * std::sin(a);
         return true;
@@ -1939,6 +2145,141 @@ constexpr float kPostHealBelowPct = 85.0f;   // the in-fight formation's patient
 constexpr float kHealReach = 40.0f;
 constexpr float kSpellReach = 30.0f;
 
+// A healer post moves with the tanks it serves. From the post itself a tank can be out of sight (a pillar between it and the tank's pile)
+// or out of reach (the pile 40 y off), and then the healers on the post cannot heal it. They used to step for sight on their own (the
+// generic RaidCastLosStep), and the post walked them straight back: bwl_nefarian 1110a, every healer walked "role position" 15-18 times in
+// 18 s, twelve healers cast 33 heals in the first 48 s, and the main tank died at 17% with all of them at 99% mana. Now the post owns the
+// healer's place: it stands at the point within kSightRoam of the post that has the most living tanks in reach and in sight, the one
+// nearest to it among the best, and stays wherever it stands as long as nothing on the post would see more.
+constexpr float kSightRoam = 14.0f;              // how far from its post point a healer may stand (the post's tolerance plus the cast slack)
+constexpr float kSightHealReach = 36.0f;         // kHealReach, with room for the tank's own steps
+constexpr float kSightSpotArrive = 2.5f;         // a healer this close to its spot stands on it
+constexpr uint32_t kSightScoreMs = 2000;         // the post's candidate points are scored again after this long
+constexpr uint32_t kSightLockMs = 4000;          // a healer keeps its spot this long unless a better one opens up
+constexpr float kSightRings[] = { 4.0f, 8.0f, 12.0f };
+constexpr int kSightBearings = 12;
+
+enum class SightSpot { Post, Here, Walk };
+
+struct SightPoint { float x, y, z; int seen; };
+struct SightPost { uint32_t at = 0; int best = 0; int centre = 0; std::vector<SightPoint> points; };
+std::unordered_map<uint64_t, SightPost> g_sightPosts;                       // (group, post point) -> scored candidate points
+struct SightLock { uint32_t at = 0; float x = 0.f, y = 0.f, z = 0.f; };
+std::unordered_map<uint64_t, SightLock> g_sightLocks;                       // healer guid -> the spot it walks to
+
+// How many of <tanks> a healer standing at (x, y, z) can heal: in reach and in sight from eye height.
+int TanksSeenFrom(Player* bot, std::vector<Player*> const& tanks, float x, float y, float z)
+{
+    int seen = 0;
+    for (Player* tank : tanks)
+        if (Dist2D(x, y, tank->GetPositionX(), tank->GetPositionY()) <= kSightHealReach &&
+            bot->GetMap()->isInLineOfSight(bot->GetPhaseShift(), x, y, z + bot->GetCollisionHeight(), tank->GetPositionX(), tank->GetPositionY(),
+                                           tank->GetPositionZ() + tank->GetCollisionHeight(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing))
+            ++seen;
+    return seen;
+}
+
+SightSpot HealerSightSpot(Plan const& plan, Stand const& rule, std::vector<Circle> const& circles, uint32_t now, Player* bot,
+                          float& outX, float& outY, float& outZ)
+{
+    std::vector<Player*> tanks;
+    for (Member const& m : plan.members)
+        if (m.tank && m.p != bot && m.p->IsAlive() && m.p->IsInMap(bot))
+            tanks.push_back(m.p);
+    if (tanks.empty())
+        return SightSpot::Post;
+
+    float const bx = bot->GetPositionX(), by = bot->GetPositionY();
+    bool const inRoam = Dist2D(bx, by, rule.x, rule.y) <= kSightRoam;
+    int const here = inRoam && !InsideAny(circles, bx, by, 0.0f) ? TanksSeenFrom(bot, tanks, bx, by, bot->GetPositionZ()) : -1;
+    if (here == int(tanks.size()))
+        return SightSpot::Here;
+
+    // The post's candidate points, shared by its healers and scored every kSightScoreMs.
+    uint64_t const postKey = (plan.groupLow << 32) ^ (uint64_t(uint32_t(int32_t(rule.x * 4.0f))) << 12) ^ uint64_t(uint32_t(int32_t(rule.y * 4.0f)));
+    SightPost& post = g_sightPosts[postKey];
+    if (!post.at || now - post.at >= kSightScoreMs)
+    {
+        post.at = now ? now : 1u;
+        post.points.clear();
+        post.best = 0;
+        Map* map = bot->GetMap();
+        auto addPoint = [&](float x, float y)
+        {
+            float const z = map->GetHeight(bot->GetPhaseShift(), x, y, rule.z + 2.0f, true, 6.0f);
+            if (z <= INVALID_HEIGHT + 1.0f || std::fabs(z - rule.z) > 3.0f)
+                return;
+            int const seen = TanksSeenFrom(bot, tanks, x, y, z);
+            post.points.push_back({ x, y, z, seen });
+            post.best = std::max(post.best, seen);
+        };
+        addPoint(rule.x, rule.y);
+        post.centre = post.points.empty() ? 0 : post.points.front().seen;
+        for (float r : kSightRings)
+            for (int i = 0; i < kSightBearings; ++i)
+            {
+                float const a = float(i) * 2.0f * float(M_PI) / float(kSightBearings);
+                addPoint(rule.x + r * std::cos(a), rule.y + r * std::sin(a));
+            }
+        // No point of the post sees a tank: the healers stand on the post and their casts fail on line of sight (bwl_nefarian 1111b: no
+        // sight spot walk in the 15 s before each tank death). Where the tanks stood names the place the post cannot see.
+        if (post.best == 0)
+        {
+            std::string where;
+            for (Player* tank : tanks)
+                where += fmt::format(" {} at {:.1f},{:.1f} {:.0f} y", tank->GetName(), tank->GetPositionX(), tank->GetPositionY(),
+                                     Dist2D(rule.x, rule.y, tank->GetPositionX(), tank->GetPositionY()));
+            TC_LOG_INFO("playerbot.v2.raid", "[raid_sight_spot] no point of the post ({:.1f},{:.1f}) sees a tank in reach ({} points):{}", rule.x, rule.y,
+                        post.points.size(), where);
+        }
+    }
+    // Nothing on the post sees more than the post point itself, or no point sees a tank at all: the post as it is.
+    if (post.best == 0 || post.best <= post.centre)
+        return SightSpot::Post;
+    if (here >= post.best)
+        return SightSpot::Here;
+
+    SightLock& lock = g_sightLocks[bot->GetGUID().GetCounter()];
+    bool keep = lock.at && now - lock.at < kSightLockMs && !InsideAny(circles, lock.x, lock.y, 0.0f);
+    if (keep)
+    {
+        keep = false;
+        for (SightPoint const& pt : post.points)
+            if (pt.seen == post.best && Dist2D(pt.x, pt.y, lock.x, lock.y) < 0.5f)
+                keep = true;
+    }
+    if (!keep)
+    {
+        // The best points nearest to the healer first; the first one it can walk to is its spot.
+        std::vector<SightPoint const*> best;
+        for (SightPoint const& pt : post.points)
+            if (pt.seen == post.best && !InsideAny(circles, pt.x, pt.y, 0.0f))
+                best.push_back(&pt);
+        std::sort(best.begin(), best.end(), [&](SightPoint const* a, SightPoint const* b)
+                  { return Dist2D(bx, by, a->x, a->y) < Dist2D(bx, by, b->x, b->y); });
+        bool found = false;
+        int tries = 0;
+        for (SightPoint const* pt : best)
+        {
+            if (++tries > 3)
+                break;
+            float z = pt->z;
+            if (Dist2D(bx, by, pt->x, pt->y) <= kSightSpotArrive || Usable(bot, pt->x, pt->y, pt->z, z))
+            {
+                lock = { now ? now : 1u, pt->x, pt->y, z };
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            return SightSpot::Post;
+        TC_LOG_INFO("playerbot.v2.raid", "[raid_sight_spot] {} heals from ({:.1f},{:.1f}): {} of {} tanks in reach and sight there, {} from its post point, {} where it stood",
+                    bot->GetName(), lock.x, lock.y, post.best, tanks.size(), post.centre, here < 0 ? 0 : here);
+    }
+    outX = lock.x; outY = lock.y; outZ = lock.z;
+    return Dist2D(bx, by, lock.x, lock.y) <= kSightSpotArrive ? SightSpot::Here : SightSpot::Walk;
+}
+
 void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<Circle> const& circles, RaidOrder& out)
 {
     // 0. Scripted mechanics (Heigan's dance, Sapphiron's ice blocks) own the bot's movement while they run.
@@ -2326,11 +2667,16 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
                     adds.push_back(c);
             for (Unit* enemy : adds)
             {
-                if (!enemy->IsAlive() || !InTankSpot(rule, enemy->GetEntry()) || enemy->GetVictim() == bot)
+                // An add already on this tank but still far out is waited for too: it walks to the tank at its slot. The rotation's chase
+                // walked the tank out to meet it, and the next one, and the one after (bwl_nefarian 1110b: "takes Bronze Drakonid on Mctankwa
+                // dist=39y why=already_on_it", then its melee spot at -7544,-1185; from 25 s on every tank fought 40-67 y from the camp
+                // centre, outside its 23 y arc, 45-60 y from the healers' post, and all four were dead by 70-90 s). Once it is in melee
+                // with the tank (ReachedRaid) or close by near the arc, it is fought as before.
+                if (!enemy->IsAlive() || !InTankSpot(rule, enemy->GetEntry()))
                     continue;
-                if (bot->IsWithinDistInMap(enemy, kFixedSpotFetchReach))
-                    continue;
-                if (rule.reach > 0.0f && Dist2D(enemy->GetPositionX(), enemy->GetPositionY(), rule.x, rule.y) <= rule.reach)
+                // The ones it goes after (FetchesAdd). One already in melee with a raider is among them: a tank with a free hand takes it,
+                // so the adds spread over the tanks instead of piling on the ones that met them first.
+                if (FetchesAdd(plan, rule, bot, enemy))
                     continue;
                 out.forbidden_targets.push_back(enemy->GetGUID());
             }
@@ -2355,14 +2701,28 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
         if (now - at < 3000)
             continue;
         at = now;
+        // A tank that does not walk back says why. bwl_nefarian 1111g run 2: Mctankwc stood 15 s at (-7540,-1202), 25 y from its place
+        // (-7565,-1217) with a drakonid on it, and logged no walk; the four tanks walked to their places 37-87 times a run, while they
+        // stood 29-37 y (median) from the camp centre on a 23 y arc in every sweep from 1111e on.
+        // A fixed row's place is the encounter's: the walk there needs ground and a path without a detour, not sight of it from where the
+        // tank stands, nor the fight area round the main tank. 1111h: of 297 refusals 212 were "no LoS" (the tanks on the west half of the
+        // arc could not see the slots on the east half across the north side, the ground the healers' post cannot see either) and 86 "fight
+        // area" (the arc is 46 y across, wider than the 35 y fight radius round the main tank).
+        float const off = Dist2D(bot->GetPositionX(), bot->GetPositionY(), tx, ty);
         if (!circles.empty() && InsideAny(circles, tx, ty, 0.5f))
+        {
+            TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] {} stays {:.0f} y from its place for entry {} ({:.0f},{:.0f}): the place is in a hazard",
+                        bot->GetName(), off, rule.enemy, tx, ty);
             continue;
-        if (Usable(bot, tx, ty, bot->GetPositionZ(), tz, /*urgent*/ true))
+        }
+        if (Usable(bot, tx, ty, bot->GetPositionZ(), tz, /*urgent*/ true, /*hazard*/ false, /*fixedPlace*/ rule.fixed))
         {
             TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] {} walks to its place for entry {} ({:.0f},{:.0f})", bot->GetName(), rule.enemy, tx, ty);
             SetMove(out, tx, ty, tz, "tank spot");
             return;
         }
+        TC_LOG_INFO("playerbot.v2.raid", "[raid_tank_spot] {} stays {:.0f} y from its place for entry {} ({:.0f},{:.0f}) at ({:.0f},{:.0f}): {}",
+                    bot->GetName(), off, rule.enemy, tx, ty, bot->GetPositionX(), bot->GetPositionY(), kUsableWhyName[g_usableWhy]);
     }
 
     // 3c. Stand behind (Magmadar): matching bots stand in the sector behind the enemy, wherever the tank has turned it.
@@ -2557,6 +2917,21 @@ void DecideMove(Plan const& plan, Member const& self, uint32_t now, std::vector<
         if (rule.needOtherEnemy ? !other : (rule.needVictimIsMe && boss->GetVictim() != bot))
             continue;
         out.post_enemy = boss->GetGUID();
+        if (rule.who == Who::Healer && self.healer)
+        {
+            float sx = 0.0f, sy = 0.0f, sz = 0.0f;
+            SightSpot const spot = HealerSightSpot(plan, rule, circles, now, bot, sx, sy, sz);
+            if (spot == SightSpot::Here)
+            {
+                out.at_post = true;
+                continue;
+            }
+            if (spot == SightSpot::Walk)
+            {
+                SetMove(out, sx, sy, sz, "sight spot");
+                return;
+            }
+        }
         float const offPost = Dist2D(bot->GetPositionX(), bot->GetPositionY(), rule.x, rule.y);
         if (offPost <= rule.tolerance)
         {
@@ -2659,6 +3034,9 @@ bool Election::Assign(Unit* target, std::vector<Ranks const*> const& families, b
             for (Ranks const* family : families)
             {
                 uint32_t const id = KnownRank(m.p, *family);
+                // The player's boss plan said "no sheep" (BossTactics): that kind is nobody's job in this fight.
+                if (kind == RaidOrder::CastKind::CrowdControl && (CcDeny::KindOfSpell(id) & plan.tacticsCcDeny))
+                    continue;
                 if (!Ready(m.p, id, target, hostile))
                     continue;
                 RaidOrder* o = OrderOf(m.p);
@@ -3204,6 +3582,32 @@ void ElectControlledMembers(Election& e)
             if (!e.Assign(p, { &kPolymorph }, true, RaidOrder::CastKind::CrowdControl, "polymorph controlled", true))
                 e.Assign(p, { &kHammerOfJustice, &kGouge, &kBash }, true, RaidOrder::CastKind::CrowdControl, "stun controlled", true);
         }
+    // The control ends long before the raid's own polymorph does: Hakkar's Cause Insanity charms for 10 s and Polymorph holds a player
+    // 50 s. zg_hakkar 1110b: both tanks were sheeped under the charm and stood as sheep 40 s after it, one died among the Sons of Hakkar
+    // where the charm had walked him, and with the other one sheeped Hakkar went from 5% to the raiders, followed one off his platform at
+    // 1% and reset. A member no longer under a control aura is cleared of a polymorph a raid member put on it, at once (healers too).
+    for (Member const& victim : plan.members)
+    {
+        Player* p = victim.p;
+        if (!p->IsAlive() || !p->IsPolymorphed())
+            continue;
+        if (std::any_of(plan.rules->controlledMember.begin(), plan.rules->controlledMember.end(),
+                        [p](ControlledMember const& rule) { return p->HasAura(rule.aura); }))
+            continue;
+        bool ours = false;
+        for (auto const& [spellId, app] : p->GetAppliedAuras())
+        {
+            Aura const* aura = app->GetBase();
+            if (!(aura->GetSpellInfo()->GetAllEffectsMechanicMask() & (UI64LIT(1) << MECHANIC_POLYMORPH)))
+                continue;
+            ObjectGuid const caster = aura->GetCasterGUID();
+            ours = std::any_of(plan.members.begin(), plan.members.end(), [&](Member const& m) { return m.p->GetGUID() == caster; });
+            if (ours)
+                break;
+        }
+        if (ours)
+            e.Assign(p, DispelSpellsFor(DispelKind::Magic), false, RaidOrder::CastKind::Dispel, "unsheep after control", false);
+    }
 }
 
 // A school whose resistance costs a caster of the raid at least this share of every hit on average is avoided. The Classic formula
@@ -3362,6 +3766,31 @@ void PublishTargets(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& orders,
             continue; // unpulled: the tank owns first contact
         candidates.push_back(enemy);
     }
+    // The player's boss plan (BossTactics, "tactics Lucifron: adds first"): "adds first" leaves the boss to the tanks while one of his adds
+    // is up, "boss first" leaves the adds to the tanks while he is up. Only among the enemies the rules let the raid attack (candidates), so a
+    // rule's never-target or spared add stays out of it and never holds the boss back.
+    for (auto const& [boss, t] : plan.tactics)
+    {
+        if (t.kill == BossTactics::Kill::Any || std::find(candidates.begin(), candidates.end(), boss) == candidates.end())
+            continue;
+        bool addUp = false;
+        for (Unit* c : candidates)
+            addUp = addUp || (c != boss && c->GetEntry() != boss->GetEntry());
+        if (!addUp)
+            continue;
+        if (t.kill == BossTactics::Kill::AddsFirst)
+        {
+            forbiddenDps.push_back(boss->GetGUID());
+            candidates.erase(std::remove(candidates.begin(), candidates.end(), boss), candidates.end());
+        }
+        else
+        {
+            for (Unit* c : candidates)
+                if (c != boss)
+                    forbiddenDps.push_back(c->GetGUID());
+            candidates.assign(1, boss);
+        }
+    }
     // First matching entry per enemy wins; a gated entry needs a living gate enemy inside its health window.
     auto const priorityFor = [&](Member const& m, Unit* enemy)
     {
@@ -3438,8 +3867,14 @@ void PublishTargets(Plan& plan, std::unordered_map<uint64_t, RaidOrder>& orders,
             int const priority = priorityFor(m, enemy);
             if (priority < 0)
                 continue;
-            bool const hurts = (schools & ~candidateAvoid[i]) != 0;
             bool const held = focusHeldLowest && heldByTank(enemy);
+            // In a wave fight the held enemy is the DPS's pick, never a tank's: a tank sent to the drakonid another tank holds walks off its
+            // slot to share it, and the next loose one runs at the raid. bwl_nefarian 1111f: two to four tanks on one drakonid in 9-16
+            // fight lines of 46-55 per run in phase one, idle tanks sent there by raid:switch_target ("claimed by another tank 1"), the tank
+            // row drifting to the north doors (-7564,-1198), where the tanks died.
+            if (held && m.tank && enemy->GetVictim() != m.p)
+                continue;
+            bool const hurts = (schools & ~candidateAvoid[i]) != 0;
             bool better = !best || (hurts && !bestHurts);
             if (!better && hurts == bestHurts)
             {
@@ -3720,6 +4155,237 @@ Brain& GetBrain()
 
 namespace {
 
+// ---------------------------------------------------------------------------
+// Raid banter (RaidBanter.h): the raid leader bot reacts to mistakes, bots argue a little after a wipe.
+// ---------------------------------------------------------------------------
+
+BanterLevel BanterNow() { return BanterLevelFromConfig(Services::Config().raid_banter()); }
+
+bool GroupHasHuman(Group const* group)
+{
+    for (GroupReference const& ref : group->GetMembers())
+        if (Player const* m = ref.GetSource(); m && !Services::Lifecycle().is_bot(m->GetGUID().GetCounter()))
+            return true;
+    return false;
+}
+
+// `from` speaks in the group's chat: raid chat in a raid group, the sub-group's party chat otherwise; each reader reads it in his
+// language (BotLanguage, the Russian catalog).
+void SayInGroupChat(Player* from, Group* group, std::string const& text)
+{
+    bool const raid = group->isRaidGroup();
+    bool const leader = group->IsLeader(from->GetGUID());
+    ChatMsg const type = raid ? (leader ? CHAT_MSG_RAID_LEADER : CHAT_MSG_RAID) : (leader ? CHAT_MSG_PARTY_LEADER : CHAT_MSG_PARTY);
+    BotLanguage::GroupChat(from, group, type, text, raid ? -1 : group->GetMemberGroup(from->GetGUID()));
+}
+
+// The raid leader's voice on `map`: the group's leader when that is a bot, else an assistant bot, else the first bot by guid (alive
+// or not: a dead leader still talks). Null: no bot of the group there.
+Player* BanterLeader(Group* group, Map* map)
+{
+    Player* assistant = nullptr;
+    Player* first = nullptr;
+    for (GroupReference const& ref : group->GetMembers())
+    {
+        Player* m = ref.GetSource();
+        if (!m || !m->IsInWorld() || m->GetMap() != map || !Services::Lifecycle().is_bot(m->GetGUID().GetCounter()))
+            continue;
+        if (group->IsLeader(m->GetGUID()))
+            return m;
+        if (!assistant && group->IsAssistant(m->GetGUID()))
+            assistant = m;
+        if (!first || m->GetGUID() < first->GetGUID())
+            first = m;
+    }
+    return assistant ? assistant : first;
+}
+
+// A line waiting for its time: the fixed text, said at `due` unless the program's own line for `ask` came back in time.
+struct BanterSay { uint32_t due = 0; ObjectGuid group; ObjectGuid bot; std::string text; uint64 ask = 0; };
+std::vector<BanterSay> g_banterQueue;
+BanterGate g_banter;
+
+void QueueBanter(Group* group, Player* bot, Mishap m, std::string const& name, std::string const& boss, std::string const& text,
+                 bool leader, BanterLevel level, uint32_t delayMs, uint32_t now)
+{
+    if (text.empty() || !bot || g_banterQueue.size() >= 64)
+        return;
+    uint64 const ask = BotBridge::AskRaidLine(bot, MishapWord(m), MishapDetail(m, name, boss), text, BanterLevelWord(level),
+                                              leader ? "raid leader" : "raider", delayMs, kModelWaitMs);
+    g_banterQueue.push_back({ now + (ask ? std::max(delayMs, kModelWaitMs) : delayMs), group->GetGUID(), bot->GetGUID(), text, ask });
+    TC_LOG_INFO("playerbot.v2.raid", "[raid_banter] {} ({}{}): {}{}", bot->GetName(), MishapWord(m), leader ? ", leader" : "", text,
+        ask ? " (asked the program first)" : "");
+}
+
+// World thread, every plan pass: the fixed lines whose time has come.
+void SayDueBanter(uint32_t now)
+{
+    for (auto it = g_banterQueue.begin(); it != g_banterQueue.end();)
+    {
+        if (int32_t(now - it->due) < 0)
+        {
+            ++it;
+            continue;
+        }
+        if (!it->ask || !BotBridge::RaidLineAnswered(it->ask))
+            if (Player* bot = ObjectAccessor::FindConnectedPlayer(it->bot))
+                if (Group* group = bot->GetGroup(); group && group->GetGUID() == it->group)
+                    SayInGroupChat(bot, group, it->text);
+        it = g_banterQueue.erase(it);
+    }
+}
+
+// The leader reacts to a mishap (rate limited per raid by BanterGate). `name`: the raider (or spell) it is about.
+void LeaderReacts(Group* group, Map* map, Mishap m, std::string const& name, std::string const& boss, uint32_t now)
+{
+    BanterLevel const level = BanterNow();
+    if (level == BanterLevel::Off || !group || !map || !GroupHasHuman(group))
+        return;
+    Player* leader = BanterLeader(group, map);
+    if (!leader || !g_banter.Allow(group->GetGUID().GetCounter(), m, name, level, now))
+        return;
+    QueueBanter(group, leader, m, name, boss, LeaderLine(m, level, name, urand(0, 2)), true, level, urand(600, 1600), now);
+}
+
+// After a wipe: the leader's line, then one or two other bots (blame, excuses, "my bad").
+void WipeBanter(Group* group, Map* map, std::string const& firstDead, std::string const& boss, uint32_t now)
+{
+    BanterLevel const level = BanterNow();
+    if (level == BanterLevel::Off || !group || !map || !GroupHasHuman(group))
+        return;
+    Player* leader = BanterLeader(group, map);
+    if (!leader || !g_banter.Allow(group->GetGUID().GetCounter(), Mishap::Wipe, std::string(), level, now))
+        return;
+    QueueBanter(group, leader, Mishap::Wipe, firstDead, boss, LeaderLine(Mishap::Wipe, level, firstDead, urand(0, 2)), true, level,
+        urand(1500, 3000), now);
+    std::vector<Player*> others;
+    for (GroupReference const& ref : group->GetMembers())
+        if (Player* m = ref.GetSource(); m && m != leader && m->IsInWorld() && m->GetMap() == map &&
+                                         Services::Lifecycle().is_bot(m->GetGUID().GetCounter()))
+            others.push_back(m);
+    for (size_t i = others.size(); i > 1; --i)
+        std::swap(others[i - 1], others[urand(0, uint32(i - 1))]);
+    // The one who died first answers first when it is a bot ("my bad"); then somebody else.
+    for (size_t i = 0; i < others.size(); ++i)
+        if (others[i]->GetName() == firstDead)
+            std::swap(others[0], others[i]);
+    size_t const speakers = std::min<size_t>(others.size(), urand(1, 2));
+    uint32_t at = urand(4000, 6500);
+    for (size_t i = 0; i < speakers; ++i)
+    {
+        bool const self = others[i]->GetName() == firstDead;
+        std::string const blame = firstDead == others[i]->GetName() ? std::string() : firstDead;
+        QueueBanter(group, others[i], Mishap::Wipe, firstDead, boss, WipeReply(level, blame, self, urand(0, 31)), false, level, at, now);
+        at += urand(2500, 4500);
+    }
+}
+
+// Per raid group: what the banter watches between plan passes.
+struct BanterWatch
+{
+    std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> bad;   // member -> (inside a hazard since, health then)
+    struct Cast { uint32_t spell = 0; int32_t left = 0; };
+    std::map<ObjectGuid, Cast> casts;                                  // enemy -> its interrupt-first cast in progress
+    struct Cc { int32_t left = 0; std::string hitter; };
+    std::map<ObjectGuid, Cc> cc;                                       // enemy -> its long crowd control, and a member hitting it
+    uint32_t seen = 0;
+};
+std::unordered_map<uint64_t, BanterWatch> g_banterWatch;
+
+// A member stands inside one of the hazard circles the raid rules put around it (noted by the movement pass for bots, and for the
+// humans at the end of the plan pass).
+void BanterNoteBad(uint64_t key, Player* p, bool inside, uint32_t now)
+{
+    auto& bad = g_banterWatch[key].bad;
+    uint64_t const id = p->GetGUID().GetCounter();
+    if (!inside)
+        bad.erase(id);
+    else if (!bad.count(id))
+        bad[id] = { now ? now : 1u, uint32_t(p->GetHealth()) };
+}
+
+int32_t LongestCcLeft(Unit* u)
+{
+    int32_t left = u->IsPolymorphed() ? 10000 : 0;
+    for (Ranks const* ranks : { &kBanish, &kShackle, &kHibernate, &kPolymorph })
+        for (uint32_t id : *ranks)
+            if (Aura const* a = u->GetAura(id))
+                left = std::max(left, a->GetDuration());
+    return left;
+}
+
+// The mishaps of one plan pass: a raider in the bad stuff for 3 s and hurt, an interrupt-first cast that went off, a long crowd control
+// broken under someone's damage. (Extra pulls: TrackPull; wipes and kills: EndQuietPulls.)
+void SpotMishaps(Plan const& plan, Group* group, uint64_t key, Map* map, uint32_t now)
+{
+    BanterWatch& w = g_banterWatch[key];
+    w.seen = now;
+    if (BanterNow() == BanterLevel::Off)
+        return;
+    std::string boss;
+    for (Unit* u : plan.enemies)
+        if (Creature* c = u->ToCreature(); c && IsBoss(c, plan.rules))
+            boss = c->GetName();
+
+    for (Member const& m : plan.members)
+    {
+        auto it = w.bad.find(m.p->GetGUID().GetCounter());
+        if (it == w.bad.end() || now - it->second.first < 3000 || m.p->GetHealth() >= it->second.second)
+            continue;
+        it->second = { now, uint32_t(m.p->GetHealth()) };   // the next call for the same raider needs another 3 s in it
+        LeaderReacts(group, map, Mishap::StoodInBad, m.p->GetName(), boss, now);
+    }
+
+    std::map<ObjectGuid, BanterWatch::Cast> casts;
+    std::map<ObjectGuid, BanterWatch::Cc> cc;
+    ObjectGuid const skull = group->GetTargetIcon(7);
+    for (Unit* enemy : plan.enemies)
+    {
+        if (Spell const* s = enemy->GetCurrentSpell(CURRENT_GENERIC_SPELL); s && InterruptFirst(plan.mapId, s->GetSpellInfo()->Id))
+            casts[enemy->GetGUID()] = { s->GetSpellInfo()->Id, s->GetTimer() };
+        if (Controlled(enemy))
+        {
+            BanterWatch::Cc c{ LongestCcLeft(enemy), {} };
+            for (Member const& m : plan.members)
+                if (m.p->GetVictim() == enemy)
+                    c.hitter = m.p->GetName();
+            cc[enemy->GetGUID()] = c;
+        }
+    }
+    // A cast that was nearly done and is gone without a school lockout on its caster went off: nobody kicked it.
+    for (auto const& [guid, was] : w.casts)
+    {
+        if (casts.count(guid) && casts[guid].spell == was.spell)
+            continue;
+        Unit* enemy = ObjectAccessor::GetUnit(*plan.members.front().p, guid);
+        SpellInfo const* info = sSpellMgr->GetSpellInfo(was.spell, DIFFICULTY_NONE);
+        if (!enemy || !enemy->IsAlive() || !info || was.left > 700 || enemy->GetSpellHistory()->IsSchoolLocked(info->GetSchoolMask()))
+            continue;
+        char const* spellName = info->SpellName ? info->SpellName->Str[LOCALE_enUS] : nullptr;
+        LeaderReacts(group, map, Mishap::MissedKick, spellName ? spellName : "the cast", enemy->GetName(), now);
+    }
+    // A crowd control with more than 3 s left that is gone while its target lives: somebody broke it (the skull on it is the owner's
+    // call to kill it, not a mistake).
+    for (auto const& [guid, was] : w.cc)
+    {
+        if (cc.count(guid) || was.left <= 3000 || guid == skull)
+            continue;
+        Unit* enemy = ObjectAccessor::GetUnit(*plan.members.front().p, guid);
+        if (enemy && enemy->IsAlive() && enemy->IsInCombat())
+            LeaderReacts(group, map, Mishap::BrokeCc, was.hitter, boss, now);
+    }
+    w.casts = std::move(casts);
+    w.cc = std::move(cc);
+}
+
+void ForgetBanterWatch(uint32_t now)
+{
+    for (auto it = g_banterWatch.begin(); it != g_banterWatch.end();)
+        it = now - it->second.seen > 60000u ? g_banterWatch.erase(it) : std::next(it);
+    if (g_banter.Tracked() > 128)
+        g_banter.Prune(now);
+}
+
 // Pull log for the test-night digest (scripts/bot-log-digest.ps1). One [raid_encounter] line when a group on a raid map
 // enters combat and one when the fight is over (no enemy for 4 s): what was pulled, how long it took and how it ended.
 // World thread only, a few map operations per raid group every plan pass.
@@ -3741,6 +4407,9 @@ struct PullLog
     std::unordered_map<uint64_t, std::string> hitBy;
     std::string firstDead, firstCause;
     uint32_t deaths = 0;
+    // Extra pulls (RaidBanter): new mobs that are no summons joining after the pull's first seconds, counted in a 5 s window.
+    uint32_t newMobsFrom = 0, newMobs = 0;
+    std::string newMobsOn;   // the raider the first of them attacks
 };
 std::unordered_map<uint64_t, PullLog> g_pulls;
 constexpr uint32_t kPullEndQuietMs = 4000;
@@ -4028,6 +4697,29 @@ void TrackPull(uint64_t key, Group* group, detail::Plan const& plan, Map* map, u
         bool const boss = detail::IsBoss(c, plan.rules);
         pl.engaged.emplace(c->GetGUID(), PullLog::Mob{ c->GetEntry(), c->GetName(), boss });
         added = true;
+        // A pack joining a fight that runs (not the boss's own summons, not in the pull's first 8 s): an extra pull.
+        if (!boss && !c->IsSummon() && now_ms - pl.startMs >= 8000)
+        {
+            if (!pl.newMobsFrom || now_ms - pl.newMobsFrom > 5000)
+            {
+                pl.newMobsFrom = now_ms ? now_ms : 1u;
+                pl.newMobs = 0;
+                pl.newMobsOn.clear();
+            }
+            ++pl.newMobs;
+            if (pl.newMobsOn.empty())
+                if (Unit* v = c->GetVictim(); v && v->IsPlayer())
+                    pl.newMobsOn = v->GetName();
+        }
+    }
+    if (pl.newMobs >= 2)
+    {
+        std::string boss;
+        for (auto const& [eg, em] : pl.engaged)
+            if (em.boss && boss.empty())
+                boss = em.name;
+        LeaderReacts(group, map, Mishap::ExtraPull, pl.newMobsOn, boss, now_ms);
+        pl.newMobs = 0;
     }
     for (auto& [eg, em] : pl.engaged)
         if (Creature* ec = map->GetCreature(eg))
@@ -4115,6 +4807,20 @@ void EndQuietPulls(uint32_t now_ms)
         // The boss dead is a kill even with its adds still standing (Garr's Firesworn, Ragnaros' Sons of Flame): the left list names them.
         bool const bossKilled = bosses > 0 && bossesDead == bosses;
         char const* result = killed == pl.engaged.size() || bossKilled ? "kill" : ((alive * 4 <= pl.startAlive && mostDead) || humanDeadNoneAlive ? "wipe" : "reset");
+        // The raid leader's word on it, and after a wipe the others' (RaidBanter). A group of 15 or fewer has the companions' own
+        // wipe and kill lines (PartyBanter) instead.
+        if (Group* bg = sGroupMgr->GetGroupByGUID(ObjectGuid::Create<HighGuid::Party>(pl.groupLow));
+            bg && map && (bg->GetMembersCount() > 15 || !Services::Config().behavior_party_banter()))
+        {
+            std::string bossName;
+            for (auto const& [guid, mob] : pl.engaged)
+                if (mob.boss && bossName.empty())
+                    bossName = mob.name;
+            if (bossKilled)
+                LeaderReacts(bg, map, Mishap::BossDown, pl.firstDead, bossName, now_ms);
+            else if (std::strcmp(result, "wipe") == 0)
+                WipeBanter(bg, map, pl.firstDead, bossName, now_ms);
+        }
         TC_LOG_INFO("playerbot.v2.raid", "[raid_encounter] ts={} map={} group={} pull end: result={} dur={}s killed={}/{} alive={}/{} deaths={} | {}{}{}",
             uint64_t(GameTime::GetGameTime()), pl.mapId, pl.groupLow, result, (pl.lastSeenMs - pl.startMs) / 1000, killed,
             uint32_t(pl.engaged.size()), alive, pl.startAlive, pl.deaths, PullLabel(pl), left.empty() ? "" : " | left: ", left);
@@ -4174,6 +4880,142 @@ void EndQuietPulls(uint32_t now_ms)
         }
         it = g_pulls.erase(it);
     }
+}
+
+// The player's boss plans for the bosses in this fight (BotCommandParser::ApplyTacticsOrder stores them per account): the group
+// leader's plan first, then the other real players' in the group.
+void LoadTactics(Plan& plan, Group* group)
+{
+    std::vector<uint32> accounts;
+    auto const add = [&accounts](Player const* p)
+    {
+        if (!p || !p->GetSession() || Services::Lifecycle().is_bot(p->GetGUID().GetCounter()))
+            return;
+        uint32 const a = p->GetSession()->GetAccountId();
+        if (a && std::find(accounts.begin(), accounts.end(), a) == accounts.end())
+            accounts.push_back(a);
+    };
+    add(ObjectAccessor::FindConnectedPlayer(group->GetLeaderGUID()));
+    for (GroupReference const& ref : group->GetMembers())
+        add(ref.GetSource());
+    if (accounts.empty())
+        return;
+    for (Unit* enemy : plan.enemies)
+    {
+        if (std::find(plan.rules->bosses.begin(), plan.rules->bosses.end(), enemy->GetEntry()) == plan.rules->bosses.end())
+            continue;
+        for (uint32 a : accounts)
+            if (std::string const stored = Services::Owners().BossTacticsOf(a, enemy->GetEntry()); !stored.empty())
+            {
+                BossTactics const t = ParseStoredTactics(stored);
+                if (t.Empty())
+                    continue;
+                plan.tactics.emplace_back(enemy, t);
+                plan.tacticsCcDeny = uint16_t(plan.tacticsCcDeny | t.cc_deny);
+                break;
+            }
+    }
+}
+
+// The player's "tank here" (BossTactics): the tank that holds a boss with a plan spot walks there, every 2 s at most, and the boss
+// follows it. Never into a hazard circle, and not where the raid rules place that tank themselves (RulesPlaceTank).
+std::unordered_map<uint64_t, uint32_t> g_lastTacticSpot;
+std::unordered_map<uint64_t, uint32_t> g_lastTacticSpotLog;
+
+void TacticTankSpot(Plan const& plan, Member const& m, uint32_t now, std::vector<Circle> const& circles, RaidOrder& out)
+{
+    if (!m.tank || plan.tactics.empty())
+        return;
+    Unit* victim = m.p->GetVictim();
+    if (!victim)
+        return;
+    for (auto const& [boss, t] : plan.tactics)
+    {
+        if (boss != victim || !t.spot || t.spot_map != plan.mapId || boss->GetVictim() != m.p || RulesPlaceTank(plan.mapId, boss->GetEntry()))
+            continue;
+        if (Dist2D(m.p->GetPositionX(), m.p->GetPositionY(), t.x, t.y) < 4.0f)
+            return;
+        uint32_t& at = g_lastTacticSpot[m.p->GetGUID().GetCounter()];
+        if (now - at < 2000)
+            return;
+        at = now ? now : 1u;
+        if (!circles.empty() && InsideAny(circles, t.x, t.y, 0.5f))
+            return;
+        float tz = 0.0f;
+        if (Usable(m.p, t.x, t.y, t.z, tz, /*urgent*/ true))
+        {
+            TC_LOG_INFO("playerbot.v2.raid", "[raid_tactics] {} drags {} to the player's spot ({:.0f},{:.0f}), {:.0f} y away", m.p->GetName(),
+                boss->GetName(), t.x, t.y, Dist2D(m.p->GetPositionX(), m.p->GetPositionY(), t.x, t.y));
+            SetMove(out, t.x, t.y, tz, "tactic: tank spot");
+        }
+        else if (uint32_t& logged = g_lastTacticSpotLog[m.p->GetGUID().GetCounter()]; now - logged >= 10000u)
+        {
+            logged = now ? now : 1u;
+            TC_LOG_INFO("playerbot.v2.raid", "[raid_tactics] {} can't take {} to the player's spot ({:.0f},{:.0f}): {}", m.p->GetName(),
+                boss->GetName(), t.x, t.y, kUsableWhyName[size_t(g_usableWhy) < std::size(kUsableWhyName) ? g_usableWhy : 0]);
+        }
+        return;
+    }
+}
+
+// Raid callouts (RaidCallouts.h): the bot says its new decision in raid chat, the way a player types "bomb on me, running out".
+CalloutGate g_callouts;
+
+std::string SpellNameOf(uint32_t spellId)
+{
+    SpellInfo const* info = spellId ? sSpellMgr->GetSpellInfo(spellId, DIFFICULTY_NONE) : nullptr;
+    char const* name = info && info->SpellName ? info->SpellName->Str[LOCALE_enUS] : nullptr;
+    return name ? std::string(name) : std::string();
+}
+
+void SayCallout(Player* bot, RaidOrder const& o, uint32_t now_ms)
+{
+    Group* group = bot->GetGroup();
+    if (!group || !bot->IsAlive())
+        return;
+    // Only a group with a real player in it reads raid chat; a bot-only group stays quiet.
+    bool human = false;
+    for (GroupReference const& ref : group->GetMembers())
+        if (Player const* m = ref.GetSource(); m && !Services::Lifecycle().is_bot(m->GetGUID().GetCounter()))
+        {
+            human = true;
+            break;
+        }
+    if (!human)
+        return;
+
+    CalloutFacts f;
+    f.move_reason = o.move && o.move_reason ? o.move_reason : "";
+    f.hold_rotation = o.hold_rotation;
+    f.use_object = !o.use_object.IsEmpty();
+    if (o.cast_kind == RaidOrder::CastKind::Taunt || o.cast_kind == RaidOrder::CastKind::CrowdControl)
+    {
+        Unit const* target = o.cast_target.IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*bot, o.cast_target);
+        if (target)
+            f.target = target->GetName();
+        f.spell = SpellNameOf(o.cast_spell);
+        f.taunt = o.cast_kind == RaidOrder::CastKind::Taunt;
+        if (o.cast_kind == RaidOrder::CastKind::CrowdControl)
+            if (SpellInfo const* info = sSpellMgr->GetSpellInfo(o.cast_spell, DIFFICULTY_NONE))
+                f.long_cc = info->GetMaxDuration() >= 15000;
+    }
+    if (f.move_reason == "carrier run")
+        if (RaidRules const* rules = RulesForMap(bot->GetMapId()))
+            for (CarrierRun const& rule : rules->carrierRun)
+                if (bot->HasAura(rule.aura))
+                {
+                    f.carried = SpellNameOf(rule.aura);
+                    break;
+                }
+
+    Callout const c = PickCallout(f);
+    if (!g_callouts.Allow(group->GetGUID().GetCounter(), bot->GetGUID().GetCounter(), c.kind, c.group_wide, now_ms))
+        return;
+    ChatMsg type = group->isRaidGroup()
+        ? (group->IsLeader(bot->GetGUID()) ? CHAT_MSG_RAID_LEADER : CHAT_MSG_RAID)
+        : (group->IsLeader(bot->GetGUID()) ? CHAT_MSG_PARTY_LEADER : CHAT_MSG_PARTY);
+    BotLanguage::GroupChat(bot, group, type, c.text, group->isRaidGroup() ? -1 : group->GetMemberGroup(bot->GetGUID()));
+    TC_LOG_INFO("playerbot.v2.raid", "[raid_callout] {}: {}", bot->GetName(), c.text);
 }
 
 } // namespace
@@ -4440,6 +5282,7 @@ void Brain::Update(uint32_t now_ms)
 
     LogDeadHumanReleaseState(now_ms);
     EndAbandonedEncounters(now_ms);
+    SayDueBanter(now_ms);
 
     // Bucket bots on raid maps that have rules by (group, map).
     struct Bucket { Group* group = nullptr; uint32_t mapId = 0; uint64_t refBot = 0; Player* ref = nullptr; };
@@ -4556,6 +5399,9 @@ void Brain::Update(uint32_t now_ms)
 
         dump << plan.rules->name << " group " << b.group->GetGUID().GetCounter() << ": " << plan.members.size() << " members, "
              << plan.enemies.size() << " enemies\n";
+        LoadTactics(plan, b.group);
+        for (auto const& [boss, t] : plan.tactics)
+            dump << "  player's tactics for " << boss->GetName() << ": " << DescribeTactics(t) << "\n";
 
         // Change-only plan header, so a log always shows that the raid layer is running and which tanks it uses, even on a
         // pull where no bot gets a move / cast / hold (the per-bot lines below only appear when there is a decision).
@@ -4632,8 +5478,13 @@ void Brain::Update(uint32_t now_ms)
                 o.active = true;
                 std::vector<Circle> const circles = HazardsFor(plan, m, now_ms);
                 nextMoveCtx[m.p->GetGUID().GetCounter()] = BuildMoveContext(plan, m, circles);
+                BanterNoteBad(key, m.p, !circles.empty() && InsideAny(circles, m.p->GetPositionX(), m.p->GetPositionY(), 0.0f), now_ms);
                 if (!m.p->HasUnitState(UNIT_STATE_ROOT | UNIT_STATE_STUNNED | UNIT_STATE_CONFUSED | UNIT_STATE_FLEEING))
+                {
                     DecideMove(plan, m, now_ms, circles, o);
+                    if (!o.move)
+                        TacticTankSpot(plan, m, now_ms, circles, o);
+                }
                 ApplyKeepOut(plan, m, circles, o);
                 ApplyFrontArcGuard(plan, m, now_ms, o);
                 if (!plan.rules->hideBeforeBreath.empty())
@@ -4645,6 +5496,16 @@ void Brain::Update(uint32_t now_ms)
                         if (enemy->GetEntry() == rule.enemy && m.p->GetDistance(enemy) < 40.0f)
                             o.no_aoe = true;
             }
+
+        // The player's boss plan (BossTactics): no AoE and the crowd control it leaves out, for every bot while that boss fights.
+        for (auto const& [boss, t] : plan.tactics)
+            for (Member const& m : plan.members)
+                if (m.bot)
+                {
+                    RaidOrder& o = next[m.p->GetGUID().GetCounter()];
+                    o.no_aoe = o.no_aoe || t.no_aoe;
+                    o.cc_deny = uint16_t(o.cc_deny | t.cc_deny);
+                }
 
         // A bot that has to move does not also get a cast job.
         Election e{ plan, next, {}, dump };
@@ -4699,6 +5560,19 @@ void Brain::Update(uint32_t now_ms)
         ApplyFightScript(plan, next, now_ms, dump);
         PublishMeleeSoak(plan, next);
         PublishAuraReactions(plan, next);
+
+        // The raid leader's eye (RaidBanter): the humans' hazard circles too (the bots' were noted by the movement pass), then the
+        // mishaps of this pass. Last in the pass, so the hazard pass's per-member scratch state is no longer read by anything.
+        if (BanterNow() != BanterLevel::Off)
+        {
+            for (Member const& m : plan.members)
+                if (!m.bot)
+                {
+                    std::vector<Circle> const circles = HazardsFor(plan, m, now_ms);
+                    BanterNoteBad(key, m.p, !circles.empty() && InsideAny(circles, m.p->GetPositionX(), m.p->GetPositionY(), 0.0f), now_ms);
+                }
+            SpotMishaps(plan, b.group, key, b.ref->GetMap(), now_ms);
+        }
     }
 
     // Change-only decision log (WARN so it shows with the usual Logger.playerbot.v2=3 test setup):
@@ -4724,11 +5598,22 @@ void Brain::Update(uint32_t now_ms)
         std::string& last = lastSignature[guidLow];
         if (s != last && !s.empty())
             if (Player* p = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(guidLow)))
+            {
                 TC_LOG_WARN("playerbot.v2.raid", "[raid] {}: {}", p->GetName(), s);
+                if (Services::Config().raid_callouts_enabled())
+                    SayCallout(p, o, now_ms);
+            }
         last = s;
     }
     if (lastSignature.size() > 2 * next.size() + 64)
         lastSignature.clear();
+    if (g_callouts.Tracked() > 256)
+        g_callouts.Prune(now_ms);
+    ForgetBanterWatch(now_ms);
+    if (g_lastTacticSpot.size() > 256)
+        g_lastTacticSpot.clear();
+    if (g_lastTacticSpotLog.size() > 256)
+        g_lastTacticSpotLog.clear();
 
     EndQuietPulls(now_ms);
     orders_.swap(next);

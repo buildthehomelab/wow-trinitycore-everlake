@@ -1441,6 +1441,12 @@ bool SameMapRelocationNeedsBridge(
 // worker, so a given bot's pairs stay on a single cache (good locality).
 bool CachedLosCheck(Player const* p, Unit const* t, uint32 now_ms)
 {
+    // Within melee reach the two stand against each other: a melee swing needs no line of sight on the server, and the ray between
+    // the two heads can still end in a branch or an overhang right above them. The Barrens near the Crossroads (Discord 2026-11-09,
+    // mob 3632): bots 0.1 y from their target read "out of LoS", walked about six times looking for a clear spot, dropped the target
+    // and took it again, round and round.
+    if (p->IsWithinMeleeRange(t))
+        return true;
     struct LosEntry { uint32 at_ms; bool los; };
     thread_local std::unordered_map<uint64, LosEntry> s_losCache;
     if (s_losCache.size() > 65536)
@@ -4651,6 +4657,22 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
             // immune-to-PC, visibility, and unit-flag checks.
             if (t->GetCreatureType() == CREATURE_TYPE_NON_COMBAT_PET) continue;
             if (!p->IsValidAttackTarget(t)) continue;
+            // A civilian or a working NPC of the other side (vendor, trainer, quest giver, the Commerce Authority's traders in
+            // Durotar) is no mob to farm: bots killed them over and over and players lost their vendors (Discord 2026-11-09).
+            // Only when it is not already fighting the bot or one of its group: then it is a fight like any other. Open world only:
+            // dungeon, raid and battleground bosses can carry a gossip or quest flag.
+            if (Creature const* c = t->ToCreature(); c && p->GetMap() && !p->GetMap()->Instanceable())
+            {
+                // A town guard of the other side is no mob either: an Alliance bot grinding by the Crossroads pulled its guards and
+                // died to them (Discord 2026-11-10).
+                if (c->IsCivilian() || c->IsGuard() || c->GetNpcFlags() != UNIT_NPC_FLAG_NONE)
+                {
+                    Unit const* v = c->GetVictim();
+                    Player const* vp = v ? v->GetCharmerOrOwnerPlayerOrPlayerItself() : nullptr;
+                    if (!vp || (vp != p && !(p->GetGroup() && p->GetGroup() == vp->GetGroup())))
+                        continue;
+                }
+            }
             const float dx = t->GetPositionX() - p->GetPositionX();
             const float dy = t->GetPositionY() - p->GetPositionY();
             const float dz = t->GetPositionZ() - p->GetPositionZ();
@@ -4665,6 +4687,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         {
             NearbyUnit u{};
             u.guid   = t->GetGUID();
+            u.player_owned = t->GetTypeId() != TYPEID_PLAYER && t->GetCharmerOrOwnerPlayerOrPlayerItself() != nullptr;
             u.entry  = t->GetEntry();
             u.level  = t->GetLevelForTarget(p);   // per-viewer scaled level (see attackers note / audit doc)
             u.hp     = static_cast<int32>(t->GetHealth());
@@ -5545,7 +5568,9 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
             // "dropped" the goal and was handed it right back). Honor it here
             // so dropping a goal actually rotates the picker to other work
             // for the blacklist window.
-            if (bot_ai && bot_ai->quest_blacklisted(q.quest_id, now_ms))
+            // Only the bot's OWN drop counts here: the other bots' drops (QuestGoalMemory) are about starting a quest, and with them
+            // a bot halfway through a quest stopped working on it as soon as two others somewhere had given up on theirs.
+            if (bot_ai && bot_ai->quest_blacklisted(q.quest_id, now_ms, /*fleet_memory*/ false))
                 continue;
             // Level gate: skip a quest the bot is too LOW-level to actually do.
             // A bot force-granted a quest far above its level (verified live: L4
@@ -6092,7 +6117,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                     Quest const* dqt = sObjectMgr->GetQuestTemplate(dq.quest_id);
                     if (dqt && dqt->GetRequiredSkill() && const_cast<Player*>(p)->GetSkillValue(dqt->GetRequiredSkill()) == 0)
                         skip = "skill";
-                    else if (bot_ai && bot_ai->quest_blacklisted(dq.quest_id, now_ms))
+                    else if (bot_ai && bot_ai->quest_blacklisted(dq.quest_id, now_ms, /*fleet_memory*/ false))
                         skip = "quest_blacklist";
                     else if (dqt && !const_cast<Player*>(p)->SatisfyQuestMinLevel(dqt, false))
                         skip = "min_level";
@@ -7442,7 +7467,17 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                 // Cheapest first: skip quests already in the log and the
                 // per-bot blacklists.
                 if (p->GetQuestStatus(qid) != QUEST_STATUS_NONE) continue;
-                if (offer_bot_ai && offer_bot_ai->quest_blacklisted(qid, offer_now_ms))
+                // A starting-zone quest (bot and quest at level 10 or below) is taken even when other bots gave up on its goal: the
+                // first quests of a zone open everything after them, so skipping one strands every new bot there (Shadowglen 0.1.34:
+                // two drops of The Balance of Nature left 40 bots with empty quest logs). Only the bot's own drop skips it.
+                bool const starter_quest = [&]
+                {
+                    if (p->GetLevel() > 10)
+                        return false;
+                    Quest const* sq = sObjectMgr->GetQuestTemplate(qid);
+                    return sq && p->GetQuestLevel(sq) <= 10;
+                }();
+                if (offer_bot_ai && offer_bot_ai->quest_blacklisted(qid, offer_now_ms, /*fleet_memory*/ !starter_quest))
                     continue;
                 // Permanent class/race-impossible skip — these gates never flip
                 // for this bot, so don't re-run the expensive CanTakeQuest or
@@ -9702,7 +9737,11 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     // Same writer-before-parallel-barrier contract as the PvE order above.
     if (Services::Initialized())
         if (auto const* rord = Raid::GetBrain().OrderFor(p->GetGUID().GetCounter()))
+        {
             snap->raid_order = *rord;
+            // The player's boss plan ("tactics Lucifron: no fear"): left out for this fight, on top of his standing orders.
+            snap->cc_deny = uint16(snap->cc_deny | rord->cc_deny);
+        }
 
     // ---- Bank capacity ----
     // Tab count via PlayerData; free slots by walking the bank-bag bags
