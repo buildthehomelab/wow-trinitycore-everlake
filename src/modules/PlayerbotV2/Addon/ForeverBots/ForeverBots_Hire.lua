@@ -1,5 +1,5 @@
 --[[
-ForeverBots_Hire: hired bots only (the server's Playerbot.Hire.Mode, chris 2026-11-03). When the realm has hired NPC bots on, a
+ForeverBots_Hire: hired bots only (the server's Playerbot.Hire.Mode, Karrz 2026-11-03). When the realm has hired NPC bots on, a
 player cannot make bots of their own: the "Add a bot" class and role buttons on the Bots tab are hidden and a line says where
 bots come from instead (the mercenary brokers). Quick party, Call saved and Raid ready stay: they bring the bots you hired. The
 Group finder and the dungeon finder still bring bots for that group. The server says whether you must hire (HIRE_REQ / HIRE_RESP);

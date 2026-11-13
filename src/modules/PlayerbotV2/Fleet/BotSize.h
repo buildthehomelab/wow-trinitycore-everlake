@@ -18,7 +18,7 @@
 #ifndef PLAYERBOT_V2_FLEET_BOT_SIZE_H
 #define PLAYERBOT_V2_FLEET_BOT_SIZE_H
 
-// Plain bot numbers (chris 2026-11-01). The player's file has at most these lines:
+// Plain bot numbers (Karrz 2026-11-01). The player's file has at most these lines:
 //   Bots.Size      = Low | Normal | High     fills the four below; most people need only this
 //                  = Off                     no world bots at all (own bots, dungeon finder and battleground bots still come);
 //                                            the four below are then not used (the launcher's Bots window, 0.1.29)
@@ -184,7 +184,7 @@ namespace Playerbot::V2::Fleet
 
     inline uint64_t PlaceKey(uint32_t map, uint32_t zone) { return (uint64_t(map) << 32) | zone; }
 
-    // The world bot choice of the ForeverBots panel (chris 2026-11-03: "bots off, low, medium or high ... rather than having it in
+    // The world bot choice of the ForeverBots panel (Karrz 2026-11-03: "bots off, low, medium or high ... rather than having it in
     // the config"). A GM picks it in game; the server keeps it (characters table playerbot_v2_realm_setting) and it wins over
     // Bots.Size, the other Bots.* numbers and Playerbot.World.Enable until "file" (.bot population file) hands back to the files.
     // Off: no world bots (the ones online log out). Low / Medium / High: that preset, world bots on. Medium is Normal.

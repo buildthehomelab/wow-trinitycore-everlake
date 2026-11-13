@@ -462,7 +462,7 @@ void BotChatModel::WarmUp()
     if (!cfg.enable)
         return;
     // With the bot bridge answering chat, the outside program brings its own model. Loading this one too kept a second model
-    // (llama3.2:3b, 3 GB) in the graphics card next to the program's qwen2.5:14b (chris's PC, 2026-11-08). It is loaded on the
+    // (llama3.2:3b, 3 GB) in the graphics card next to the program's qwen2.5:14b (Karrz's PC, 2026-11-08). It is loaded on the
     // first line it really has to answer: when the program is not running.
     if (auto const& bridge = Services::Config().bridge(); bridge.enable && bridge.chat)
         return;

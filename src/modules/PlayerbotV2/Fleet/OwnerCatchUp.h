@@ -1,18 +1,18 @@
 // A companion goes where its owner goes, also where it cannot walk.
 //
 // Flights (Playerbot.Behavior.FlyWithOwner): a taxi stays on the owner's map, so the follow chased a flying owner on the ground, mounted
-// because a player on a taxi counts as mounted, through every camp under the route, and was left far behind when he landed (chris
+// because a player on a taxi counts as mounted, through every camp under the route, and was left far behind when he landed (Karrz
 // 2026-10-30: "the bots are going to have to fly as well"). Now the bots of his group that stand by him when he takes off board the
 // same route a moment later and land with him; the ones that could not board (too far off, dead, fighting) are brought to him when he
 // lands, as his "summon" would.
 //
 // Catch-up (Playerbot.Behavior.CatchUpToOwner): a bot that cannot get any closer to its owner while he is well away, for kCatchUpStrikes
-// looks running, is set down beside him (chris 2026-10-30: "if they're stuck and they can't get to you and you're running away, they
+// looks running, is set down beside him (Karrz 2026-10-30: "if they're stuck and they can't get to you and you're running away, they
 // just teleport to you"). The case is Blackrock Mountain: a player takes the chains and the jumps up to the Spire, a bot leaps down
 // ledges (API::move_to follow_drop) but never up or across, finds no way and stood where it was. Pets already work this way
 // (Fleet/PetSnap.h). It also brings a bot left on another continent when the owner took a ship or a zeppelin it did not board, and one
-// left outside (or inside) a dungeon he went into (or out of): chris 2026-10-31, "after 15 seconds, they automatically appear on you".
-// Out of range (chris 2026-11-02, after a port from Dun Morogh to Crystal Lake left his bots running down from Ironforge): a bot more
+// left outside (or inside) a dungeon he went into (or out of): Karrz 2026-10-31, "after 15 seconds, they automatically appear on you".
+// Out of range (Karrz 2026-11-02, after a port from Dun Morogh to Crystal Lake left his bots running down from Ironforge): a bot more
 // than kCatchUpFarYards from its owner on the same map for the same 15 s is brought too, even while its walk still gets it closer.
 //
 // Pure decision logic for the module's world tick (PlayerbotV2.cpp DriveOwnerCatchUp / DriveFlyWithOwner); the world state is read by

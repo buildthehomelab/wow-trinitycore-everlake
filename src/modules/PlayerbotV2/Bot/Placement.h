@@ -1,4 +1,4 @@
-// Placement - the ForeverBots Positions tab: chosen bots stand in a shape at one spot and stay there (chris 2026-11-03: "select the
+// Placement - the ForeverBots Positions tab: chosen bots stand in a shape at one spot and stay there (Karrz 2026-11-03: "select the
 // formation, move specific bots, set them in a formation: close, circle, far apart, line, spear, arrow").
 //
 // Pure geometry, no server types, so tests/game/ClassicPlacement.cpp checks it without a realm. The caller sorts the bots (tanks

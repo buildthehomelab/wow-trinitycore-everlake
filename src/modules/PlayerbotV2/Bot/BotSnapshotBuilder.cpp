@@ -3408,7 +3408,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         else
             cc_account = Services::Owners().GetOwner(snap->bot_id).account_id;
         // A grouped bot in a dungeon or raid that nobody commands (a scenario squad, a bot-led group) keeps the owner default: Fear off in
-        // dungeons and raids (chris 10-28). It had no deny at all: smlibrary_loksey 0.1.28j, the hunter cast Scare Beast on a Tracking
+        // dungeons and raids (Karrz 10-28). It had no deny at all: smlibrary_loksey 0.1.28j, the hunter cast Scare Beast on a Tracking
         // Hound 18 times in 41 s, none held, and the tank died to the hound (21 casts and the same death in smlibrary_loksey36 0.1.28i).
         if (cc_account || (!snap->group.group_guid.IsEmpty() && snap->instance_ctx.is_in_dungeon))
             snap->cc_deny = Services::Owners().CcDenied(cc_account, snap->identity.cls);

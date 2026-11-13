@@ -3172,7 +3172,7 @@ void Unit::_UpdateAutoRepeatSpell()
     }
 
     // A player's client ends Auto Shot (CMSG_CANCEL_AUTO_REPEAT_SPELL) when its target dies; a bot has no client, so the repeat sat on the corpse
-    // for good and the hunter stood in the aim pose with the arrow nocked.
+    // for good and the hunter stood in the aim pose with the arrow nocked (PC 20 Oct).
     if (Player const* player = ToPlayer(); player && player->GetSession()->IsBot())
         if (Unit const* target = m_currentSpells[CURRENT_AUTOREPEAT_SPELL]->m_targets.GetUnitTarget(); !target || !target->IsAlive())
         {

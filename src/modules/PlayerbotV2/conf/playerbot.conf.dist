@@ -792,7 +792,7 @@ Playerbot.OwnedGear.AllowedModes = ""
 #                                whatever you wear), a Black Market Broker in Gadgetzan, Booty Bay and Ratchet (Legend: level cap only, best
 #                                in slot). Bots you owned before hired mode came on count as Sellswords with no upkeep. World bots are not
 #                                affected, and a listed Group finder group you join plays with you without becoming yours.
-#                                Hired bots only (chris 2026-11-03): with it on the ForeverBots add-on hides its "Add a bot" buttons (the server
+#                                Hired bots only (Karrz 2026-11-03): with it on the ForeverBots add-on hides its "Add a bot" buttons (the server
 #                                says so in HIRE_RESP). The Group finder and the dungeon finder (`.bot lfg`, `.bot dungeon`, a posted listing)
 #                                still fill the group for free, but those bots are only lent: they cannot be called on their own and are
 #                                deleted once they leave that group.

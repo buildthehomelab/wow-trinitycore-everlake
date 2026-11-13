@@ -118,6 +118,8 @@ enum ClassicWarlockDruidTalentMisc
     NPC_CWD_SUCCUBUS                        = 1863,
     NPC_CWD_INCUBUS                         = 185317,
     NPC_CWD_FELGUARD                        = 213450,
+
+    CWD_STARFIRE_FAMILY_FLAG_0              = 0x4,      // druid SpellFamilyFlags[0] bit of every Starfire rank
 };
 
 namespace ClassicTalentsWarlockDruid
@@ -1709,21 +1711,64 @@ class classic_talent_dru_eclipse : public AuraScript
     }
 };
 
-// 408255 - Eclipse (buff): the client data has a proc charge on any harmful spell; the Starfire script consumes the stacks instead
+// 408255 - Eclipse (buff): the client data has a proc charge on any harmful spell; the Starfire script consumes the stacks instead.
+// Effect 0 is a plain dummy (-500 ms per Starfire), so the client did not know about it: the cast bar showed 2.5 sec (the
+// server sends the real cast time) but the Starfire button tooltip stayed at 3.0 sec. While the buff is up a player gets a
+// flat cast time spell modifier on the Starfire class flag (druid family flag 0x4), which the client also uses for the
+// tooltip. The server applies the same modifier to the real cast time, so the Starfire script no longer subtracts it.
 class classic_talent_dru_eclipse_buff : public AuraScript
 {
+public:
+    ~classic_talent_dru_eclipse_buff()
+    {
+        delete _castTimeMod;
+    }
+
+private:
     bool CheckProc(ProcEventInfo& /*eventInfo*/)
     {
         return false;
     }
 
+    void HandleApply(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    {
+        Player* player = GetTarget()->ToPlayer();
+        if (!player || _castTimeMod)
+            return;
+
+        SpellFlatModifierByClassMask* mod = new SpellFlatModifierByClassMask(SpellModOp::ChangeCastTime, GetId(), GetAura(),
+            flag128(CWD_STARFIRE_FAMILY_FLAG_0, 0, 0, 0));
+        // one charge's worth: the effect amount is multiplied by the stack count, and a buff loaded at login with 2-4 stacks
+        // would otherwise give 2-4 charges' worth to every Starfire until it ends (the non-player path below uses the same)
+        mod->value = int32(aurEff->GetBaseAmount());
+        _castTimeMod = mod;
+        player->AddSpellMod(_castTimeMod, true);
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (!_castTimeMod)
+            return;
+
+        if (Player* player = GetTarget()->ToPlayer())
+            player->AddSpellMod(_castTimeMod, false);
+
+        delete _castTimeMod;
+        _castTimeMod = nullptr;
+    }
+
     void Register() override
     {
         DoCheckProc += AuraCheckProcFn(classic_talent_dru_eclipse_buff::CheckProc);
+        AfterEffectApply += AuraEffectApplyFn(classic_talent_dru_eclipse_buff::HandleApply, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_talent_dru_eclipse_buff::HandleRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
     }
+
+    SpellModifier* _castTimeMod = nullptr;
 };
 
-// 2912, 8949, 8950, 8951, 9875, 9876, 25298 - Starfire: one 408255 Eclipse charge reduces the cast time
+// 2912, 8949, 8950, 8951, 9875, 9876, 25298 - Starfire: one 408255 Eclipse charge reduces the cast time. For players the
+// reduction comes from the buff's cast time spell modifier (see classic_talent_dru_eclipse_buff); other casters get it here.
 class classic_talent_dru_eclipse_starfire : public SpellScript
 {
     int32 CalcCastTime(int32 castTime) override
@@ -1732,7 +1777,8 @@ class classic_talent_dru_eclipse_starfire : public SpellScript
         if (AuraEffect const* buff = caster->GetAuraEffect(SPELL_CWD_ECLIPSE_BUFF, EFFECT_0, caster->GetGUID()))
         {
             _usesCharge = true;
-            castTime = std::max(0, castTime + int32(buff->GetBaseAmount()));
+            if (!caster->IsPlayer())
+                castTime = std::max(0, castTime + int32(buff->GetBaseAmount()));
         }
         return castTime;
     }

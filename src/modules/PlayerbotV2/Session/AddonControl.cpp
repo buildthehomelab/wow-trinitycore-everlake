@@ -891,7 +891,7 @@ void HandlePopReq(uint32 client_seq, WorldSession* sess, std::vector<std::string
 
 // ----------------------------------------------------------------------------
 // HIRE_REQ - hired bots only (Playerbot.Hire.Mode): the ForeverBots Bots tab greys its
-// "Add a bot" buttons for a player who must hire (chris 2026-11-03). Returns:
+// "Add a bot" buttons for a player who must hire (Karrz 2026-11-03). Returns:
 //   HIRE_RESP|<must hire 0/1>|<mode 0 off, 1 everyone, 2 each player>
 // ----------------------------------------------------------------------------
 void HandleHireReq(uint32 client_seq, WorldSession* sess)

@@ -1,6 +1,6 @@
 // A player's bots take the way he went where the navmesh has none (Playerbot.Behavior.FollowOwnerSteps).
 //
-// chris 2026-10-31: "On the way up to the UBRS, that they jump up the chains and run along and then jump onto the ledge. And if they
+// Karrz 2026-10-31: "On the way up to the UBRS, that they jump up the chains and run along and then jump onto the ledge. And if they
 // can't, after 15 seconds, they automatically appear on you." The climb from the Blackrock Mountain floor to the Spire is a run up a
 // chain, a jump to the next and a jump onto the ledge: no walking route on the navmesh, so the follow stood under the chain. A player gets
 // there by doing it, so the bots do what he did: the module's world tick keeps the last stretch of his way (OwnerTrail: a step every

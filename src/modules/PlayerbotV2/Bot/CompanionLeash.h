@@ -18,7 +18,7 @@ namespace Playerbot::CompanionLeash {
 constexpr float kLeashYd = 30.0f;
 // The group's own fight reaches as far as the Passive join and the fight's hold on the follow do (GroupControl::kFightJoinYd): a
 // player casting from range stands 30 to 36 y behind his tank. With 30 y here a warlock's rogue and cat druid stood beside him while
-// the tank fought 32 y out, "does not chase ... (5 y away)" (UBRS 2026-10-28 22:09, chris: "they just stay close to me and do not
+// the tank fought 32 y out, "does not chase ... (5 y away)" (UBRS 2026-10-28 22:09, Karrz: "they just stay close to me and do not
 // fight until I move close").
 constexpr float kGroupFightYd = 40.0f;
 
