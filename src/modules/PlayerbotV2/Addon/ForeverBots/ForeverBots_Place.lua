@@ -1,7 +1,7 @@
 --[[
 ForeverBots_Place: the Positions tab of the main window (after World bots). Pick a shape and the bots, then send them: they run to
 their spots in that shape where you stand (or round your target) and stay there, also after a fight (they walk back to their own
-spot when it is over). Follow lets the ticked bots follow you again. chris 2026-11-03: "select the formation, move specific bots,
+spot when it is over). Follow lets the ticked bots follow you again. Karrz 2026-11-03: "select the formation, move specific bots,
 set them in a formation: close, circle, far apart, line, spear, arrow".
 Sent as a hidden add-on message (PLACE_REQ); without that line, as the group order "place <shape> <gap> <here|target> <names>".
 The bot list is your group (the server only moves your own bots and the world bots you lead). Buttons only: nothing here shows or

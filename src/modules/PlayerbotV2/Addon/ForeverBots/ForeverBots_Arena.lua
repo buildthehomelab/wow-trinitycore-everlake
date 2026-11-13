@@ -1,6 +1,6 @@
 --[[
 ForeverBots_Arena: Enter and Leave buttons when an arena (2v2 / 3v3) is ready. The game's own arena pop shows Enter only, with no
-way to turn the arena down (chris 2026-11-08: "have a leave as well, not just an enter"). Both buttons send the server line
+way to turn the arena down (Karrz 2026-11-08: "have a leave as well, not just an enter"). Both buttons send the server line
 (.bot arena enter / .bot arena leave); Leave also takes your party's bots out of the same queue. The pop-up closes by itself
 once the arena is no longer waiting for you (you went in, left, or the invite ran out).
 ]]

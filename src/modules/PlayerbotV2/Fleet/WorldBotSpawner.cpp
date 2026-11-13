@@ -377,11 +377,11 @@ void WorldBotSpawner::LoadConfig()
             c.zone_bots = b->zone_hi;
             c.bots_per_player = b->zone_hi;                        // fallback and the per-player reserve of the global filler
             c.rss_budget_mb = uint32(PhysicalRamMb() * 45u / 100u);   // memory stop: automatic
-            // The numbers are flat (chris 11-01: "a flat number"): no quieter night unless the player asks for it. With the old rule a
+            // The numbers are flat (Karrz 11-01: "a flat number"): no quieter night unless the player asks for it. With the old rule a
             // 50-70 zone held 30-42 bots after midnight and a 120 city held 72, so a late player saw a thin world.
             c.day_rhythm = sConfigMgr->GetBoolDefault("Bots.DayRhythm", false, true);
             // Leaving: a zone nobody is in loses its bots after LeaveZoneSec; after a dungeon, battleground or logout the spot is
-            // kept as a ghost so the total is LeaveWorldSec (chris 11-01: "the bots should log out fast").
+            // kept as a ghost so the total is LeaveWorldSec (Karrz 11-01: "the bots should log out fast").
             uint32 const leave_zone = uint32(std::clamp<int32>(sConfigMgr->GetIntDefault("Bots.LeaveZoneSec", 20, true), 0, 3600));
             uint32 const leave_world = uint32(std::clamp<int32>(sConfigMgr->GetIntDefault("Bots.LeaveWorldSec", 60, true), 0, 3600));
             c.leave_zone_ms = leave_zone * 1000u;
@@ -1605,7 +1605,7 @@ void WorldBotSpawner::DriveDespawn(uint32 now_ms, std::vector<Anchor> const& anc
             trail = trail && !counted;
         }
         // Plain bot numbers: a zone nobody has been in for LeaveZoneSec loses its bots, unless one stands inside a player's spawn ring
-        // (a bot just over a zone line next to him stays; chris 11-01: "why would you hold 50 bots still active there?").
+        // (a bot just over a zone line next to him stays; Karrz 11-01: "why would you hold 50 bots still active there?").
         // Inside a player's bubble (ActivityRadius) the bot counts for him, so it stays even over a zone line: logging it out there only
         // had the spawner put a new one in its place (a bot grinding 360 y away in the next zone went, and came back as another one).
         bool emptied = false;

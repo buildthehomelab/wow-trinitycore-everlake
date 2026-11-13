@@ -23,7 +23,7 @@ std::optional<std::string> ClassifyGroupOrder(std::string_view msg, bool owner_w
     // sets that point (BotCommandParser OrderFallback). "pull back" (also "pullback", "pull and back") is the main
     // tank's pull-and-return: ranged opener, run to the rally point, tank the mob there (OrderPullBack). "mount" and
     // "dismount" are the parser's own words (MountIntent / DismountIntent): with AI chat on they went to the language model as
-    // chatter and the bots only talked back (chris, 2026-11-08). Exact phrases only.
+    // chatter and the bots only talked back (Karrz, 2026-11-08). Exact phrases only.
     // The owner's plain-language words (Playerbot.Behavior.OwnerCommands, BotCommandParser OwnerWordOrder) are exact
     // phrases too: summon, passive / defensive / aggressive, the questions who / help / stats / gear / inventory, the
     // quest orders, loot / loot all, sell grey, repair. "drop quest <name>" is an argument order below.
@@ -41,7 +41,7 @@ std::optional<std::string> ClassifyGroupOrder(std::string_view msg, bool owner_w
     // Formation / spacing / main tank orders carry an argument ("formation circle", "spacing tight", "set main tank X").
     // Gear orders: "equip <item link / name / upgrades / best>", "use your best gear" (BotCommandParser OrderEquip).
     // "use <object>" (an altar, brazier, lever, orb; BotCommandParser "use") is unambiguous as a bare party line, so it needs no ";"
-    // (chris typed "use altar" / "use orb" in party chat and nothing answered, 2026-10-23). A bare "use" alone still says nothing.
+    // (Karrz typed "use altar" / "use orb" in party chat and nothing answered, 2026-10-23). A bare "use" alone still says nothing.
     bool const arg_order = order.rfind("gear ", 0) == 0 || order == "equip" || order.rfind("equip ", 0) == 0 || order == "use your best gear" ||
         order.rfind("use ", 0) == 0 ||
         order == "wear your best gear" || order.rfind("formation ", 0) == 0 || order.rfind("spacing ", 0) == 0 ||
@@ -59,11 +59,11 @@ std::optional<std::string> ClassifyGroupOrder(std::string_view msg, bool owner_w
         order == "ignore target" || order == "ignore clear" ||
         // The Positions tab's words: "place <shape> [gap] [here|target] [who...]", answered once (BotCommandParser::ApplyPlaceOrder).
         order.rfind("place ", 0) == 0;
-    // Everyday words for the two commonest orders, exact lines only ("follow me please" stays chatter). chris typed "wait here" in
+    // Everyday words for the two commonest orders, exact lines only ("follow me please" stays chatter). Karrz typed "wait here" in
     // party chat (2026-11-08): a bot answered "wait, got it" (BotChatReactor's acknowledgement) and nobody waited; "follow me"
     // likewise only got a reply. The Russian lines are the ones the Russian testers use.
     struct Alias { std::string_view words; std::string_view order; };
-    // "come here", "mount up" and "get off your mount" likewise reached only the AI chat (chris, 2026-11-08).
+    // "come here", "mount up" and "get off your mount" likewise reached only the AI chat (Karrz, 2026-11-08).
     static constexpr std::array<Alias, 16> kAliases = { {
         { "wait", "stay" }, { "wait here", "stay" }, { "stay here", "stay" }, { "wait for me", "stay" }, { "hold position", "stay" },
         { "follow me", "follow" }, { "come with me", "follow" }, { "with me", "follow" }, { "come here", "come" },

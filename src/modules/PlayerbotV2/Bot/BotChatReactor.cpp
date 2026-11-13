@@ -925,7 +925,7 @@ void BotChatReactor::ReactPartyModel(Player* sender, Group* group, std::string c
     // A line counts as said to a bot when it names the bot, when the bot is the only one who heard it (a duo: "how are you?" to
     // the one priest in an arena pair), or when the bot talked with the speaker in the last TalkWindowMs (the answer to its own
     // question). Without that, a quiet bot dropped the follow-ups of a talk it had just started: "hi" got "how's it going?",
-    // then "good you?" and "how are you ?" got nothing (chris, 2026-11-08).
+    // then "good you?" and "how are you ?" got nothing (Karrz, 2026-11-08).
     static constexpr uint32 kTalkWindowMs = 90000;
     static std::unordered_map<uint64, uint32> s_party_talk;   // (bot << 32 | speaker) -> when the bot was last asked; world thread
     uint32 const now_ms = GameTime::GetGameTimeMS();

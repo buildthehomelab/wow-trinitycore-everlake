@@ -8736,7 +8736,7 @@ Result API::apply_classic_talents()
     // until another rank is bought. `cfgVersion` counts the ranks bought; a node or pick refused at the current version is not validated again.
     // Without it fillParents filled every ancestor once per path to it (a node under two parents that share a parent: that one twice, and so on
     // five levels up), and every refused pick, with its parents, was validated again after each leftover rank. On the 70532 client data (234,
-    // 2026-10-23) the walk held the world thread past the 60 s freeze detector, inside ValidateConfig, when chris targeted or cast.
+    // 2026-10-23) the walk held the world thread past the 60 s freeze detector, inside ValidateConfig, when Karrz targeted or cast.
     uint32 cfgVersion = 0;
     std::map<int32, uint32> parentsTriedAt;      // node id -> cfgVersion when its parents were last filled
     std::map<std::string, uint32> pickTriedAt;   // pick name -> cfgVersion when its ranks were last refused

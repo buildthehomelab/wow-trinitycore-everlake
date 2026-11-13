@@ -15573,7 +15573,7 @@ bool BgDispatch(BotSnapshotView const& s, BotAI& ai,
         // for that small a roster.
 
         // Arena, gates open, not fighting: go and find the other team. The teams start out of sight of each other (Mak'gora:
-        // 90 yards), so a bot that nobody came to hit stood at its start spot for the whole match (chris, 2026-11-08 2v2).
+        // 90 yards), so a bot that nobody came to hit stood at its start spot for the whole match (Karrz, 2026-11-08 2v2).
         // Close enough: attack; further: run to the enemy. The combat state does the rest (healers heal from there).
         if (s.is_alive() && !s.is_casting() && !s.in_combat() &&
             s.bg_status() == 3 /*STATUS_IN_PROGRESS*/ && !s.raw().bg.arena_enemy.IsEmpty())
@@ -15608,7 +15608,7 @@ bool BgDispatch(BotSnapshotView const& s, BotAI& ai,
             s.position(self_x, self_y, self_z);
             // Opening rally: once the gates are open and no enemy is known (all hidden), go to the middle. Not during the
             // preparation minute: the bots wait at their start spot like players (walking out then made the battleground
-            // put them back at the start every second, the "jumping" chris saw on 2026-11-08).
+            // put them back at the start every second, the "jumping" Karrz saw on 2026-11-08).
             if ((bg_advice.opening_rally_x != 0.f ||
                  bg_advice.opening_rally_y != 0.f) &&
                 s.bg_status() == 3 /*STATUS_IN_PROGRESS*/ && s.bg_start_delay_ms() == 0)

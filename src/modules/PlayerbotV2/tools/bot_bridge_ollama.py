@@ -645,7 +645,7 @@ def static_rules(actions_on, swearing):
          "You have a mind of your own: you can joke, tease, grumble a little or ask something back. You come across as a "
          "friendly, cheeky player, never mean: no insults, no telling people to shut up or get lost. Be warmer with people "
          "you like; with people you don't like be short or a bit sarcastic, still not nasty.\n")
-    # chris, 2026-11-08: "can you sign my guild charter", "do you want to join the guild", "do you want to quest".
+    # Karrz, 2026-11-08: "can you sign my guild charter", "do you want to join the guild", "do you want to quest".
     s += ("When a player asks you to join his guild, sign his charter, group up or quest together, answer from GUILD AND "
           "GROUP below, like a player would (\"sure, inv me\", \"np, signed\", \"nah, I'm happy in my guild\"). Never "
           "promise to join when it says you would say no or can't: say why, in your own words. You can't invite him "
@@ -657,7 +657,7 @@ def static_rules(actions_on, swearing):
     else:
         s += "Don't swear. No slurs, no threats, nothing sexual.\n"
     if actions_on:
-        # A bot that said "On it." and "Trade away, mate." and then did nothing (chris, 2026-11-08): saying yes means a "do".
+        # A bot that said "On it." and "Trade away, mate." and then did nothing (Karrz, 2026-11-08): saying yes means a "do".
         s += ("You may also DO one thing for the player who talks, only an action from \"You can do now\" below.\n"
               "If you say yes to something (ok, on it, sure, trade away, coming), put that action in \"do\" in the same "
               "answer, or nothing happens. If none of your actions fits, don't promise it: say you can't, in your own words.\n"
@@ -723,13 +723,13 @@ def build_prompt(event, actions_on, minds, swearing):
     can = event.get("can")
     spells = event.get("spells") or []
     # The rules that are the same for every bot come first, then what is this bot's own: Ollama keeps the start of the last
-    # prompt worked out and only reads what is new, so the answer comes sooner (chris, 2026-11-08: "quite slow answering").
+    # prompt worked out and only reads what is new, so the answer comes sooner (Karrz, 2026-11-08: "quite slow answering").
     system = static_rules(actions_on, swearing)
     system += ("You are %s, a level %s %s %s. Who you are: %s. How you write: %s. You are %s in chat. %s\n"
                % (bot, event.get("level", "?"), event.get("race", ""), event.get("class", ""),
                   p.get("temper_text", ""), p.get("style_text", ""), p.get("chatty", "normal"), language_line(russian)))
     # The player who brought this bot (its owner, the leader of its group): orders from him are what the bot is there for. A bot
-    # that answered "piss off" to "mount up" and did nothing felt broken (chris, 2026-11-08).
+    # that answered "piss off" to "mount up" and did nothing felt broken (Karrz, 2026-11-08).
     if owner:
         system += ("%s is your friend and leads your group; you play together. When %s asks you to do something you can do, "
                    "do it (put it in \"do\") and say a short, cheeky okay. If you can't, say why in a friendly way. A request "
@@ -749,7 +749,7 @@ def build_prompt(event, actions_on, minds, swearing):
     lines = ["You are in %s%s. Your quest: %s." % (event.get("zone", "?"),
              (", " + event["area"]) if event.get("area") else "", (event.get("quest") or {}).get("name", "none"))]
     if event.get("doing"):
-        # "what are you doing?" / "where are you off to?": the game's answer, not a made-up one (chris, 2026-11-09)
+        # "what are you doing?" / "where are you off to?": the game's answer, not a made-up one (Karrz, 2026-11-09)
         lines.append("What you are doing right now: %s. When asked, say this in your own words; don't invent anything "
                      "else." % event["doing"])
     if event.get("weather") or event.get("time_of_day"):
@@ -792,7 +792,7 @@ def build_prompt(event, actions_on, minds, swearing):
         if spells and can and "cast" in can:
             lines.append("YOUR SPELLS: " + ", ".join("%s (%s)" % (s.get("name"), s.get("kind")) for s in spells))
         if event.get("speaker_target"):
-            # "cast a frostbolt on it" / "attack that": the selection is what "it" means (chris, 2026-11-08)
+            # "cast a frostbolt on it" / "attack that": the selection is what "it" means (Karrz, 2026-11-08)
             lines.append("%s has selected: %s (%s). When %s says \"it\", \"that\" or \"this one\", it is this (target "
                          "\"speaker_target\")." % (player, event["speaker_target"], event.get("speaker_target_kind", "?"), player))
     with history_lock:
@@ -1089,7 +1089,7 @@ def answer(event, api, actions_on, minds, opts):
         reply["say"] = human_touch(reply["say"], minds.get(bot)["persona"], rng)
         # The program doesn't wait here any more: the server waits before it shows the line (delay_ms), and an action in
         # the same reply happens at once. Before, the action waited for the typing too, and the server added its own
-        # typing time on top (chris, 2026-11-08: "quite slow answering").
+        # typing time on top (Karrz, 2026-11-08: "quite slow answering").
         wait = 0.0 if opts.no_typing_delay else typing_delay(reply["say"], rng, "do" in reply) - (time.time() - started)
         reply["delay_ms"] = int(max(0.0, wait) * 1000)
     if time.time() - event["_seen"] > MAX_AGE_S:

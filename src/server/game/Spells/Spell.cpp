@@ -4932,7 +4932,7 @@ void Spell::SendSpellGo()
     }
 
     // The missile is launched by this packet: without the ammo display the client draws it as a white box. Shots whose cast start is
-    // never sent (Auto Shot's repeats, other triggered ranged spells) would otherwise carry display 0.
+    // never sent (Auto Shot's repeats, other triggered ranged spells) were left with display 0 (PC 20 Oct, squares on some of a hunter's moves).
     if (castFlags & CAST_FLAG_PROJECTILE)
         castData.AmmoDisplayID = GetSpellCastDataAmmo();
 
@@ -5002,14 +5002,14 @@ int32 Spell::GetSpellCastDataAmmo()
             if (ammoInventoryType == INVTYPE_THROWN)
             {
                 ammoDisplayID = pItem->GetDisplayId(playerCaster);
-                // A thrown weapon with the generic 1.60 display, or none, is drawn by the client as a white square.
+                // A thrown weapon with the generic 1.60 display, or none, is drawn by the client as a white square (UBRS and Red Cloud Mesa, 20 Oct).
                 if (!ammoDisplayID || ammoDisplayID >= 500000)
                     ammoDisplayID = 5996;      // plain arrow (23211 was the fire arrow of item 19082)
             }
             else if (ItemTemplate const* ammo = sObjectMgr->GetItemTemplate(playerCaster->GetAmmoId()))   // Classic 1.60 ammo slot
             {
                 // The ammo's own display, as a real player's cast sends it. The generic 1.60 ammo display (737992 / 737993) has no material and
-                // the client draws a white box for it; bots take ammo that has its own display (Player::AutoSelectAmmo), so
+                // the client draws a white box for it (PC log 20 Oct); bots take ammo that has its own display (Player::AutoSelectAmmo), so
                 // this is the fallback only: an arrow model, for bullets too (every classic bullet has the generic display).
                 ammoDisplayID = Player::GetAmmoDisplayId(ammo);
                 if (!Player::HasDrawableAmmoDisplay(ammo))

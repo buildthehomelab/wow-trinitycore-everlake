@@ -1192,7 +1192,7 @@ public:
     // is told. In hired mode (Playerbot.Hire.*, HirePolicy.h) nothing is made out of nothing: an idle companion of the account
     // comes instead, or next to a broker a Sellsword is hired; `hireGrade` hires that grade from the broker beside `me`.
     // `finder`: the Group Finder / dungeon finder fill (`.bot lfg`, `.bot dungeon`, a posted listing). It still works in hired mode
-    // (chris 2026-11-03: "you can still look for group"), but the bot is only lent: free, it stays with the group and is deleted
+    // (Karrz 2026-11-03: "you can still look for group"), but the bot is only lent: free, it stays with the group and is deleted
     // when it leaves it, and it cannot be called on its own (HireMgr::SetLoaned).
     static bool AddCompanionFor(Player* me, WorldSession* sess, uint8 cls, Playerbot::Role role, uint8 race, uint8 gender,
                                 std::string const& className, std::string& outMsg,

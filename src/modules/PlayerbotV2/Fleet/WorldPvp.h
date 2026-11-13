@@ -18,7 +18,7 @@
 #ifndef PLAYERBOT_V2_FLEET_WORLD_PVP_H
 #define PLAYERBOT_V2_FLEET_WORLD_PVP_H
 
-// World PvP of the world bots on a PvP or free-for-all realm (chris 2026-11-03: "some of the bots are marked as PvP, and some
+// World PvP of the world bots on a PvP or free-for-all realm (Karrz 2026-11-03: "some of the bots are marked as PvP, and some
 // ... have got flagged PvP off ... a wee bit of randomness ... I'm walking down and all of a sudden I get cheap-shotted by a
 // rogue that's been hiding, or a hunter will suddenly sting you"; free-for-all "a wee bit of hardcore ... bots fight each other,
 // you fight the bots").

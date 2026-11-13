@@ -1652,7 +1652,7 @@ bool OwnerWordOrder(Player* sender, Player* bot, std::string const& n)
     }
 
     // ---- combat attitude ----
-    // Three stances, the panel's one button (chris, 2026-11-03: "passive, defensive and aggressive"):
+    // Three stances, the panel's one button (Karrz, 2026-11-03: "passive, defensive and aggressive"):
     //   passive    - BotAI::OwnerStance::NoFight: the bot attacks nothing at all, not to defend itself or the group and not on attack
     //                or pull, until defensive or aggressive. Heals and buffs go on (a hunter player taming a beast, crowd control
     //                that must not break, a quest mob that must stay alive).
@@ -1662,7 +1662,7 @@ bool OwnerWordOrder(Player* sender, Player* bot, std::string const& n)
     //   aggressive - below.
     // "stance nofight" / "stance defensive" / "stance aggressive": the add-on's own re-send of the stance its panel shows (when the
     // group grows, after a loading screen), so new and re-created bots get it. It sets the stance and nothing else: an Attack / Pull
-    // under way or a Stay is kept, and nothing is said. The plain word ended the order: in UBRS a bot joined at 22:05:34, chris said
+    // under way or a Stay is kept, and nothing is said. The plain word ended the order: in UBRS a bot joined at 22:05:34, Karrz said
     // "attack" at 22:05:35, the re-send at 22:05:36 called the whole raid off, and the melee stood by him until he said it again.
     // "stance passive" is the older add-on's re-send of its Passive, which was the defensive stance.
     if (n == "stance passive" || n == "stance defensive" || n == "stance aggressive" || n == "stance nofight")
@@ -2075,7 +2075,7 @@ bool BotCommandParser::ApplyIgnoreOrder(Player* sender, std::string const& line,
 
 // ---------------------------------------------------------------------------------------------------------------------------
 // The Positions tab (ForeverBots, PLACE_REQ) and the "place ..." group order: the chosen bots stand in a shape at one spot and stay
-// there (chris 2026-11-03). Each bot gets a Stay whose way-back spot is its own slot, so after a fight the group joined it walks
+// there (Karrz 2026-11-03). Each bot gets a Stay whose way-back spot is its own slot, so after a fight the group joined it walks
 // back to the slot (idle:owner_stay_return). "Follow" lets them go again. World thread.
 namespace {
 

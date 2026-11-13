@@ -882,7 +882,7 @@ inline ScenarioDef MakeScorecardScenario()
     return d;
 }
 
-// ---- brm_follow: a player's group through Blackrock Mountain on foot (chris 2026-10-30) ----
+// ---- brm_follow: a player's group through Blackrock Mountain on foot (Karrz 2026-10-30) ----
 // The rogue leads like a player from the Blackrock Spire door at the top down to the Blackrock Depths door at the bottom, and back up. The
 // way down has drops the bots leap (follow_drop); the way up is where a player takes the chains and the jumps, which bots cannot: where
 // the rogue finds no walking route he is set down on the point, and the bots that cannot follow are brought to him (CatchUpToOwner). The

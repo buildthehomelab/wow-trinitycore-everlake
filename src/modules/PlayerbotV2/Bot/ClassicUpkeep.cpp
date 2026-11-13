@@ -3252,7 +3252,7 @@ void ResolveAlwaysAura(AlwaysAura const& row, std::vector<uint32>& out)
             }
             else if (e.TriggerSpell)
             {
-                // A trigger that is the eating aura itself is left out (chris's priest companion sat in Stormwind with full mana and
+                // A trigger that is the eating aura itself is left out (Karrz's priest companion sat in Stormwind with full mana and
                 // health: "+1129" put Food on again every 30 s, 0.1.29 dev realm, Consumables.World on).
                 if (!IsSitDownAura(sSpellMgr->GetSpellInfo(e.TriggerSpell, DIFFICULTY_NONE)))
                     out.push_back(e.TriggerSpell);

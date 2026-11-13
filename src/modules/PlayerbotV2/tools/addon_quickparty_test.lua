@@ -33,7 +33,7 @@ n = run(6, false, "none", 0); check(n, 0)
 n = run(1, true, "party", 5); check(n, 4)
 -- UBRS 10: 9 bots, 2 tanks 3 healers 4 dps
 n, t = run(1, true, "raid", 10); check(n, 9); assert(t.tank == 2 and t.healer == 3 and t.dps == 4)
--- UBRS with 6 already (chris's case): 4 more
+-- UBRS with 6 already (Karrz's case): 4 more
 n = run(6, true, "raid", 10); check(n, 4)
 -- ZG 20, MC 40, unknown raid size -> 40
 n, t = run(1, true, "raid", 20); check(n, 19); assert(t.tank == 2 and t.healer == 5)

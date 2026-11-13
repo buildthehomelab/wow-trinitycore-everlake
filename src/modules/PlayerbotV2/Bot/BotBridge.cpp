@@ -1088,7 +1088,7 @@ std::string RunTrade(Player* bot, Player* speaker, std::string const& items, std
     if (!speaker)
         return "nobody asked";
     // A window already open between the two of them (he opened it, or an earlier ask did): the things go into that one. Before,
-    // every later ask was refused with "I'm already trading" while the first window sat empty (chris, 2026-11-08).
+    // every later ask was refused with "I'm already trading" while the first window sat empty (Karrz, 2026-11-08).
     TradeData* const open = bot->GetTradeData();
     bool const same_window = open && open->GetTrader() == speaker;
     if (open && !same_window)

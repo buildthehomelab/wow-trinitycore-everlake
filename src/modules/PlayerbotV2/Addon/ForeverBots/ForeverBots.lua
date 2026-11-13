@@ -259,7 +259,7 @@ local function ServerCommand(text)
     Cmd.Say(text)
 end
 
--- Stance button of the panel, three steps (chris 2026-11-03: "passive, defensive and aggressive"). ForeverBotsDB.stance is
+-- Stance button of the panel, three steps (Karrz 2026-11-03: "passive, defensive and aggressive"). ForeverBotsDB.stance is
 --   "nofight"    - Passive: the bots attack nothing at all, not even to defend; heals and buffs go on (taming a beast, a sheep that
 --                  must not break, a quest mob that must stay alive). Server word "passive".
 --   "defensive"  - Defensive: they start nothing and fight what you pull or what attacks the group (the server's start stance).

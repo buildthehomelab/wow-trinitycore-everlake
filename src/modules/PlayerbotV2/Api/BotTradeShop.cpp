@@ -276,7 +276,7 @@ std::vector<Item*> PickGifts(Player* bot, Player* partner, std::string const& wa
         return false;
     };
     bool const general = words.empty() || has({ "stuff", "things", "anything", "something", "everything", "useful", "loot", "items" });
-    // Water and food apart: "trade water" from a mage with only cheese in its bags handed over the cheese (chris, 2026-11-08).
+    // Water and food apart: "trade water" from a mage with only cheese in its bags handed over the cheese (Karrz, 2026-11-08).
     bool const want_food = has({ "food", "eat", "bread", "consumables" });
     bool const want_drink = has({ "drink", "drinks", "water", "consumables" });
     bool const want_potions = has({ "potion", "potions", "pots", "elixir", "elixirs", "flask", "flasks", "consumables" });

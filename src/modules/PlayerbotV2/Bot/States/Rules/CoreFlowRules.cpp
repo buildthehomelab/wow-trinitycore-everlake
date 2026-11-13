@@ -1108,7 +1108,7 @@ bool DungeonLoopRequeueFire(BotSnapshotView const& s, BotAI& ai,
 // not in a city/inn) invites a same-faction same-bracket nearby player
 // to a group. Per-target 5-min cooldown via InviteOther absorbs declines.
 // Real players (not bots) are left out unless Playerbot.Behavior.InvitePassingPlayers = 1
-// (chris 2026-11-02: bots should not invite you as you walk past; a player asks by whispering "invite").
+// (Karrz 2026-11-02: bots should not invite you as you walk past; a player asks by whispering "invite").
 bool InviteNearbyPlayerGate(BotSnapshotView const& s, BotAI&,
                             GroupSnapshotView const&, uint32)
 {
