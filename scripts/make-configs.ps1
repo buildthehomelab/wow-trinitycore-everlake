@@ -41,7 +41,7 @@ $db = { param($name) "`"127.0.0.1;3306;trinity;$pw;$name`"" }
 # with the full list below: every default build plus any extra build the user added, newest first, each once. Keeping only the saved value
 # left a new client out (70862 on 7 November 2026: the saved 70840 list stayed). Both servers need it (worldserver builds the realm entry for
 # character create).
-$defaultAlso = '70888,70862,70840,70790,70755,70685,70658,70634,70630,70532'
+$defaultAlso = '70938,70888,70862,70840,70790,70755,70685,70658,70634,70630,70532'
 $savedAlso = $null
 foreach ($f in "$server\bnetserver.conf", "$server\worldserver.conf") {
     if ((-not $savedAlso) -and (Test-Path $f)) {

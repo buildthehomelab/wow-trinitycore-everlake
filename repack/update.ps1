@@ -15,7 +15,8 @@ param(
     [string]$Repo,               # default: repack\release-source.txt
     [string]$ApiUrl,             # tests only: replaces https://api.github.com/repos/<repo>/releases/latest
     [string]$Root,               # tests only: default is the folder above repack\
-    [switch]$SkipDatabase        # tests only: skip the MySQL dump (never use on a real install)
+    [switch]$SkipDatabase,       # tests only: skip the MySQL dump (never use on a real install)
+    [switch]$NoAddon             # do not copy the add-ons into the game folder (also: a file config\no-addon.txt, for test installs)
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'   # the progress bar makes downloads in Windows PowerShell 5.1 very slow
@@ -331,8 +332,13 @@ try {
     Say "Installed version $remote ($count files)."
 
     # --- add-on -----------------------------------------------------------------------------------------------------
+    # A test install points at the same game folder as the real one, and its update used to put its own (test) add-ons into the
+    # player's game (2026-11-13). -NoAddon or config\no-addon.txt leave the game folder alone; Play in the launcher still installs them.
     $clientFile = Join (Join $Root 'config') 'client.txt'
-    if (Test-Path $clientFile) {
+    $noAddonFile = Join (Join $Root 'config') 'no-addon.txt'
+    if ($NoAddon -or (Test-Path $noAddonFile)) {
+        Say "Add-ons not copied into the game folder ($(if ($NoAddon) { '-NoAddon' } else { 'config\no-addon.txt' }))."
+    } elseif (Test-Path $clientFile) {
         $client = (Get-Content $clientFile -TotalCount 1).Trim()
         try { & (Join $PSScriptRoot 'install-addon.ps1') -Client $client } catch { Write-Warning "Could not update the add-on: $($_.Exception.Message)" }
     } else {

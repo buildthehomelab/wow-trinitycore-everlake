@@ -198,6 +198,33 @@ uint32 SpellImplicitTargetInfo::GetExplicitTargetMask(bool& srcSet, bool& dstSet
                                 break;
                         }
                         break;
+                    // The explicit target is a corpse (or a player who has not released yet). Resurrection spells carry
+                    // TARGET_FLAG_CORPSE_ALLY in SpellTargetRestrictions::Targets too, but not all of them: Classic 1.60
+                    // Revive (437138) has no row there. Without this its explicit mask was empty, so InitExplicitTargets
+                    // dropped the dead player as a target and the finished cast hit the ASSERT in
+                    // SelectImplicitTargetObjectTargets (player report 2026-11-12).
+                    case TARGET_OBJECT_TYPE_CORPSE_ALLY:
+                        targetMask = TARGET_FLAG_CORPSE_ALLY;
+                        break;
+                    case TARGET_OBJECT_TYPE_CORPSE_ENEMY:
+                        targetMask = TARGET_FLAG_CORPSE_ENEMY;
+                        break;
+                    case TARGET_OBJECT_TYPE_CORPSE:
+                        switch (GetCheckType())
+                        {
+                            case TARGET_CHECK_ENEMY:
+                                targetMask = TARGET_FLAG_CORPSE_ENEMY;
+                                break;
+                            case TARGET_CHECK_ALLY:
+                            case TARGET_CHECK_PARTY:
+                            case TARGET_CHECK_RAID:
+                                targetMask = TARGET_FLAG_CORPSE_ALLY;
+                                break;
+                            default:
+                                targetMask = TARGET_FLAG_CORPSE_ALLY | TARGET_FLAG_CORPSE_ENEMY;
+                                break;
+                        }
+                        break;
                     default:
                         break;
                 }
@@ -3029,10 +3056,20 @@ void SpellInfo::_LoadSpellSpecific()
             }
             case SPELLFAMILY_WARLOCK:
             {
-                // Warlock (Bane of Havoc). Classic 603 and 980 are Curse of Doom and Curse of Agony rank 1 (the client names
-                // them Bane, but they dispel as curses): as banes they stacked with the warlock's other curse.
-                if (Id == 80240)
-                    return SPELL_SPECIFIC_BANE;
+                // Banes. The Forever client renamed Curse of Agony and Curse of Doom to Bane, and their tooltips say "Only one Bane
+                // per Warlock can be active on any one target", while every Curse says "Only one Curse per Warlock": a Bane and a
+                // Curse of the same warlock stand on one target together. They still dispel as curses, so the IDs are listed here
+                // (all spells whose client description carries the Bane line, plus Bane of Havoc) before the curse check below.
+                switch (Id)
+                {
+                    case 980: case 1014: case 6217: case 11711: case 11712: case 11713: // Bane of Agony, ranks 1-6
+                    case 603:                                                         // Bane of Doom
+                    case 1225228:                                                     // Bane of Havoc (Forever)
+                    case 80240:                                                       // Bane of Havoc (Cataclysm)
+                        return SPELL_SPECIFIC_BANE;
+                    default:
+                        break;
+                }
 
                 // only warlock curses have this
                 if (Dispel == DISPEL_CURSE)

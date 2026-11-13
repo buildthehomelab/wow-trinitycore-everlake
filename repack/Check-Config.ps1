@@ -12,5 +12,9 @@ foreach ($l in $cfg.Lines) {
 }
 if ($cfg.Ok) { Write-Host 'No problem the server would stop on.' -ForegroundColor Green }
 else { Write-Host 'Fix the PROBLEM lines above (file and line number are given), save the file, then start the server again.' -ForegroundColor Red }
-if (-not $NoPause) { Read-Host 'Press Enter to close' | Out-Null }
+# no wait when nobody can press a key: started by a script or a scheduled task (input redirected, -NonInteractive, or no
+# interactive session). An unattended test run waited here for 2 hours (2026-11-13).
+$interactive = [Environment]::UserInteractive -and -not ([Environment]::GetCommandLineArgs() -match '^-NonI')
+try { if ([Console]::IsInputRedirected) { $interactive = $false } } catch { }
+if (-not $NoPause -and $interactive) { Read-Host 'Press Enter to close' | Out-Null }
 if (-not $cfg.Ok) { exit 1 }

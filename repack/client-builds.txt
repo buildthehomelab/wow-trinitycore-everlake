@@ -1,6 +1,7 @@
 # Client builds this package works with, one per line, the preferred one first. The installer, the data extraction and the launcher
 # use the first installed client whose build is listed here. Add a build only once the server accepts it (realm build or
 # Realm.AlsoAcceptBuilds) and its game data matches.
+70938
 70888
 70862
 70840

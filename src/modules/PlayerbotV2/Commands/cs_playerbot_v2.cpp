@@ -38,6 +38,7 @@
 #include "TypeContainerVisitor.h"
 #include "PlayerbotAPI.h"
 #include "ClassicSpec.h"      // .playerbot questrun: spec override
+#include "TalentCode.h"       // .playerbot talentcode
 #include "DB2Stores.h"        // .playerbot questrun: sMapStore
 #include "PlayerbotV2.h"
 #include "LfgBotFill.h"
@@ -102,8 +103,13 @@
 #include "SpellAuras.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "ClassicRage.h"          // .playerbot rageprobe
+#include "Api/BotItemScorer.h"     // .playerbot gearpick
+#include "ConditionMgr.h"         // .playerbot visualprobe
 #include "Trainer.h"
 #include "TraitMgr.h"
+#include "TransmogrificationPackets.h"  // .playerbot transmogprobe
+#include "TransmogMgr.h"                // .playerbot transmogprobe
 #include "Containers.h"
 #include "MapUtils.h"
 #include "DB2Stores.h"
@@ -585,6 +591,7 @@ public:
             { "quests",        HandleQuests,        rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "crafting",      HandleCrafting,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "stuck",         HandleStuck,         rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "flips",         HandleFlips,         rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "bg",            HandleBg,            rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "mark",          HandleMark,          rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "unmark",        HandleUnmark,        rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
@@ -643,10 +650,22 @@ public:
             { "proccheck",     HandleProcCheck,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "casttest",      HandleCastTest,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "xpprobe",       HandleXpProbe,       rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "questchainprobe", HandleQuestChainProbe, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "groundz",       HandleGroundZ,       rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "formprobe",     HandleFormProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "equipprobe",    HandleEquipProbe,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "gearpick",      HandleGearPick,      rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "rageprobe",     HandleRageProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "visualprobe",   HandleVisualProbe,   rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "campprobe",     HandleCampProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "spotprobe",     HandleSpotProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "collisionprobe", HandleCollisionProbe, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "transmogprobe", HandleTransmogProbe, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "langprobe",     HandleLangProbe,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "learncheck",    HandleLearnCheck,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "traitcheck",    HandleTraitCheck,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "talentwalk",    HandleTalentWalk,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "talentcode",    HandleTalentCode,    rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "graveyardscan", HandleGraveyardScan, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "wipefleet",     HandleWipeFleet,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
             { "roadstats",     HandleRoadStats,     rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
@@ -680,6 +699,8 @@ public:
             { "call",          HandleBotCall,       rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             // Every player: brings the caller's own bots only (`.bot summon all|saved|<bot name>`).
             { "summon",        HandleBotSummon,     rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No },
+            // Every player: takes the caller to one of their own bots (`.bot goto <bot name>`).
+            { "goto",          HandleBotGoto,       rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No },
             { "dismiss",       HandleBotDismiss,    rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             { "regear",        HandleBotRegear,     rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
             { "gear",          HandleBotGear,       rbac::RBAC_PERM_JOIN_NORMAL_BG, Console::No  },
@@ -1475,6 +1496,56 @@ public:
         return false;
     }
 
+    // .bot goto <bot name>: takes the caller to one of their own bots (a companion or a summoned alt), the other way round from
+    // `.bot summon`. Every player has it; `.appear` is a GM command (Discord 12 Nov). Only the caller's own bots, and only from
+    // where a hearthstone could be used: not in combat, not dead, not on a flight path, not in or into a battleground or arena.
+    // Into a dungeon or raid only when the caller is in the bot's group, and the map's own entry checks (lock, level, attunement)
+    // still decide, as for any other teleport.
+    static bool HandleBotGoto(ChatHandler* handler, Tail args)
+    {
+        Playerbot::BotLanguage::LocalizedHandler localized(handler); handler = localized.Get();   // replies in the player's language
+        WorldSession* sess = handler ? handler->GetSession() : nullptr;
+        Player* me = sess ? sess->GetPlayer() : nullptr;
+        if (!me)
+            return false;
+        if (!Playerbot::Services::Initialized())
+        { handler->SendSysMessage("PlayerbotV2 not initialized."); return Refuse(handler); }
+        std::string who(args);
+        while (!who.empty() && (who.back() == ' ' || who.back() == '\t')) who.pop_back();
+        while (!who.empty() && (who.front() == ' ' || who.front() == '\t')) who.erase(who.begin());
+        if (who.empty() || ToLowerAscii(who) == "all")
+        { handler->SendSysMessage(".bot goto <bot name>: takes you to one of your bots."); return Refuse(handler); }
+        auto const ids = CompanionsMatching(sess, who);
+        if (ids.empty())
+        { handler->PSendSysMessage("No bot or summoned alt of yours called '%s'. `.bot list` shows your bots.", who.c_str()); return Refuse(handler); }
+        Player* bot = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(ids.front()));
+        if (!bot || !bot->IsInWorld() || bot->IsBeingTeleported())
+        {
+            std::string const name = CompanionName(ids.front());
+            handler->PSendSysMessage("%s is offline: `.bot call %s` first.", name.c_str(), name.c_str());
+            return Refuse(handler);
+        }
+        if (me->IsInCombat() || !me->IsAlive())
+        { handler->SendSysMessage("Not while you are in combat or dead."); return Refuse(handler); }
+        if (me->IsInFlight())
+        { handler->SendSysMessage("Not while you are on a flight path."); return Refuse(handler); }
+        if (me->GetMap()->IsBattlegroundOrArena() || bot->GetMap()->IsBattlegroundOrArena())
+        { handler->SendSysMessage("Not into or out of a battleground or arena."); return Refuse(handler); }
+        if (bot->GetMap()->IsDungeon())
+        {
+            Group const* group = me->GetGroup();
+            if (!group || !group->IsMember(bot->GetGUID()))
+            {
+                handler->PSendSysMessage("%s is in a dungeon or raid: invite it to your group first.", bot->GetName().c_str());
+                return Refuse(handler);
+            }
+        }
+        if (!me->TeleportTo(bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(), bot->GetOrientation()))
+        { handler->PSendSysMessage("Could not take you to %s.", bot->GetName().c_str()); return Refuse(handler); }
+        handler->PSendSysMessage("Going to %s.", bot->GetName().c_str());
+        return true;
+    }
+
     // .learn all mylevel [player]: what a visit to the class trainers, the class quests and the weapon masters would have
     // taught at the player's current level, for free and without the NPCs (the same code the owner companions are levelled with).
     // No spell above the level, no talents.
@@ -2056,6 +2127,15 @@ public:
     static bool HandleCrafting(ChatHandler* handler)
     {
         const std::string report = Playerbot::Diagnostics::FleetCrafting();
+        for (auto const& line : Trinity::Tokenize(report, '\n', true))
+            handler->SendSysMessage(std::string{line});
+        return true;
+    }
+
+    // .playerbot flips: bots that stop and start because two rules take turns (Diagnostics::FleetFlips)
+    static bool HandleFlips(ChatHandler* handler)
+    {
+        const std::string report = Playerbot::Diagnostics::FleetFlips();
         for (auto const& line : Trinity::Tokenize(report, '\n', true))
             handler->SendSysMessage(std::string{line});
         return true;
@@ -4685,6 +4765,94 @@ public:
         return walked > 0;
     }
 
+    // .playerbot talentcode <Name> [<wowhead link or code> | clear]
+    // The owner's talent build ("change talents <link>", Api/TalentCode.h) without a player in game: prints the bot's class tabs as the
+    // talent calculator lays them out (each talent's name, ranks and row), sets the code when
+    // one is given (checked as the whisper checks it), runs the talent walk at once and prints the code the bot then holds, so the two
+    // can be compared. "clear" gives it our builds back. Memory only: a companion's stored code is not touched.
+    static bool HandleTalentCode(ChatHandler* handler, Tail args)
+    {
+        namespace TCode = ::Playerbot::Classic::TalentCode;
+        std::string_view const all(args);
+        size_t const sp = all.find(' ');
+        std::string const name(all.substr(0, sp));
+        std::string code = sp == std::string_view::npos ? std::string() : std::string(all.substr(sp + 1));
+        Player* p = name.empty() ? nullptr : ObjectAccessor::FindPlayerByName(name);
+        if (!p || !p->IsInWorld())
+        {
+            handler->PSendSysMessage("talentcode: %s is not in the world", name.c_str());
+            return false;
+        }
+        auto const* tabs = ::Playerbot::Classic::GetTalentTabs(p);
+        if (!tabs)
+        {
+            handler->PSendSysMessage("talentcode: %s: no talent tabs (no talent config, or the data is not three tabs)", p->GetName().c_str());
+            return false;
+        }
+        for (size_t t = 0; t < tabs->size(); ++t)
+        {
+            std::string line;
+            for (::Playerbot::Classic::TalentSlot const& slot : (*tabs)[t])
+                line += fmt::format("{}{}:{}/r{}", line.empty() ? "" : ", ", slot.name.empty() ? std::to_string(slot.TraitNodeID) : slot.name,
+                                    slot.MaxRanks, uint32(slot.row));
+            handler->PSendSysMessage("talentcode: tab %u (%u talents): %s", uint32(t + 1), uint32((*tabs)[t].size()), line.c_str());
+        }
+        if (code == "clear")
+            ::Playerbot::Classic::SetTalentCode(p->GetGUID(), std::string());
+        else if (!code.empty())
+        {
+            TCode::Parsed const parsed = TCode::Parse(code);
+            TCode::Layout layout;
+            for (auto const& tab : *tabs)
+            {
+                std::vector<TCode::Slot>& slots = layout.emplace_back();
+                for (::Playerbot::Classic::TalentSlot const& slot : tab)
+                    slots.push_back({ uint8(std::clamp<int32>(slot.MaxRanks, 0, 9)), slot.row });
+            }
+            // The same checks in the same order as the whisper: the code itself, the link's class, then the fit on the class's tabs.
+            if (parsed.ok() && parsed.cls && parsed.cls != p->GetClass())
+            {
+                handler->PSendSysMessage("talentcode: refused (wrong class: link class %u, bot class %u): that link is for a %s, I'm a %s",
+                    uint32(parsed.cls), uint32(p->GetClass()), std::string(TCode::SlugOfClass(parsed.cls)).c_str(),
+                    std::string(TCode::SlugOfClass(p->GetClass())).c_str());
+                return false;
+            }
+            TCode::Error const error = !parsed.ok() ? parsed.error : TCode::Validate(parsed, layout).error;
+            if (error != TCode::Error::None)
+            {
+                handler->PSendSysMessage("talentcode: refused (error %u): %s", uint32(error), std::string(TCode::ErrorText(error)).c_str());
+                return false;
+            }
+            ::Playerbot::Classic::SetTalentCode(p->GetGUID(), TCode::Encode(parsed.tabs));
+        }
+        uint32 const start = getMSTime();
+        Playerbot::Result const r = Playerbot::API(p).apply_classic_talents();
+        uint32 const ms = getMSTimeDiff(start, getMSTime());
+
+        UF::TraitConfig const* active = p->GetTraitConfig(p->m_activePlayerData->ActiveCombatTraitConfigID);
+        std::vector<std::vector<uint8_t>> held;
+        for (auto const& tab : *tabs)
+        {
+            std::vector<uint8_t>& row = held.emplace_back();
+            for (::Playerbot::Classic::TalentSlot const& slot : tab)
+            {
+                int32 rank = 0;
+                if (active)
+                    for (UF::TraitEntry const& e : active->Entries)
+                        if (e.TraitNodeID == slot.TraitNodeID && e.TraitNodeEntryID == slot.TraitNodeEntryID)
+                            rank = e.Rank;
+                row.push_back(uint8_t(std::clamp<int32>(rank, 0, 9)));
+            }
+        }
+        std::string const now = TCode::Encode(held);
+        std::string const wanted = ::Playerbot::Classic::GetTalentCode(p->GetGUID());
+        handler->PSendSysMessage("talentcode: %s L%u code set \"%s\", walk result %u in %u ms, holds \"%s\" %s", p->GetName().c_str(),
+            uint32(p->GetLevel()), wanted.c_str(), uint32(r), ms, now.c_str(),
+            wanted.empty() ? "(our build)" : now == wanted ? "(MATCH)" : "(partial or different: compare)");
+        handler->PSendSysMessage("talentcode: link %s", TCode::Link(p->GetClass(), now).c_str());
+        return true;
+    }
+
     // .playerbot auracheck [@Player] [class id]
     // For every aura effect of the vanilla spells a class trainer teaches whose amount is a plain number (stat, attack power, armor, crit and hit, speed, healing and
     // damage done, absorb, periodic damage and heal), the caster gets the real aura on itself (Unit::AddAura: the aura effect's own CalculateAmount, with the
@@ -5281,6 +5449,146 @@ public:
         return true;
     }
 
+    // .playerbot groundz <map> <x> <y> [<z to search down from>]
+    // Lists every standing surface under a point, top down (terrain .map plus VMap: ledges, cave roofs and floors, the valley
+    // floor), with no player or bot needed, so a spawn's height can be checked or chosen from the console. A creature spawned off
+    // these surfaces floats or sits inside the rock (Incinerator Gar'im, 2026-11-04).
+    static bool HandleGroundZ(ChatHandler* handler, uint32 mapId, float x, float y, Optional<float> fromZ)
+    {
+        if (!sMapStore.LookupEntry(mapId) || !Trinity::IsValidMapCoord(x, y))
+        {
+            handler->SendSysMessage("groundz: no such map or point");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        std::shared_ptr<TerrainInfo> terrain = sTerrainMgr.LoadTerrain(mapId);
+        PhaseShift const& phaseShift = PhasingHandler::GetEmptyPhaseShift();
+        float const gridZ = terrain->GetGridHeight(phaseShift, mapId, x, y);
+        handler->PSendSysMessage("groundz: map %u (%.2f, %.2f) terrain (.map) %.2f", mapId, x, y, gridZ);
+
+        float z = fromZ.value_or(2000.0f);
+        for (uint32 i = 1; i <= 10; ++i)
+        {
+            float const surface = terrain->GetStaticHeight(phaseShift, mapId, x, y, z, true, 4000.0f);
+            if (surface <= INVALID_HEIGHT)
+                break;
+            handler->PSendSysMessage("groundz:   surface %u at %.2f", i, surface);
+            z = surface - 3.0f;   // under this floor, down to the next one
+        }
+        return true;
+    }
+
+    // .playerbot questchainprobe <player> <first quest id>
+    // Walks a quest chain the way a player meets it: for each quest it reports who starts it (creatures, objects, items), every
+    // requirement check the player fails, then takes, completes and rewards it and looks for what comes next (the reward's next
+    // quest, the addon NextQuestID, a rewarded item that starts a quest, and every quest whose PrevQuestID points back). The walk
+    // goes on with the first next quest the player can take; "chain ends" names the quest after which nothing is offered. Every
+    // walked quest is forgotten again at the end; the XP and the reward items stay. Use a bot of the right race and class.
+    // Paladin Redemption (human): .playerbot questchainprobe <human paladin, level 12+> 1641
+    static bool HandleQuestChainProbe(ChatHandler* handler, std::string name, uint32 firstQuest)
+    {
+        Player* p = normalizePlayerName(name) ? ObjectAccessor::FindPlayerByName(name) : nullptr;
+        if (!p || !p->IsInWorld() || !sObjectMgr->GetQuestTemplate(firstQuest))
+        {
+            handler->SendSysMessage(!p || !p->IsInWorld() ? "questchainprobe: no such player in the world" : "questchainprobe: no such quest");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        auto const forget = [p](uint32 questId)
+        {
+            if (p->GetQuestStatus(questId) != QUEST_STATUS_NONE)
+                p->RemoveActiveQuest(questId, false);
+            p->RemoveRewardedQuest(questId);
+        };
+
+        auto const starters = [](uint32 questId)
+        {
+            std::string out;
+            for (auto const& [entry, creatureTemplate] : sObjectMgr->GetCreatureTemplates())
+                for (uint32 id : sObjectMgr->GetCreatureQuestRelations(entry))
+                    if (id == questId)
+                        out += Trinity::StringFormat(" npc {}", entry);
+            for (auto const& [entry, goTemplate] : sObjectMgr->GetGameObjectTemplates())
+                for (uint32 id : sObjectMgr->GetGOQuestRelations(entry))
+                    if (id == questId)
+                        out += Trinity::StringFormat(" object {}", entry);
+            for (auto const& [entry, itemTemplate] : sObjectMgr->GetItemTemplateStore())
+                if (itemTemplate.GetStartQuest() == questId)
+                    out += Trinity::StringFormat(" item {}", entry);
+            return out.empty() ? std::string(" NONE") : out;
+        };
+
+        std::vector<uint32> walked;
+        uint32 questId = firstQuest;
+        for (uint32 step = 1; questId && step <= 30; ++step)
+        {
+            Quest const* quest = sObjectMgr->GetQuestTemplate(questId);
+            forget(questId);
+            walked.push_back(questId);
+
+            std::string failed;
+            if (!p->SatisfyQuestClass(quest, false)) failed += " class";
+            if (!p->SatisfyQuestRace(quest, false)) failed += " race";
+            if (!p->SatisfyQuestLevel(quest, false)) failed += " level";
+            if (!p->SatisfyQuestPreviousQuest(quest, false)) failed += Trinity::StringFormat(" previous({})", quest->GetPrevQuestId());
+            if (!p->SatisfyQuestDependentQuests(quest, false)) failed += " dependent";
+            if (!p->SatisfyQuestBreadcrumbQuest(quest, false)) failed += " breadcrumb";
+            if (!p->SatisfyQuestExclusiveGroup(quest, false)) failed += Trinity::StringFormat(" exclusive({})", quest->GetExclusiveGroup());
+            if (!p->SatisfyQuestConditions(quest, false)) failed += " conditions";
+            if (!p->SatisfyQuestReputation(quest, false)) failed += " reputation";
+            if (!p->SatisfyQuestSkill(quest, false)) failed += " skill";
+            handler->PSendSysMessage("questchainprobe: %u. quest %u '%s' started by%s; take: %s", step, questId, quest->GetLogTitle().c_str(),
+                starters(questId).c_str(), failed.empty() ? "yes" : ("NO," + failed).c_str());
+
+            p->AddQuest(quest, nullptr);
+            p->CompleteQuest(questId);
+            if (p->GetQuestStatus(questId) != QUEST_STATUS_COMPLETE)
+            {
+                handler->PSendSysMessage("questchainprobe: quest %u did not reach complete (status %u), walk stops", questId, uint32(p->GetQuestStatus(questId)));
+                break;
+            }
+            p->RewardQuest(quest, LootItemType::Item, 0, p, false);
+
+            // what can come next, in the order the client meets it
+            std::vector<std::pair<uint32, std::string>> next;
+            auto const addNext = [&next](uint32 id, std::string how)
+            {
+                if (id && sObjectMgr->GetQuestTemplate(id))
+                    next.emplace_back(id, std::move(how));
+            };
+            addNext(quest->GetNextQuestInChain(), "reward next");
+            addNext(quest->GetNextQuestId(), "addon NextQuestID");
+            for (uint32 i = 0; i < QUEST_REWARD_ITEM_COUNT; ++i)
+                if (ItemTemplate const* item = sObjectMgr->GetItemTemplate(quest->RewardItemId[i]))
+                    addNext(item->GetStartQuest(), Trinity::StringFormat("reward item {}", item->GetId()));
+            for (auto const& [id, other] : sObjectMgr->GetQuestTemplates())
+                if (other->GetPrevQuestId() == int32(questId) || other->GetPrevQuestId() == -int32(questId))
+                    addNext(id, Trinity::StringFormat("PrevQuestID {}", other->GetPrevQuestId()));
+
+            uint32 chosen = 0;
+            for (auto const& [id, how] : next)
+            {
+                Quest const* candidate = sObjectMgr->GetQuestTemplate(id);
+                bool const walkedAlready = std::find(walked.begin(), walked.end(), id) != walked.end();
+                bool const takeable = !walkedAlready && p->SatisfyQuestClass(candidate, false) && p->SatisfyQuestRace(candidate, false)
+                    && p->SatisfyQuestPreviousQuest(candidate, false) && p->SatisfyQuestExclusiveGroup(candidate, false);
+                handler->PSendSysMessage("questchainprobe:    next %u '%s' (%s)%s", id, candidate->GetLogTitle().c_str(), how.c_str(),
+                    walkedAlready ? " already walked" : takeable ? "" : " not for this player");
+                if (!chosen && takeable)
+                    chosen = id;
+            }
+            if (!chosen)
+                handler->PSendSysMessage("questchainprobe: chain ends after quest %u", questId);
+            questId = chosen;
+        }
+
+        for (uint32 id : walked)
+            forget(id);
+        return true;
+    }
+
     // .playerbot formprobe <player> <form spell id> [<passive spell id>]
     // Learns the form spell if needed, takes the form (a triggered cast: no cost, no cooldown, no level check) and reports the armor before
     // and in the form and whether the form's passive aura is on the player, then leaves the form again and reports the armor back.
@@ -5318,6 +5626,500 @@ public:
             p->GetName().c_str(), uint32(p->GetLevel()), formSpell, learned ? " (learned now)" : "", uint32(result), inForm ? "yes" : "no",
             uint32(info->GetEffect(EFFECT_0).MiscValue), armorBefore, armorInForm, armorAfter, passiveSpell.value_or(0),
             !passiveSpell ? "not checked" : hasPassive ? "present" : "MISSING", passiveGone ? "gone" : "STILL THERE");
+        return true;
+    }
+
+    // .playerbot equipprobe <player> <item id>
+    // Whether the player could equip the item as the client's equip request does it (CanEquipNewItem with no slot given: the slot the
+    // server picks itself, as for a right click), with the result code and the slot. Druid idols, paladin librams and shaman totems go in
+    // the ranged slot (17); EQUIP_ERR 0 is OK. Nothing is created or equipped.
+    static bool HandleEquipProbe(ChatHandler* handler, std::string name, uint32 itemId)
+    {
+        Player* p = normalizePlayerName(name) ? ObjectAccessor::FindPlayerByName(name) : nullptr;
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
+        if (!p || !p->IsInWorld() || !proto)
+        {
+            handler->SendSysMessage(!proto ? "equipprobe: no such item" : "equipprobe: no such player in the world");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        uint16 dest = 0;
+        InventoryResult const equip = p->CanEquipNewItem(NULL_SLOT, dest, itemId, true);
+        InventoryResult const use = p->CanUseItem(proto);
+        handler->PSendSysMessage("equipprobe: %s (class %u level %u) item %u %s: class %u subclass %u inventory type %u; can use %u, can equip %u%s, "
+            "slot %u", p->GetName().c_str(), uint32(p->GetClass()), uint32(p->GetLevel()), itemId, proto->GetName(DEFAULT_LOCALE),
+            proto->GetClass(), proto->GetSubClass(), uint32(proto->GetInventoryType()), uint32(use), uint32(equip), equip == EQUIP_ERR_OK ? " (OK)" : "",
+            equip == EQUIP_ERR_OK ? uint32(dest & 255) : 255u);
+        return true;
+    }
+
+    // .playerbot gearpick <player> <inventory type> [count]
+    // The items the bot gear scorer (Gear::ScoreItemForBot: quest rewards, loot, trades, the gear generator) ranks highest for the
+    // player in one inventory type (5 = chest, 1 = head, 7 = legs, 13 = one-hand, 17 = two-hand...), among the armor and weapons the
+    // player can use with a required level from 8 under to its own level. Each line gives the score and the item's Strength,
+    // Agility, Intellect and Stamina shares, so a spec that ranks the wrong main stat first shows at a glance.
+    static bool HandleGearPick(ChatHandler* handler, std::string name, uint32 inventoryType, Optional<uint32> countArg)
+    {
+        Player* p = normalizePlayerName(name) ? ObjectAccessor::FindPlayerByName(name) : nullptr;
+        if (!p || !p->IsInWorld())
+        {
+            handler->SendSysMessage("gearpick: no such player in the world");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        int32 const level = int32(p->GetLevel());
+        std::vector<std::pair<int32, ItemTemplate const*>> picks;
+        for (auto const& [id, tpl] : sObjectMgr->GetItemTemplateStore())
+        {
+            if (uint32(tpl.GetInventoryType()) != inventoryType || (tpl.GetClass() != ITEM_CLASS_ARMOR && tpl.GetClass() != ITEM_CLASS_WEAPON))
+                continue;
+            if (tpl.GetBaseRequiredLevel() > level || tpl.GetBaseRequiredLevel() < level - 8 || tpl.GetQuality() < ITEM_QUALITY_UNCOMMON
+                || tpl.GetQuality() > ITEM_QUALITY_EPIC)
+                continue;
+            if (p->CanUseItem(&tpl) != EQUIP_ERR_OK)
+                continue;
+            picks.emplace_back(::Playerbot::Gear::ScoreItemForBot(&tpl, p), &tpl);
+        }
+
+        std::ranges::sort(picks, std::ranges::greater(), &std::pair<int32, ItemTemplate const*>::first);
+        uint32 const count = std::min<uint32>(countArg.value_or(8), uint32(picks.size()));
+        handler->PSendSysMessage("gearpick: %s class %u spec %u level %d, inventory type %u: %u usable items, top %u",
+            p->GetName().c_str(), uint32(p->GetClass()), uint32(::Playerbot::Classic::EffectiveSpecId(p)), level, inventoryType,
+            uint32(picks.size()), count);
+        for (uint32 i = 0; i < count; ++i)
+        {
+            ItemTemplate const* tpl = picks[i].second;
+            int32 str = 0, agi = 0, intel = 0, sta = 0;
+            for (uint32 s = 0; s < MAX_ITEM_PROTO_STATS; ++s)
+            {
+                int32 const share = tpl->GetStatPercentEditor(s);
+                switch (tpl->GetStatModifierBonusStat(s))
+                {
+                    case ITEM_MOD_STRENGTH:  str += share;   break;
+                    case ITEM_MOD_AGILITY:   agi += share;   break;
+                    case ITEM_MOD_INTELLECT: intel += share; break;
+                    case ITEM_MOD_STAMINA:   sta += share;   break;
+                    default: break;
+                }
+            }
+            handler->PSendSysMessage("  %d  %u %s (subclass %u, req %d): str %d agi %d int %d sta %d", picks[i].first, tpl->GetId(),
+                tpl->GetName(DEFAULT_LOCALE), tpl->GetSubClass(), tpl->GetBaseRequiredLevel(), str, agi, intel, sta);
+        }
+        return true;
+    }
+
+    // .playerbot rageprobe <player> [damage]
+    // Rage from damage taken (Classic: damage / conversion(level) * 2.5): a hostile creature near the player (its attacker, its target, or
+    // the nearest one in 40 y) deals it `damage` (default 20) through Unit::DealDamage as a melee hit does, and the rage before, after and
+    // expected is reported. Needs a rage user (warrior, druid in Bear Form) with more health than the damage.
+    static bool HandleRageProbe(ChatHandler* handler, std::string name, Optional<uint32> damageArg)
+    {
+        Player* p = normalizePlayerName(name) ? ObjectAccessor::FindPlayerByName(name) : nullptr;
+        if (!p || !p->IsInWorld() || !p->IsAlive() || p->GetPowerType() != POWER_RAGE)
+        {
+            handler->SendSysMessage(!p || !p->IsInWorld() || !p->IsAlive() ? "rageprobe: no such living player in the world" : "rageprobe: the player does not use rage now");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        uint32 const damage = std::max<uint32>(1, damageArg.value_or(20));
+        if (p->GetHealth() <= damage)
+        {
+            handler->SendSysMessage("rageprobe: the damage would kill the player");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        Unit* attacker = !p->getAttackers().empty() ? *p->getAttackers().begin() : p->GetVictim();
+        if (!attacker)
+        {
+            Unit* nearest = nullptr;
+            Trinity::NearestAttackableUnitInObjectRangeCheck check(p, p, 40.0f);
+            Trinity::UnitLastSearcher<Trinity::NearestAttackableUnitInObjectRangeCheck> searcher(p, nearest, check);
+            Cell::VisitAllObjects(p, searcher, 40.0f);
+            attacker = nearest;
+        }
+        if (!attacker || attacker == p)
+        {
+            handler->SendSysMessage("rageprobe: no hostile creature within 40 y of the player");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        int32 const before = p->GetPower(POWER_RAGE);
+        float const expected = ClassicRage::RageFromDamage(float(damage), float(p->GetLevel()), false) * sWorld->getRate(RATE_POWER_RAGE_INCOME) * 10.0f;
+        CleanDamage clean(0, 0, BASE_ATTACK, MELEE_HIT_NORMAL);
+        Unit::DealDamage(attacker, p, damage, &clean, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
+        int32 const after = p->GetPower(POWER_RAGE);
+        handler->PSendSysMessage("rageprobe: %s level %u took %u from %s: rage %d -> %d (tenths), gained %d, expected about %d%s",
+            p->GetName().c_str(), uint32(p->GetLevel()), damage, attacker->GetName().c_str(), before, after, after - before, int32(expected),
+            after > before || before >= p->GetMaxPower(POWER_RAGE) ? "" : " - NO RAGE FROM THE HIT");
+        return true;
+    }
+
+    // .playerbot visualprobe <spell id> [player]
+    // The spell's SpellXSpellVisual rows as the server holds them (client data plus hotfixes): visual, priority, probability and the caster
+    // conditions, whether the player meets each, and the visual the server sends in SMSG_SPELL_GO for that caster (0 = none: the client then
+    // shows no animation and plays no sound for the cast).
+    static bool HandleVisualProbe(ChatHandler* handler, uint32 spellId, Optional<std::string> name)
+    {
+        SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId, DIFFICULTY_NONE);
+        if (!info)
+        {
+            handler->SendSysMessage("visualprobe: no such spell");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        Player* p = nullptr;
+        if (name)
+        {
+            std::string n = *name;
+            p = normalizePlayerName(n) ? ObjectAccessor::FindPlayerByName(n) : nullptr;
+        }
+
+        uint32 rows = 0;
+        for (SpellXSpellVisualEntry const* visual : sSpellXSpellVisualStore)
+        {
+            if (visual->SpellID != spellId)
+                continue;
+            ++rows;
+            char const* playerCond = !visual->CasterPlayerConditionID ? "none" : !p ? "?" :
+                ConditionMgr::IsPlayerMeetingCondition(p, visual->CasterPlayerConditionID) ? "met" : "NOT MET";
+            UnitConditionEntry const* unitCondition = sUnitConditionStore.LookupEntry(visual->CasterUnitConditionID);
+            char const* unitCond = !visual->CasterUnitConditionID ? "none" : !unitCondition ? "not in the data" : !p ? "?" :
+                ConditionMgr::IsUnitMeetingCondition(p, nullptr, unitCondition) ? "met" : "NOT MET";
+            handler->PSendSysMessage("visualprobe: row %u difficulty %u visual %u priority %u probability %.2f; player condition %u %s, unit condition %u %s",
+                visual->ID, uint32(visual->DifficultyID), visual->SpellVisualID, uint32(visual->Priority), visual->Probability,
+                visual->CasterPlayerConditionID, playerCond, visual->CasterUnitConditionID, unitCond);
+        }
+
+        uint32 const sent = info->GetSpellXSpellVisualId(p);
+        handler->PSendSysMessage("visualprobe: spell %u %s: %u SpellXSpellVisual rows; the server sends row %u%s%s", spellId,
+            info->SpellName ? (*info->SpellName)[DEFAULT_LOCALE] : "", rows, sent, p ? " for " : " for no caster", p ? p->GetName().c_str() : "");
+        return true;
+    }
+
+    // .playerbot langprobe <english line>
+    // The line as a Russian reader gets it from a bot (Util/BotLocaleText), or "unchanged" when no catalog entry matches: checks the
+    // catalog of the running build without a Russian client.
+    static bool HandleLangProbe(ChatHandler* handler, Tail text)
+    {
+        std::string const english(text);
+        std::string const russian = Playerbot::Locale::Translate(Playerbot::Locale::Lang::Ru, english);
+        if (russian == english)
+            handler->PSendSysMessage("langprobe: unchanged (%u Russian entries): %s", uint32(Playerbot::Locale::Russian().Size()), english.c_str());
+        else
+            handler->PSendSysMessage("langprobe: ru: %s", russian.c_str());
+        return true;
+    }
+
+    // .playerbot campprobe <player> go <map> <x> <y> <z>
+    // .playerbot campprobe <player> sit [<quest id>]
+    // Camping without a client. "go" moves the player (a bot over SOAP) to a camp. "sit" then, in one go: gives the quest if one is named (a
+    // The Great Outdoors quest, taken off again at the end), sits the player down the way the sit key does (WorldSession::UpdateCampfireRest),
+    // reports the campfire found, the nearest spell focus of any kind, whether the rest started and whether the quest's sit objective counted;
+    // then ends the rest as if its minute ran out and reports the camp buffs it gave, and stands the player up again.
+    static bool HandleCampProbe(ChatHandler* handler, std::string name, std::string mode, Optional<float> a1, Optional<float> a2,
+        Optional<float> a3, Optional<float> a4)
+    {
+        static constexpr uint32 SPELL_CAMPFIRE_REST = 1289723;
+        static constexpr uint32 SPELL_CAMP_BENEFITS = 1229741;
+        static constexpr uint32 BoostedBuffs[] = { 1229451, 1229519, 1230164, 1230587, 1230172, 1229513, 1229718, 1230124, 1230098, 1230653 };
+
+        Player* p = normalizePlayerName(name) ? ObjectAccessor::FindPlayerByName(name) : nullptr;
+        if (!p || !p->IsInWorld() || !p->IsAlive())
+        {
+            handler->SendSysMessage("campprobe: no such living player in the world");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (mode == "go")
+        {
+            if (!a1 || !a2 || !a3 || !a4)
+            {
+                handler->SendSysMessage("campprobe: go <map> <x> <y> <z>");
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+            bool const ok = p->TeleportTo(uint32(*a1), *a2, *a3, *a4, p->GetOrientation());
+            handler->PSendSysMessage("campprobe: %s teleport to map %u (%.2f, %.2f, %.2f) %s", p->GetName().c_str(), uint32(*a1), *a2, *a3, *a4,
+                ok ? "started, run sit in a few seconds" : "REFUSED");
+            return true;
+        }
+        if (mode != "sit")
+        {
+            handler->SendSysMessage("campprobe: mode is go or sit");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        // the quest, from no status, so earlier runs or the bot's own questing do not get in the way
+        uint32 const questId = a1 ? uint32(*a1) : 0;
+        Quest const* quest = questId ? sObjectMgr->GetQuestTemplate(questId) : nullptr;
+        if (questId && !quest)
+        {
+            handler->SendSysMessage("campprobe: no such quest");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        auto const forget = [p, questId]()
+        {
+            if (p->GetQuestStatus(questId) != QUEST_STATUS_NONE)
+                p->RemoveActiveQuest(questId, false);
+            p->RemoveRewardedQuest(questId);
+        };
+        if (quest)
+        {
+            forget();
+            p->AddQuest(quest, nullptr);
+        }
+
+        // what is near: the campfire as the rest looks for it, and the nearest spell focus of any kind (what the rest used to look at)
+        GameObject* fire = nullptr;
+        Trinity::GameObjectFocusCheck focusCheck(p, 4);
+        Trinity::GameObjectSearcher<Trinity::GameObjectFocusCheck> fireSearcher(p, fire, focusCheck);
+        Cell::VisitGridObjects(p, fireSearcher, 15.0f);
+        GameObject* anyFocus = p->FindNearestGameObjectOfType(GAMEOBJECT_TYPE_SPELL_FOCUS, 15.0f);
+        handler->PSendSysMessage("campprobe: %s map %u (%.2f, %.2f, %.2f); campfire %s; nearest spell focus %s",
+            p->GetName().c_str(), p->GetMapId(), p->GetPositionX(), p->GetPositionY(), p->GetPositionZ(),
+            fire ? Trinity::StringFormat("{} '{}' spawn {} at {:.1f} yd", fire->GetEntry(), fire->GetGOInfo()->name, fire->GetSpawnId(),
+                p->GetDistance(fire)).c_str() : "NONE within 15 yd",
+            anyFocus ? Trinity::StringFormat("{} '{}' focus type {} at {:.1f} yd", anyFocus->GetEntry(), anyFocus->GetGOInfo()->name,
+                anyFocus->GetGOInfo()->spellFocus.spellFocusType, p->GetDistance(anyFocus)).c_str() : "none within 15 yd");
+
+        // sit as the sit key does
+        p->RemoveAurasDueToSpell(SPELL_CAMPFIRE_REST);
+        p->SetStandState(UNIT_STAND_STATE_SIT);
+        p->GetSession()->UpdateCampfireRest(UNIT_STAND_STATE_SIT);
+        bool const resting = p->HasAura(SPELL_CAMPFIRE_REST);
+
+        std::string objectives;
+        if (quest)
+            for (QuestObjective const& objective : quest->GetObjectives())
+                objectives += Trinity::StringFormat(" [{} type {}: {}]", objective.StorageIndex, uint32(objective.Type),
+                    p->IsQuestObjectiveComplete(objective.QuestID, objective.ID) ? "done" : "not done");
+        handler->PSendSysMessage("campprobe: sat down, rest %u %s%s%s", SPELL_CAMPFIRE_REST, resting ? "STARTED" : "did not start",
+            quest ? "; quest objectives:" : "", objectives.c_str());
+
+        // the minute runs out: the rest's own script gives the camp buffs
+        if (resting)
+        {
+            p->RemoveAurasDueToSpell(SPELL_CAMPFIRE_REST, ObjectGuid::Empty, 0, AURA_REMOVE_BY_EXPIRE);
+            std::string buffs;
+            for (uint32 buff : BoostedBuffs)
+                if (p->HasAura(buff))
+                    buffs += Trinity::StringFormat(" {}", buff);
+            handler->PSendSysMessage("campprobe: rest ran out; camp buffs:%s; Camp Benefits %u %s; next rest %s", buffs.empty() ? " NONE" : buffs.c_str(),
+                SPELL_CAMP_BENEFITS, p->HasAura(SPELL_CAMP_BENEFITS) ? "on" : "NOT on", p->HasAura(SPELL_CAMPFIRE_REST) ? "started" : "did not start");
+        }
+
+        p->SetStandState(UNIT_STAND_STATE_STAND);
+        p->GetSession()->UpdateCampfireRest(UNIT_STAND_STATE_STAND);
+        if (quest)
+            forget();
+        return true;
+    }
+
+    // .playerbot spotprobe <player> <x> <y> <z> [<from x> <from y> <from z>]
+    // Checks a spawn or landing spot on the player's own map (any player on that map, a bot over SOAP): the floor the server sees under the
+    // spot (terrain and buildings, as Map::GetHeight finds it searching down from 2 yards above, and from 30 yards above), a 5 x 5 grid of
+    // floors a yard apart around it, whether the spot is in water, and, with a start point, whether a walker finds a path from there.
+    static bool HandleSpotProbe(ChatHandler* handler, std::string name, float x, float y, float z, Optional<float> fromX, Optional<float> fromY,
+        Optional<float> fromZ)
+    {
+        Player* p = normalizePlayerName(name) ? ObjectAccessor::FindPlayerByName(name) : nullptr;
+        if (!p || !p->IsInWorld())
+        {
+            handler->SendSysMessage("spotprobe: no such player in the world");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        Map* map = p->GetMap();
+        PhaseShift const& phaseShift = p->GetPhaseShift();
+        // the spot may be far from the player: load its grid (terrain, buildings, navmesh tile) first
+        map->LoadGrid(x, y);
+        if (fromX && fromY)
+            map->LoadGrid(*fromX, *fromY);
+        auto const floorText = [](float h) { return h <= INVALID_HEIGHT ? std::string("NONE") : Trinity::StringFormat("{:.2f}", h); };
+
+        float const floorNear = map->GetHeight(phaseShift, x, y, z + 2.0f, true, 50.0f);
+        float const floorHigh = map->GetHeight(phaseShift, x, y, z + 30.0f, true, 80.0f);
+        handler->PSendSysMessage("spotprobe: map %u spot (%.2f, %.2f, %.2f): floor below spot %s, highest floor (from 30 yd up) %s, %s",
+            map->GetId(), x, y, z, floorText(floorNear).c_str(), floorText(floorHigh).c_str(),
+            map->IsInWater(phaseShift, x, y, z) ? "IN WATER" : "not in water");
+
+        for (int dy = 2; dy >= -2; --dy)
+        {
+            std::string row;
+            for (int dx = -2; dx <= 2; ++dx)
+            {
+                float const h = map->GetHeight(phaseShift, x + float(dx), y + float(dy), z + 2.0f, true, 50.0f);
+                row += Trinity::StringFormat(" {:>7}", floorText(h));
+            }
+            handler->PSendSysMessage("spotprobe: y%+d:%s", dy, row.c_str());
+        }
+
+        if (fromX && fromY && fromZ)
+        {
+            PathGenerator path(p);
+            bool const found = path.CalculatePath(*fromX, *fromY, *fromZ, x, y, z, false);
+            Movement::PointsArray const& points = path.GetPath();
+            G3D::Vector3 const end = points.empty() ? G3D::Vector3(*fromX, *fromY, *fromZ) : points.back();
+            float const endDist = std::sqrt((end.x - x) * (end.x - x) + (end.y - y) * (end.y - y) + (end.z - z) * (end.z - z));
+            handler->PSendSysMessage("spotprobe: path from (%.2f, %.2f, %.2f): %s, type 0x%X, %u points, length %.1f yd, ends %.1f yd from the spot (%.2f, %.2f, %.2f)",
+                *fromX, *fromY, *fromZ, found ? "found" : "NOT found", uint32(path.GetPathType()), uint32(points.size()), path.GetPathLength(), endDist,
+                end.x, end.y, end.z);
+        }
+        return true;
+    }
+
+    // .playerbot transmogprobe <player>
+    // Checks where an outfit save lands (Player::UpdateTransmogOutfitSlots, what CMSG_TRANSMOG_OUTFIT_UPDATE_SLOTS calls). On the
+    // player's lowest outfit id, every stored slot is written once in reverse slot order (the 1.60 client does not send the slots
+    // sorted) with a test appearance id, each slot is read back at its own index, and the outfit is then written back as it was.
+    // A bot is the safe target: the test values are live for one world tick on whoever holds the outfit.
+    static bool HandleTransmogProbe(ChatHandler* handler, std::string name)
+    {
+        Player* p = normalizePlayerName(name) ? ObjectAccessor::FindPlayerByName(name) : nullptr;
+        if (!p || !p->IsInWorld())
+        {
+            handler->SendSysMessage("transmogprobe: no such player in the world");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        uint32 outfitId = 0;
+        for (auto const& entry : p->m_activePlayerData->TransmogOutfits)
+            if (p->m_activePlayerData->TransmogOutfits.Get(entry.first) && (!outfitId || entry.first < outfitId))
+                outfitId = entry.first;
+
+        UF::TransmogOutfitData const* outfit = outfitId ? p->m_activePlayerData->TransmogOutfits.Get(outfitId) : nullptr;
+        if (!outfit || outfit->Slots.empty())
+        {
+            handler->PSendSysMessage("transmogprobe: %s has no outfit (%u outfits)", p->GetName().c_str(),
+                uint32(p->m_activePlayerData->TransmogOutfits.size()));
+            return true;
+        }
+
+        auto const toPacketSlot = [](UF::TransmogOutfitSlotData const& stored)
+        {
+            WorldPackets::Transmogrification::TransmogOutfitSlotData slot;
+            slot.Slot = static_cast<TransmogOutfitSlot>(*stored.Slot);
+            slot.SlotOption = static_cast<TransmogOutfitSlotOption>(*stored.SlotOption);
+            slot.SheatheCategory = static_cast<TransmogOutfitSlotOptionSheatheCategory>(*stored.SheatheCategory);
+            slot.AppearanceDisplayType = static_cast<TransmogOutfitDisplayType>(*stored.AppearanceDisplayType);
+            slot.IllusionDisplayType = static_cast<TransmogOutfitDisplayType>(*stored.IllusionDisplayType);
+            slot.ItemModifiedAppearanceID = *stored.ItemModifiedAppearanceID;
+            slot.SpellItemEnchantmentID = *stored.SpellItemEnchantmentID;
+            slot.Flags = *stored.Flags;
+            return slot;
+        };
+
+        std::vector<WorldPackets::Transmogrification::TransmogOutfitSlotData> original;
+        for (UF::TransmogOutfitSlotData const& stored : outfit->Slots)
+            original.push_back(toPacketSlot(stored));
+
+        // test values: slot i gets appearance 900000000 + i, sent from the last slot to the first
+        constexpr uint32 TestAppearanceBase = 900000000;
+        std::vector<WorldPackets::Transmogrification::TransmogOutfitSlotData> test;
+        for (std::size_t i = original.size(); i-- > 0;)
+        {
+            WorldPackets::Transmogrification::TransmogOutfitSlotData slot = original[i];
+            slot.ItemModifiedAppearanceID = TestAppearanceBase + uint32(i);
+            test.push_back(slot);
+        }
+
+        p->UpdateTransmogOutfitSlots(outfitId, test);
+
+        outfit = p->m_activePlayerData->TransmogOutfits.Get(outfitId);
+        uint32 inPlace = 0, misplaced = 0, unknownSlot = 0;
+        std::string wrong;
+        for (std::size_t i = 0; i < original.size(); ++i)
+        {
+            TransmogMgr::TransmogOutfitSlotAndOptionInfo const* slotInfo = TransmogMgr::GetSlotAndOption(original[i].Slot, original[i].SlotOption);
+            if (!slotInfo)
+            {
+                ++unknownSlot;
+                continue;
+            }
+
+            UF::TransmogOutfitSlotData const& stored = outfit->Slots[i];
+            bool const ok = slotInfo->SlotIndex == i && *stored.Slot == AsUnderlyingType(original[i].Slot)
+                && *stored.SlotOption == AsUnderlyingType(original[i].SlotOption) && *stored.ItemModifiedAppearanceID == TestAppearanceBase + uint32(i);
+            if (ok)
+                ++inPlace;
+            else
+            {
+                ++misplaced;
+                // int8/uint8 are widened so they print as numbers, not characters
+                wrong += Trinity::StringFormat(" [{}: slot {} option {} holds slot {} option {} appearance {}]", i, int32(AsUnderlyingType(original[i].Slot)),
+                    int32(AsUnderlyingType(original[i].SlotOption)), int32(*stored.Slot), int32(*stored.SlotOption), uint32(*stored.ItemModifiedAppearanceID));
+            }
+        }
+
+        p->UpdateTransmogOutfitSlots(outfitId, original);
+
+        outfit = p->m_activePlayerData->TransmogOutfits.Get(outfitId);
+        uint32 restored = 0;
+        for (std::size_t i = 0; i < original.size(); ++i)
+            if (*outfit->Slots[i].ItemModifiedAppearanceID == original[i].ItemModifiedAppearanceID)
+                ++restored;
+
+        handler->PSendSysMessage("transmogprobe: %s outfit %u, %u slots written last to first: %u at their own place, %u misplaced, "
+            "%u with no slot info; %u of %u put back -> %s%s", p->GetName().c_str(), outfitId, uint32(original.size()), inPlace, misplaced,
+            unknownSlot, restored, uint32(original.size()), misplaced || restored != original.size() ? "FAIL" : "PASS", wrong.c_str());
+        return true;
+    }
+
+    // .playerbot collisionprobe <creature entry> [<player>]
+    // The collision height of each model of a creature template: the model's raw CollisionHeight, the height the core uses
+    // (CreatureModelDataEntry::GetCollisionHeight, which reads the bounding box when the client marks the height "not set") and the
+    // scaled unit height. With a player, every creature of that entry within 60 yards of the player is listed with its live
+    // Unit::GetCollisionHeight and whether the player and the creature see each other (Map line of sight, as spells and melee check it).
+    static bool HandleCollisionProbe(ChatHandler* handler, uint32 entry, Optional<std::string> name)
+    {
+        CreatureTemplate const* tmpl = sObjectMgr->GetCreatureTemplate(entry);
+        if (!tmpl)
+        {
+            handler->PSendSysMessage("collisionprobe: no creature template %u", entry);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        for (CreatureModel const& model : tmpl->Models)
+        {
+            CreatureDisplayInfoEntry const* display = sCreatureDisplayInfoStore.LookupEntry(model.CreatureDisplayID);
+            CreatureModelDataEntry const* modelData = display ? sCreatureModelDataStore.LookupEntry(display->ModelID) : nullptr;
+            if (!modelData)
+            {
+                handler->PSendSysMessage("collisionprobe: %u display %u: no display or model data", entry, model.CreatureDisplayID);
+                continue;
+            }
+            handler->PSendSysMessage("collisionprobe: %u display %u model %u: raw CollisionHeight %.2f, used %.2f, bounds top %.2f, unit height %.2f",
+                entry, model.CreatureDisplayID, display->ModelID, modelData->CollisionHeight, modelData->GetCollisionHeight(), modelData->GeoBox[5],
+                modelData->GetCollisionHeight() * modelData->ModelScale * display->CreatureModelScale);
+        }
+
+        if (!name)
+            return true;
+        std::string playerName = *name;
+        Player* p = normalizePlayerName(playerName) ? ObjectAccessor::FindPlayerByName(playerName) : nullptr;
+        if (!p || !p->IsInWorld())
+        {
+            handler->SendSysMessage("collisionprobe: no such player in the world");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        std::list<Creature*> creatures;
+        p->GetCreatureListWithEntryInGrid(creatures, entry, 60.0f);
+        handler->PSendSysMessage("collisionprobe: %u creature(s) of entry %u within 60 yd of %s", uint32(creatures.size()), entry, p->GetName().c_str());
+        for (Creature const* c : creatures)
+            handler->PSendSysMessage("collisionprobe: spawn %llu at (%.1f, %.1f, %.1f), %.1f yd: unit height %.2f, line of sight %s", uint64(c->GetSpawnId()),
+                c->GetPositionX(), c->GetPositionY(), c->GetPositionZ(), p->GetDistance(c), c->GetCollisionHeight(),
+                p->IsWithinLOSInMap(c) ? "yes" : "NO");
         return true;
     }
 
@@ -6871,8 +7673,7 @@ public:
     {
         if (Playerbot::Services::Initialized())
         {
-            Playerbot::BotChatter::OnCreatureKilled(killer, killed);
-            Playerbot::BotChatter::OnBossKilled(killer, killed);   // "gg" / bow / cheer from a nearby companion
+            Playerbot::BotChatter::OnCreatureKilled(killer, killed);   // a boss's "gg" comes from Module::OnDeath (any killer)
         }
     }
 

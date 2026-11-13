@@ -183,11 +183,19 @@ foreach ($f in Get-ChildItem $stage -Recurse -File -Include *.exe, *.dll | Where
 }
 # Final check: nothing packed may carry the words (or the dev's user folder / full name), ASCII or UTF-16, except known game data (NPC names in the world data, a word list in MySQL).
 $allowed = @('sql\world.sql', 'sql\hotfixes.sql', 'sql\custom\world\2026_09_27_00_world_forever_baseline_01.sql', 'mysql\share\dictionary.txt')
+# Three custom SQL files that already shipped carry an old local note. Changing them would make the DB updater run them and every later
+# custom file again on players' realms, so they are skipped here only while their content is exactly what shipped (LF or CRLF copy).
+$allowedHash = @{
+    'sql\custom\auth\2026_10_07_99_auth_pin_client_70205.sql'                   = @('d76c1698cc733ab3492b322b0d2c917ab24aff40033c5d5a7ace50ec421b7716', 'c1816589650d69e8c83ddcc6074d235ad4601cd59c52e0baf71693159aaa8ae6')
+    'sql\custom\auth\2026_10_09_01_auth_forever_move_to_70291.sql'              = @('98c0e312acb44c9655042eea7d264fdec8e06df60873e6fbdf70a07253dcb128', '6a3c89612d94fb13072e6f9d27346446ff8be182f1d566782e2a32fd9d398c8e')
+    'sql\custom\world\2026_11_11_70_world_forever_tameable_beasts_live_70888.sql' = @('d6064e5094a4f8fa3b1df7dc69f2e50f3fa435e57a4c45cfec0b7ab3a3371992', 'c22df38a26ce0fdc63e3dc8bb5a918b2f83b29d57283b35a2cc26917081afab0')
+}
 $reAny = '(?i)[c]laude|[a]nthropic|c\x00l\x00a\x00u\x00d\x00e\x00|a\x00n\x00t\x00h\x00r\x00o\x00p\x00i\x00c\x00|Users[\\/]c[h]ris|c[h]ris leisk|c[h]risleisk|U\x00s\x00e\x00r\x00s\x00[\\/]\x00c\x00h\x00r\x00i\x00s\x00'
 $hits = New-Object System.Collections.Generic.List[string]
 foreach ($f in Get-ChildItem $stage -Recurse -File) {
     $rel = $f.FullName.Substring($stage.Length + 1)
     if ($allowed -contains $rel -or $f.Length -gt 1GB) { continue }
+    if ($allowedHash.ContainsKey($rel) -and ($allowedHash[$rel] -contains (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower())) { continue }
     if ($lat.GetString([IO.File]::ReadAllBytes($f.FullName)) -match $reAny) { $hits.Add($rel) }
     elseif ($rel -like 'sql\custom\*' -and $lat.GetString([IO.File]::ReadAllBytes($f.FullName)) -match '(?i)\bc[h]ris\b') { $hits.Add($rel) }   # local notes in our own SQL
 }

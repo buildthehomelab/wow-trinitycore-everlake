@@ -40,7 +40,7 @@ try {
         if ($t -notmatch '(?i)[c]laude|[a]nthropic|\bchris\b') { continue }
         $n = $t
         if ($rel -match '(^|/)\.gitignore$') { $n = (($n -split "`n") | Where-Object { $_ -notmatch '(?i)[c]laude' }) -join "`n" }
-        elseif ($isSql) { $n = [regex]::Replace($n, "'[c]laude-([a-z0-9-]+)'", "'`$1'") }   # provenance tags in the navigation data; names like [C]laude/[C]laudette are game data
+        elseif ($isSql) { $n = [regex]::Replace([regex]::Replace($n, "'[c]laude-([a-z0-9-]+)'", "'`$1'"), '(?i)cache-c[h]ris-', 'cache-') }   # shipped SQL keeps its bytes (updater hash); only the source copy drops the dev's name from a cache zip name   # provenance tags in the navigation data; names like [C]laude/[C]laudette are game data
         else { foreach ($s in $scrubs) { $n = [regex]::Replace($n, $s.re, $s.to) } }
         $leak = if ($isSql) { '(?i)[a]nthropic|[c]laude-|[c]laude code|[c]laude\.ai' } else { '(?i)[c]laude|[a]nthropic' }
         if ($n -match $leak) { $bad.Add($rel); continue }
