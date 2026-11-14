@@ -156,8 +156,9 @@ inline void KillRewarder::_RewardXP(Player* player, float rate)
         // 4.2.3. Give XP to player.
         player->GiveXP(xp, _victim, _groupRate);
         if (Pet* pet = player->GetPet())
-            // 4.2.4. If player has pet, reward pet with XP (100% for single player, 50% for group case).
-            pet->GivePetXP(player->GetGroup() ? xp / 2 : xp);
+            // 4.2.4. If player has pet, reward pet with XP. Classic 1.60 (WoW Forever, Classic Hunter Lodge wiki, Pet-Fundamentals): the
+            //        pet gets the hunter's own kill XP before the rested bonus (GiveXP adds that), alone or in a group; it was halved in a group.
+            pet->GivePetXP(xp);
     }
 }
 

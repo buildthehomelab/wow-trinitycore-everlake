@@ -23,6 +23,7 @@
 #include "DatabaseEnv.h"
 #include "DB2Stores.h"
 #include "Group.h"
+#include "HunterPetForever.h"
 #include "InstanceScript.h"
 #include "Log.h"
 #include "Map.h"
@@ -46,7 +47,6 @@
 #include <sstream>
 #include <unordered_set>
 
-#define PET_XP_FACTOR 0.05f
 
 Pet::Pet(Player* owner, PetType type) :
     Guardian(nullptr, owner, true), m_removed(false),
@@ -400,7 +400,7 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
         owner->ToPlayer()->SetLastPetNumber(petInfo->PetNumber);
 
     owner->GetSession()->AddQueryHolderCallback(CharacterDatabase.DelayQueryHolder(std::make_shared<PetLoadQueryHolder>(ownerid, petInfo->PetNumber)))
-        .AfterComplete([this, owner, session = owner->GetSession(), isTemporarySummon, current, lastSaveTime = petInfo->LastSaveTime, specializationId = petInfo->SpecializationId](SQLQueryHolderBase const& holder)
+        .AfterComplete([this, owner, session = owner->GetSession(), isTemporarySummon, current, lastSaveTime = petInfo->LastSaveTime, specializationId = petInfo->SpecializationId, savedHealth = petInfo->Health](SQLQueryHolderBase const& holder)
     {
         if (session->GetPlayer() != owner || owner->GetPet() != this)
             return;
@@ -408,6 +408,9 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
         // passing previous checks ensure that 'this' is still valid
         if (m_removed)
             return;
+
+        // damage or healing the pet took since it was added to the map, before this query came back (kept by the health restore below)
+        int64 const healthChangeWhileLoading = int64(GetHealth()) - int64(std::min<uint64>(savedHealth, GetMaxHealth()));
 
         uint32 timediff = uint32(GameTime::GetGameTime() - lastSaveTime);
         _LoadAuras(holder.GetPreparedResult(PetLoadQueryHolder::AURAS), holder.GetPreparedResult(PetLoadQueryHolder::AURA_EFFECTS), timediff);
@@ -426,6 +429,12 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
                 RemoveArenaAuras();
 
             CastPetAuras(current);
+
+            // The saved health was capped to the maximum without the auras (passives are not saved), and an aura that raises maximum
+            // health (Hunter Pet Scaling, Great Stamina) heals its whole amount when applied: put back what the pet had when it was saved,
+            // moved by what happened to it while loading.
+            if (getPetType() == HUNTER_PET && IsAlive() && savedHealth)
+                SetHealth(uint64(std::clamp<int64>(int64(savedHealth) + healthChangeWhileLoading, 1, int64(GetMaxHealth()))));
         }
 
         TC_LOG_DEBUG("entities.pet", "New Pet has {}", GetGUID().ToString());
@@ -770,15 +779,15 @@ void Pet::Update(uint32 diff)
                     switch (GetPowerType())
                     {
                         case POWER_FOCUS:
-                            Regenerate(POWER_FOCUS);
-                            m_focusRegenTimer += PET_FOCUS_REGEN_INTERVAL - diff;
-                            if (!m_focusRegenTimer) ++m_focusRegenTimer;
-
-                            // Reset if large diff (lag) causes focus to get 'stuck'
-                            if (m_focusRegenTimer > PET_FOCUS_REGEN_INTERVAL)
-                                m_focusRegenTimer = PET_FOCUS_REGEN_INTERVAL;
-
+                        {
+                            // Classic 1.60: one tick a second, so a world update longer than that (lag) gets the ticks it covered, up to 5
+                            uint32 const overdue = diff - m_focusRegenTimer;
+                            uint32 const ticks = std::min<uint32>(1 + overdue / PET_FOCUS_REGEN_INTERVAL, 5);
+                            for (uint32 i = 0; i < ticks; ++i)
+                                Regenerate(POWER_FOCUS);
+                            m_focusRegenTimer = PET_FOCUS_REGEN_INTERVAL - overdue % PET_FOCUS_REGEN_INTERVAL;
                             break;
+                        }
 
                         // in creature::update
                         //case POWER_ENERGY:
@@ -885,9 +894,10 @@ void Pet::GivePetXP(uint32 xp)
         KillLoyaltyBonus(petlevel);
 }
 
+// Classic 1.60 (WoW Forever): 20% of the hunter's XP for the level (Classic Hunter Lodge wiki, Pet-Fundamentals); vanilla was 5%
 uint32 Pet::GetHunterPetNextLevelExperience(uint8 level)
 {
-    return uint32(sObjectMgr->GetXPForLevel(level) * PET_XP_FACTOR);
+    return HunterPetForever::NextLevelXp(sObjectMgr->GetXPForLevel(level));
 }
 
 void Pet::GivePetLevel(uint8 level)
@@ -1309,7 +1319,7 @@ bool Pet::CreateBaseAtTamed(CreatureTemplate const* cinfo, Map* map)
 
     SetPetNameTimestamp(0);
     SetPetExperience(0);
-    SetPetNextLevelExperience(uint32(sObjectMgr->GetXPForLevel(GetLevel() + 1) * PET_XP_FACTOR));
+    SetPetNextLevelExperience(GetHunterPetNextLevelExperience(GetLevel() + 1));
     ReplaceAllNpcFlags(UNIT_NPC_FLAG_NONE);
     ReplaceAllNpcFlags2(UNIT_NPC_FLAG_2_NONE);
 
@@ -1439,7 +1449,7 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
         }
         case HUNTER_PET:
         {
-            ToPet()->SetPetNextLevelExperience(uint32(sObjectMgr->GetXPForLevel(petlevel)*PET_XP_FACTOR));
+            ToPet()->SetPetNextLevelExperience(Pet::GetHunterPetNextLevelExperience(petlevel));
             //these formula may not be correct; however, it is designed to be close to what it should be
             //this makes dps 0.5 of pets level
             SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, float(petlevel - (petlevel / 4)));

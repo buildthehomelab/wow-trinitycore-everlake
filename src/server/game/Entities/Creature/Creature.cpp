@@ -32,6 +32,7 @@
 #include "GameTime.h"
 #include "GridNotifiersImpl.h"
 #include "Group.h"
+#include "HunterPetForever.h"
 #include "ItemTemplate.h"
 #include "Log.h"
 #include "Loot.h"
@@ -980,8 +981,13 @@ void Creature::Regenerate(Powers power)
     {
     case POWER_FOCUS:
     {
-        // For hunter pets.
-        addvalue = 24 * sWorld->getRate(RATE_POWER_FOCUS);
+        // For hunter pets. Classic 1.60 (WoW Forever): 10 focus per second in and out of combat, from the client's PowerType row
+        // (RegenPeace and RegenCombat 10; Classic Hunter Lodge wiki, Pet-Fundamentals). Vanilla gave 24 every 4 seconds.
+        float focusPerSecond = HunterPetForever::FocusPerSecondFallback;
+        if (PowerTypeEntry const* powerType = sDB2Manager.GetPowerTypeEntry(POWER_FOCUS))
+            focusPerSecond = IsInCombat() ? powerType->RegenCombat : powerType->RegenPeace;
+
+        addvalue = HunterPetForever::FocusPerTick(focusPerSecond, PET_FOCUS_REGEN_INTERVAL) * sWorld->getRate(RATE_POWER_FOCUS);
         break;
     }
     case POWER_ENERGY:

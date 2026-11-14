@@ -1475,7 +1475,11 @@ void Guardian::UpdateArmor()
     value += GetFlatModifierValue(unitMod, TOTAL_VALUE) + bonus_armor;
     value *= GetPctModifierValue(unitMod, TOTAL_PCT);
 
-    SetArmor(int32(baseValue), int32(value - baseValue));
+    // The total, as Player::UpdateArmor and Creature::UpdateArmor do: GetArmor() (damage reduction) reads this field, and with only the
+    // base in it a pet's bonus armor (Natural Armor, the hunter's 30% from Hunter Pet Scaling, Dust Cloud on the pet) never reduced damage.
+    // Not below 0: GetArmor() is unsigned, so negative armor (stacked Sunder Armor on a low level pet) would read as the 75% cap.
+    value = std::max(0.0f, value);
+    SetArmor(int32(value), int32(value - baseValue));
 }
 
 void Guardian::UpdateMaxHealth()
