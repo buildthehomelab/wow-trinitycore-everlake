@@ -5,7 +5,7 @@ Karrz1 publishes WoW Forever Bots in two places, and they are not the same code:
 | source | what it is | what only it has |
 |---|---|---|
 | **Karrz git**: [Karrz1/TrinityCore](https://github.com/Karrz1/TrinityCore) `forever` (core) and `forever-bots` (core + bots, `forever` merged in) | real commit history on advocaite `forever` `f63ffc12b3` | the commits made after the latest release |
-| **Karrz releases**: [Karrz1/Karrz-playerbots-wow-forever](https://github.com/Karrz1/Karrz-playerbots-wow-forever) release asset `wow-forever-source-<version>.zip` (git `main` there stopped on 2026-10-21) | one source snapshot per release, near-daily | features kept out of git: for 0.1.35, bot hiring (`src/modules/PlayerbotV2/Fleet/Hire*`, `sql/playerbot_v2/0037_hired_bots.sql`) and the Ring of Law + Mak'gora arena hotfixes |
+| **Karrz releases**: [Karrz1/Karrz-playerbots-wow-forever](https://github.com/Karrz1/Karrz-playerbots-wow-forever) release asset `wow-forever-source-<version>.zip` (git `main` there stopped on 2026-10-21) | one source snapshot per release, near-daily | features kept out of git: for 0.1.35, bot hiring (`src/modules/PlayerbotV2/Fleet/Hire*`, `sql/playerbot_v2/0037_hired_bots.sql`) and the Ring of Law + Mak'gora arena hotfixes; for 0.1.36 nearly the whole release (his git got one commit between 0.1.35's follow-ups and 0.1.36) |
 
 We track both:
 
@@ -79,3 +79,4 @@ pin; record the move here before porting from that release.
 2026-11-08/09: v0.1.12 to v0.1.33 (34 releases), each checked against its zip with `verify.sh`.
 2026-11-10: v0.1.34 (pin unchanged, `f63ffc12b3`), checked with `verify.sh`.
 2026-11-12: v0.1.35 (pin unchanged, `f63ffc12b3`), tag `karrz-v0.1.35` = `6dae366c19`.
+2026-11-13: v0.1.36 (pin unchanged, `f63ffc12b3`), tag `karrz-v0.1.36` = `441114b453`, checked with `verify.sh`.
