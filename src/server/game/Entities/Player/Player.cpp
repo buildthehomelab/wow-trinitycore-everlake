@@ -31293,7 +31293,7 @@ void Player::AddPetToUpdateFields(PetStable::PetInfo const& pet, PetSaveMode slo
     ufPet.ModifyValue(&UF::StablePetInfo::Name).SetValue(pet.Name);
 }
 
-void Player::UpdateStablePetLoyalty(uint32 petNumber, uint8 loyaltyLevel, int32 loyaltyPoints)
+void Player::UpdateStablePetLoyalty(uint32 petNumber, uint8 loyaltyLevel, int32 loyaltyPoints, uint32 loyaltySeconds)
 {
     if (m_petStable)
     {
@@ -31303,6 +31303,7 @@ void Player::UpdateStablePetLoyalty(uint32 petNumber, uint8 loyaltyLevel, int32 
             {
                 currentPet->LoyaltyLevel = loyaltyLevel;
                 currentPet->LoyaltyPoints = loyaltyPoints;
+                currentPet->LoyaltySeconds = loyaltySeconds;
             }
         }
     }
@@ -31735,14 +31736,14 @@ void Player::_LoadPetStable(uint32 summonedPetNumber, PreparedQueryResult result
     m_petStable = std::make_unique<PetStable>();
 
     // Classic 1.60: hunter pet loyalty (character_pet_loyalty; pets saved before it existed have no row and count as Best Friend)
-    std::unordered_map<uint32, std::pair<uint8, int32>> petLoyalty;
-    if (QueryResult loyaltyResult = CharacterDatabase.PQuery("SELECT l.id, l.loyalty, l.loyalty_points FROM character_pet_loyalty l "
+    std::unordered_map<uint32, std::tuple<uint8, int32, uint32>> petLoyalty;
+    if (QueryResult loyaltyResult = CharacterDatabase.PQuery("SELECT l.id, l.loyalty, l.loyalty_points, l.loyalty_time FROM character_pet_loyalty l "
         "JOIN character_pet p ON p.id = l.id WHERE p.owner = {}", GetGUID().GetCounter()))
     {
         do
         {
             Field* fields = loyaltyResult->Fetch();
-            petLoyalty[fields[0].GetUInt32()] = { fields[1].GetUInt8(), fields[2].GetInt32() };
+            petLoyalty[fields[0].GetUInt32()] = { fields[1].GetUInt8(), fields[2].GetInt32(), fields[3].GetUInt32() };
         } while (loyaltyResult->NextRow());
     }
 
@@ -31773,8 +31774,7 @@ void Player::_LoadPetStable(uint32 summonedPetNumber, PreparedQueryResult result
             petInfo.SpecializationId = fields[15].GetUInt16();
             if (auto loyalty = petLoyalty.find(petInfo.PetNumber); loyalty != petLoyalty.end())
             {
-                petInfo.LoyaltyLevel = loyalty->second.first;
-                petInfo.LoyaltyPoints = loyalty->second.second;
+                std::tie(petInfo.LoyaltyLevel, petInfo.LoyaltyPoints, petInfo.LoyaltySeconds) = loyalty->second;
             }
             if (slot >= PET_SAVE_FIRST_ACTIVE_SLOT && slot < PET_SAVE_LAST_ACTIVE_SLOT)
             {

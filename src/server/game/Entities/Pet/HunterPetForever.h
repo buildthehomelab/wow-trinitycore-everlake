@@ -20,6 +20,7 @@
 
 #include "Define.h"
 #include <algorithm>
+#include <array>
 
 // Classic 1.60 (WoW Forever) hunter pet rules that differ from vanilla. Sources: the Classic Hunter Lodge wiki
 // (github.com/classic-hunter/forever-hunter/wiki), pages Pet-Stat-Mechanics and Pet-Fundamentals, and the 1.60.1.70862
@@ -87,6 +88,32 @@ namespace HunterPetForever
     inline float FocusPerTick(float focusPerSecond, uint32 tickMs)
     {
         return focusPerSecond * float(tickMs) / 1000.0f;
+    }
+
+    // Pet-Fundamentals, "Loyalty": 6 ranks (1 Rebellious .. 6 Best Friend). Each rank up needs both 5% of the hunter's XP for the pet's
+    // current level, earned by the pet since its last rank, and time: 0, 30, 45, 60 and 90 minutes for ranks 2 to 6.
+    constexpr uint8 LoyaltyRankMin = 1;
+    constexpr uint8 LoyaltyRankMax = 6;
+    constexpr float LoyaltyXpShare = 0.05f;
+    constexpr std::array<uint32, LoyaltyRankMax + 1> LoyaltyRankMinutes = { 0, 0, 0, 30, 45, 60, 90 }; // by the rank reached
+
+    inline uint32 LoyaltyXpForRank(uint32 hunterXpForLevel)
+    {
+        return uint32(float(hunterXpForLevel) * LoyaltyXpShare);
+    }
+
+    inline uint32 LoyaltySecondsForRank(uint8 rank)
+    {
+        return LoyaltyRankMinutes[std::clamp(rank, LoyaltyRankMin, LoyaltyRankMax)] * 60;
+    }
+
+    // rank: the pet's rank now; xp and seconds: what it earned and how long it was out since it reached that rank
+    inline bool CanRankUp(uint8 rank, uint32 xp, uint32 seconds, uint32 hunterXpForLevel)
+    {
+        if (rank >= LoyaltyRankMax)
+            return false;
+
+        return xp >= LoyaltyXpForRank(hunterXpForLevel) && seconds >= LoyaltySecondsForRank(uint8(rank + 1));
     }
 }
 

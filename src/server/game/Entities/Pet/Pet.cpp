@@ -44,6 +44,7 @@
 #include "World.h"
 #include "WorldSession.h"
 #include <algorithm>
+#include <limits>
 #include <sstream>
 #include <unordered_set>
 
@@ -314,7 +315,7 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
     InitStatsForLevel(petlevel);
     SetPetExperience(petInfo->Experience);
     if (HasLoyalty())
-        InitLoyalty(petInfo->LoyaltyLevel, petInfo->LoyaltyPoints);
+        InitLoyalty(petInfo->LoyaltyLevel, petInfo->LoyaltyPoints, petInfo->LoyaltySeconds);
 
     SynchronizeLevelWithOwner();
 
@@ -564,10 +565,10 @@ void Pet::SavePetToDB(PetSaveMode mode)
         stmt->setUInt16(16, GetSpecialization());
         trans->Append(stmt);
 
-        // Classic 1.60: hunter pet loyalty (sql/custom/characters 2026_10_12_20)
+        // Classic 1.60: hunter pet loyalty (sql/custom/characters 2026_10_12_20, loyalty_time 2026_11_13_81)
         if (HasLoyalty())
-            trans->PAppend("REPLACE INTO character_pet_loyalty (id, loyalty, loyalty_points) VALUES ({}, {}, {})",
-                m_charmInfo->GetPetNumber(), uint32(m_loyaltyLevel), m_loyaltyPoints);
+            trans->PAppend("REPLACE INTO character_pet_loyalty (id, loyalty, loyalty_points, loyalty_time) VALUES ({}, {}, {}, {})",
+                m_charmInfo->GetPetNumber(), uint32(m_loyaltyLevel), m_loyaltyPoints, m_loyaltySeconds);
 
         CharacterDatabase.CommitTransaction(trans);
     }
@@ -598,6 +599,7 @@ void Pet::FillPetInfo(PetStable::PetInfo* petInfo, Optional<ReactStates> forcedR
     petInfo->SpecializationId = GetSpecialization();
     petInfo->LoyaltyLevel = m_loyaltyLevel;
     petInfo->LoyaltyPoints = m_loyaltyPoints;
+    petInfo->LoyaltySeconds = m_loyaltySeconds;
 }
 
 void Pet::DeleteFromDB(uint32 petNumber)
@@ -749,7 +751,8 @@ void Pet::Update(uint32 diff)
                 }
             }
 
-            // Classic 1.60: loyalty every 12 s by happiness: happy +20, content +10, unhappy -20 (VMaNGOS Pet::TickLoyaltyChange)
+            // Classic 1.60 (WoW Forever): loyalty counts the time the pet is out, alive (vanilla: points every 12 s by happiness, lost while
+            // unhappy, and a Rebellious pet ran away; the Forever rule has no loss)
             if (HasLoyalty())
             {
                 if (m_loyaltyTimer > diff)
@@ -757,15 +760,7 @@ void Pet::Update(uint32 diff)
                 else
                 {
                     m_loyaltyTimer = LOYALTY_TICK_INTERVAL;
-                    int32 change = 0;
-                    switch (GetHappinessState())
-                    {
-                        case HAPPY:   change = 20; break;
-                        case CONTENT: change = 10; break;
-                        case UNHAPPY: change = -20; break;
-                    }
-                    if (!ModifyLoyalty(change))
-                        return;                             // ran away, removed
+                    AddLoyaltyProgress(0, LOYALTY_TICK_INTERVAL / IN_MILLISECONDS);
                 }
             }
 
@@ -864,6 +859,10 @@ void Pet::GivePetXP(uint32 xp)
     if (!IsAlive())
         return;
 
+    // Classic 1.60 (WoW Forever): the kill XP also counts toward the next loyalty rank, a pet at the hunter's level included
+    if (HasLoyalty())
+        AddLoyaltyProgress(xp, 0);
+
     uint8 maxlevel = std::min((uint8)sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL), GetOwner()->GetLevel());
     uint8 petlevel = GetLevel();
 
@@ -889,9 +888,6 @@ void Pet::GivePetXP(uint32 xp)
     // Not affected by special conditions - give it new XP
     SetPetExperience(petlevel < maxlevel ? newXP : 0);
 
-    // Classic 1.60: kills that give experience also give loyalty (VMaNGOS Pet::KillLoyaltyBonus)
-    if (HasLoyalty())
-        KillLoyaltyBonus(petlevel);
 }
 
 // Classic 1.60 (WoW Forever): 20% of the hunter's XP for the level (Classic Hunter Lodge wiki, Pet-Fundamentals); vanilla was 5%
@@ -999,85 +995,38 @@ int32 Pet::GetFoodBenefit(uint8 petLevel, uint32 foodLevel)
     return 0;
 }
 
-// Classic 1.60 hunter pet loyalty: points needed to reach the next level / points a level starts with (VMaNGOS Pet::LevelUpLoyalty /
-// LevelStartLoyalty; 100 points per minute while happy)
-int32 Pet::GetLoyaltyLevelUpPoints(uint8 loyaltyLevel)
-{
-    static constexpr std::array<int32, 6> LevelUp = { 5500, 11500, 17000, 23500, 31000, 39500 };
-    return LevelUp[std::clamp<uint8>(loyaltyLevel, REBELLIOUS, BEST_FRIEND) - 1];
-}
-
-int32 Pet::GetLoyaltyStartPoints(uint8 loyaltyLevel)
-{
-    static constexpr std::array<int32, 6> Start = { 2000, 4500, 7000, 10000, 13500, 17500 };
-    return Start[std::clamp<uint8>(loyaltyLevel, REBELLIOUS, BEST_FRIEND) - 1];
-}
-
-void Pet::InitLoyalty(uint8 loyaltyLevel, int32 loyaltyPoints)
+void Pet::InitLoyalty(uint8 loyaltyLevel, int32 loyaltyPoints, uint32 loyaltySeconds /*= 0*/)
 {
     m_loyaltyLevel = std::clamp<uint8>(loyaltyLevel, REBELLIOUS, BEST_FRIEND);
-    m_loyaltyPoints = std::clamp<int32>(loyaltyPoints, 0, GetLoyaltyLevelUpPoints(m_loyaltyLevel));
+    m_loyaltyPoints = std::max<int32>(loyaltyPoints, 0);
+    m_loyaltySeconds = loyaltySeconds;
     m_loyaltyTimer = LOYALTY_TICK_INTERVAL;
 }
 
-bool Pet::ModifyLoyalty(int32 addvalue)
+// Classic 1.60 (WoW Forever, Classic Hunter Lodge wiki, Pet-Fundamentals): a loyalty rank needs 5% of the hunter's XP for the pet's level,
+// earned since the last rank, and 0, 30, 45, 60 or 90 minutes out for ranks 2 to 6. Each rank adds the pet's level in training points.
+void Pet::AddLoyaltyProgress(uint32 xp, uint32 seconds)
 {
-    if (!HasLoyalty() || !addvalue)
-        return true;
-
-    uint8 loyaltyLevel = m_loyaltyLevel;
-    if (loyaltyLevel >= BEST_FRIEND && addvalue + m_loyaltyPoints > GetLoyaltyLevelUpPoints(loyaltyLevel))
-        return true;
-
-    m_loyaltyPoints += addvalue;
-
-    if (m_loyaltyPoints < 0)
-    {
-        if (loyaltyLevel > REBELLIOUS)
-        {
-            // level down: the pet loses training points (level * 1)
-            --loyaltyLevel;
-            m_loyaltyPoints = GetLoyaltyStartPoints(loyaltyLevel);
-        }
-        else
-        {
-            // vanilla: a Rebellious pet that keeps losing loyalty runs away for good
-            m_loyaltyPoints = 0;
-            Player* owner = GetOwner();
-            TC_LOG_INFO("entities.pet", "Pet {} ({}) of {} ran away: Rebellious and unhappy (happiness {})", GetName(), GetEntry(),
-                owner->GetName(), GetPower(POWER_HAPPINESS));
-            ChatHandler(owner->GetSession()).SendSysMessage("Your pet has run away");
-            Remove(PET_SAVE_AS_DELETED);
-            return false;
-        }
-    }
-    else if (m_loyaltyPoints > GetLoyaltyLevelUpPoints(loyaltyLevel))
-    {
-        // level up: the pet gains training points (level * 1)
-        ++loyaltyLevel;
-        m_loyaltyPoints = GetLoyaltyStartPoints(loyaltyLevel);
-    }
-
-    if (loyaltyLevel != m_loyaltyLevel)
-    {
-        m_loyaltyLevel = loyaltyLevel;
-        UpdateTrainingPoints();
-    }
-
-    // the client reads loyalty only from the stable pet values: sent on level changes alone, the points it shows never moved
-    // between loyalty levels ("pets do not gain loyalty experience")
-    if (Player* owner = GetOwner())
-        owner->UpdateStablePetLoyalty(m_charmInfo->GetPetNumber(), m_loyaltyLevel, m_loyaltyPoints);
-    return true;
-}
-
-void Pet::KillLoyaltyBonus(uint8 level)
-{
-    if (level > 100)
+    if (!HasLoyalty() || m_loyaltyLevel >= BEST_FRIEND)
         return;
 
-    // at lower levels gain is faster, the lower the loyalty the more is gained
-    ModifyLoyalty(int32((100 - level) / 10) + (BEST_FRIEND - m_loyaltyLevel));
+    // capped well above any requirement, so a long stay out cannot overflow the counters
+    m_loyaltyPoints = int32(std::min<uint64>(uint64(m_loyaltyPoints) + xp, uint64(std::numeric_limits<int32>::max() / 2)));
+    m_loyaltySeconds = uint32(std::min<uint64>(uint64(m_loyaltySeconds) + seconds, 24 * HOUR));
+
+    if (!HunterPetForever::CanRankUp(m_loyaltyLevel, uint32(m_loyaltyPoints), m_loyaltySeconds, sObjectMgr->GetXPForLevel(GetLevel())))
+        return;
+
+    ++m_loyaltyLevel;
+    m_loyaltyPoints = 0;
+    m_loyaltySeconds = 0;
+    UpdateTrainingPoints();
+
+    TC_LOG_DEBUG("entities.pet", "Pet {} ({}) reached loyalty level {}", GetName(), GetGUID().ToString(), uint32(m_loyaltyLevel));
+
+    // the client reads loyalty only from the stable pet values
+    if (Player* owner = GetOwner())
+        owner->UpdateStablePetLoyalty(m_charmInfo->GetPetNumber(), m_loyaltyLevel, m_loyaltyPoints, m_loyaltySeconds);
 }
 
 uint32 Pet::GetSpellTrainingPoints(uint32 spellId)
@@ -1330,9 +1279,8 @@ bool Pet::CreateBaseAtTamed(CreatureTemplate const* cinfo, Map* map)
         SetPowerType(POWER_FOCUS);
         SetSheath(SHEATH_STATE_MELEE);
         ReplaceAllPetFlags(UNIT_PET_FLAG_CAN_BE_RENAMED | UNIT_PET_FLAG_CAN_BE_ABANDONED);
-        // Classic 1.60: a freshly tamed beast is Rebellious (vanilla)
-        m_loyaltyLevel = REBELLIOUS;
-        m_loyaltyPoints = LOYALTY_TAMED;
+        // Classic 1.60: a freshly tamed beast is Rebellious
+        InitLoyalty(REBELLIOUS, 0, 0);
     }
 
     return true;

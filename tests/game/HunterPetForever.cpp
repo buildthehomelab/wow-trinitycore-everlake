@@ -88,3 +88,26 @@ TEST_CASE("Focus comes back at 10 per second", "[HunterPetForever]")
     CHECK(HunterPetForever::FocusPerTick(10.0f, 4000) == Catch::Approx(40.0f));
     CHECK(HunterPetForever::FocusPerTick(HunterPetForever::FocusPerSecondFallback, 1000) == Catch::Approx(10.0f));
 }
+
+TEST_CASE("A loyalty rank needs 5% of the hunter's level XP and the rank's time", "[HunterPetForever]")
+{
+    using namespace HunterPetForever;
+    uint32 const levelXp = 10100;                                           // hunter XP for level 12
+    uint32 const xp = LoyaltyXpForRank(levelXp);
+    CHECK(xp == 505u);
+
+    // rank 2 (Unruly) needs no time
+    CHECK(CanRankUp(1, xp, 0, levelXp));
+    CHECK_FALSE(CanRankUp(1, xp - 1, 0, levelXp));
+
+    // ranks 3 to 6 need 30, 45, 60 and 90 minutes as well
+    for (auto [rank, minutes] : { std::pair{ 2, 30u }, { 3, 45u }, { 4, 60u }, { 5, 90u } })
+    {
+        INFO("Rank: " << rank);
+        CHECK(CanRankUp(uint8(rank), xp, minutes * 60, levelXp));
+        CHECK_FALSE(CanRankUp(uint8(rank), xp, minutes * 60 - 1, levelXp));  // the XP alone is not enough
+        CHECK_FALSE(CanRankUp(uint8(rank), xp - 1, 24 * 3600, levelXp));     // nor is the time alone
+    }
+
+    CHECK_FALSE(CanRankUp(6, xp, 24 * 3600, levelXp));                      // Best Friend is the top
+}
