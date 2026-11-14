@@ -153,6 +153,8 @@ Left out on purpose:
 
 - `Spell::SendNextMeleeSwingAttackerState` took a process-wide lock on every Heroic Strike, Cleave, Maul and Raptor Strike for
   a once-per-ability log line. It now does so only while `playerbot.v2` logs at INFO (the same guard #45 put on `[certain_crit]`).
+- gcc build: `classic_instance_razorfen_downs.cpp` compared the wave number sent with `_gongWaves + 1` (a `uint8` promoted to
+  `int`) against a `uint32`, an error under `-Werror=sign-compare`. Cast added. Karrz builds with MSVC, clang does not warn.
 
 ## How it was checked
 

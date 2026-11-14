@@ -147,7 +147,7 @@ public:
             if (type == DATA_GONG_WAVES)
             {
                 GameObject* gong = instance->GetGameObject(_gongGUID);
-                if (!gong || GongCompleted() || !_gongSummons.empty() || data != _gongWaves + 1 || data > 3)
+                if (!gong || GongCompleted() || !_gongSummons.empty() || data != uint32(_gongWaves) + 1 || data > 3)
                     return;
 
                 static constexpr uint32 entries[] = { CREATURE_TOMB_FIEND, CREATURE_TOMB_REAVER, CREATURE_TUTEN_KASH };
