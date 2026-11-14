@@ -4912,6 +4912,8 @@ void Spell::SendNextMeleeSwingAttackerState()
         unitCaster->SendCombatLogMessage(&packet);
 
         // once per ability, so a test run can see the swing packet went out without a client
+        // Everlake: only while somebody logs it, so a swing takes no process-wide lock for a line nobody reads
+        if (sLog->ShouldLog("playerbot.v2", LOG_LEVEL_INFO))
         {
             static std::mutex loggedMutex;
             static std::unordered_set<uint32> logged;
