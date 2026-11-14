@@ -11609,7 +11609,7 @@ namespace
 // training points allow (cost per chain from classic_pet_spell_training_points), with autocast on, as a player's pet is trained at 60.
 void RaiseGrantedHunterPet(Pet* pet, Player const* owner)
 {
-    pet->InitLoyalty(Pet::BEST_FRIEND, Pet::GetLoyaltyStartPoints(Pet::BEST_FRIEND));
+    pet->InitLoyalty(Pet::BEST_FRIEND, 0);
     pet->SetPower(POWER_HAPPINESS, Pet::HAPPINESS_MAX);
 
     CreatureTemplate const* tpl = pet->GetCreatureTemplate();
