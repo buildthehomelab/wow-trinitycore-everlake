@@ -426,6 +426,8 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
             // Classic 1.60: a beast tamed before it kept its wild abilities has none (auto attack only); give them now
             if (getPetType() == HUNTER_PET && !KnowsActiveSpell())
                 LearnTameSpells();
+            // and its attack speed passive, for a pet tamed before the beast had one or since it changed
+            SyncTameAttackSpeed();
             if (GetMap()->IsBattleArena())
                 RemoveArenaAuras();
 
@@ -1221,6 +1223,41 @@ void Pet::LearnTameSpells()
             learnSpell(spellId);                            // replaces a lower rank of it
 }
 
+void Pet::SyncTameAttackSpeed()
+{
+    if (getPetType() != HUNTER_PET)
+        return;
+
+    uint32 ownPassive = 0;
+    if (std::vector<uint32> const* spells = GetTameSpells(GetEntry()))
+        for (uint32 spellId : *spells)
+            if (HunterPetForever::IsAttackSpeedPassive(spellId))
+                ownPassive = spellId;
+
+    // one speed at a time: a passive that is not this beast's own goes (the beast's row changed, or it never had one)
+    for (uint32 spellId : HunterPetForever::AttackSpeedPassives)
+        if (spellId != ownPassive && HasSpell(spellId))
+            unlearnSpell(spellId, false, false);
+
+    if (ownPassive && !HasSpell(ownPassive))
+        learnSpell(ownPassive);
+}
+
+int32 Pet::GetAttackSpeedPassivePercent() const
+{
+    for (uint32 spellId : HunterPetForever::AttackSpeedPassives)
+    {
+        if (!HasSpell(spellId))
+            continue;
+
+        if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId, DIFFICULTY_NONE))
+            for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+                if (effect.IsAura(SPELL_AURA_MOD_ATTACKSPEED))
+                    return effect.CalcValueAsInt(this);
+    }
+    return 0;
+}
+
 bool Pet::KnowsActiveSpell() const
 {
     for (auto const& [spellId, petSpell] : m_spells)
@@ -1330,9 +1367,12 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
 
     SetStatFlatModifier(UNIT_MOD_ARMOR, BASE_VALUE, float(petlevel * 50));
 
-    // Classic 1.60 (vanilla): pets keep their creature's attack speed (a tamed beast keeps the speed it had in the wild);
-    // retail forced 2.0 sec
-    uint32 const attackTime = cinfo->BaseAttackTime ? cinfo->BaseAttackTime : BASE_ATTACK_TIME;
+    // Classic 1.60 (WoW Forever): every hunter pet swings once in 2.0 sec, whatever the beast did in the wild, and a faster or
+    // slower beast knows a Faster Attack or Slower Attack passive that changes it (classic_pet_tame_spell, SyncTameAttackSpeed).
+    // Other pets keep their creature's attack speed; retail forced 2.0 sec on all of them.
+    uint32 attackTime = cinfo->BaseAttackTime ? cinfo->BaseAttackTime : BASE_ATTACK_TIME;
+    if (petType == HUNTER_PET)
+        attackTime = HunterPetForever::BaseAttackTimeMs;
     SetBaseAttackTime(BASE_ATTACK, attackTime);
     SetBaseAttackTime(OFF_ATTACK, attackTime);
     SetBaseAttackTime(RANGED_ATTACK, cinfo->RangeAttackTime ? cinfo->RangeAttackTime : BASE_ATTACK_TIME);
@@ -1574,9 +1614,7 @@ bool Pet::HaveInDiet(ItemTemplate const* item) const
     if (!cFamily)
         return false;
 
-    uint32 diet = cFamily->PetFoodMask;
-    uint32 FoodMask = 1 << (item->FoodType-1);
-    return (diet & FoodMask) != 0;
+    return HunterPetForever::EatsFoodType(uint32(cFamily->PetFoodMask), item->FoodType);
 }
 
 void Pet::_LoadSpells(PreparedQueryResult result)

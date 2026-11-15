@@ -36,6 +36,7 @@
 #include "GridDefines.h"
 #include "GroupMgr.h"
 #include "GuildMgr.h"
+#include "HunterPetForever.h"
 #include "InstanceScript.h"
 #include "Item.h"
 #include "ItemBonusMgr.h"
@@ -3663,7 +3664,7 @@ void ObjectMgr::LoadItemTemplates()
 
         itemTemplate.MaxDurability = FillMaxDurability(db2Data->ClassID, db2Data->SubclassID, sparse->InventoryType, sparse->OverallQualityID, sparse->ItemLevel);
         itemTemplate.ScriptId = 0;
-        itemTemplate.FoodType = 0;
+        itemTemplate.FoodType = HunterPetForever::FoodType(db2Data->ItemPetFoodID, 0);   // the client's own pet food type
         itemTemplate.MinMoneyLoot = 0;
         itemTemplate.MaxMoneyLoot = 0;
         itemTemplate.FlagsCu = 0;
@@ -3772,7 +3773,9 @@ void ObjectMgr::LoadItemTemplateAddon()
                 std::swap(minMoneyLoot, maxMoneyLoot);
             }
             itemTemplate->FlagsCu = fields[1].GetUInt32();
-            itemTemplate->FoodType = fields[2].GetUInt8();
+            // Classic 1.60: the client's Item table wins. Of the 411 pet foods in the 1.60.1.70790 client this table had 197,
+            // nine of them with another type, so a pet refused most of the food the client says it eats.
+            itemTemplate->FoodType = HunterPetForever::FoodType(itemTemplate->BasicData->ItemPetFoodID, fields[2].GetUInt8());
             itemTemplate->MinMoneyLoot = minMoneyLoot;
             itemTemplate->MaxMoneyLoot = maxMoneyLoot;
             itemTemplate->SpellPPMRate = fields[5].GetFloat();

@@ -26,6 +26,7 @@
 #include "Containers.h"
 #include "DB2Stores.h"
 #include "GridNotifiersImpl.h"
+#include "HunterPetForever.h"
 #include "Item.h"
 #include "Log.h"
 #include "MiscPackets.h"
@@ -4815,7 +4816,13 @@ void AuraEffect::HandleModAttackSpeed(AuraApplication const* aurApp, uint8 mode,
 
     Unit* target = aurApp->GetTarget();
 
-    target->ApplyAttackTimePercentMod(BASE_ATTACK, float(GetAmount()), apply);
+    float amount = float(GetAmount());
+    // Classic 1.60 (WoW Forever): a hunter pet's Slower Attack passive divides the swing like the Faster Attack ones do
+    // (-20% is 2.0 / 0.8 = 2.5 sec, the speed Wowhead lists for the beast), where any other slow multiplies it (2.4 sec)
+    if (amount < 0.0f && HunterPetForever::IsAttackSpeedPassive(GetId()))
+        amount = HunterPetForever::SlowAmountForSwingShare(GetAmount());
+
+    target->ApplyAttackTimePercentMod(BASE_ATTACK, amount, apply);
     target->UpdateDamagePhysical(BASE_ATTACK);
 }
 

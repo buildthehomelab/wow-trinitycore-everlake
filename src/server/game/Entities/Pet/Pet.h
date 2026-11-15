@@ -135,6 +135,10 @@ class TC_GAME_API Pet final : public Guardian
         static std::vector<uint32> const* GetTameSpells(uint32 creatureEntry);  // nullptr = the beast comes with no ability
         static uint32 GetBeastTrainingTeachSpell(uint32 petSpellId);           // 0 = no Beast Training rank teaches it
         void LearnTameSpells();
+        // Classic 1.60 (WoW Forever): the beast's Faster Attack or Slower Attack passive, the one classic_pet_tame_spell row of
+        // HunterPetForever::AttackSpeedPassives it has; a pet knows that one and no other.
+        void SyncTameAttackSpeed();
+        int32 GetAttackSpeedPassivePercent() const;                       // its Mod Attack Speed amount, 0 without a passive
         bool KnowsActiveSpell() const;                                    // any spell besides passives (auto attack is no spell)
         void CheckLearning(uint32 spellId);
 
