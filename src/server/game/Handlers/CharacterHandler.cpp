@@ -3598,3 +3598,55 @@ void WorldSession::SendUndeleteCharacterResponse(CharacterUndeleteResult result,
 
     SendPacket(response.Write());
 }
+
+// The account's characters on this realm. The client keeps the list and offers the names where a name is typed with
+// completion: the mail window's To box fills in your own characters from it. Not answered, only friends, guild members and
+// people nearby were offered there.
+void WorldSession::HandleGetAccountCharacterList(WorldPackets::Character::GetAccountCharacterList& getAccountCharacterList)
+{
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_CHARACTER_LIST);
+    stmt->setUInt32(0, GetAccountId());
+
+    _queryProcessor.AddCallback(CharacterDatabase.AsyncQuery(stmt).WithPreparedCallback(
+        [this, token = getAccountCharacterList.Token, consoleCommand = getAccountCharacterList.ConsoleCommand](PreparedQueryResult result)
+    {
+        SendAccountCharacterList(std::move(result), token, consoleCommand);
+    }));
+}
+
+void WorldSession::SendAccountCharacterList(PreparedQueryResult result, uint32 token, bool consoleCommand)
+{
+    WorldPackets::Character::GetAccountCharacterListResult response;
+    response.Token = token;
+    response.ConsoleCommand = consoleCommand;
+
+    if (result)
+    {
+        std::string realmName;
+        if (std::shared_ptr<Realm const> realm = sRealmList->GetCurrentRealm())
+            realmName = realm->Name;
+
+        ObjectGuid wowAccount = ObjectGuid::Create<HighGuid::WowAccount>(GetAccountId());
+        uint32 virtualRealmAddress = GetVirtualRealmAddress();
+
+        do
+        {
+            Field* fields = result->Fetch();
+
+            // the name alone, without the surname: names are unique in this core and the mail's recipient is found by it
+            WorldPackets::Character::AccountCharacterData& character = response.Characters.emplace_back();
+            character.WowAccount = wowAccount;
+            character.Guid = ObjectGuid::Create<HighGuid::Player>(fields[0].GetUInt64());
+            character.VirtualRealmAddress = virtualRealmAddress;
+            character.CharacterName = fields[1].GetString();
+            character.RaceID = fields[2].GetUInt8();
+            character.ClassID = fields[3].GetUInt8();
+            character.SexID = fields[4].GetUInt8();
+            character.ExperienceLevel = fields[5].GetUInt8();
+            character.LastActiveTime = fields[6].GetInt64();
+            character.RealmName = realmName;
+        } while (result->NextRow());
+    }
+
+    SendPacket(response.Write());
+}
