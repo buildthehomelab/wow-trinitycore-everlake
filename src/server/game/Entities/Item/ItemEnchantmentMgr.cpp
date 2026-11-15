@@ -104,7 +104,7 @@ ItemRandomBonusListId GenerateItemRandomBonusListId(uint32 item_id)
     return *Trinity::Containers::SelectRandomWeightedContainerElement(tab->second.BonusListIDs, std::span(tab->second.Chances));
 }
 
-float GetRandomPropertyPoints(uint32 itemLevel, uint32 quality, uint32 inventoryType, uint32 subClass)
+float GetRandomPropertyPoints(uint32 itemLevel, uint32 quality, uint32 inventoryType, uint32 /*subClass*/)
 {
     uint32 propIndex;
 
@@ -114,17 +114,9 @@ float GetRandomPropertyPoints(uint32 itemLevel, uint32 quality, uint32 inventory
         case INVTYPE_BODY:
         case INVTYPE_CHEST:
         case INVTYPE_LEGS:
-        case INVTYPE_RANGED:
         case INVTYPE_2HWEAPON:
         case INVTYPE_ROBE:
-        case INVTYPE_THROWN:
             propIndex = 0;
-            break;
-        case INVTYPE_RANGEDRIGHT:
-            if (subClass == ITEM_SUBCLASS_WEAPON_WAND)
-                propIndex = 3;
-            else
-                propIndex = 0;
             break;
         case INVTYPE_WEAPON:
         case INVTYPE_WEAPONMAINHAND:
@@ -146,6 +138,16 @@ float GetRandomPropertyPoints(uint32 itemLevel, uint32 quality, uint32 inventory
         case INVTYPE_HOLDABLE:
             propIndex = 2;
             break;
+        // WoW: Forever differs from stock TrinityCore here. Stock gives bows, guns, crossbows and thrown weapons the
+        // column of two-handers and chest pieces (0) and wands the one-hand column (3). Forever keeps the original
+        // game's rule: every ranged weapon, wands included, takes the ranged column (4). Checked against the ranged
+        // weapons Forever left unchanged from the original game (37 with primary stats: column 4 gives the original
+        // amounts for all of them, columns 0 to 3 for none) and against live Forever tooltips (Ragefire Wand, item
+        // 7513: +3 Intellect, column 3 would give +4; Mithril Blunderbuss, item 10508: +5 Agility, column 0 would
+        // give +17).
+        case INVTYPE_RANGED:
+        case INVTYPE_THROWN:
+        case INVTYPE_RANGEDRIGHT:
         case INVTYPE_RELIC:
             propIndex = 4;
             break;
