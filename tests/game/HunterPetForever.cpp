@@ -111,3 +111,87 @@ TEST_CASE("A loyalty rank needs 5% of the hunter's level XP and the rank's time"
 
     CHECK_FALSE(CanRankUp(6, xp, 24 * 3600, levelXp));                      // Best Friend is the top
 }
+
+// Attack speed: the ten Faster Attack / Slower Attack passives of the 1.60.1.70790 client (SpellEffect: Mod Attack Speed).
+
+TEST_CASE("A Faster Attack passive shortens the 2.0 sec swing to the beast's vanilla speed", "[HunterPetForever]")
+{
+    CHECK(HunterPetForever::AttackTimeMs(0) == 2000u);      // no passive: every hunter pet swings once in 2.0 sec
+    CHECK(HunterPetForever::AttackTimeMs(17) == 1709u);     // Faster Attack I, Wowhead: 1.70 (Mangy Wolf)
+    CHECK(HunterPetForever::AttackTimeMs(25) == 1600u);     // Faster Attack II, Wowhead: 1.60 (Mystmane)
+    CHECK(HunterPetForever::AttackTimeMs(33) == 1504u);     // Faster Attack III, Wowhead: 1.50 (Prowler)
+    CHECK(HunterPetForever::AttackTimeMs(43) == 1399u);     // Faster Attack IV
+    CHECK(HunterPetForever::AttackTimeMs(54) == 1299u);     // Faster Attack V
+    CHECK(HunterPetForever::AttackTimeMs(67) == 1198u);     // Faster Attack VI
+    CHECK(HunterPetForever::AttackTimeMs(100) == 1000u);    // Faster Attack VII (Broken Tooth)
+}
+
+TEST_CASE("A Slower Attack passive lengthens the swing the way a slow does", "[HunterPetForever]")
+{
+    // Unit::ApplyAttackTimePercentMod multiplies the swing by 1 + percent for a negative amount
+    CHECK(HunterPetForever::AttackTimeMs(-17) == 2340u);    // Slower Attack I
+    CHECK(HunterPetForever::AttackTimeMs(-20) == 2400u);    // Slower Attack II
+    CHECK(HunterPetForever::AttackTimeMs(-26) == 2520u);    // Slower Attack III
+}
+
+TEST_CASE("Pets of every attack speed do the same damage per second", "[HunterPetForever]")
+{
+    // Pet-Attack-Formulas: Auto Attack = (Base Pet DPS + Pet AP / 14) x Swing Speed. 85.45 DPS is the wiki's level 60 example.
+    float const dps = 85.45f;
+    float const swingAtBaseSpeed = dps * 2.0f;
+    for (int32 percent : { 0, 17, 25, 33, 43, 54, 67, 100, -17, -20, -26 })
+    {
+        float swing = swingAtBaseSpeed * HunterPetForever::SwingShare(percent);
+        float seconds = 2.0f * HunterPetForever::SwingShare(percent);
+        CHECK(swing / seconds == Catch::Approx(dps));
+    }
+
+    CHECK(HunterPetForever::SwingShare(0) == Catch::Approx(1.0f));
+    CHECK(HunterPetForever::SwingShare(25) == Catch::Approx(0.8f));     // Mystmane hits for 80% of a 2.0 sec beast's swing
+    CHECK(HunterPetForever::SwingShare(100) == Catch::Approx(0.5f));    // Broken Tooth: half the swing, twice as often
+    CHECK(HunterPetForever::SwingShare(-20) == Catch::Approx(1.2f));
+}
+
+TEST_CASE("Only the ten Faster Attack and Slower Attack spells are attack speed passives", "[HunterPetForever]")
+{
+    CHECK(HunterPetForever::IsAttackSpeedPassive(1263099));     // Faster Attack I
+    CHECK(HunterPetForever::IsAttackSpeedPassive(1263100));     // Faster Attack II
+    CHECK(HunterPetForever::IsAttackSpeedPassive(1263110));     // Faster Attack VII
+    CHECK(HunterPetForever::IsAttackSpeedPassive(1263111));     // Slower Attack I
+    CHECK(HunterPetForever::IsAttackSpeedPassive(1263114));     // Slower Attack III
+    CHECK_FALSE(HunterPetForever::IsAttackSpeedPassive(0));
+    CHECK_FALSE(HunterPetForever::IsAttackSpeedPassive(1263101));
+    CHECK_FALSE(HunterPetForever::IsAttackSpeedPassive(1264494));   // Swipe
+    CHECK_FALSE(HunterPetForever::IsAttackSpeedPassive(17253));     // Bite Rank 1
+}
+
+// Pet food: Item.ItemPetFoodID and CreatureFamily.PetFoodMask of the 1.60.1.70790 client.
+
+TEST_CASE("An item's pet food type is the client's, and item_template_addon only fills a gap", "[HunterPetForever]")
+{
+    CHECK(HunterPetForever::FoodType(1, 0) == 1u);      // Raging Raptor Ribs 250073: Meat in the client, no addon row
+    CHECK(HunterPetForever::FoodType(2, 4) == 2u);      // Crab Cake 2683: Fish in the client, the addon row said Bread
+    CHECK(HunterPetForever::FoodType(0, 1) == 1u);      // Meaty Bat Wing 12223: nothing in the client, Meat in the addon row
+    CHECK(HunterPetForever::FoodType(0, 0) == 0u);      // not a pet food
+    CHECK(HunterPetForever::FoodType(-1, 3) == 3u);
+}
+
+TEST_CASE("A family eats the food types of its PetFoodMask", "[HunterPetForever]")
+{
+    uint32 const bear = 63;     // Meat, Fish, Cheese, Bread, Fungus, Fruit
+    uint32 const wolf = 1;      // Meat
+    uint32 const turtle = 178;  // Fish, Fungus, Fruit, Raw Fish
+    for (uint32 foodType = 1; foodType <= 6; ++foodType)
+        CHECK(HunterPetForever::EatsFoodType(bear, foodType));
+    CHECK_FALSE(HunterPetForever::EatsFoodType(bear, 7));       // Raw Meat (Pound of Flesh) is not in a bear's mask
+    CHECK_FALSE(HunterPetForever::EatsFoodType(bear, 8));
+
+    CHECK(HunterPetForever::EatsFoodType(wolf, 1));
+    CHECK_FALSE(HunterPetForever::EatsFoodType(wolf, 2));
+    CHECK(HunterPetForever::EatsFoodType(turtle, 2));
+    CHECK(HunterPetForever::EatsFoodType(turtle, 8));
+    CHECK_FALSE(HunterPetForever::EatsFoodType(turtle, 1));
+
+    CHECK_FALSE(HunterPetForever::EatsFoodType(bear, 0));       // an item with no food type is never food
+    CHECK_FALSE(HunterPetForever::EatsFoodType(0xFFFFFFFF, 33)); // no shift past the mask
+}

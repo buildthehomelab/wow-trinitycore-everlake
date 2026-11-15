@@ -24,6 +24,7 @@
 #include "Pet.h"
 #include "GameTables.h"
 #include "GameTime.h"
+#include "HunterPetForever.h"
 #include "Log.h"
 #include "ObjectMgr.h"
 #include "SharedDefines.h"
@@ -1620,6 +1621,15 @@ void Guardian::UpdateDamagePhysical(WeaponAttackType attType)
 
     float mindamage = ((base_value + weapon_mindamage) * base_pct + total_value) * total_pct;
     float maxdamage = ((base_value + weapon_maxdamage) * base_pct + total_value) * total_pct;
+
+    // Classic 1.60 (WoW Forever): a swing's damage follows the beast's own attack speed (its Faster Attack or Slower Attack
+    // passive), so every hunter pet does the same damage per second. Haste from other auras (Frenzy) is not part of this.
+    if (IsHunterPet() && IsPet())
+    {
+        float swingShare = HunterPetForever::SwingShare(ToPet()->GetAttackSpeedPassivePercent());
+        mindamage *= swingShare;
+        maxdamage *= swingShare;
+    }
 
     SetUpdateFieldStatValue(m_values.ModifyValue(&Unit::m_unitData).ModifyValue(&UF::UnitData::MinDamage), mindamage);
     SetUpdateFieldStatValue(m_values.ModifyValue(&Unit::m_unitData).ModifyValue(&UF::UnitData::MaxDamage), maxdamage);

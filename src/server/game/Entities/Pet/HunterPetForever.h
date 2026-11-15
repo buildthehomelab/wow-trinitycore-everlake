@@ -115,6 +115,52 @@ namespace HunterPetForever
 
         return xp >= LoyaltyXpForRank(hunterXpForLevel) && seconds >= LoyaltySecondsForRank(uint8(rank + 1));
     }
+
+    // Attack speed. Every hunter pet swings once in 2.0 sec, and a beast that is faster or slower than that knows one of ten
+    // passives of the generic pet skill line (270): Faster Attack I to VII and Slower Attack I to III, each a Mod Attack Speed
+    // aura (1.60.1.70790 client). Wowhead's NPC pages name the beast's passive: "Attack Speed: 1.60 (Faster Attack II)".
+    // The beast's speeds are vanilla's: 1.7, 1.6, 1.5, 1.4, 1.3, 1.2 and 1.0 sec for Faster Attack I to VII.
+    constexpr uint32 BaseAttackTimeMs = 2000;
+    constexpr std::array<uint32, 10> AttackSpeedPassives =
+    {
+        1263099, 1263100, 1263102, 1263104, 1263107, 1263109, 1263110,     // Faster Attack I .. VII: 17, 25, 33, 43, 54, 67, 100%
+        1263111, 1263113, 1263114                                          // Slower Attack I .. III: -17, -20, -26%
+    };
+
+    inline bool IsAttackSpeedPassive(uint32 spellId)
+    {
+        return std::find(AttackSpeedPassives.begin(), AttackSpeedPassives.end(), spellId) != AttackSpeedPassives.end();
+    }
+
+    // Pet-Attack-Formulas, "Attack Speed Normalization": Auto Attack = (Base Pet DPS + Pet AP / 14) x Swing Speed, so a faster
+    // beast hits for less and a slower one for more, and all of them do the same damage per second. This is the share of a
+    // 2.0 sec swing that one swing of the pet is, by the arithmetic of Unit::ApplyAttackTimePercentMod: 25% faster is a swing
+    // of 1 / 1.25, 20% slower is a swing of 1.20. percent: the passive's Mod Attack Speed amount, 0 without a passive.
+    inline float SwingShare(int32 percent)
+    {
+        if (percent >= 0)
+            return 1.0f / (1.0f + float(percent) / 100.0f);
+
+        return 1.0f + float(-percent) / 100.0f;
+    }
+
+    inline uint32 AttackTimeMs(int32 percent)
+    {
+        return uint32(float(BaseAttackTimeMs) * SwingShare(percent) + 0.5f);
+    }
+
+    // Pet food. The client's Item table names an item's food type (ItemPetFoodID, a row of ItemPetFood: 1 Meat, 2 Fish, 3 Cheese,
+    // 4 Bread, 5 Fungus, 6 Fruit, 7 Raw Meat, 8 Raw Fish) and CreatureFamily.PetFoodMask has one bit per type the family eats.
+    // item_template_addon.FoodType only fills in an item the client gives no type.
+    inline uint32 FoodType(int32 clientItemPetFoodId, uint32 addonFoodType)
+    {
+        return clientItemPetFoodId > 0 ? uint32(clientItemPetFoodId) : addonFoodType;
+    }
+
+    inline bool EatsFoodType(uint32 familyPetFoodMask, uint32 foodType)
+    {
+        return foodType >= 1 && foodType <= 32 && (familyPetFoodMask & (uint32(1) << (foodType - 1))) != 0;
+    }
 }
 
 #endif
