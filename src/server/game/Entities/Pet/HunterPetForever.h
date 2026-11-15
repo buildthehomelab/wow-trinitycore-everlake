@@ -132,21 +132,31 @@ namespace HunterPetForever
         return std::find(AttackSpeedPassives.begin(), AttackSpeedPassives.end(), spellId) != AttackSpeedPassives.end();
     }
 
-    // Pet-Attack-Formulas, "Attack Speed Normalization": Auto Attack = (Base Pet DPS + Pet AP / 14) x Swing Speed, so a faster
-    // beast hits for less and a slower one for more, and all of them do the same damage per second. This is the share of a
-    // 2.0 sec swing that one swing of the pet is, by the arithmetic of Unit::ApplyAttackTimePercentMod: 25% faster is a swing
-    // of 1 / 1.25, 20% slower is a swing of 1.20. percent: the passive's Mod Attack Speed amount, 0 without a passive.
+    // The swing a passive leaves, as a share of the 2.0 sec one: 2.0 / (1 + percent / 100) sec, for the Slower Attack ranks
+    // too. Their amounts are 2.0 / speed - 1 for vanilla's slow beasts (-17, -20 and -26% for 2.4, 2.5 and 2.7 sec) and
+    // Wowhead lists a Slower Attack II beast at 2.50 sec (Young Forest Bear), where a slow of 20% would give 2.40.
+    // percent: the passive's Mod Attack Speed amount, 0 without a passive.
+    // Pet-Attack-Formulas, "Attack Speed Normalization": Auto Attack = (Base Pet DPS + Pet AP / 14) x Swing Speed, so a
+    // faster beast hits for less and a slower one for more, and all of them do the same damage per second: one swing's
+    // damage is this share of a 2.0 sec swing's damage as well.
     inline float SwingShare(int32 percent)
     {
-        if (percent >= 0)
-            return 1.0f / (1.0f + float(percent) / 100.0f);
+        if (percent <= -100)
+            return 1.0f;
 
-        return 1.0f + float(-percent) / 100.0f;
+        return 1.0f / (1.0f + float(percent) / 100.0f);
     }
 
     inline uint32 AttackTimeMs(int32 percent)
     {
         return uint32(float(BaseAttackTimeMs) * SwingShare(percent) + 0.5f);
+    }
+
+    // Unit::ApplyAttackTimePercentMod lengthens a swing by 1 + amount for a negative amount (a slow). The amount that
+    // makes it lengthen the swing to SwingShare instead: -25 for Slower Attack II's -20.
+    inline float SlowAmountForSwingShare(int32 percent)
+    {
+        return -(SwingShare(percent) - 1.0f) * 100.0f;
     }
 
     // Pet food. The client's Item table names an item's food type (ItemPetFoodID, a row of ItemPetFood: 1 Meat, 2 Fish, 3 Cheese,

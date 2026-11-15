@@ -126,12 +126,24 @@ TEST_CASE("A Faster Attack passive shortens the 2.0 sec swing to the beast's van
     CHECK(HunterPetForever::AttackTimeMs(100) == 1000u);    // Faster Attack VII (Broken Tooth)
 }
 
-TEST_CASE("A Slower Attack passive lengthens the swing the way a slow does", "[HunterPetForever]")
+TEST_CASE("A Slower Attack passive lengthens the swing to the beast's vanilla speed", "[HunterPetForever]")
 {
-    // Unit::ApplyAttackTimePercentMod multiplies the swing by 1 + percent for a negative amount
-    CHECK(HunterPetForever::AttackTimeMs(-17) == 2340u);    // Slower Attack I
-    CHECK(HunterPetForever::AttackTimeMs(-20) == 2400u);    // Slower Attack II
-    CHECK(HunterPetForever::AttackTimeMs(-26) == 2520u);    // Slower Attack III
+    CHECK(HunterPetForever::AttackTimeMs(-17) == 2410u);    // Slower Attack I, vanilla 2.4
+    CHECK(HunterPetForever::AttackTimeMs(-20) == 2500u);    // Slower Attack II, Wowhead: 2.50 (Young Forest Bear)
+    CHECK(HunterPetForever::AttackTimeMs(-26) == 2703u);    // Slower Attack III, vanilla 2.7
+    CHECK(HunterPetForever::AttackTimeMs(-100) == 2000u);   // no division by zero on broken data
+}
+
+TEST_CASE("A Slower Attack passive reaches its speed through the slow arithmetic of the attack timer", "[HunterPetForever]")
+{
+    // Unit::ApplyAttackTimePercentMod: swing x (1 + -amount / 100) for a negative amount
+    for (int32 percent : { -17, -20, -26 })
+    {
+        float amount = HunterPetForever::SlowAmountForSwingShare(percent);
+        CHECK(amount < 0.0f);
+        CHECK(2000.0f * (1.0f + -amount / 100.0f) == Catch::Approx(float(HunterPetForever::AttackTimeMs(percent))).margin(0.5));
+    }
+    CHECK(HunterPetForever::SlowAmountForSwingShare(-20) == Catch::Approx(-25.0f));
 }
 
 TEST_CASE("Pets of every attack speed do the same damage per second", "[HunterPetForever]")
@@ -149,7 +161,7 @@ TEST_CASE("Pets of every attack speed do the same damage per second", "[HunterPe
     CHECK(HunterPetForever::SwingShare(0) == Catch::Approx(1.0f));
     CHECK(HunterPetForever::SwingShare(25) == Catch::Approx(0.8f));     // Mystmane hits for 80% of a 2.0 sec beast's swing
     CHECK(HunterPetForever::SwingShare(100) == Catch::Approx(0.5f));    // Broken Tooth: half the swing, twice as often
-    CHECK(HunterPetForever::SwingShare(-20) == Catch::Approx(1.2f));
+    CHECK(HunterPetForever::SwingShare(-20) == Catch::Approx(1.25f));    // Young Forest Bear: 2.5 sec, a quarter more a swing
 }
 
 TEST_CASE("Only the ten Faster Attack and Slower Attack spells are attack speed passives", "[HunterPetForever]")
