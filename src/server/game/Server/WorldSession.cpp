@@ -1840,6 +1840,7 @@ uint32 WorldSession::DosProtection::GetMaxPacketCounterAllowed(uint32 opcode) co
         case CMSG_SOCKET_GEMS:                          // not profiled
         case CMSG_WRAP_ITEM:                            // not profiled
         case CMSG_REPORT_PVP_PLAYER_AFK:                // not profiled
+        case CMSG_GET_ACCOUNT_CHARACTER_LIST:           // not profiled                1 async db query
         {
             maxPacketCounterAllowed = 10;
             break;
