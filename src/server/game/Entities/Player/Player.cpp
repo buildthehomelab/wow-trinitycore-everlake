@@ -59,6 +59,7 @@
 #include "CreatureAI.h"
 #include "DB2Stores.h"
 #include "DatabaseEnv.h"
+#include "DayCycle.h"
 #include "DisableMgr.h"
 #include "DuelPackets.h"
 #include "EquipmentSetPackets.h"
@@ -75,6 +76,7 @@
 #include "GridNotifiersImpl.h"
 #include "Group.h"
 #include "GroupMgr.h"
+#include "HeadlessPackets.h"
 #include "GameTables.h"
 #include "GameTime.h"
 #include "Guild.h"
@@ -136,6 +138,7 @@
 #include "StringConvert.h"
 #include "TalentPackets.h"
 #include "TerrainMgr.h"
+#include "Timezone.h"
 #include "ToyPackets.h"
 #include "TradeData.h"
 #include "TraitMgr.h"
@@ -249,6 +252,7 @@ Player::Player(WorldSession* session) : Unit(true), m_sceneMgr(this)
 
     m_hostileReferenceCheckTimer = 0;
     m_drunkTimer = 0;
+    m_skyMode = uint8(DayCycle::SkyMode::Auto);
     m_deathTimer = 0;
     m_deathExpireTime = 0;
 
@@ -374,6 +378,12 @@ Player::~Player()
 {
     // it must be unloaded already in PlayerLogout and accessed only for logged in player
     //m_social = nullptr;
+
+    // items still listed for an inventory save forget this player before it goes, so none of them points at it afterwards
+    for (Item* item : m_itemUpdateQueue)
+        if (item)
+            RemoveItemFromUpdateQueueOf(item, this);
+    m_itemUpdateQueue.clear();
 
     // Note: buy back item already deleted from DB when player was saved
     for (uint8 i = 0; i < PLAYER_SLOTS_COUNT; ++i)
@@ -961,6 +971,7 @@ void Player::Update(uint32 p_time)
     SetCanDelayTeleport(false);
 
     UpdateParkedPet(p_time);
+    UpdateCombatPlates(p_time);
 
     // The pet remembered at login comes back a moment after the player is in the world, as a summon during play does. Created while the
     // Classic 1.60 client is still on its loading screen, the client froze on the pet (warlock demon out at logout, 20 Oct).
@@ -3223,6 +3234,11 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
         castSpell = true;
     else if (spellInfo->HasAttribute(SPELL_ATTR1_CAST_WHEN_LEARNED))
         castSpell = true;
+    // A hidden form spell (AuraEffect::HandleShapeshiftBoosts casts it at every shapeshift into one of its forms) learned while already
+    // in such a form goes on now, as it would at the next shapeshift (Feral Charge 1238122 teaches the Cat Form override 414925)
+    else if (!loading && IsInWorld() && spellInfo->Stances && spellInfo->HasAttribute(SPELL_ATTR0_DO_NOT_DISPLAY_SPELLBOOK_AURA_ICON_COMBAT_LOG))
+        if (ShapeshiftForm const form = GetShapeshiftForm(); form != FORM_NONE)
+            castSpell = (spellInfo->Stances & (UI64LIT(1) << (form - 1))) != 0;
 
     if (castSpell)
     {
@@ -4585,6 +4601,10 @@ void Player::DeleteFromDB(ObjectGuid playerguid, uint32 accountId, bool updateRe
             stmt->setUInt64(0, guid);
             trans->Append(stmt);
 
+            stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER_DAY_CYCLE);
+            stmt->setUInt64(0, guid);
+            trans->Append(stmt);
+
             sCharacterCache->DeleteCharacterCacheEntry(playerguid, name);
             break;
         }
@@ -4787,6 +4807,11 @@ void Player::ResurrectPlayer(float restore_percent, bool applySickness)
 
     // recast lost by death auras of any items held in the inventory
     CastAllObtainSpells();
+
+    // and the equip auras death took: a classic equip spell is often not passive (Onyxia Scale Cloak 22683 has no passive attribute
+    // in the 1.60 data), so RemoveAllAurasOnDeath removed it and nothing cast it again until the item was re-equipped. Every raider
+    // who died once was then open to Shadow Flame's burn 22682 with the cloak still on (BWL Nefarian, dev realm 2026-11-13).
+    CastAllEquipSpellsLostOnDeath();
 
     if (!applySickness)
         return;
@@ -8219,7 +8244,11 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea)
     uint32 const oldZone = m_zoneUpdateId;
     m_zoneUpdateId = newZone;
 
-    GetMap()->UpdatePlayerZoneStats(oldZone, newZone);
+    // The zone player count drives dynamic respawn timers (Map::ApplyDynamicRespawnScaling). Bots are not counted: a zone full of bots
+    // would otherwise respawn its mobs as if it were crowded with players. A session is a bot for its whole life, so the count stays
+    // balanced (the leave in Map::RemovePlayerFromMap comes through here too).
+    if (!GetSession()->IsBot())
+        GetMap()->UpdatePlayerZoneStats(oldZone, newZone);
 
     // call leave script hooks immedately (before updating flags)
     if (oldZone != newZone)
@@ -8428,9 +8457,19 @@ void Player::DuelComplete(DuelCompleteType type)
 
     if (type != DUEL_INTERRUPTED)
     {
+        // Classic 1.60: live sends each name with its surname ("Name Surname"), the client prints the strings as they come
+        auto nameWithSurname = [](Player const* player)
+        {
+            std::string name = player->GetName();
+            std::string const surname = sCharacterCache->GetCharacterSurnameByGuid(player->GetGUID());
+            if (!surname.empty())
+                name += " " + surname;
+            return name;
+        };
+
         WorldPackets::Duel::DuelWinner duelWinner;
-        duelWinner.BeatenName = (type == DUEL_WON ? opponent : this)->GetName();
-        duelWinner.WinnerName = (type == DUEL_WON ? this : opponent)->GetName();
+        duelWinner.BeatenName = nameWithSurname(type == DUEL_WON ? opponent : this);
+        duelWinner.WinnerName = nameWithSurname(type == DUEL_WON ? this : opponent);
         duelWinner.BeatenVirtualRealmAddress = (type == DUEL_WON ? opponent : this)->m_playerData->VirtualPlayerRealm;
         duelWinner.WinnerVirtualRealmAddress = (type == DUEL_WON ? this : opponent)->m_playerData->VirtualPlayerRealm;
         duelWinner.Fled = type != DUEL_WON;
@@ -9038,6 +9077,35 @@ void Player::CastAllObtainSpells()
     }
 }
 
+void Player::CastAllEquipSpellsLostOnDeath()
+{
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        Item* item = GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item || item->IsBroken() || item->GetTemplate()->HasFlag(ITEM_FLAG_LEGACY))
+            continue;
+
+        for (ItemEffectEntry const* effectData : item->GetEffects())
+        {
+            if (effectData->TriggerType != ITEM_SPELLTRIGGER_ON_EQUIP)
+                continue;
+
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(effectData->SpellID, DIFFICULTY_NONE);
+            // passive and death-persistent auras survive death (RemoveAllAurasOnDeath); only the others need casting again
+            if (!spellInfo || spellInfo->IsPassive() || spellInfo->IsDeathPersistent())
+                continue;
+
+            if (effectData->ChrSpecializationID && ChrSpecialization(effectData->ChrSpecializationID) != GetPrimarySpecialization())
+                continue;
+
+            if (HasAura(spellInfo->Id, GetGUID(), item->GetGUID()))
+                continue;
+
+            ApplyEquipSpell(spellInfo, item, true);
+        }
+    }
+}
+
 void Player::ApplyItemObtainSpells(Item* item, bool apply)
 {
     if (item->GetTemplate()->HasFlag(ITEM_FLAG_LEGACY))
@@ -9196,7 +9264,10 @@ void Player::ApplyEquipSpell(SpellInfo const* spellInfo, Item* item, bool apply,
             }
         }
 
-        CastSpell(this, spellInfo->Id, item);
+        SpellCastResult const castResult = CastSpell(this, spellInfo->Id, item);
+        if (castResult != SPELL_CAST_OK)
+            TC_LOG_ERROR("spells", "Player::ApplyEquipSpell: {} ({}) equip spell {} of item {} was not applied: cast result {}",
+                GetName(), GetGUID().ToString(), spellInfo->Id, item ? item->GetEntry() : 0, uint32(castResult));
     }
     else
     {
@@ -10972,8 +11043,11 @@ bool Player::HasItemTotemCategory(uint32 TotemCategory) const
             return true;
     }
 
+    // Classic 1.60: a profession bag may sit in the reagent bag slot (ITEM_FLAG5_CLASSIC_FITS_REAGENT_BAG_SLOT), and a tool
+    // stored in it (skinning knife, mining pick) still counts, so the bag slots and the reagent bag slot are searched as one range
+    static_assert(uint8(INVENTORY_SLOT_BAG_END) == uint8(REAGENT_BAG_SLOT_START));
     Bag* bag;
-    for (uint8 i = INVENTORY_SLOT_BAG_START; i < INVENTORY_SLOT_BAG_END; ++i)
+    for (uint8 i = INVENTORY_SLOT_BAG_START; i < REAGENT_BAG_SLOT_END; ++i)
     {
         bag = GetBagByPos(i);
         if (bag)
@@ -19929,6 +20003,8 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
 
     _LoadCharacterBankTabSettings(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_BANK_TAB_SETTINGS));
 
+    _LoadDayCycle(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_DAY_CYCLE));
+
     _LoadInventory(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_INVENTORY),
         holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ARTIFACTS),
         holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_AZERITE),
@@ -21660,6 +21736,11 @@ void Player::_LoadCharacterBankTabSettings(PreparedQueryResult result)
         AddDynamicUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::CharacterBankTabSettings));
 }
 
+void Player::_LoadDayCycle(PreparedQueryResult result)
+{
+    m_skyMode = uint8(result ? DayCycle::SkyModeFromDb((*result)[0].GetUInt8()) : DayCycle::SkyMode::Auto);
+}
+
 /*********************************************************/
 /***                   SAVE SYSTEM                     ***/
 /*********************************************************/
@@ -22324,6 +22405,9 @@ void Player::_SaveInventory(CharacterDatabaseTransaction trans)
         Item* item = m_itemUpdateQueue[i];
         if (!item)
             continue;
+
+        // The item leaves the list before it is saved: saving may delete it (ITEM_REMOVED), and the list is emptied below.
+        RemoveItemFromUpdateQueueOf(item, this);
 
         Bag* container = item->GetContainer();
         if (item->GetState() != ITEM_REMOVED)
@@ -25752,6 +25836,80 @@ bool Player::HaveAtClient(BaseEntity const* u) const
     return u == this || m_clientGUIDs.find(u->GetGUID()) != m_clientGUIDs.end();
 }
 
+// Combat-only enemy nameplates: a plate is hidden for an attackable NPC that is in no live (unsuppressed) fight with this player, his
+// pet or a member of his group on this map. Standing near it or selecting it is not a fight. NPCs a script forces a plate on or off,
+// and units a player controls, keep what they have.
+bool Player::CombatPlateHidden(Unit const* unit, Pet const* pet) const
+{
+    if (!_combatPlateOn || !unit->GetGUID().IsCreatureOrVehicle() || unit->IsControlledByPlayer())
+        return false;
+    if (unit->HasUnitFlag(UNIT_FLAG_FORCE_NAMEPLATE) || unit->HasUnitFlag3(UNIT_FLAG3_FORCE_HIDE_NAMEPLATE))
+        return false;
+    // A mob that died is no longer a valid attack target, and its plate came back as a large grey name over the corpse mid-fight
+    // (Karrz 11-16, a Noxious Plaguebat in the Eastern Plaguelands). A corpse is out of every fight: an unfriendly one stays hidden.
+    if (unit->IsAlive() ? !IsValidAttackTarget(unit) : IsFriendlyTo(unit))
+        return false;
+    auto fights = [unit](Unit const* side)
+    {
+        auto const& refs = side->GetCombatManager().GetPvECombatRefs();
+        auto const itr = refs.find(unit->GetGUID());
+        return itr != refs.end() && !itr->second->IsSuppressedFor(side);
+    };
+    if (fights(this) || (pet && fights(pet)))
+        return false;
+    if (Group const* group = GetGroup())
+        for (GroupReference const& ref : group->GetMembers())
+            if (Player const* member = ref.GetSource(); member && member != this && member->IsInMap(this))
+                if (fights(member) || (member->GetPet() && fights(member->GetPet())))
+                    return false;
+    return true;
+}
+
+// Records the plate state of one NPC this client knows; true when it changed (the client needs the new flags).
+bool Player::RefreshCombatPlate(Unit const* unit, Pet const* pet)
+{
+    if (CombatPlateHidden(unit, pet))
+        return _combatPlateHidden.insert(unit->GetGUID()).second;
+    return _combatPlateHidden.erase(unit->GetGUID()) != 0;
+}
+
+// Four times a second while the filter is on (or just turned off): re-checks every NPC this client knows and sends the flags of
+// those that changed, so a mob that joins the fight gets its bar and one whose fight ended loses it.
+void Player::UpdateCombatPlates(uint32 diff)
+{
+    if (!_combatPlateOn && !_combatPlateWanted && _combatPlateHidden.empty())
+        return;
+    if (_combatPlateTimer > diff && _combatPlateOn == _combatPlateWanted)
+    {
+        _combatPlateTimer -= diff;
+        return;
+    }
+    _combatPlateTimer = 250;
+    _combatPlateOn = _combatPlateWanted;
+
+    UF::ObjectData::Base objMask;
+    UF::UnitData::Base unitMask;
+    unitMask.MarkChanged(&UF::UnitData::Flags3);
+    UpdateData data(GetMapId());
+    Pet const* pet = GetPet();
+    for (ObjectGuid const& guid : m_clientGUIDs)
+    {
+        if (!guid.IsCreatureOrVehicle())
+            continue;
+        if (Creature* creature = ObjectAccessor::GetCreatureOrPetOrVehicle(*this, guid))
+            if (RefreshCombatPlate(creature, pet))
+                creature->BuildValuesUpdateForPlayerWithMask(&data, objMask.GetChangesMask(), unitMask.GetChangesMask(), this, false);
+    }
+    // NPCs gone from this client need no entry (they get a fresh check when they come back into view).
+    std::erase_if(_combatPlateHidden, [this](ObjectGuid const& guid) { return !m_clientGUIDs.contains(guid); });
+    if (data.HasData())
+    {
+        WorldPacket packet;
+        data.BuildPacket(&packet);
+        SendDirectMessage(&packet);
+    }
+}
+
 bool Player::IsNeverVisibleFor(WorldObject const* seer, bool allowServersideObjects) const
 {
     if (Unit::IsNeverVisibleFor(seer, allowServersideObjects))
@@ -25871,7 +26029,7 @@ inline void BeforeVisibilityDestroy<GameObject>(GameObject* t, Player* p)
 
 void Player::UpdateVisibilityOf(Trinity::IteratorPair<WorldObject**> targets)
 {
-    if (targets.begin() == targets.end())
+    if (targets.begin() == targets.end() || Trinity::HeadlessPackets::SkipVisibility(this))
         return;
 
     UpdateData udata(GetMapId());
@@ -25926,6 +26084,9 @@ void Player::UpdateVisibilityOf(Trinity::IteratorPair<WorldObject**> targets)
 
 void Player::UpdateVisibilityOf(WorldObject* target)
 {
+    if (Trinity::HeadlessPackets::SkipVisibility(this))
+        return;
+
     if (HaveAtClient(target))
     {
         if (!CanSeeOrDetect(target, { .DistanceCheck = true }))
@@ -25961,6 +26122,9 @@ void Player::UpdateVisibilityOf(WorldObject* target)
     {
         if (CanSeeOrDetect(target, { .DistanceCheck = true }))
         {
+            if (_combatPlateOn)
+                if (Creature const* creature = target->ToCreature())
+                    RefreshCombatPlate(creature, GetPet());   // the create block carries the plate state from the start
             target->SendUpdateToPlayer(this);
             m_clientGUIDs.insert(target->GetGUID());
 
@@ -26020,6 +26184,9 @@ void Player::UpdateTriggerVisibility()
 
 void Player::SendInitialVisiblePackets(WorldObject* target) const
 {
+    if (Trinity::HeadlessPackets::Skip(this))
+        return;
+
     auto sendVignette = [](Vignettes::VignetteData const& vignette, Player const* where)
     {
         if (!vignette.Data->IsInfiniteAOI() && Vignettes::CanSee(where, vignette))
@@ -26052,16 +26219,22 @@ void Player::SendInitialVisiblePackets(WorldObject* target) const
 template<class T>
 void Player::UpdateVisibilityOf(T* target, UpdateData& data, std::set<WorldObject*>& visibleNow)
 {
+    if (Trinity::HeadlessPackets::SkipVisibility(this))
+        return;
+
     if (HaveAtClient(target))
     {
         if (!CanSeeOrDetect(target, { .DistanceCheck = true }))
         {
             BeforeVisibilityDestroy<T>(target, this);
 
-            if (!target->IsDestroyedObject())
-                target->BuildOutOfRangeUpdateBlock(&data);
-            else
-                target->BuildDestroyUpdateBlock(&data);
+            if (!Trinity::HeadlessPackets::Skip(this))   // a bot has no client: only the guid list below changes
+            {
+                if (!target->IsDestroyedObject())
+                    target->BuildOutOfRangeUpdateBlock(&data);
+                else
+                    target->BuildDestroyUpdateBlock(&data);
+            }
 
             m_clientGUIDs.erase(target->GetGUID());
 
@@ -26074,9 +26247,15 @@ void Player::UpdateVisibilityOf(T* target, UpdateData& data, std::set<WorldObjec
     {
         if (CanSeeOrDetect(target, { .DistanceCheck = true }))
         {
-            target->BuildCreateUpdateBlockForPlayer(&data, this);
             m_clientGUIDs.insert(target->GetGUID());
-            visibleNow.insert(target);
+            if (!Trinity::HeadlessPackets::Skip(this))
+            {
+                if (_combatPlateOn)
+                    if (Creature const* creature = target->ToCreature())
+                        RefreshCombatPlate(creature, GetPet());   // the create block carries the plate state from the start
+                target->BuildCreateUpdateBlockForPlayer(&data, this);
+                visibleNow.insert(target);
+            }
 
             #ifdef TRINITY_DEBUG
                 TC_LOG_DEBUG("maps", "Object {} is visible now for player {}. Distance = {}", target->GetGUID().ToString(), GetGUID().ToString(), GetDistance(target));
@@ -26111,6 +26290,12 @@ void Player::UpdateObjectVisibility(bool forced)
 
 void Player::UpdateVisibilityForPlayer()
 {
+    if (Trinity::HeadlessPackets::SkipVisibility(this))
+    {
+        m_clientGUIDs.clear();   // a bot keeps no view; also drops what it held before the switch was turned on
+        return;
+    }
+
     // updates visibility of all objects around point of view for current player
     Trinity::VisibleNotifier notifier(*this);
     Cell::VisitAllObjects(m_seer, notifier, GetSightRange());
@@ -26290,14 +26475,7 @@ void Player::SendInitialPacketsBeforeAddToMap()
     m_questObjectiveCriteriaMgr->SendAllData(this);
 
     /// SMSG_LOGIN_SETTIMESPEED
-    static float const TimeSpeed = 0.01666667f;
-    WorldPackets::Misc::LoginSetTimeSpeed loginSetTimeSpeed;
-    loginSetTimeSpeed.NewSpeed = TimeSpeed;
-    loginSetTimeSpeed.GameTime = *GameTime::GetWowTime();
-    loginSetTimeSpeed.ServerTime = *GameTime::GetWowTime();
-    loginSetTimeSpeed.GameTimeHolidayOffset = 0; /// @todo
-    loginSetTimeSpeed.ServerTimeHolidayOffset = 0; /// @todo
-    SendDirectMessage(loginSetTimeSpeed.Write());
+    SendDayCycle();
 
     /// SMSG_WORLD_SERVER_INFO
     WorldPackets::Misc::WorldServerInfo worldServerInfo;
@@ -26344,6 +26522,54 @@ void Player::SendInitialPacketsBeforeAddToMap()
     SendDirectMessage(initialSetup.Write());
 
     SetMovedUnit(this);
+}
+
+// SMSG_LOGIN_SET_TIME_SPEED: sent at login and at every map change (SendInitialPacketsBeforeAddToMap), and by .time. The
+// realm's date and clock go as they are (ServerTime, and the date of GameTime: the calendar and holidays); only the hour
+// and minute of GameTime and the speed are the sky's.
+void Player::SendDayCycle() const
+{
+    WowTime const& now = *GameTime::GetWowTime();
+    // the realm's wall clock to the second (WowTime holds whole minutes, a minute that a fast sky would multiply)
+    int64 const localSeconds = int64(GameTime::GetGameTime())
+        + std::chrono::duration_cast<Seconds>(Trinity::Timezone::GetSystemZoneOffsetAt(GameTime::GetSystemTime())).count();
+    DayCycle::SkyClock const sky = DayCycle::ShownClock(localSeconds, sWorld->getIntConfig(CONFIG_FOREVER_DAY_CYCLE_SPEED), GetSkyMode());
+
+    WorldPackets::Misc::LoginSetTimeSpeed loginSetTimeSpeed;
+    loginSetTimeSpeed.NewSpeed = sky.Speed;
+    loginSetTimeSpeed.GameTime = now;
+    loginSetTimeSpeed.GameTime.SetHour(sky.Hour);
+    loginSetTimeSpeed.GameTime.SetMinute(sky.Minute);
+    loginSetTimeSpeed.ServerTime = now;
+    loginSetTimeSpeed.GameTimeHolidayOffset = 0; /// @todo
+    loginSetTimeSpeed.ServerTimeHolidayOffset = 0; /// @todo
+    SendDirectMessage(loginSetTimeSpeed.Write());
+}
+
+DayCycle::SkyMode Player::GetSkyMode() const
+{
+    return DayCycle::SkyModeFromDb(m_skyMode);
+}
+
+void Player::SetSkyMode(DayCycle::SkyMode mode)
+{
+    m_skyMode = uint8(mode);
+
+    CharacterDatabasePreparedStatement* stmt;
+    if (mode == DayCycle::SkyMode::Auto)
+    {
+        stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHARACTER_DAY_CYCLE);
+        stmt->setUInt64(0, GetGUID().GetCounter());
+    }
+    else
+    {
+        stmt = CharacterDatabase.GetPreparedStatement(CHAR_REP_CHARACTER_DAY_CYCLE);
+        stmt->setUInt64(0, GetGUID().GetCounter());
+        stmt->setUInt8(1, uint8(mode));
+    }
+    CharacterDatabase.Execute(stmt);
+
+    SendDayCycle();
 }
 
 void Player::SendInitialPacketsAfterAddToMap()
@@ -28768,8 +28994,11 @@ void Player::_LoadSkills(PreparedQueryResult result)
         LearnSkillRewardedSpells(skillId, skillValue, race);
 
         // enable parent skill line if missing
+        // Classic 1.60: not from a profession child line (ParentTierIndex 4), that made every profession 300 at login; ranks come
+        // from the rank spells, as in SetSkill
         SkillLineEntry const* skillEntry = sSkillLineStore.LookupEntry(skillId);
-        if (skillEntry->ParentSkillLineID && skillEntry->ParentTierIndex > 0 && int32(GetSkillStep(skillEntry->ParentSkillLineID)) < skillEntry->ParentTierIndex)
+        if (skillEntry->ParentSkillLineID && skillEntry->ParentTierIndex > 0 && !IsClassicProfessionChildSkill(skillEntry)
+            && int32(GetSkillStep(skillEntry->ParentSkillLineID)) < skillEntry->ParentTierIndex)
             if (SkillRaceClassInfoEntry const* rcEntry = sDB2Manager.GetSkillRaceClassInfo(skillEntry->ParentSkillLineID, GetRace(), GetClass()))
                 if (SkillTiersEntry const* tier = sObjectMgr->GetSkillTier(rcEntry->SkillTierID))
                     SetSkill(skillEntry->ParentSkillLineID, skillEntry->ParentTierIndex, std::max<uint16>(GetPureSkillValue(skillEntry->ParentSkillLineID), 1), tier->GetValueForTierIndex(skillEntry->ParentTierIndex - 1));
@@ -29464,6 +29693,22 @@ bool Player::IsPetNeedBeTemporaryUnsummoned() const
     return !IsInWorld() || !IsAlive() || HasUnitMovementFlag(MOVEMENTFLAG_FLYING) || HasUnitMovementFlag(MOVEMENTFLAG_ADV_FLYING);
 }
 
+bool Player::HasPendingTalkToObjective(uint32 creatureEntry) const
+{
+    for (QuestObjectiveStatusMap::value_type const& objectiveItr : Trinity::Containers::MapEqualRange(m_questObjectiveStatus, { QUEST_OBJECTIVE_TALKTO, int32(creatureEntry) }))
+    {
+        Quest const* quest = sObjectMgr->GetQuestTemplate(objectiveItr.second.QuestStatusItr->first);
+        QuestObjective const* objective = sObjectMgr->GetQuestObjective(objectiveItr.second.ObjectiveId);
+        if (!quest || !objective)
+            continue;
+
+        uint16 logSlot = objectiveItr.second.QuestStatusItr->second.Slot;
+        if (IsQuestObjectiveCompletable(logSlot, quest, *objective) && !IsQuestObjectiveComplete(logSlot, quest, *objective))
+            return true;
+    }
+    return false;
+}
+
 bool Player::CanSeeGossipOn(Creature const* creature) const
 {
     if (creature->HasNpcFlag(UNIT_NPC_FLAG_GOSSIP))
@@ -29471,6 +29716,12 @@ bool Player::CanSeeGossipOn(Creature const* creature) const
         if (GetGossipMenuForSource(creature))
             return true;
     }
+
+    // "talk to" objectives: an npc the player still has to speak with stays interactable even without a gossip menu or
+    // a quest of its own (Exploring the Alliance: Mekkatorque and Magni have neither, so the bubble was stripped and the
+    // objective could never be credited). HandleGossipHelloOpcode / HandleQuestgiverHelloOpcode give the credit.
+    if ((creature->HasNpcFlag(UNIT_NPC_FLAG_GOSSIP) || creature->HasNpcFlag(UNIT_NPC_FLAG_QUESTGIVER)) && HasPendingTalkToObjective(creature->GetEntry()))
+        return true;
 
     // for cases with questgiver/ender without gossip menus
     if (creature->HasNpcFlag(UNIT_NPC_FLAG_QUESTGIVER))

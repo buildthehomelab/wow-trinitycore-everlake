@@ -1,5 +1,5 @@
 -- FULL FOREVER RESERVE (not applied by any install or update; see README.md here).
--- Live WoW Forever values for spells where we keep the vanilla value for now (chris 10-30: hold vanilla until Forever's gear and
+-- Live WoW Forever values for spells where we keep the vanilla value for now (Karrz 10-30: hold vanilla until Forever's gear and
 -- balance are there, then switch). Blizzard's live rows after 70685, from the live hotfix cache wowsims/forever (MIT,
 -- https://github.com/wowsims/forever) uses. Pair with 02_world_drop_vanilla_holds.sql, or the vanilla value rows still win.
 --   Aspect of the Hawk 13165/14318/14319/14320/14321: 20/35/50/70/90 -> 15/22/30/38/47 ranged attack power.

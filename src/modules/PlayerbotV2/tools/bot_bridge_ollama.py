@@ -534,7 +534,23 @@ def read_backup_settings(folder, opts):
     got = {"url": opts.backup_url or "", "model": opts.backup_model or "", "key": opts.backup_key or ""}
     if got["url"]:
         return got
-    for path in (os.path.join(os.path.dirname(os.path.abspath(__file__)), "backup.txt"), os.path.join(folder, "backup.txt")):
+    return read_service_file("backup.txt", folder, got)
+
+
+def read_main_settings(folder, opts):
+    """url / model / key of the player's own AI service as the MAIN one, instead of the local Ollama: --url etc., else api.txt
+    in the BotBridge folder or next to this program, the same lines as backup.txt (the launcher's AI BOTS tab writes it when
+    the player picks "My own AI service"). Its model wins over --model, as the two belong together. Empty url: the local
+    Ollama (the default)."""
+    got = {"url": "", "model": "", "key": ""}
+    if opts.url:
+        return got
+    return read_service_file("api.txt", folder, got)
+
+
+def read_service_file(name, folder, got):
+    """`got` filled from the first `name` (next to this program, then in the BotBridge folder) that sets a url."""
+    for path in (os.path.join(os.path.dirname(os.path.abspath(__file__)), name), os.path.join(folder, name)):
         found = {}
         try:
             with open(path, encoding="utf-8-sig") as f:
@@ -648,7 +664,7 @@ def static_rules(actions_on, swearing):
          "You have a mind of your own: you can joke, tease, grumble a little or ask something back. You come across as a "
          "friendly, cheeky player, never mean: no insults, no telling people to shut up or get lost. Be warmer with people "
          "you like; with people you don't like be short or a bit sarcastic, still not nasty.\n")
-    # chris, 2026-11-08: "can you sign my guild charter", "do you want to join the guild", "do you want to quest".
+    # Karrz, 2026-11-08: "can you sign my guild charter", "do you want to join the guild", "do you want to quest".
     s += ("When a player asks you to join his guild, sign his charter, group up or quest together, answer from GUILD AND "
           "GROUP below, like a player would (\"sure, inv me\", \"np, signed\", \"nah, I'm happy in my guild\"). Never "
           "promise to join when it says you would say no or can't: say why, in your own words. You can't invite him "
@@ -660,7 +676,7 @@ def static_rules(actions_on, swearing):
     else:
         s += "Don't swear. No slurs, no threats, nothing sexual.\n"
     if actions_on:
-        # A bot that said "On it." and "Trade away, mate." and then did nothing (chris, 2026-11-08): saying yes means a "do".
+        # A bot that said "On it." and "Trade away, mate." and then did nothing (Karrz, 2026-11-08): saying yes means a "do".
         s += ("You may also DO one thing for the player who talks, only an action from \"You can do now\" below.\n"
               "If you say yes to something (ok, on it, sure, trade away, coming), put that action in \"do\" in the same "
               "answer, or nothing happens. If none of your actions fits, don't promise it: say you can't, in your own words.\n"
@@ -726,13 +742,13 @@ def build_prompt(event, actions_on, minds, swearing):
     can = event.get("can")
     spells = event.get("spells") or []
     # The rules that are the same for every bot come first, then what is this bot's own: Ollama keeps the start of the last
-    # prompt worked out and only reads what is new, so the answer comes sooner (chris, 2026-11-08: "quite slow answering").
+    # prompt worked out and only reads what is new, so the answer comes sooner (Karrz, 2026-11-08: "quite slow answering").
     system = static_rules(actions_on, swearing)
     system += ("You are %s, a level %s %s %s. Who you are: %s. How you write: %s. You are %s in chat. %s\n"
                % (bot, event.get("level", "?"), event.get("race", ""), event.get("class", ""),
                   p.get("temper_text", ""), p.get("style_text", ""), p.get("chatty", "normal"), language_line(russian)))
     # The player who brought this bot (its owner, the leader of its group): orders from him are what the bot is there for. A bot
-    # that answered "piss off" to "mount up" and did nothing felt broken (chris, 2026-11-08).
+    # that answered "piss off" to "mount up" and did nothing felt broken (Karrz, 2026-11-08).
     if owner:
         system += ("%s is your friend and leads your group; you play together. When %s asks you to do something you can do, "
                    "do it (put it in \"do\") and say a short, cheeky okay. If you can't, say why in a friendly way. A request "
@@ -752,7 +768,7 @@ def build_prompt(event, actions_on, minds, swearing):
     lines = ["You are in %s%s. Your quest: %s." % (event.get("zone", "?"),
              (", " + event["area"]) if event.get("area") else "", (event.get("quest") or {}).get("name", "none"))]
     if event.get("doing"):
-        # "what are you doing?" / "where are you off to?": the game's answer, not a made-up one (chris, 2026-11-09)
+        # "what are you doing?" / "where are you off to?": the game's answer, not a made-up one (Karrz, 2026-11-09)
         lines.append("What you are doing right now: %s. When asked, say this in your own words; don't invent anything "
                      "else." % event["doing"])
     if event.get("weather") or event.get("time_of_day"):
@@ -795,7 +811,7 @@ def build_prompt(event, actions_on, minds, swearing):
         if spells and can and "cast" in can:
             lines.append("YOUR SPELLS: " + ", ".join("%s (%s)" % (s.get("name"), s.get("kind")) for s in spells))
         if event.get("speaker_target"):
-            # "cast a frostbolt on it" / "attack that": the selection is what "it" means (chris, 2026-11-08)
+            # "cast a frostbolt on it" / "attack that": the selection is what "it" means (Karrz, 2026-11-08)
             lines.append("%s has selected: %s (%s). When %s says \"it\", \"that\" or \"this one\", it is this (target "
                          "\"speaker_target\")." % (player, event["speaker_target"], event.get("speaker_target_kind", "?"), player))
     with history_lock:
@@ -972,7 +988,7 @@ def clean_action(data, event, why=None):
 
 def plain_order(event):
     """The action of a plain order in the player's own words, {} for anything else. A model sometimes answers an order with
-    words only: "go to the bank" -> "Heading to the bank then." and no action, and the bot stood there (chris, 2026-11-13).
+    words only: "go to the bank" -> "Heading to the bank then." and no action, and the bot stood there (Karrz, 2026-11-13).
     For an order this plain, what to do is not the model's guess: go to the place he named, mount, dismount. English only
     (the place words are)."""
     if event.get("_moment") or event.get("from_is_bot") or "?" in str(event.get("text", "")):
@@ -1118,7 +1134,7 @@ def answer(event, api, actions_on, minds, opts):
         reply["say"] = human_touch(reply["say"], minds.get(bot)["persona"], rng)
         # The program doesn't wait here any more: the server waits before it shows the line (delay_ms), and an action in
         # the same reply happens at once. Before, the action waited for the typing too, and the server added its own
-        # typing time on top (chris, 2026-11-08: "quite slow answering").
+        # typing time on top (Karrz, 2026-11-08: "quite slow answering").
         wait = 0.0 if opts.no_typing_delay else typing_delay(reply["say"], rng, "do" in reply) - (time.time() - started)
         reply["delay_ms"] = int(max(0.0, wait) * 1000)
     if time.time() - event["_seen"] > MAX_AGE_S:
@@ -1197,9 +1213,20 @@ def answer_talk(event, api, minds, opts):
     log("%s [%s, %.1f s]: %s" % (bot, "talk" if channel == "say" else channel, time.time() - started, say))
 
 
+# The raid's own talk that is no mistake (Playerbot.Raid.Talk, the server's RaidVoice): what the bot is doing when it speaks.
+RAID_VOICE = {
+    "kill_crowd": "Your raid just killed a boss; you say something short in raid chat the way raiders do then.",
+    "run_back": "Your raid just wiped and you are on the way back; you say something a raider says then (repair, rez, buffs, a "
+                "small joke).",
+    "rebuff_call": "You are the raid leader; after a wipe you get everyone to resurrect, rebuff and go again, calm and short.",
+    "between_pulls": "Your raid is resting between pulls; you say something a raider says then (buffs, water, loot, the next "
+                     "boss, a small joke).",
+}
+
+
 def answer_raid_line(event, api, opts):
     """A bot's raid chat line about something that just happened in the fight (the raid leader reacting to a mistake, a raider
-    after a wipe). Fast or nothing: the server says its fixed line itself when this one is not back within wait_ms (2.5 s), so
+    after a wipe), or the raid's own talk (a kill, the run back, between pulls: RAID_VOICE). Fast or nothing: the server says its fixed line itself when this one is not back within wait_ms (2.5 s), so
     the prompt is short, the answer is a few words, and a slow model simply loses. No persona text of anyone's goes in: the
     lines stay game banter, never about a person, never a slur (check_line still filters what comes back)."""
     api = getattr(api, "primary", api)   # never the paid backup for banter
@@ -1212,16 +1239,21 @@ def answer_raid_line(event, api, opts):
     harsh = str(event.get("mood", "mild")) == "harsh"
     leader = str(event.get("role", "")) == "raid leader"
     russian = str(event.get("locale", "")).lower() == "ruru"
+    voice = RAID_VOICE.get(str(event.get("what", "")))
+    if voice and leader and event.get("what") == "between_pulls":
+        voice = "You are the raid leader; the raid rests between pulls and you get them ready for the next one, calm and short."
     system = ("You are %s, a level %s %s in a World of Warcraft raid, writing in raid chat like a real player. %s "
-              "Write ONE short line (at most 12 words), lowercase, no emoji, no quotes. Only about the game and this mistake: "
+              "Write ONE short line (at most 12 words), lowercase, no emoji, no quotes. Only about the game and this %s: "
               "never about the person behind the character, never insults about real life, never slurs, no threats. "
               "Answer as JSON: {\"say\": \"...\"}."
               % (bot, event.get("level", "60"), event.get("class", ""),
+                 voice if voice else
                  ("You are the raid leader and you %s." % ("freak out at every mistake, loud and dramatic, CAPS now and then, but it "
                                                            "is all in good fun" if harsh else "tease people about mistakes, "
                                                            "calm and a bit dry")) if leader else
                  ("You just wiped with your raid; you %s." % ("blame someone a bit, half joking" if harsh else
-                                                              "make an excuse, a joke or own up"))))
+                                                              "make an excuse, a joke or own up")),
+                 "moment" if voice else "mistake"))
     if russian:
         system += " " + language_line(True)
     user = "Just now: %s.\nThe kind of line meant (don't copy it): %s" % (event.get("detail", "something happened"), event.get("example", ""))
@@ -1316,6 +1348,11 @@ def main():
         log("another bridge program already answers for %s (the launcher's AI bots, or a window left open); this one stops" % folder)
         sys.exit(0)
     url = opts.url or "http://%s:%d/v1" % (opts.host or "127.0.0.1", opts.port or 11434)
+    own = read_main_settings(folder, opts)
+    if own["url"]:
+        url, opts.key = own["url"], own["key"] or opts.key
+        opts.model = own["model"] or opts.model
+        log("your own AI service from api.txt: %s at %s%s" % (opts.model, url, " (with a key)" if opts.key else ""))
     actions_on = not opts.no_actions
     api = ChatApi(url, opts.model, opts.key, opts.timeout)
     api.no_think = not opts.think

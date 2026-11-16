@@ -1,0 +1,15 @@
+# Every client build a published release accepted (0.1.36, 13 November 2026, and earlier). Backwards compatible: a build in this
+# list must stay in client-builds.txt; scripts\Check-ClientBuilds.ps1 (run by build-package.ps1) stops the package otherwise.
+# Never remove a line. On release day add the builds the new release accepts (the check names any that are missing here).
+70938
+70888
+70862
+70840
+70790
+70755
+70707
+70685
+70658
+70634
+70630
+70532

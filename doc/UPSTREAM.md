@@ -14,7 +14,7 @@ upstream it is.
 3. **PC build and test.** The PC builds the candidate in the normal build slot and runs `ctest` (the opcode, party-update and
    feature-status layout tests included). Nothing is installed from the candidate, and nothing new runs on the PC in between.
 4. **Move the pin** (one commit on the trunk: `UPSTREAM_PIN`, the merge, this file's "last move" line) only when the build and
-   every test are green **and chris says OK**.
+   every test are green **and Karrz says OK**.
 5. Cadence: weekly, or sooner for a fix the fork needs.
 
 ## Keeping the hooks small

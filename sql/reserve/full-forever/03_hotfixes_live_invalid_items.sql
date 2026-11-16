@@ -1,7 +1,7 @@
 -- FULL FOREVER RESERVE (hotfixes). Items live Forever now marks invalid (pushes 112724-113368) that we still serve from our 70124
 -- sniff: Aegis of Stormwind 1203, Short Bastard Sword 3192, Viridian Band 11982, Vermilion Band 11992, Coral Band 11994,
 -- Vermilion Necklace 12027, Keen Machete 18610, Firewater Cauldron 233209, Runemender's Seal 273031, Gravespike Repeater 273033,
--- Ponderous Orb 273052, Sword of the Fallen 286977. Kept for now (chris 10-30). This drops our rows and tells clients the records
+-- Ponderous Orb 273052, Sword of the Fallen 286977. Kept for now (Karrz 10-30). This drops our rows and tells clients the records
 -- are invalid, as live does; loot, vendor and quest rows pointing at them are then skipped by the server. Undo: 03_undo.sql.
 DELETE FROM `item_sparse` WHERE `ID` IN (1203,3192,11982,11992,11994,12027,18610,233209,273031,273033,273052,286977);
 DELETE FROM `item` WHERE `ID` IN (1203,3192,11982,11992,11994,12027,18610,233209,273031,273033,273052,286977);

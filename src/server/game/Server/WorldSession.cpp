@@ -1295,6 +1295,9 @@ bool WorldSession::IsAddonRegistered(std::string_view prefix) const
 void WorldSession::HandleUnregisterAllAddonPrefixesOpcode(WorldPackets::Chat::ChatUnregisterAllAddonPrefixes& /*packet*/) // empty packet
 {
     _registeredAddonPrefixes.clear();
+    // A UI reload or an add-on turned off: combat-only nameplates are the add-on's to ask for again (Player::SetCombatPlateFilter).
+    if (Player* player = GetPlayer())
+        player->SetCombatPlateFilter(false);
 }
 
 void WorldSession::HandleAddonRegisteredPrefixesOpcode(WorldPackets::Chat::ChatRegisterAddonPrefixes& packet)
@@ -1772,6 +1775,15 @@ uint32 WorldSession::DosProtection::GetMaxPacketCounterAllowed(uint32 opcode) co
             // "0" is a magic number meaning there's no limit for the opcode.
             // All the opcodes above must cause little CPU usage and no sync/async database queries at all
             maxPacketCounterAllowed = 0;
+            break;
+        }
+
+        // Auto loot (or a fast-loot add-on) with full bags asks for every item again each frame until there is room: at a high frame rate
+        // that is well over the default 100 a second, and the player was kicked for it (Discord 11-14, varanday on 0.1.36.1: "flooding
+        // packet (opc: CMSG_LOOT_ITEM, count: 101)"). Each request is answered with "inventory full", nothing more.
+        case CMSG_LOOT_ITEM:
+        {
+            maxPacketCounterAllowed = 600;
             break;
         }
 

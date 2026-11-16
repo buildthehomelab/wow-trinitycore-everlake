@@ -107,7 +107,7 @@ if (Test-Path $pbDist) {
         'Playerbot.Raid.DpsWaitTimeoutMs' = '8000'
         'Playerbot.Bg.AutoSeed.Matches' = '0'; 'Playerbot.Bg.AutoJoin' = '0'
         'PlayerbotV2.Guilds.Enabled' = '0'; 'PlayerbotV2.SessionRhythm.Enabled' = '0'
-        'Playerbot.World.Enable' = '1'; 'Playerbot.World.FriendlyPct' = '100'; 'Playerbot.World.GlobalFill' = '0'; 'Playerbot.World.TownPct' = '100'
+        'Playerbot.World.Enable' = '1'; 'Playerbot.World.FriendlyPct' = '100'; 'Playerbot.World.GlobalFill' = '0'; 'Playerbot.World.TownPct' = '50'
         'Playerbot.World.ActivityRadius' = '600'; 'Playerbot.World.SpawnRingMin' = '150'; 'Playerbot.World.SpawnRingMax' = '350'; 'Playerbot.World.AreaCapOutdoors' = '8'
         'Playerbot.World.TickMs' = '500'
         'Playerbot.World.SpawnPerTick' = '6'; 'Playerbot.World.CitySpawnPerTick' = '12'

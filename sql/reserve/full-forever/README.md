@@ -1,7 +1,7 @@
 # Full Forever reserve
 
 This folder holds the switch from "vanilla where Forever is weaker" to "as close to live WoW Forever as we can". Nothing here is
-applied by an install, an update or the DB updater; it only runs by hand. chris (2026-10-30): keep the vanilla values for now,
+applied by an install, an update or the DB updater; it only runs by hand. Karrz (2026-10-30): keep the vanilla values for now,
 hold everything in reserve, and swap it all over once Forever's gear, balance and data are there.
 
 Live data comes from Blizzard's live hotfix cache, the one wowsims/forever (MIT, https://github.com/wowsims/forever) builds its

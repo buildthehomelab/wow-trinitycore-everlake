@@ -10,7 +10,7 @@
 # of the MySQL 8.4 folder that has bin\mysqld.exe; its data dir is NOT included), optional <root>\openssl-portable\.
 # Refuses to pack when this checkout's sql\, add-on or repack scripts lack what the programs' commit has (see Assert-KitMatchesPrograms);
 # -BinCommit names that commit when worldserver.exe carries none.
-param([Parameter(Mandatory)][string]$Version, [string]$DbZip, [string]$LegacyDll, [string]$BinCommit)
+param([Parameter(Mandatory)][string]$Version, [string]$DbZip, [string]$LegacyDll, [string]$BinCommit, [string]$LauncherExe)
 $ErrorActionPreference = 'Stop'
 # Windows PowerShell 5.1 reads a script without a BOM as ANSI, so a non-ASCII character in a string can break parsing. Installer scripts must be
 # plain ASCII, or UTF-8 with a BOM (HostForOthers.ps1 has Russian text and a BOM; 5.1 reads those right).
@@ -80,6 +80,8 @@ function Assert-KitMatchesPrograms {
     $script:BinFull = $binFull; $script:KitHead = $kitHead
 }
 Assert-KitMatchesPrograms
+# Backwards compatible: every client build the last release accepted is still accepted, and all build lists agree.
+& (Join-Path $src 'scripts\Check-ClientBuilds.ps1') -Root $src
 $out = Join-Path $root "release\$Version"; New-Item -ItemType Directory -Force $out | Out-Null
 $stage = Join-Path $out '_stage'; Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force "$stage\server", "$stage\repack", "$stage\config", "$stage\addons", "$stage\tools" | Out-Null
@@ -140,7 +142,10 @@ Copy-Item "$src\repack\Bug-Report.cmd" "$stage\Bug-Report.cmd" -Force
 Copy-Item "$src\repack\Host-For-Others.cmd" "$stage\Host-For-Others.cmd" -Force
 Copy-Item "$src\repack\Check-Config.cmd" "$stage\Check-Config.cmd" -Force   # settings files check: file and line of a duplicate setting or a broken line
 Copy-Item "$src\repack\Uninstall.cmd" "$stage\Uninstall.cmd" -Force   # removes shortcuts, add-ons, certificates, hosts lines, firewall rules; asks about the folder
-& "$src\repack\build-launcher.ps1" -Out "$stage\WoWForeverLauncher.exe"   # the launcher window, compiled with the .NET Framework compiler that ships with Windows
+# -LauncherExe: a launcher built elsewhere (0.1.37: the cross-platform launcher from Karrz1/wow-forever-launcher) goes in as it is;
+# without it the WinForms launcher in repack\launcher is compiled with the .NET Framework compiler that ships with Windows.
+if ($LauncherExe) { if (-not (Test-Path $LauncherExe)) { throw "Launcher not found: $LauncherExe" }; Copy-Item $LauncherExe "$stage\WoWForeverLauncher.exe" -Force; "Launcher from $LauncherExe ($((Get-Item $LauncherExe).Length) bytes)" }
+else { & "$src\repack\build-launcher.ps1" -Out "$stage\WoWForeverLauncher.exe" }
 foreach ($f in 'README-TESTER.md:README.md', 'SOURCE.txt:SOURCE.txt', 'NOTICE.txt:NOTICE.txt') {
     $a, $b = $f -split ':'; Copy-Item "$src\repack\$a" "$stage\$b" -Force
 }

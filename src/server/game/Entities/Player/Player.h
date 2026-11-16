@@ -119,6 +119,11 @@ namespace BattlePets
     struct BattlePet;
 }
 
+namespace DayCycle
+{
+    enum class SkyMode : uint8;
+}
+
 namespace WorldPackets
 {
     namespace Character
@@ -1032,6 +1037,7 @@ enum PlayerLoginQueryIndex
     PLAYER_LOGIN_QUERY_LOAD_DATA_ELEMENTS,
     PLAYER_LOGIN_QUERY_LOAD_DATA_FLAGS,
     PLAYER_LOGIN_QUERY_LOAD_BANK_TAB_SETTINGS,
+    PLAYER_LOGIN_QUERY_LOAD_DAY_CYCLE,
     MAX_PLAYER_LOGIN_QUERY
 };
 
@@ -1278,6 +1284,10 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         void SendInitialPacketsBeforeAddToMap();
         void SendInitialPacketsAfterAddToMap();
+        // the sky's clock (DayCycle.h): the realm's sky at Forever.DayCycle.Speed, or this character's own noon or midnight
+        void SendDayCycle() const;
+        DayCycle::SkyMode GetSkyMode() const;
+        void SetSkyMode(DayCycle::SkyMode mode);   // saved at once and sent
         void SendSupercededSpell(uint32 oldSpell, uint32 newSpell) const;
         void SendTransferAborted(uint32 mapid, TransferAbortReason reason, uint8 arg = 0, int32 mapDifficultyXConditionID = 0) const;
 
@@ -2626,6 +2636,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         SpellSchoolMask GetMeleeDamageSchoolMask(WeaponAttackType attackType = BASE_ATTACK) const override;
 
         void CastAllObtainSpells();
+        void CastAllEquipSpellsLostOnDeath();
         void ApplyItemObtainSpells(Item* item, bool apply);
 
         void UpdateWeaponDependentCritAuras(WeaponAttackType attackType);
@@ -2813,6 +2824,13 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         bool HaveAtClient(BaseEntity const* u) const;
 
+        // Combat-only enemy nameplates (asked for by the client's add-on): while on, a hostile NPC this player can see that is not in
+        // a fight with him or his pet goes to his client with UNIT_FLAG3_FORCE_HIDE_NAMEPLATE, so the client draws its plain name;
+        // one that joins the fight gets its health bar. Per viewer: other players see their own fights. Applied on the next update.
+        void SetCombatPlateFilter(bool on) { _combatPlateWanted = on; }
+        bool IsCombatPlateFilterOn() const { return _combatPlateOn; }
+        bool HidesNameplateOf(Unit const* unit) const { return _combatPlateOn && _combatPlateHidden.contains(unit->GetGUID()); }
+
         bool IsNeverVisibleFor(WorldObject const* seer, bool allowServersideObjects) const override;
 
         bool IsVisibleGloballyFor(Player const* player) const;
@@ -2968,6 +2986,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         //bool isActiveObject() const { return true; }
         bool CanSeeGossipOn(Creature const* creature) const;
+        bool HasPendingTalkToObjective(uint32 creatureEntry) const;
         bool CanSeeSpellClickOn(Creature const* creature) const;
 
         uint32 GetChampioningFaction() const { return m_ChampioningFaction; }
@@ -3274,6 +3293,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void _LoadCUFProfiles(PreparedQueryResult result);
         void _LoadPlayerData(PreparedQueryResult elementsResult, PreparedQueryResult flagsResult);
         void _LoadCharacterBankTabSettings(PreparedQueryResult result);
+        void _LoadDayCycle(PreparedQueryResult result);
 
         /*********************************************************/
         /***                   SAVE SYSTEM                     ***/
@@ -3411,6 +3431,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         uint32 m_hostileReferenceCheckTimer;
         uint32 m_drunkTimer;
         uint32 m_weaponChangeTimer;
+        uint8 m_skyMode;                    // DayCycle::SkyMode
 
         uint32 m_zoneUpdateId;
         uint32 m_areaUpdateId;
@@ -3556,6 +3577,15 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         bool CanRequestSpellCast(SpellInfo const* spell, Unit const* castingUnit) const;
 
     private:
+        // Combat-only enemy nameplates (SetCombatPlateFilter).
+        bool CombatPlateHidden(Unit const* unit, Pet const* pet) const;
+        bool RefreshCombatPlate(Unit const* unit, Pet const* pet);
+        void UpdateCombatPlates(uint32 diff);
+        bool _combatPlateWanted = false;      // what the client asked for
+        bool _combatPlateOn = false;          // in force (set on the player's update)
+        uint32 _combatPlateTimer = 0;
+        GuidUnorderedSet _combatPlateHidden;  // the NPCs this client was told to hide the plate of
+
         std::unique_ptr<SpellCastRequest> _pendingSpellCastRequest;
         void ExecutePendingSpellCastRequest();
         bool ProcessItemCast(SpellCastRequest& castRequest, SpellCastTargets const& targets);

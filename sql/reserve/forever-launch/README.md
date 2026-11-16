@@ -28,7 +28,7 @@ and the steps below take it in quickly. Nothing here runs by itself: no install,
    (--dbc is optional now: table hashes come from the names). Use a new 100-id block of hotfix_data ids; 2001600-2001699 is the
    hunter file.
 4. Compare the class spells again (same method as `world 2026_11_03_40`). Drop the vanilla value row wherever Forever is now within
-   30% of vanilla or stronger, and keep it where Forever is still 30%+ lower (chris rule; `full-forever/04` holds those rows).
+   30% of vanilla or stronger, and keep it where Forever is still 30%+ lower (Karrz rule; `full-forever/04` holds those rows).
 
 ## 3. Trainers and removed spells (after step 1 or 2 has removed them)
 
@@ -56,4 +56,4 @@ compare the old and new ExpectedStat CreatureHealth (and CreatureDifficulty Heal
 ## 5. Test before the PC
 
 Each SQL file twice on a scratch DB, then on the test install (never the live realm): start worldserver, check DBErrors.log, run
-the bot DPS and dungeon scenarios. Nothing goes on chris's PC without his go.
+the bot DPS and dungeon scenarios. Nothing goes on Karrz's PC without his go.

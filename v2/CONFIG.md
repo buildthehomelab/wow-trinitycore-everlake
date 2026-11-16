@@ -44,7 +44,7 @@ Each key is tagged:
 
 | Key | Default | HR | Description |
 |---|---|---|---|
-| `Playerbot.Interact.AutoAcceptInvites` | `friends_or_higher` | HR-yes | `none`, `friends_or_higher`, `guild_or_higher`, `anyone`. |
+| `Playerbot.Interact.AcceptInvitesFrom` | `anyone` | HR-yes | `anyone`, `guild`, `friends`, `none`: whose group invite a bot takes (the owner and GMs always). Replaces `AutoAcceptInvites`, which was never read. |
 | `Playerbot.Interact.AutoLeaderHandover` | `true` | HR-yes | Bot relinquishes leadership on player join. Per `SYSTEM_FEATURES.md` §3.2. |
 | `Playerbot.Interact.CommandPrefix` | `!` | HR-yes | Whisper command prefix. |
 
