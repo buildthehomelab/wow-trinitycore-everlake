@@ -111,6 +111,9 @@ if (-not (Test-Path "$stage\addons\ForeverBots\ForeverBots.toc")) { throw 'Forev
 # ForeverDots (countdown bars for your own damage-over-time spells) goes in beside it and is installed the same way
 robocopy "$src\src\modules\PlayerbotV2\Addon\ForeverDots" "$stage\addons\ForeverDots" /E /NFL /NDL /NJH /NJS | Out-Null
 if (-not (Test-Path "$stage\addons\ForeverDots\ForeverDots.toc")) { throw 'ForeverDots addon missing from the package' }
+# Forever Combat Nameplates by SIN (enemy bars only over mobs that fight you or your pet, GPLv2, COPYING inside), the same way
+robocopy "$src\src\modules\PlayerbotV2\Addon\ForeverCombatNameplates" "$stage\addons\ForeverCombatNameplates" /E /NFL /NDL /NJH /NJS | Out-Null
+if (-not (Test-Path "$stage\addons\ForeverCombatNameplates\ForeverCombatNameplates.toc")) { throw 'ForeverCombatNameplates addon missing from the package' }
 # The bot bridge (Playerbot.Bridge.*, off by default): the player guide, the technical guide and the two programs that plug into it,
 # always the copies from this commit. In both zips (the update zip is made from the same stage).
 New-Item -ItemType Directory -Force "$stage\repack\bot-bridge" | Out-Null
@@ -223,6 +226,8 @@ New-Item -ItemType Directory -Force "$addonTmp\ForeverBots" | Out-Null
 Copy-Item "$stage\addons\ForeverBots\*" "$addonTmp\ForeverBots" -Recurse -Force
 New-Item -ItemType Directory -Force "$addonTmp\ForeverDots" | Out-Null
 Copy-Item "$stage\addons\ForeverDots\*" "$addonTmp\ForeverDots" -Recurse -Force
+New-Item -ItemType Directory -Force "$addonTmp\ForeverCombatNameplates" | Out-Null
+Copy-Item "$stage\addons\ForeverCombatNameplates\*" "$addonTmp\ForeverCombatNameplates" -Recurse -Force
 Copy-Item "$src\tools\addon-installer\*" $addonTmp -Force   # Install-Addon.cmd/.ps1 + README.txt: double-click installer next to the folder
 New-Zip $addonTmp "$out\ForeverBots-addon-$Version.zip"
 Remove-Item $addonTmp -Recurse -Force

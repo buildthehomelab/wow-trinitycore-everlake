@@ -499,8 +499,6 @@ Item::Item()
 
     m_slot = 0;
     uState = ITEM_NEW;
-    uQueuePos = 0;
-    _updateQueueOwner = nullptr;
     m_container = nullptr;
     m_lootGenerated = false;
     mb_in_trade = false;
@@ -516,19 +514,17 @@ Item::Item()
 
 Item::~Item()
 {
-    // An item deleted while it is still listed for its owner's next inventory save must leave the list, or that save reads a
-    // deleted item.
-    if (_updateQueueOwner)
-        LeaveUpdateQueue();
+    DetachFromUpdateQueue();
 }
 
-void Item::LeaveUpdateQueue()
+void Item::DetachFromUpdateQueue()
 {
-    std::vector<Item*>& queue = _updateQueueOwner->GetItemUpdateQueue();
-    if (uQueuePos < queue.size() && queue[uQueuePos] == this)
-        queue[uQueuePos] = nullptr;
+    if (!_updateQueueOwner)
+        return;
+    auto& queue = _updateQueueOwner->GetItemUpdateQueue();
+    ASSERT(uQueuePos < queue.size() && queue[uQueuePos] == this);
+    queue[uQueuePos] = nullptr;
     _updateQueueOwner = nullptr;
-    uQueuePos = 0;
 }
 
 bool Item::Create(ObjectGuid::LowType guidlow, uint32 itemId, ItemContext context, Player const* owner)
@@ -1349,10 +1345,7 @@ void Item::SetState(ItemUpdateState state, Player* forplayer)
     }
     else
     {
-        // Before, only the position was forgotten and the item stayed in its owner's list; when it was then added again and
-        // deleted, the next inventory save still found it at the old place (a deleted item). It now leaves the list for real.
-        if (_updateQueueOwner)
-            LeaveUpdateQueue();
+        DetachFromUpdateQueue();
         uState = ITEM_UNCHANGED;
     }
 }
@@ -1376,7 +1369,7 @@ void AddItemToUpdateQueueOf(Item* item, Player* player)
 
     player->m_itemUpdateQueue.push_back(item);
     item->_updateQueueOwner = player;
-    item->uQueuePos = uint32(player->m_itemUpdateQueue.size() - 1);
+    item->uQueuePos = player->m_itemUpdateQueue.size() - 1;
 }
 
 void RemoveItemFromUpdateQueueOf(Item* item, Player* player)
@@ -1386,16 +1379,8 @@ void RemoveItemFromUpdateQueueOf(Item* item, Player* player)
 
     ASSERT(player != nullptr);
 
-    // The item is in the list of the player it was added for, even if its owner changed since (trade); that player is the one
-    // to check, not the owner's guid. An item is never added while the list is blocked, so taking it out is always safe.
-    if (item->_updateQueueOwner != player)
-    {
-        TC_LOG_DEBUG("entities.player.items", "RemoveItemFromUpdateQueueOf - item {} is not in the update list of player {}",
-            item->GetGUID().ToString(), player->GetGUID().ToString());
-        return;
-    }
-
-    item->LeaveUpdateQueue();
+    if (item->_updateQueueOwner == player)
+        item->DetachFromUpdateQueue();
 }
 
 uint8 Item::GetBagSlot() const

@@ -1783,7 +1783,8 @@ void GameObject::Update(uint32 diff)
             }
 
             uint32 respawnDelay = m_respawnDelayTime;
-            GetMap()->ApplyDynamicRespawnScaling(this, this->m_spawnId, respawnDelay);
+            if (uint32 scalingMode = sWorld->getIntConfig(CONFIG_RESPAWN_DYNAMICMODE))
+                GetMap()->ApplyDynamicModeRespawnScaling(this, this->m_spawnId, respawnDelay, scalingMode);
             m_respawnTime = GameTime::GetGameTime() + respawnDelay;
 
             // if option not set then object will be saved at grid unload
@@ -2408,6 +2409,14 @@ bool GameObject::ActivateToQuest(Player const* target) const
             // Chests become inactive while not ready to be looted
             if (getLootState() == GO_NOT_READY)
                 return false;
+
+            // Excavation Tools also drops the item that offers quest 86613.
+            // Enable the first interaction before the collection objective exists.
+            if (GetEntry() == 665282 && target->GetQuestStatus(86613) == QUEST_STATUS_NONE
+                && !target->HasItemCount(278049, 1, true))
+                if (Quest const* quest = sObjectMgr->GetQuestTemplate(86613))
+                    if (target->CanTakeQuest(quest, false))
+                        return true;
 
             // scan GO chest with loot including quest items
             if (target->GetQuestStatus(GetGOInfo()->chest.questID) == QUEST_STATUS_INCOMPLETE

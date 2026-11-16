@@ -17,6 +17,8 @@ This package is distributed under the GNU General Public License version 2 (the 
   placeholders, fetched slowly by our own tool.
 - Host for friends can download Cloudflare's cloudflared (https://github.com/cloudflare/cloudflared, Apache-2.0) unchanged
   from its GitHub release when a host turns the tunnel on; it is not part of this package.
+- The Forever Combat Nameplates add-on (addons\ForeverCombatNameplates) and its realm side are by SIN, GPL-2.0 (COPYING in
+  the add-on folder).
 - Third-party binaries in the package (MySQL, OpenSSL, Boost, zlib and others) keep their own licences; their licence
   files are in the folders they came from.
 

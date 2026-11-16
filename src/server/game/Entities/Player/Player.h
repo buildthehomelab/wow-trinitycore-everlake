@@ -1288,6 +1288,11 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void SendDayCycle() const;
         DayCycle::SkyMode GetSkyMode() const;
         void SetSkyMode(DayCycle::SkyMode mode);   // saved at once and sent
+        // .time day / night: a fixed light over every area light of the map (the client does not light the world again from
+        // a new clock); restore: give the map its own lights back (.time auto). Open world maps only.
+        void SendSkyLights(bool restore = false);
+        // the light this player's sky puts over an area light of the map they are on; 0: none
+        int32 GetSkyOverrideLight(uint32 areaLightId) const;
         void SendSupercededSpell(uint32 oldSpell, uint32 newSpell) const;
         void SendTransferAborted(uint32 mapid, TransferAbortReason reason, uint8 arg = 0, int32 mapDifficultyXConditionID = 0) const;
 
@@ -2824,12 +2829,9 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         bool HaveAtClient(BaseEntity const* u) const;
 
-        // Combat-only enemy nameplates (asked for by the client's add-on): while on, a hostile NPC this player can see that is not in
-        // a fight with him or his pet goes to his client with UNIT_FLAG3_FORCE_HIDE_NAMEPLATE, so the client draws its plain name;
-        // one that joins the fight gets its health bar. Per viewer: other players see their own fights. Applied on the next update.
-        void SetCombatPlateFilter(bool on) { _combatPlateWanted = on; }
-        bool IsCombatPlateFilterOn() const { return _combatPlateOn; }
-        bool HidesNameplateOf(Unit const* unit) const { return _combatPlateOn && _combatPlateHidden.contains(unit->GetGUID()); }
+        inline static constexpr char CombatNameplatePrefix[] = "FCN_PLATES1";
+        void RequestCombatNameplates(bool enabled, bool acknowledge);
+        bool HidesCombatNameplate(Unit const* unit) const;
 
         bool IsNeverVisibleFor(WorldObject const* seer, bool allowServersideObjects) const override;
 
@@ -3577,16 +3579,15 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         bool CanRequestSpellCast(SpellInfo const* spell, Unit const* castingUnit) const;
 
     private:
-        // Combat-only enemy nameplates (SetCombatPlateFilter).
-        bool CombatPlateHidden(Unit const* unit, Pet const* pet) const;
-        bool RefreshCombatPlate(Unit const* unit, Pet const* pet);
-        void UpdateCombatPlates(uint32 diff);
-        bool _combatPlateWanted = false;      // what the client asked for
-        bool _combatPlateOn = false;          // in force (set on the player's update)
-        uint32 _combatPlateTimer = 0;
-        GuidUnorderedSet _combatPlateHidden;  // the NPCs this client was told to hide the plate of
-
         std::unique_ptr<SpellCastRequest> _pendingSpellCastRequest;
+
+        void UpdateCombatNameplates(uint32 elapsed);
+        bool RefreshCombatNameplate(Unit const* unit, Pet const* pet);
+        bool _combatNameplatesRequested = false;
+        bool _combatNameplatesEnabled = false;
+        bool _combatNameplateAckPending = false;
+        uint32 _combatNameplateTimer = 0;
+        GuidUnorderedSet _hiddenCombatNameplates;
         void ExecutePendingSpellCastRequest();
         bool ProcessItemCast(SpellCastRequest& castRequest, SpellCastTargets const& targets);
         bool CanExecutePendingSpellCastRequest();

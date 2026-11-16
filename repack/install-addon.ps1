@@ -61,10 +61,16 @@ if (Test-Path (Join-Path $dotsSrc 'ForeverDots.toc')) {
     Install-CleanAddon $dotsSrc $dest 'ForeverDots'
     Update-OtherAddonCopies $dotsSrc $Client $dest 'ForeverDots'
 }
+# Forever Combat Nameplates (SIN), shipped beside it (addons\ForeverCombatNameplates), the same way
+$platesSrc = Join-Path $root 'addons\ForeverCombatNameplates'
+if (Test-Path (Join-Path $platesSrc 'ForeverCombatNameplates.toc')) {
+    Install-CleanAddon $platesSrc $dest 'ForeverCombatNameplates'
+    Update-OtherAddonCopies $platesSrc $Client $dest 'ForeverCombatNameplates'
+}
 # The Classic Forever dungeon-bot add-on (another server's) sends ".dungeonbots ..." chat commands at login, which this server does
 # not have ("Command 'dungeonbots presets' does not exist"). It is not ours and is left untouched; the player is only told.
 if (Test-Path -LiteralPath (Join-Path $dest 'ClassicForever_Bots')) {
     Write-Host "Note: the add-on ClassicForever_Bots is installed. It is made for another server and prints 'Command dungeonbots presets does not exist' here. Untick it in the AddOns list on the character screen."
 }
 Save-Client $root $Client
-"ForeverBots and ForeverDots installed to $dest. In the character select screen click AddOns and make sure ForeverBots and ForeverDots are ticked (and 'Load out of date AddOns' if shown)."
+"ForeverBots, ForeverDots and Forever Combat Nameplates installed to $dest. In the character select screen click AddOns and make sure all three are ticked (and 'Load out of date AddOns' if shown)."

@@ -2,7 +2,7 @@
 # What it removes:
 #   - the running server, MySQL and launcher of this folder (stopped cleanly first, so characters are saved)
 #   - the "WoW Forever" and "WoW Forever Bots" shortcuts on the Desktop and in the Start Menu (only ones that point into this folder)
-#   - the ForeverBots and ForeverDots add-ons and the launcher's WTF\ForeverLauncher.wtf in your game folder
+#   - the ForeverBots, ForeverDots and ForeverCombatNameplates add-ons and the launcher's WTF\ForeverLauncher.wtf in your game folder
 #     (your own game settings, Config.wtf and SavedVariables are not touched)
 #   - the WoW Forever certificates in the Windows trust store (your own and the ones added for friends' servers)
 #   - the hosts lines this repack added (marked wow-forever-local and wow-forever-join); a backup of the hosts file is kept
@@ -140,7 +140,7 @@ if ($client -and (Test-Path -LiteralPath $client)) {
         foreach ($sub in '_forever_', '_classic_beta_', '_classic_', '_classic_era_', '') {
             $game = if ($sub) { Join-Path $base $sub } else { $base }
             if (-not (Test-Path -LiteralPath $game)) { continue }
-            foreach ($a in 'ForeverBots', 'ForeverDots') {
+            foreach ($a in 'ForeverBots', 'ForeverDots', 'ForeverCombatNameplates') {
                 $d = Join-Path $game "Interface\AddOns\$a"
                 if (Test-Path -LiteralPath $d) { if ($DryRun) { "Would remove add-on $d" } else { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue; "Removed add-on $d" } }
             }

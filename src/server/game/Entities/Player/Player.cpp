@@ -379,11 +379,9 @@ Player::~Player()
     // it must be unloaded already in PlayerLogout and accessed only for logged in player
     //m_social = nullptr;
 
-    // items still listed for an inventory save forget this player before it goes, so none of them points at it afterwards
     for (Item* item : m_itemUpdateQueue)
         if (item)
             RemoveItemFromUpdateQueueOf(item, this);
-    m_itemUpdateQueue.clear();
 
     // Note: buy back item already deleted from DB when player was saved
     for (uint8 i = 0; i < PLAYER_SLOTS_COUNT; ++i)
@@ -971,7 +969,7 @@ void Player::Update(uint32 p_time)
     SetCanDelayTeleport(false);
 
     UpdateParkedPet(p_time);
-    UpdateCombatPlates(p_time);
+    UpdateCombatNameplates(p_time);
 
     // The pet remembered at login comes back a moment after the player is in the world, as a summon during play does. Created while the
     // Classic 1.60 client is still on its loading screen, the client froze on the pet (warlock demon out at logout, 20 Oct).
@@ -4741,7 +4739,7 @@ bool Player::RefuseHardcoreResurrect()
 {
     // Classic 1.60 Hardcore ruleset realm (Classic.Hardcore = 1): death is permanent, no spirit healer, corpse run or resurrection spell
     // brings the character back, also not on game master accounts. Only staff using the .revive command can (SetHardcoreReviveAllowed).
-    if (IsAlive() || m_hardcoreReviveAllowed || !sConfigMgr->GetBoolDefault("Classic.Hardcore", false))
+    if (IsAlive() || m_hardcoreReviveAllowed || !sWorld->getBoolConfig(CONFIG_CLASSIC_HARDCORE))
         return false;
 
     ChatHandler(GetSession()).SendSysMessage("Hardcore: this character has fallen. Death is permanent on this realm.");
@@ -8244,11 +8242,7 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea)
     uint32 const oldZone = m_zoneUpdateId;
     m_zoneUpdateId = newZone;
 
-    // The zone player count drives dynamic respawn timers (Map::ApplyDynamicRespawnScaling). Bots are not counted: a zone full of bots
-    // would otherwise respawn its mobs as if it were crowded with players. A session is a bot for its whole life, so the count stays
-    // balanced (the leave in Map::RemovePlayerFromMap comes through here too).
-    if (!GetSession()->IsBot())
-        GetMap()->UpdatePlayerZoneStats(oldZone, newZone);
+    GetMap()->UpdatePlayerZoneStats(oldZone, newZone);
 
     // call leave script hooks immedately (before updating flags)
     if (oldZone != newZone)
@@ -11043,8 +11037,7 @@ bool Player::HasItemTotemCategory(uint32 TotemCategory) const
             return true;
     }
 
-    // Classic 1.60: a profession bag may sit in the reagent bag slot (ITEM_FLAG5_CLASSIC_FITS_REAGENT_BAG_SLOT), and a tool
-    // stored in it (skinning knife, mining pick) still counts, so the bag slots and the reagent bag slot are searched as one range
+    // Profession bags can also occupy the reagent bag slot immediately after the regular bags.
     static_assert(uint8(INVENTORY_SLOT_BAG_END) == uint8(REAGENT_BAG_SLOT_START));
     Bag* bag;
     for (uint8 i = INVENTORY_SLOT_BAG_START; i < REAGENT_BAG_SLOT_END; ++i)
@@ -22406,9 +22399,7 @@ void Player::_SaveInventory(CharacterDatabaseTransaction trans)
         if (!item)
             continue;
 
-        // The item leaves the list before it is saved: saving may delete it (ITEM_REMOVED), and the list is emptied below.
         RemoveItemFromUpdateQueueOf(item, this);
-
         Bag* container = item->GetContainer();
         if (item->GetState() != ITEM_REMOVED)
         {
@@ -25836,77 +25827,90 @@ bool Player::HaveAtClient(BaseEntity const* u) const
     return u == this || m_clientGUIDs.find(u->GetGUID()) != m_clientGUIDs.end();
 }
 
-// Combat-only enemy nameplates: a plate is hidden for an attackable NPC that is in no live (unsuppressed) fight with this player, his
-// pet or a member of his group on this map. Standing near it or selecting it is not a fight. NPCs a script forces a plate on or off,
-// and units a player controls, keep what they have.
-bool Player::CombatPlateHidden(Unit const* unit, Pet const* pet) const
+void Player::RequestCombatNameplates(bool enabled, bool acknowledge)
 {
-    if (!_combatPlateOn || !unit->GetGUID().IsCreatureOrVehicle() || unit->IsControlledByPlayer())
+    // Chat and prefix handlers run in the world session pass. Apply the last
+    // request and send its acknowledgement together on the player's map tick.
+    _combatNameplatesRequested = enabled;
+    _combatNameplateAckPending = acknowledge;
+}
+
+bool Player::HidesCombatNameplate(Unit const* unit) const
+{
+    return _combatNameplatesEnabled && _hiddenCombatNameplates.contains(unit->GetGUID());
+}
+
+bool Player::RefreshCombatNameplate(Unit const* unit, Pet const* pet)
+{
+    ObjectGuid const guid = unit->GetGUID();
+    if (!guid.IsCreatureOrVehicle())
         return false;
-    if (unit->HasUnitFlag(UNIT_FLAG_FORCE_NAMEPLATE) || unit->HasUnitFlag3(UNIT_FLAG3_FORCE_HIDE_NAMEPLATE))
-        return false;
-    // A mob that died is no longer a valid attack target, and its plate came back as a large grey name over the corpse mid-fight
-    // (Karrz 11-16, a Noxious Plaguebat in the Eastern Plaguelands). A corpse is out of every fight: an unfriendly one stays hidden.
-    if (unit->IsAlive() ? !IsValidAttackTarget(unit) : IsFriendlyTo(unit))
-        return false;
-    auto fights = [unit](Unit const* side)
+
+    auto engaged = [&guid](Unit const* participant)
     {
-        auto const& refs = side->GetCombatManager().GetPvECombatRefs();
-        auto const itr = refs.find(unit->GetGUID());
-        return itr != refs.end() && !itr->second->IsSuppressedFor(side);
+        auto const& refs = participant->GetCombatManager().GetPvECombatRefs();
+        auto it = refs.find(guid);
+        return it != refs.end() && !it->second->IsSuppressedFor(participant);
     };
-    if (fights(this) || (pet && fights(pet)))
-        return false;
-    if (Group const* group = GetGroup())
-        for (GroupReference const& ref : group->GetMembers())
-            if (Player const* member = ref.GetSource(); member && member != this && member->IsInMap(this))
-                if (fights(member) || (member->GetPet() && fights(member->GetPet())))
-                    return false;
-    return true;
+
+    // Leave scripted show/hide flags, player-controlled units and friendly
+    // plates alone. IsValidAttackTarget also checks neutral, attackable NPCs.
+    // A dead hostile NPC is no longer a valid target, and the client then
+    // drew its plate as a large grey name over the corpse mid-fight: a
+    // corpse is out of every fight, so its plate is hidden too.
+    bool const hostile = unit->IsAlive() ? IsValidAttackTarget(unit) : !IsFriendlyTo(unit);
+    if (_combatNameplatesEnabled && !unit->IsControlledByPlayer() &&
+        !unit->HasUnitFlag(UNIT_FLAG_FORCE_NAMEPLATE) && !unit->HasUnitFlag3(UNIT_FLAG3_FORCE_HIDE_NAMEPLATE) &&
+        !engaged(this) && !(pet && engaged(pet)) && hostile)
+        return _hiddenCombatNameplates.insert(guid).second;
+
+    return _hiddenCombatNameplates.erase(guid) != 0;
 }
 
-// Records the plate state of one NPC this client knows; true when it changed (the client needs the new flags).
-bool Player::RefreshCombatPlate(Unit const* unit, Pet const* pet)
+void Player::UpdateCombatNameplates(uint32 elapsed)
 {
-    if (CombatPlateHidden(unit, pet))
-        return _combatPlateHidden.insert(unit->GetGUID()).second;
-    return _combatPlateHidden.erase(unit->GetGUID()) != 0;
-}
-
-// Four times a second while the filter is on (or just turned off): re-checks every NPC this client knows and sends the flags of
-// those that changed, so a mob that joins the fight gets its bar and one whose fight ended loses it.
-void Player::UpdateCombatPlates(uint32 diff)
-{
-    if (!_combatPlateOn && !_combatPlateWanted && _combatPlateHidden.empty())
+    if (!_combatNameplatesEnabled && !_combatNameplatesRequested && !_combatNameplateAckPending)
         return;
-    if (_combatPlateTimer > diff && _combatPlateOn == _combatPlateWanted)
+
+    if (_combatNameplateTimer > elapsed)
     {
-        _combatPlateTimer -= diff;
+        _combatNameplateTimer -= elapsed;
         return;
     }
-    _combatPlateTimer = 250;
-    _combatPlateOn = _combatPlateWanted;
+    _combatNameplateTimer = 250;
+    _combatNameplatesEnabled = _combatNameplatesRequested;
 
-    UF::ObjectData::Base objMask;
+    // Selection, another player's fight and distance are not combat references.
+    // Recheck only this viewer's known creatures to catch pet replacement,
+    // charm, faction changes and threat suppression without altering the units.
     UF::UnitData::Base unitMask;
     unitMask.MarkChanged(&UF::UnitData::Flags3);
-    UpdateData data(GetMapId());
-    Pet const* pet = GetPet();
+    UpdateData updates(GetMapId());
+    Pet const* pet = _combatNameplatesEnabled ? GetPet() : nullptr;
     for (ObjectGuid const& guid : m_clientGUIDs)
     {
         if (!guid.IsCreatureOrVehicle())
             continue;
         if (Creature* creature = ObjectAccessor::GetCreatureOrPetOrVehicle(*this, guid))
-            if (RefreshCombatPlate(creature, pet))
-                creature->BuildValuesUpdateForPlayerWithMask(&data, objMask.GetChangesMask(), unitMask.GetChangesMask(), this, false);
+            if (RefreshCombatNameplate(creature, pet))
+                creature->BuildValuesUpdateForPlayerWithMask(&updates, {}, unitMask.GetChangesMask(), this, false);
     }
-    // NPCs gone from this client need no entry (they get a fresh check when they come back into view).
-    std::erase_if(_combatPlateHidden, [this](ObjectGuid const& guid) { return !m_clientGUIDs.contains(guid); });
-    if (data.HasData())
+    std::erase_if(_hiddenCombatNameplates, [this](ObjectGuid const& guid) { return !m_clientGUIDs.contains(guid); });
+    if (!_combatNameplatesEnabled)
+        _hiddenCombatNameplates.clear();
+
+    if (updates.HasData())
     {
         WorldPacket packet;
-        data.BuildPacket(&packet);
+        updates.BuildPacket(&packet);
         SendDirectMessage(&packet);
+    }
+    if (_combatNameplateAckPending)
+    {
+        _combatNameplateAckPending = false;
+        TC_LOG_INFO("server.combatplates", "[combat_plates] {}: {} sent, prefix registered {}", GetSession()->GetPlayerInfo(),
+            _combatNameplatesEnabled ? "ACK ON" : "ACK OFF", GetSession()->IsAddonRegistered(CombatNameplatePrefix));
+        WhisperAddon(_combatNameplatesEnabled ? "ACK ON" : "ACK OFF", CombatNameplatePrefix, false, this);
     }
 }
 
@@ -26122,9 +26126,9 @@ void Player::UpdateVisibilityOf(WorldObject* target)
     {
         if (CanSeeOrDetect(target, { .DistanceCheck = true }))
         {
-            if (_combatPlateOn)
-                if (Creature const* creature = target->ToCreature())
-                    RefreshCombatPlate(creature, GetPet());   // the create block carries the plate state from the start
+            if (_combatNameplatesEnabled)
+                if (Creature* creature = target->ToCreature())
+                    RefreshCombatNameplate(creature, GetPet());
             target->SendUpdateToPlayer(this);
             m_clientGUIDs.insert(target->GetGUID());
 
@@ -26250,9 +26254,9 @@ void Player::UpdateVisibilityOf(T* target, UpdateData& data, std::set<WorldObjec
             m_clientGUIDs.insert(target->GetGUID());
             if (!Trinity::HeadlessPackets::Skip(this))
             {
-                if (_combatPlateOn)
-                    if (Creature const* creature = target->ToCreature())
-                        RefreshCombatPlate(creature, GetPet());   // the create block carries the plate state from the start
+                if (_combatNameplatesEnabled)
+                    if (Creature* creature = target->ToCreature())
+                        RefreshCombatNameplate(creature, GetPet());
                 target->BuildCreateUpdateBlockForPlayer(&data, this);
                 visibleNow.insert(target);
             }
@@ -26570,6 +26574,48 @@ void Player::SetSkyMode(DayCycle::SkyMode mode)
     CharacterDatabase.Execute(stmt);
 
     SendDayCycle();
+    if (IsInWorld())
+    {
+        SendSkyLights(true);
+        GetMap()->SendZoneLightOverrides(GetZoneId(), this);   // a zone's scripted light (an event darkening it) still wins
+    }
+}
+
+int32 Player::GetSkyOverrideLight(uint32 areaLightId) const
+{
+    if (!IsInWorld() || GetMap()->Instanceable())
+        return 0;
+
+    int32 const skyLight = DayCycle::OverrideLightFor(GetSkyMode());
+    if (!skyLight || !sLightStore.HasRecord(skyLight))
+        return 0;
+
+    LightEntry const* areaLight = sLightStore.LookupEntry(areaLightId);
+    if (!areaLight || areaLight->ContinentID != int32(GetMapId()) || int32(areaLightId) == skyLight)
+        return 0;
+
+    return skyLight;
+}
+
+void Player::SendSkyLights(bool restore /*= false*/)
+{
+    if (!IsInWorld() || GetMap()->Instanceable())
+        return;
+
+    if (!restore && DayCycle::OverrideLightFor(GetSkyMode()) == 0)
+        return;
+
+    for (LightEntry const* light : sLightStore)
+    {
+        if (light->ContinentID != int32(GetMapId()))
+            continue;
+
+        WorldPackets::Misc::OverrideLight overrideLight;
+        overrideLight.AreaLightID = light->ID;
+        overrideLight.OverrideLightID = GetSkyOverrideLight(light->ID);
+        overrideLight.TransitionMilliseconds = DayCycle::LightTransitionMs;
+        SendDirectMessage(overrideLight.Write());
+    }
 }
 
 void Player::SendInitialPacketsAfterAddToMap()
@@ -26592,6 +26638,7 @@ void Player::SendInitialPacketsAfterAddToMap()
     // update zone
     uint32 newzone, newarea;
     GetZoneAndAreaId(newzone, newarea);
+    SendSkyLights();                                         // before UpdateZone: the zone's scripted lights win
     UpdateZone(newzone, newarea);                            // also call SendInitWorldStates();
 
     GetSession()->SendLoadCUFProfiles();

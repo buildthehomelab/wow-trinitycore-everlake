@@ -1295,22 +1295,23 @@ bool WorldSession::IsAddonRegistered(std::string_view prefix) const
 void WorldSession::HandleUnregisterAllAddonPrefixesOpcode(WorldPackets::Chat::ChatUnregisterAllAddonPrefixes& /*packet*/) // empty packet
 {
     _registeredAddonPrefixes.clear();
-    // A UI reload or an add-on turned off: combat-only nameplates are the add-on's to ask for again (Player::SetCombatPlateFilter).
     if (Player* player = GetPlayer())
-        player->SetCombatPlateFilter(false);
+        player->RequestCombatNameplates(false, false);
 }
 
 void WorldSession::HandleAddonRegisteredPrefixesOpcode(WorldPackets::Chat::ChatRegisterAddonPrefixes& packet)
 {
     // This is always sent after CMSG_CHAT_UNREGISTER_ALL_ADDON_PREFIXES
+    bool const announceCombatNameplates = GetClientBuild() >= 70532 && GetPlayer() &&
+        !advstd::ranges::contains(_registeredAddonPrefixes, Player::CombatNameplatePrefix) &&
+        advstd::ranges::contains(packet.Prefixes, Player::CombatNameplatePrefix);
     _registeredAddonPrefixes.insert(_registeredAddonPrefixes.end(), packet.Prefixes.begin(), packet.Prefixes.end());
-    if (_registeredAddonPrefixes.size() > WorldPackets::Chat::ChatRegisterAddonPrefixes::MAX_PREFIXES)
-    {
-        _filterAddonMessages = false;
-        return;
-    }
-
-    _filterAddonMessages = true;
+    _filterAddonMessages = _registeredAddonPrefixes.size() <= WorldPackets::Chat::ChatRegisterAddonPrefixes::MAX_PREFIXES;
+    if (advstd::ranges::contains(packet.Prefixes, Player::CombatNameplatePrefix))
+        TC_LOG_INFO("server.combatplates", "[combat_plates] {}: prefix registered (build {}, {} prefixes, filter {}), READY {}", GetPlayerInfo(),
+            GetClientBuild(), _registeredAddonPrefixes.size(), _filterAddonMessages, announceCombatNameplates ? "sent" : "not sent");
+    if (announceCombatNameplates)
+        GetPlayer()->WhisperAddon("READY", Player::CombatNameplatePrefix, false, GetPlayer());
 }
 
 void WorldSession::SetPlayer(Player* player)

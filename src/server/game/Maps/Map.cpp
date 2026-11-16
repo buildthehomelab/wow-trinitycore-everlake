@@ -2313,62 +2313,10 @@ void Map::ProcessRespawns()
     }
 }
 
-namespace
+void Map::ApplyDynamicModeRespawnScaling(WorldObject const* obj, ObjectGuid::LowType spawnId, uint32& respawnDelay, uint32 mode) const
 {
-// Respawn.DynamicOpenWorld: an ordinary open-world combat creature, the kind players kill in numbers when many of them quest in one
-// zone. Read from the spawn and its template, so it follows the world data without a list of spawn ids. Left out: anything in an
-// explicit spawn group (that group's own flags decide), a pool or quest spawn tracking; anything that is not normal rank (elites,
-// rares and bosses keep their timers); service NPCs, quest givers and enders, vehicles, triggers, civilians, racial leaders and
-// creatures players cannot attack; and creatures that are neither hostile to players nor a beast that is not friendly to players
-// (wolves, boars and spiders count).
-bool IsOpenWorldCombatSpawn(Creature const* creature, SpawnMetadata const* data)
-{
-    if (data->spawnGroupData != sObjectMgr->GetDefaultSpawnGroup())
-        return false;
-    if (sPoolMgr->IsPartOfAPool<Creature>(data->spawnId))
-        return false;
-    // Spawn tracking ties the spawn to a quest's state; leave those to their quest.
-    if (data->spawnTrackingData)
-        return false;
-
-    CreatureTemplate const* cInfo = creature->GetCreatureTemplate();
-    if (cInfo->Classification != CreatureClassifications::Normal)
-        return false;
-    if (cInfo->VehicleId || cInfo->RacialLeader || creature->IsTrigger() || creature->IsCivilian() || creature->IsDungeonBoss())
-        return false;
-    // The spawn's own npcflag / unit_flags win over the template's, as they do when the creature is created.
-    CreatureData const* spawn = sObjectMgr->GetCreatureData(data->spawnId);
-    uint64 const npcFlags = spawn && spawn->npcflag ? *spawn->npcflag : cInfo->npcflag;
-    uint32 const unitFlags = spawn && spawn->unit_flags ? *spawn->unit_flags : cInfo->unit_flags;
-    if (npcFlags)
-        return false;
-    if (unitFlags & (UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_NOT_ATTACKABLE_1 | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_UNINTERACTIBLE))
-        return false;
-
-    QuestRelationResult starts = sObjectMgr->GetCreatureQuestRelations(cInfo->Entry);
-    QuestRelationResult ends = sObjectMgr->GetCreatureQuestInvolvedRelations(cInfo->Entry);
-    if (!(starts.begin() == starts.end()) || !(ends.begin() == ends.end()))
-        return false;
-
-    FactionTemplateEntry const* faction = sFactionTemplateStore.LookupEntry(cInfo->faction);
-    if (!faction)
-        return false;
-    if (faction->IsHostileToPlayers())
-        return true;
-    return cInfo->type == CREATURE_TYPE_BEAST && !(faction->FriendGroup & FACTION_MASK_PLAYER);
-}
-}
-
-void Map::ApplyDynamicRespawnScaling(WorldObject const* obj, ObjectGuid::LowType spawnId, uint32& respawnDelay) const
-{
+    ASSERT(mode == 1);
     ASSERT(obj->GetMap() == this);
-
-    // Respawn.DynamicMode 1: spawn groups flagged for dynamic rate (stock). Respawn.DynamicOpenWorld: also the ordinary open-world
-    // combat creatures (IsOpenWorldCombatSpawn). Both off by default; both scale by the players in the zone.
-    bool const groupMode = sWorld->getIntConfig(CONFIG_RESPAWN_DYNAMICMODE) == 1;
-    bool const openWorld = sWorld->getBoolConfig(CONFIG_RESPAWN_DYNAMIC_OPEN_WORLD);
-    if (!groupMode && !openWorld)
-        return;
 
     if (IsBattlegroundOrArena())
         return;
@@ -2390,13 +2338,9 @@ void Map::ApplyDynamicRespawnScaling(WorldObject const* obj, ObjectGuid::LowType
     if (!data)
         return;
 
-    bool scaled = groupMode && (data->spawnGroupData->flags & SPAWNGROUP_FLAG_DYNAMIC_SPAWN_RATE);
-    if (!scaled && openWorld && type == SPAWN_TYPE_CREATURE && !Instanceable())
-        scaled = IsOpenWorldCombatSpawn(obj->ToCreature(), data);
-    if (!scaled)
+    if (!(data->spawnGroupData->flags & SPAWNGROUP_FLAG_DYNAMIC_SPAWN_RATE))
         return;
 
-    // Real players only: bots are not counted (Player::UpdateZone), so a zone full of bots keeps the normal timers.
     auto it = _zonePlayerCountMap.find(obj->GetZoneId());
     if (it == _zonePlayerCountMap.end())
         return;
@@ -4182,7 +4126,21 @@ void Map::SendZoneDynamicInfo(uint32 zoneId, Player* player) const
 
     SendZoneWeather(itr->second, player);
 
-    for (ZoneDynamicInfo::LightOverride const& lightOverride : itr->second.LightOverrides)
+    SendZoneLightOverrides(itr->second, player);
+}
+
+void Map::SendZoneLightOverrides(uint32 zoneId, Player* player) const
+{
+    auto itr = _zoneDynamicInfo.find(zoneId);
+    if (itr == _zoneDynamicInfo.end())
+        return;
+
+    SendZoneLightOverrides(itr->second, player);
+}
+
+void Map::SendZoneLightOverrides(ZoneDynamicInfo const& zoneDynamicInfo, Player* player) const
+{
+    for (ZoneDynamicInfo::LightOverride const& lightOverride : zoneDynamicInfo.LightOverrides)
     {
         WorldPackets::Misc::OverrideLight overrideLight;
         overrideLight.AreaLightID = lightOverride.AreaLightId;
@@ -4304,11 +4262,19 @@ void Map::SetZoneOverrideLight(uint32 zoneId, uint32 areaLightId, uint32 overrid
         lightOverride.TransitionMilliseconds = static_cast<uint32>(transitionTime.count());
     }
 
-    WorldPackets::Misc::OverrideLight overrideLight;
-    overrideLight.AreaLightID = areaLightId;
-    overrideLight.OverrideLightID = overrideLightId;
-    overrideLight.TransitionMilliseconds = static_cast<uint32>(transitionTime.count());
-    SendZoneMessage(zoneId, overrideLight.Write());
+    // when the zone's light ends, a player who keeps their own sky (.time day / night) goes back to that sky, not the map's light
+    for (MapReference const& ref : GetPlayers())
+    {
+        Player* player = ref.GetSource();
+        if (!player->IsInWorld() || player->GetZoneId() != zoneId)
+            continue;
+
+        WorldPackets::Misc::OverrideLight overrideLight;
+        overrideLight.AreaLightID = areaLightId;
+        overrideLight.OverrideLightID = overrideLightId ? int32(overrideLightId) : player->GetSkyOverrideLight(areaLightId);
+        overrideLight.TransitionMilliseconds = static_cast<uint32>(transitionTime.count());
+        player->SendDirectMessage(overrideLight.Write());
+    }
 }
 
 void Map::UpdateAreaDependentAuras()

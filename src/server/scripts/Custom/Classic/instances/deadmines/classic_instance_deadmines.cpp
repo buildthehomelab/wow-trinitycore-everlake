@@ -235,20 +235,12 @@ public:
             {
                 if (data == IN_PROGRESS)
                 {
-                    // The cannon used to mark the event as started even when the Iron Clad Door was not known to the instance
-                    // yet; then no timer ran and the cannon could never start it again (Discord "bugs 4", 2026-11-13: the wave
-                    // never came). Without the door the event now stays unstarted, so the next use of the cannon tries again.
                     GameObject* door = instance->GetGameObject(m_uiIronCladGUID);
                     if (!door)
-                    {
-                        TC_LOG_DEBUG("scripts", "Instance Deadmines: cannon used before the Iron Clad Door was loaded, event not started.");
                         return;
-                    }
 
-                    // only a closed door is blown open
                     if (door->GetGoState() == GO_STATE_READY)
                         door->UseDoorOrButton(0, true);
-                    m_uiIronDoorStep = 0;
                     m_uiIronDoorTimer = 3000;
                 }
                 m_auiEncounter[0] = data;
@@ -357,12 +349,7 @@ public:
                         }
                     }
                     else
-                    {
-                        // Mr. Smite is not there to call the alarm: the event did not run, so the cannon may start it again
                         m_uiIronDoorTimer = 0;
-                        m_uiIronDoorStep = 0;
-                        m_auiEncounter[0] = NOT_STARTED;
-                    }
                 }
                 else
                     m_uiIronDoorTimer -= diff;

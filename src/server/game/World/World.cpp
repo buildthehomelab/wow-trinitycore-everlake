@@ -672,7 +672,6 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "ArenaLog.ExtendedInfo"sv, .DefaultValue = false, .Index = CONFIG_ARENA_LOG_EXTENDED_INFO },
         { .Name = "OffhandCheckAtSpellUnlearn"sv, .DefaultValue = true, .Index = CONFIG_OFFHAND_CHECK_AT_SPELL_UNLEARN },
         { .Name = "Respawn.DynamicEscortNPC"sv, .DefaultValue = false, .Index = CONFIG_RESPAWN_DYNAMIC_ESCORTNPC },
-        { .Name = "Respawn.DynamicOpenWorld"sv, .DefaultValue = false, .Index = CONFIG_RESPAWN_DYNAMIC_OPEN_WORLD },
         { .Name = "mmap.enablePathFinding"sv, .DefaultValue = true, .Index = CONFIG_ENABLE_MMAPS },
         { .Name = "vmap.enableIndoorCheck"sv, .DefaultValue = true, .Index = CONFIG_VMAP_INDOOR_CHECK },
         { .Name = "PlayerStart.AllSpells"sv, .DefaultValue = false, .Index = CONFIG_START_ALL_SPELLS },
@@ -721,6 +720,10 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "Classic.AutoEquipNewBags"sv, .DefaultValue = false, .Index = CONFIG_CLASSIC_AUTO_EQUIP_NEW_BAGS },
         { .Name = "Classic.CreatureHealth.Raids"sv, .DefaultValue = false, .Index = CONFIG_CLASSIC_CREATURE_HEALTH_RAIDS },
         { .Name = "Forever.VanillaAoE"sv, .DefaultValue = false, .Index = CONFIG_FOREVER_VANILLA_AOE },
+        // read here once, not on every path or every death: a key missing from an older worldserver.conf warned on every read
+        // and flooded the console ("Missing name Pathfinding.PetLiquidCost", 0.1.37.1)
+        { .Name = "Pathfinding.PreferRoads"sv, .DefaultValue = false, .Index = CONFIG_PATHFINDING_PREFER_ROADS },
+        { .Name = "Classic.Hardcore"sv, .DefaultValue = false, .Index = CONFIG_CLASSIC_HARDCORE, .Reloadable = false },
     } };
 
     static constexpr ConfigOptionLoadDefinitionArray<uint32, INT_CONFIG_VALUE_COUNT> ints =
@@ -874,7 +877,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "NoGrayAggro.Above"sv, .DefaultValue = 0, .Index = CONFIG_NO_GRAY_AGGRO_ABOVE },
         { .Name = "NoGrayAggro.Below"sv, .DefaultValue = 0, .Index = CONFIG_NO_GRAY_AGGRO_BELOW },
         { .Name = "Respawn.MinCheckIntervalMS"sv, .DefaultValue = 5000, .Index = CONFIG_RESPAWN_MINCHECKINTERVALMS },
-        { .Name = "Respawn.DynamicMode"sv, .DefaultValue = 0, .Index = CONFIG_RESPAWN_DYNAMICMODE, .Min = 0, .Max = 1 },
+        { .Name = "Respawn.DynamicMode"sv, .DefaultValue = 1, .Index = CONFIG_RESPAWN_DYNAMICMODE, .Min = 0, .Max = 1 },
         { .Name = "Respawn.GuidWarnLevel"sv, .DefaultValue = 12000000, .Index = CONFIG_RESPAWN_GUIDWARNLEVEL, .Min = 0, .Max = 16777215 },
         { .Name = "Respawn.GuidAlertLevel"sv, .DefaultValue = 16000000, .Index = CONFIG_RESPAWN_GUIDALERTLEVEL, .Min = 0, .Max = 16777215 },
         { .Name = "Respawn.RestartQuietTime"sv, .DefaultValue = 3, .Index = CONFIG_RESPAWN_RESTARTQUIETTIME, .Min = 0, .Max = 23 },
@@ -971,6 +974,10 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "Pvp.FactionBalance.Pct5"sv, .DefaultValue = 0.6f, .Index = CONFIG_CALL_TO_ARMS_5_PCT },
         { .Name = "Pvp.FactionBalance.Pct10"sv, .DefaultValue = 0.7f, .Index = CONFIG_CALL_TO_ARMS_10_PCT },
         { .Name = "Pvp.FactionBalance.Pct20"sv, .DefaultValue = 0.8f, .Index = CONFIG_CALL_TO_ARMS_20_PCT },
+        { .Name = "Pathfinding.RoadCost"sv, .DefaultValue = 0.5f, .Index = CONFIG_PATHFINDING_ROAD_COST },
+        { .Name = "Pathfinding.RoadCostMounted"sv, .DefaultValue = 0.35f, .Index = CONFIG_PATHFINDING_ROAD_COST_MOUNTED },
+        { .Name = "Pathfinding.SlopeCoefficient"sv, .DefaultValue = 0.0f, .Index = CONFIG_PATHFINDING_SLOPE_COEFFICIENT },
+        { .Name = "Pathfinding.PetLiquidCost"sv, .DefaultValue = 2.5f, .Index = CONFIG_PATHFINDING_PET_LIQUID_COST },
     } };
 
     static constexpr ConfigOptionLoadDefinitionArray<float, MAX_RATES> rates =
@@ -1295,7 +1302,7 @@ void World::LoadConfigSettings(bool reload)
     _gameRules.push_back({ .Rule = ::GameRule::EncounterJournalDisabled, .Value = int32(sConfigMgr->GetBoolDefault("Classic.AdventureGuide", false) ? 0 : 1) });
 
     // Classic 1.60 Hardcore ruleset realm: C_GameRules.IsHardcoreActive() drives the client's Hardcore UI
-    if (sConfigMgr->GetBoolDefault("Classic.Hardcore", false))
+    if (getBoolConfig(CONFIG_CLASSIC_HARDCORE))
         _gameRules.push_back({ .Rule = ::GameRule::HardcoreRuleset, .Value = true });
 
     // PremadeGroupFinderStyle (93) = 2 is in the list above: the client loads its "Vanilla style" group finder

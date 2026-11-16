@@ -139,6 +139,13 @@ if (Test-Path (Join-Path $dotsSrc 'ForeverDots.toc')) {
     Update-OtherAddonCopies $dotsSrc $Client $dest 'ForeverDots'
     Write-Host "ForeverDots add-on installed to $(Join-Path $dest 'ForeverDots')" -ForegroundColor Green
 }
+# Forever Combat Nameplates (SIN), when it sits beside the ForeverBots folder
+$platesSrc = Join-Path (Split-Path $src -Parent) 'ForeverCombatNameplates'
+if (Test-Path (Join-Path $platesSrc 'ForeverCombatNameplates.toc')) {
+    Install-CleanAddon $platesSrc $dest 'ForeverCombatNameplates'
+    Update-OtherAddonCopies $platesSrc $Client $dest 'ForeverCombatNameplates'
+    Write-Host "Forever Combat Nameplates add-on installed to $(Join-Path $dest 'ForeverCombatNameplates')" -ForegroundColor Green
+}
 $new = Addon-Version $target
 Write-Host ''
 Write-Host "ForeverBots add-on $new installed to $target" -ForegroundColor Green

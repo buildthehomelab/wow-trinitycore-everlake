@@ -119,3 +119,13 @@ TEST_CASE("A speed out of range and an unknown saved mode are read safely", "[Cl
     CHECK(SkyModeFromDb(2) == SkyMode::Night);
     CHECK(SkyModeFromDb(7) == SkyMode::Auto);
 }
+
+TEST_CASE(".time day and .time night also put a fixed light over the map, .time auto none", "[ClassicDayCycle]")
+{
+    using namespace DayCycle;
+    static_assert(OverrideLightFor(SkyMode::Day) == DayLightID);
+    static_assert(OverrideLightFor(SkyMode::Night) == NightLightID);
+    static_assert(OverrideLightFor(SkyMode::Auto) == 0);
+    CHECK(DayLightID != NightLightID);
+    CHECK(OverrideLightFor(SkyModeFromDb(7)) == 0);
+}
