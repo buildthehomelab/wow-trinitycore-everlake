@@ -96,15 +96,17 @@ public:
 
             if (player->HasSkill(SKILL_ENGINEERING))
             {
+                // WoW: Forever keeps Engineering's rank on the profession's own line (202), where its recipes are; the
+                // retail "Classic Engineering" tier (2506) is not in its client, so nobody ever had 260 in it
                 switch (me->GetEntry())
                 {
                     case NPC_ZAP:
-                        canLearn = CanLearn(player, 6092, 0, SKILL_CLASSIC_ENGINEERING, 260, S_GOBLIN, SPELL_TO_EVERLOOK, npcTextId);
+                        canLearn = CanLearn(player, 6092, 0, SKILL_ENGINEERING, 260, S_GOBLIN, SPELL_TO_EVERLOOK, npcTextId);
                         if (canLearn)
                             gossipItem = GOSSIP_ZAP;
                         break;
                     case NPC_JHORDY:
-                        canLearn = CanLearn(player, 7251, 7252, SKILL_CLASSIC_ENGINEERING, 260, S_GNOMISH, SPELL_TO_GADGET, npcTextId);
+                        canLearn = CanLearn(player, 7251, 7252, SKILL_ENGINEERING, 260, S_GNOMISH, SPELL_TO_GADGET, npcTextId);
                         if (canLearn)
                             gossipItem = GOSSIP_JHORDY;
                         break;
