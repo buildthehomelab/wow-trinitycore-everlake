@@ -24,6 +24,7 @@
 #include "GameObject.h"
 #include "GameObjectAI.h"
 #include "GameTime.h"
+#include "HolidayStageLength.h"
 #include "Language.h"
 #include "Log.h"
 #include "Map.h"
@@ -1694,14 +1695,20 @@ void GameEventMgr::SetHolidayEventTime(GameEventData& event)
         return;
 
     HolidaysEntry const* holiday = sHolidaysStore.LookupEntry(event.holiday_id);
-    if (!holiday->Date[0] || !holiday->Duration[0]) // Invalid definitions
+    if (!holiday->Date[0]) // Invalid definitions
     {
-        TC_LOG_ERROR("sql.sql", "Missing date or duration for holiday {}.", event.holiday_id);
+        TC_LOG_ERROR("sql.sql", "Missing date for holiday {}.", event.holiday_id);
         return;
     }
 
     uint8 stageIndex = event.holidayStage - 1;
-    event.length = holiday->Duration[stageIndex] * HOUR / MINUTE;
+    // a holiday with dates but no duration (WoW: Forever's Noblegarden) keeps the length its game_event row gives
+    event.length = Trinity::Holiday::StageLengthMinutes(holiday->Duration, stageIndex, event.length);
+    if (!event.length)
+    {
+        TC_LOG_ERROR("sql.sql", "Missing duration for holiday {} and no length in game_event {}.", event.holiday_id, event.description);
+        return;
+    }
 
     Hours stageOffset = 0h;
     for (uint8 i = 0; i < stageIndex; ++i)
