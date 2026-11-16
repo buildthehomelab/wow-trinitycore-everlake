@@ -25,6 +25,7 @@ curve behind `Classic.ForeverCreatureHealth`), and the kill XP rule came in behi
 |---|---|---|
 | 2e10d8b714 | Network: the address's place is freed when the connection closes; Adventure Guide on | #62 (WorldSocket part; game rule 42 is a realm choice, not taken) |
 | 637626e264 | Ghost Wolf: 2645 again (undo 2026_11_13_80/82) | #63 |
+| a5c2b04dcb | Scheduled restarts (`ServerAutoShutdown.*`) | #65 (reworked, off by default; `sakhwoow-scheduled-restarts.md`) |
 
 ### Already ours
 
@@ -59,7 +60,6 @@ curve behind `Classic.ForeverCreatureHealth`), and the kill XP rule came in behi
 |---|---|---|
 | 493c7689d0 | Resurrection sickness 10 min at every level (advocaite#135) | vanilla scales it 1 min per level from 11 to 19; no Forever source says otherwise; closed upstream unmerged |
 | 83a8c1458f, 82bf3b91be | `.xp rate` personal XP x1-x5 | a gameplay feature, the user's call; see "Features" |
-| a5c2b04dcb | Scheduled restarts (`ServerAutoShutdown.*`, from their AzerothLegionCore) | an ops feature, the user's call; see "Features" |
 | 2fc2a17357, 46749c2416, 30e2191795 | Hardcore build without bots; #68 back on hardcore; death recap in Russian | their realm only |
 | 80e9455fc0, da89a6ddc0, c6f777e112 | Russian book pages, greetings, translations, undead start texts | Russian text only (Samuel's Remains drop in c6f777e112: advocaite#129 is ours) |
 | 5cfa05a8ba, 362caeb49d, 20e2aca16b, 4e22868612 (SQL), 89e7cb2b7c | Official server sniff data | see "Data comparison" |
@@ -88,8 +88,7 @@ normal `ShutdownServ` countdown. The design is sound (one computation per run; t
   (server time is Toronto, which has DST); `tm_isdst = -1` fixes it;
 - the time calculation is in an anonymous namespace in `World.cpp` and has no test.
 
-Worth taking if we want restarts without a host timer: with those two fixes, the calculation moved where a test can reach it, and a
-test for every-day, weekday, too-close-to-announce and DST cases.
+Taken in #65 with both fixes, a countdown already running left alone, and the calculation tested.
 
 ## Zephras and bug-report SQL
 
