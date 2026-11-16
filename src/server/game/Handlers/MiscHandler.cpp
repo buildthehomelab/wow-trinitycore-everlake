@@ -1249,6 +1249,9 @@ void WorldSession::HandleMountSpecialAnimOpcode(WorldPackets::Misc::MountSpecial
 
 void WorldSession::HandleMountSetFavorite(WorldPackets::Misc::MountSetFavorite& mountSetFavorite)
 {
+    if (!_collectionMgr) // a bot session has none (DropClientOnlyManagers)
+        return;
+
     _collectionMgr->MountSetFavorite(mountSetFavorite.MountSpellID, mountSetFavorite.IsFavorite);
 }
 

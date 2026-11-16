@@ -2006,7 +2006,8 @@ void Item::SetNotRefundable(Player* owner, bool changestate /*= true*/, Characte
 
     owner->DeleteRefundReference(GetGUID());
     if (addToCollection)
-        owner->GetSession()->GetCollectionMgr()->AddItemAppearance(this);
+        if (CollectionMgr* collectionMgr = owner->GetSession()->GetCollectionMgr())
+            collectionMgr->AddItemAppearance(this);
 }
 
 uint32 Item::GetPlayedTime() const
@@ -2031,7 +2032,8 @@ void Item::ClearSoulboundTradeable(Player* currentOwner)
     if (allowedGUIDs.empty())
         return;
 
-    currentOwner->GetSession()->GetCollectionMgr()->AddItemAppearance(this);
+    if (CollectionMgr* collectionMgr = currentOwner->GetSession()->GetCollectionMgr())
+        collectionMgr->AddItemAppearance(this);
     allowedGUIDs.clear();
     SetState(ITEM_CHANGED, currentOwner);
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_ITEM_BOP_TRADE);

@@ -1773,6 +1773,13 @@ Playerbot.Chatter.Callouts.Taunts            = 0
 # no bot waits longer than four of its normal periods. 0 = no time budget (count cap only).
 Playerbot.Perf.TickBudgetMs = 0
 
+# Lean bot sessions: a bot on a bot pool account gets no collections (toys, mounts, heirlooms, appearances, illusions, outfits)
+# and no battle pet journal. It has no client to show them to; each one cost memory (the appearance list grows with every item
+# the bot touches) and login-database work at every login and save. The bot keeps every mount it learns itself, but no longer
+# shares mounts with the other bots on its pool account. A player's own alt played as a bot always keeps its collections.
+# Applies to bot sessions made after the change (`.reload config`, then the next login of each bot). 0 = off, 1 = on.
+Playerbot.Perf.LeanBotSessions = 1
+
 ###################################################################################################
 # Diagnostics
 #

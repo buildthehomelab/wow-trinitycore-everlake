@@ -3498,7 +3498,7 @@ void World::UpdateAreaDependentAuras()
 bool World::IsBattlePetJournalLockAcquired(ObjectGuid battlenetAccountGuid)
 {
     for (auto&& sessionForBnet : Trinity::Containers::MapEqualRange(m_sessionsByBnetGuid, battlenetAccountGuid))
-        if (sessionForBnet.second->GetBattlePetMgr()->HasJournalLock())
+        if (sessionForBnet.second->GetBattlePetMgr() && sessionForBnet.second->GetBattlePetMgr()->HasJournalLock())
             return true;
 
     return false;
