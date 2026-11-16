@@ -667,7 +667,7 @@ void WorldSession::HandleCharEnum(CharacterDatabaseQueryHolder const& holder)
         }
     }
 
-    if (!charEnum.IsDeletedCharacters)
+    if (!charEnum.IsDeletedCharacters && _collectionMgr)
         _collectionMgr->SendWarbandSceneCollectionData();
 }
 
@@ -722,7 +722,7 @@ bool WorldSession::MeetsChrCustomizationReq(ChrCustomizationReqEntry const* req,
     if (req->AchievementID /*&& !HasAchieved(req->AchievementID)*/)
         return false;
 
-    if (req->ItemModifiedAppearanceID && !GetCollectionMgr()->HasItemAppearance(req->ItemModifiedAppearanceID).first)
+    if (req->ItemModifiedAppearanceID && (!GetCollectionMgr() || !GetCollectionMgr()->HasItemAppearance(req->ItemModifiedAppearanceID).first))
         return false;
 
     if (req->QuestID)
@@ -1541,7 +1541,8 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
 
     SendAuctionFavoriteList();
 
-    pCurrChar->GetSession()->GetBattlePetMgr()->SendJournalLockStatus();
+    if (BattlePets::BattlePetMgr* battlePetMgr = pCurrChar->GetSession()->GetBattlePetMgr())
+        battlePetMgr->SendJournalLockStatus();
 
     pCurrChar->SendInitialPacketsBeforeAddToMap();
 
@@ -2559,6 +2560,9 @@ void WorldSession::HandleEquipmentSetSave(WorldPackets::EquipmentSet::SaveEquipm
                 if (saveEquipmentSet.Set.Appearances[i])
                 {
                     if (!sItemModifiedAppearanceStore.LookupEntry(saveEquipmentSet.Set.Appearances[i]))
+                        return;
+
+                    if (!GetCollectionMgr())
                         return;
 
                     auto [hasAppearance, isTemporary] = GetCollectionMgr()->HasItemAppearance(saveEquipmentSet.Set.Appearances[i]);

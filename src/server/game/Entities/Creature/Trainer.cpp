@@ -187,7 +187,8 @@ namespace Trainer
         BattlePetSpeciesEntry const* speciesEntry = BattlePets::BattlePetMgr::GetBattlePetSpeciesBySpell(trainerSpell->SpellId);
         if (speciesEntry)
         {
-            if (player->GetSession()->GetBattlePetMgr()->HasMaxPetCount(speciesEntry, player->GetGUID()))
+            // A bot session has no battle pet journal (WorldSession::DropClientOnlyManagers): nothing to teach it
+            if (!player->GetSession()->GetBattlePetMgr() || player->GetSession()->GetBattlePetMgr()->HasMaxPetCount(speciesEntry, player->GetGUID()))
             {
                 // Don't send any error to client (intended)
                 return;
@@ -225,6 +226,7 @@ namespace Trainer
 
             if (speciesEntry)
             {
+                // checked above
                 player->GetSession()->GetBattlePetMgr()->AddPet(speciesEntry->ID, BattlePets::BattlePetMgr::SelectPetDisplay(speciesEntry),
                     BattlePets::BattlePetMgr::RollPetBreed(speciesEntry->ID), BattlePets::BattlePetMgr::GetDefaultPetQuality(speciesEntry->ID));
                 // If the spell summons a battle pet, we fake that it has been learned and the battle pet is added

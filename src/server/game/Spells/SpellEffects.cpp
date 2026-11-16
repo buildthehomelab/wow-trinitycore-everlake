@@ -2223,8 +2223,9 @@ void Spell::EffectLearnSpell()
 
             if (BattlePetSpeciesEntry const* speciesEntry = BattlePets::BattlePetMgr::GetBattlePetSpeciesBySpell(uint32(itemEffect->SpellID)))
             {
-                player->GetSession()->GetBattlePetMgr()->AddPet(speciesEntry->ID, BattlePets::BattlePetMgr::SelectPetDisplay(speciesEntry),
-                    BattlePets::BattlePetMgr::RollPetBreed(speciesEntry->ID), BattlePets::BattlePetMgr::GetDefaultPetQuality(speciesEntry->ID));
+                if (BattlePets::BattlePetMgr* battlePetMgr = player->GetSession()->GetBattlePetMgr())
+                    battlePetMgr->AddPet(speciesEntry->ID, BattlePets::BattlePetMgr::SelectPetDisplay(speciesEntry),
+                        BattlePets::BattlePetMgr::RollPetBreed(speciesEntry->ID), BattlePets::BattlePetMgr::GetDefaultPetQuality(speciesEntry->ID));
                 // If the spell summons a battle pet, we fake that it has been learned and the battle pet is added
                 // marking as dependent prevents saving the spell to database (intended)
                 dependent = true;
@@ -5827,7 +5828,8 @@ void Spell::EffectGrantBattlePetLevel()
     if (!unitTarget || !unitTarget->IsCreature())
         return;
 
-    playerCaster->GetSession()->GetBattlePetMgr()->GrantBattlePetLevel(unitTarget->GetBattlePetCompanionGUID(), GetEffectValueAsInt());
+    if (BattlePets::BattlePetMgr* battlePetMgr = playerCaster->GetSession()->GetBattlePetMgr())
+        battlePetMgr->GrantBattlePetLevel(unitTarget->GetBattlePetCompanionGUID(), GetEffectValueAsInt());
 }
 
 void Spell::EffectGiveExperience()
@@ -5878,7 +5880,8 @@ void Spell::EffectEnableBattlePets()
 
     Player* player = unitTarget->ToPlayer();
     player->SetPlayerFlag(PLAYER_FLAGS_PET_BATTLES_UNLOCKED);
-    player->GetSession()->GetBattlePetMgr()->UnlockSlot(BattlePets::BattlePetSlot::Slot0);
+    if (BattlePets::BattlePetMgr* battlePetMgr = player->GetSession()->GetBattlePetMgr())
+        battlePetMgr->UnlockSlot(BattlePets::BattlePetSlot::Slot0);
 }
 
 void Spell::EffectChangeBattlePetQuality()
@@ -5899,7 +5902,8 @@ void Spell::EffectChangeBattlePetQuality()
     if (qualityItr != sBattlePetBreedQualityStore.end())
         quality = BattlePets::BattlePetBreedQuality(qualityItr->QualityEnum);
 
-    playerCaster->GetSession()->GetBattlePetMgr()->ChangeBattlePetQuality(unitTarget->GetBattlePetCompanionGUID(), quality);
+    if (BattlePets::BattlePetMgr* battlePetMgr = playerCaster->GetSession()->GetBattlePetMgr())
+        battlePetMgr->ChangeBattlePetQuality(unitTarget->GetBattlePetCompanionGUID(), quality);
 }
 
 void Spell::EffectLaunchQuestChoice()
@@ -6201,7 +6205,8 @@ void Spell::EffectLearnTransmogSet()
     if (!unitTarget || unitTarget->GetTypeId() != TYPEID_PLAYER)
         return;
 
-    unitTarget->ToPlayer()->GetSession()->GetCollectionMgr()->AddTransmogSet(effectInfo->MiscValue);
+    if (CollectionMgr* collectionMgr = unitTarget->ToPlayer()->GetSession()->GetCollectionMgr())
+        collectionMgr->AddTransmogSet(effectInfo->MiscValue);
 }
 
 void Spell::EffectRespecAzeriteEmpoweredItem()
@@ -6357,7 +6362,8 @@ void Spell::EffectGrantBattlePetExperience()
     if (!unitTarget || !unitTarget->IsCreature())
         return;
 
-    playerCaster->GetSession()->GetBattlePetMgr()->GrantBattlePetExperience(unitTarget->GetBattlePetCompanionGUID(), GetEffectValueAsInt(), BattlePets::BattlePetXpSource::SpellEffect);
+    if (BattlePets::BattlePetMgr* battlePetMgr = playerCaster->GetSession()->GetBattlePetMgr())
+        battlePetMgr->GrantBattlePetExperience(unitTarget->GetBattlePetCompanionGUID(), GetEffectValueAsInt(), BattlePets::BattlePetXpSource::SpellEffect);
 }
 
 void Spell::EffectLearnTransmogIllusion()
@@ -6373,7 +6379,8 @@ void Spell::EffectLearnTransmogIllusion()
     if (!sTransmogIllusionStore.LookupEntry(illusionId))
         return;
 
-    player->GetSession()->GetCollectionMgr()->AddTransmogIllusion(illusionId);
+    if (CollectionMgr* collectionMgr = player->GetSession()->GetCollectionMgr())
+        collectionMgr->AddTransmogIllusion(illusionId);
 }
 
 void Spell::EffectModifyAuraStacks()
@@ -6551,7 +6558,8 @@ void Spell::EffectLearnWarbandScene()
     if (!target)
         return;
 
-    target->GetSession()->GetCollectionMgr()->AddWarbandScene(effectInfo->MiscValue);
+    if (CollectionMgr* collectionMgr = target->GetSession()->GetCollectionMgr())
+        collectionMgr->AddWarbandScene(effectInfo->MiscValue);
 }
 
 void Spell::EffectSetPlayerDataElementAccount()

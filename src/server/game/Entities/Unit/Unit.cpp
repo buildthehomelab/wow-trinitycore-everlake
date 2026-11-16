@@ -6618,7 +6618,8 @@ void Unit::SetMinion(Minion *minion, bool apply)
             {
                 if (properties->GetFlags().HasFlag(SummonPropertiesFlags::SummonFromBattlePetJournal))
                 {
-                    if (BattlePets::BattlePet const* pet = thisPlayer->GetSession()->GetBattlePetMgr()->GetPet(thisPlayer->GetSummonedBattlePetGUID()))
+                    BattlePets::BattlePetMgr* battlePetMgr = thisPlayer->GetSession()->GetBattlePetMgr();
+                    if (BattlePets::BattlePet const* pet = battlePetMgr ? battlePetMgr->GetPet(thisPlayer->GetSummonedBattlePetGUID()) : nullptr)
                     {
                         minion->SetBattlePetCompanionGUID(thisPlayer->GetSummonedBattlePetGUID());
                         minion->SetBattlePetCompanionNameTimestamp(pet->NameTimestamp);

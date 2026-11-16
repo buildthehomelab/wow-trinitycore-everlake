@@ -6947,7 +6947,8 @@ SpellCastResult Spell::CheckCast(bool strict, int32* param1 /*= nullptr*/, int32
                 if (!m_caster->IsPlayer())
                     return SPELL_FAILED_BAD_TARGETS;
 
-                if (!m_caster->ToPlayer()->GetSession()->GetCollectionMgr()->HasHeirloom(m_misc.Raw.Data[0]))
+                CollectionMgr const* collectionMgr = m_caster->ToPlayer()->GetSession()->GetCollectionMgr();
+                if (!collectionMgr || !collectionMgr->HasHeirloom(m_misc.Raw.Data[0]))
                     return SPELL_FAILED_BAD_TARGETS;
 
                 break;
@@ -6984,7 +6985,7 @@ SpellCastResult Spell::CheckCast(bool strict, int32* param1 /*= nullptr*/, int32
                     return SPELL_FAILED_BAD_TARGETS;
 
                 BattlePets::BattlePetMgr* battlePetMgr = playerCaster->GetSession()->GetBattlePetMgr();
-                if (!battlePetMgr->HasJournalLock())
+                if (!battlePetMgr || !battlePetMgr->HasJournalLock())
                     return SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW;
 
                 if (Creature* creature = m_targets.GetUnitTarget()->ToCreature())

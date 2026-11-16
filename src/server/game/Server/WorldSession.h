@@ -1259,10 +1259,25 @@ class TC_GAME_API WorldSession
         time_t GetCalendarEventCreationCooldown() const { return _calendarEventCreationCooldown; }
         void SetCalendarEventCreationCooldown(time_t cooldown) { _calendarEventCreationCooldown = cooldown; }
 
-        // Battle Pets
+        // Battle Pets. nullptr on a bot session that dropped it (DropClientOnlyManagers): check before use.
         BattlePets::BattlePetMgr* GetBattlePetMgr() const { return _battlePetMgr.get(); }
 
+        // Toys, mounts, heirlooms, appearances, illusions, outfits, warband scenes. nullptr on a bot session that dropped it
+        // (DropClientOnlyManagers): check before use.
         CollectionMgr* GetCollectionMgr() const { return _collectionMgr.get(); }
+
+        // Everlake: a bot session has no client to show a battle pet journal or a collection to, and each bot holding them costs
+        // memory (the appearance bitset grows to the highest appearance id the bot touches) and login-database work (ten
+        // collection queries at InitializeSession, every collected row written again at every save). This frees both managers.
+        // Only for a bot session, and only before a character is loading or logged in, so nothing holds a pointer into them yet.
+        // Returns whether they are gone. The session then skips the account collection queries and loads, and the bot's character
+        // keeps only what it saves itself: its own mount spells, not mounts, toys or appearances shared through the account.
+        bool DropClientOnlyManagers();
+        bool HasClientOnlyManagers() const { return _collectionMgr != nullptr; }
+        static constexpr bool MayDropClientOnlyManagers(bool isBot, bool hasPlayer, bool playerLoading)
+        {
+            return isBot && !hasPlayer && !playerLoading;
+        }
 
     public:                                                 // opcodes handlers
 

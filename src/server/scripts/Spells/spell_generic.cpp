@@ -4888,7 +4888,7 @@ class spell_gen_trainer_heal_cooldown : public AuraScript
         Player* target = GetUnitOwner()->ToPlayer();
         SpellInfo const* reviveBattlePetSpellInfo = sSpellMgr->AssertSpellInfo(BattlePets::SPELL_REVIVE_BATTLE_PETS, DIFFICULTY_NONE);
 
-        if (target->GetSession()->GetBattlePetMgr()->IsBattlePetSystemEnabled())
+        if (target->GetSession()->GetBattlePetMgr() && target->GetSession()->GetBattlePetMgr()->IsBattlePetSystemEnabled())
         {
             Milliseconds expectedCooldown = Milliseconds(GetAura()->GetMaxDuration());
             SpellHistory::Duration remainingCooldown = target->GetSpellHistory()->GetRemainingCategoryCooldown(reviveBattlePetSpellInfo);

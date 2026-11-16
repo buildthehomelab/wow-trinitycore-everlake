@@ -694,7 +694,7 @@ void WorldSession::LogoutPlayer(bool save)
         _player->RemovePet(nullptr, PET_SAVE_AS_CURRENT);
 
         ///- Release battle pet journal lock
-        if (_battlePetMgr->HasJournalLock())
+        if (_battlePetMgr && _battlePetMgr->HasJournalLock())
             _battlePetMgr->ToggleJournalLock(false);
 
         ///- Clear whisper whitelist
@@ -1423,11 +1423,28 @@ public:
 
     AccountInfoQueryHolder() { SetSize(MAX_QUERIES); }
 
-    bool Initialize(uint32 accountId, uint32 battlenetAccountId)
+    // collections: false for a session without a CollectionMgr / BattlePetMgr (WorldSession::DropClientOnlyManagers); their
+    // queries are left unset, which the holder skips and reads back as no result
+    bool Initialize(uint32 accountId, uint32 battlenetAccountId, bool collections)
     {
         bool ok = true;
 
-        LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_ACCOUNT_TOYS);
+        LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_CHARACTER_COUNTS_BY_ACCOUNT_ID);
+        stmt->setUInt32(0, accountId);
+        ok = SetPreparedQuery(GLOBAL_REALM_CHARACTER_COUNTS, stmt) && ok;
+
+        stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_PLAYER_DATA_ELEMENTS_ACCOUNT);
+        stmt->setUInt32(0, battlenetAccountId);
+        ok = SetPreparedQuery(PLAYER_DATA_ELEMENTS_ACCOUNT, stmt) && ok;
+
+        stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_PLAYER_DATA_FLAGS_ACCOUNT);
+        stmt->setUInt32(0, battlenetAccountId);
+        ok = SetPreparedQuery(PLAYER_DATA_FLAGS_ACCOUNT, stmt) && ok;
+
+        if (!collections)
+            return ok;
+
+        stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_ACCOUNT_TOYS);
         stmt->setUInt32(0, battlenetAccountId);
         ok = SetPreparedQuery(GLOBAL_ACCOUNT_TOYS, stmt) && ok;
 
@@ -1447,10 +1464,6 @@ public:
         stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_ACCOUNT_MOUNTS);
         stmt->setUInt32(0, battlenetAccountId);
         ok = SetPreparedQuery(MOUNTS, stmt) && ok;
-
-        stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_CHARACTER_COUNTS_BY_ACCOUNT_ID);
-        stmt->setUInt32(0, accountId);
-        ok = SetPreparedQuery(GLOBAL_REALM_CHARACTER_COUNTS, stmt) && ok;
 
         stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_ITEM_APPEARANCES);
         stmt->setUInt32(0, battlenetAccountId);
@@ -1472,14 +1485,6 @@ public:
         stmt->setUInt32(0, battlenetAccountId);
         ok = SetPreparedQuery(WARBAND_SCENES, stmt) && ok;
 
-        stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_PLAYER_DATA_ELEMENTS_ACCOUNT);
-        stmt->setUInt32(0, battlenetAccountId);
-        ok = SetPreparedQuery(PLAYER_DATA_ELEMENTS_ACCOUNT, stmt) && ok;
-
-        stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_PLAYER_DATA_FLAGS_ACCOUNT);
-        stmt->setUInt32(0, battlenetAccountId);
-        ok = SetPreparedQuery(PLAYER_DATA_FLAGS_ACCOUNT, stmt) && ok;
-
         return ok;
     }
 };
@@ -1494,7 +1499,7 @@ void WorldSession::InitializeSession()
     }
 
     std::shared_ptr<AccountInfoQueryHolder> holder = std::make_shared<AccountInfoQueryHolder>();
-    if (!holder->Initialize(GetAccountId(), GetBattlenetAccountId()))
+    if (!holder->Initialize(GetAccountId(), GetBattlenetAccountId(), HasClientOnlyManagers()))
     {
         SendAuthResponse(ERROR_INTERNAL, false);
         return;
@@ -1528,13 +1533,16 @@ void WorldSession::InitializeSessionCallback(LoginDatabaseQueryHolder const& hol
     LoadAccountData(realmHolder.GetPreparedResult(AccountInfoQueryHolderPerRealm::GLOBAL_ACCOUNT_DATA), GLOBAL_CACHE_MASK);
     LoadTutorialsData(realmHolder.GetPreparedResult(AccountInfoQueryHolderPerRealm::TUTORIALS));
     LoadInstanceTimeRestrictions(realmHolder.GetPreparedResult(AccountInfoQueryHolderPerRealm::INSTANCE_TIMES));
-    _collectionMgr->LoadAccountToys(holder.GetPreparedResult(AccountInfoQueryHolder::GLOBAL_ACCOUNT_TOYS));
-    _collectionMgr->LoadAccountHeirlooms(holder.GetPreparedResult(AccountInfoQueryHolder::GLOBAL_ACCOUNT_HEIRLOOMS));
-    _collectionMgr->LoadAccountMounts(holder.GetPreparedResult(AccountInfoQueryHolder::MOUNTS));
-    _collectionMgr->LoadAccountItemAppearances(holder.GetPreparedResult(AccountInfoQueryHolder::ITEM_APPEARANCES), holder.GetPreparedResult(AccountInfoQueryHolder::ITEM_FAVORITE_APPEARANCES));
-    _collectionMgr->LoadAccountTransmogIllusions(holder.GetPreparedResult(AccountInfoQueryHolder::TRANSMOG_ILLUSIONS));
-    _collectionMgr->LoadAccountTransmogOutfits(holder.GetPreparedResult(AccountInfoQueryHolder::TRANSMOG_OUTFITS));
-    _collectionMgr->LoadAccountWarbandScenes(holder.GetPreparedResult(AccountInfoQueryHolder::WARBAND_SCENES));
+    if (_collectionMgr)
+    {
+        _collectionMgr->LoadAccountToys(holder.GetPreparedResult(AccountInfoQueryHolder::GLOBAL_ACCOUNT_TOYS));
+        _collectionMgr->LoadAccountHeirlooms(holder.GetPreparedResult(AccountInfoQueryHolder::GLOBAL_ACCOUNT_HEIRLOOMS));
+        _collectionMgr->LoadAccountMounts(holder.GetPreparedResult(AccountInfoQueryHolder::MOUNTS));
+        _collectionMgr->LoadAccountItemAppearances(holder.GetPreparedResult(AccountInfoQueryHolder::ITEM_APPEARANCES), holder.GetPreparedResult(AccountInfoQueryHolder::ITEM_FAVORITE_APPEARANCES));
+        _collectionMgr->LoadAccountTransmogIllusions(holder.GetPreparedResult(AccountInfoQueryHolder::TRANSMOG_ILLUSIONS));
+        _collectionMgr->LoadAccountTransmogOutfits(holder.GetPreparedResult(AccountInfoQueryHolder::TRANSMOG_OUTFITS));
+        _collectionMgr->LoadAccountWarbandScenes(holder.GetPreparedResult(AccountInfoQueryHolder::WARBAND_SCENES));
+    }
     LoadPlayerDataAccount(holder.GetPreparedResult(AccountInfoQueryHolder::PLAYER_DATA_ELEMENTS_ACCOUNT), holder.GetPreparedResult(AccountInfoQueryHolder::PLAYER_DATA_FLAGS_ACCOUNT));
 
     if (!m_inQueue)
@@ -1586,8 +1594,20 @@ void WorldSession::InitializeSessionCallback(LoginDatabaseQueryHolder const& hol
         SendPacket(blockListSubscribed.Write());
     }
 
-    _battlePetMgr->LoadFromDB(holder.GetPreparedResult(AccountInfoQueryHolder::BATTLE_PETS),
-                              holder.GetPreparedResult(AccountInfoQueryHolder::BATTLE_PET_SLOTS));
+    if (_battlePetMgr)
+        _battlePetMgr->LoadFromDB(holder.GetPreparedResult(AccountInfoQueryHolder::BATTLE_PETS),
+                                  holder.GetPreparedResult(AccountInfoQueryHolder::BATTLE_PET_SLOTS));
+}
+
+bool WorldSession::DropClientOnlyManagers()
+{
+    // A player's session always keeps them, and a character that is loading or in the world may already point into them
+    if (!MayDropClientOnlyManagers(_isBot, _player != nullptr, PlayerLoading()))
+        return false;
+
+    _battlePetMgr.reset();
+    _collectionMgr.reset();
+    return true;
 }
 
 rbac::RBACData* WorldSession::GetRBACData() const
