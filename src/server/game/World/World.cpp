@@ -1438,6 +1438,8 @@ bool World::SetInitialWorldSettings()
 
     MMAP::MMapManager* mmmgr = MMAP::MMapManager::instance();
     mmmgr->InitializeThreadUnsafe(mapData);
+    mmmgr->SetWorldQueryNodes(sConfigMgr->GetIntDefault("Pathfinding.NavMeshQueryNodes", 32768));
+    TC_LOG_INFO("server.loading", "Navmesh A* node pool: {} open world, {} instances", mmmgr->GetWorldQueryNodes(), MMAP::MMapManager::INSTANCE_QUERY_NODES);
 
     ///- Initialize static helper structures
     AIRegistry::Initialize();

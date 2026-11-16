@@ -314,6 +314,11 @@ namespace MMAP
         }
     }
 
+    void MMapManager::SetWorldQueryNodes(int32 worldNodes)
+    {
+        worldQueryNodes = std::clamp(worldNodes, INSTANCE_QUERY_NODES, MAX_QUERY_NODES);
+    }
+
     bool MMapManager::loadMapInstance(std::string_view basePath, uint32 meshMapId, uint32 instanceMapId, uint32 instanceId)
     {
         MMapData* mmap = Trinity::Containers::MapGetValuePtr(loadedMMaps, meshMapId);
@@ -341,15 +346,17 @@ namespace MMAP
         });
 
         // allocate mesh query
-        // A* node pool raised 1024 -> 8192: long bot routes ran out of nodes and
-        // came back incomplete. Costs more per hard path search in Map::Update.
-        if (dtStatusFailed(queryItr->second.init(&mmap->GetMeshData(meshMapId, instanceId).first->second.navMesh, 8192)))
+        // A* node pool: stock 1024, raised to 8192 because long bot routes ran out of nodes and came back incomplete. Open-world
+        // maps get more (Pathfinding.NavMeshQueryNodes): on our continents 10-15% of 600-1600 yd routes still ran out at 8192
+        // (docs/upstream-prs/trixx34-navmesh-node-pool.md). Instances are small and many, so they keep 8192.
+        int32 const maxNodes = instanceId == 0 ? worldQueryNodes : INSTANCE_QUERY_NODES;
+        if (dtStatusFailed(queryItr->second.init(&mmap->GetMeshData(meshMapId, instanceId).first->second.navMesh, maxNodes)))
         {
             TC_LOG_ERROR("maps", "MMAP:GetNavMeshQuery: Failed to initialize dtNavMeshQuery for mapId {:04} instanceId {}", instanceMapId, instanceId);
             return false;
         }
 
-        TC_LOG_DEBUG("maps", "MMAP:GetNavMeshQuery: created dtNavMeshQuery for mapId {:04} instanceId {}", instanceMapId, instanceId);
+        TC_LOG_DEBUG("maps", "MMAP:GetNavMeshQuery: created dtNavMeshQuery for mapId {:04} instanceId {} ({} nodes)", instanceMapId, instanceId, maxNodes);
         (void)loadGuard.release();
         return true;
     }

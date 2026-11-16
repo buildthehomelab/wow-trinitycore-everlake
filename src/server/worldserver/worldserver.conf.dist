@@ -434,6 +434,18 @@ DisconnectToleranceInterval = 0
 mmap.enablePathFinding = 1
 
 #
+#    Pathfinding.NavMeshQueryNodes
+#        Description: A* node pool of the navmesh query on open-world maps. A search that runs
+#                     out of nodes returns a partial path that stops short of the target. Each
+#                     open-world map holds one query; dungeon and battleground copies always use
+#                     8192. Memory per query: 8192 = 0.33 MB, 32768 = 1.33 MB, 65535 = 2.66 MB.
+#                     Bigger pools let long searches cost more time (up to ~20-35 ms for a
+#                     65535-node search). Clamped to 8192-65535. Read at startup.
+#        Default:     32768
+
+Pathfinding.NavMeshQueryNodes = 32768
+
+#
 #    Pathfinding.PreferRoads
 #        Description: Road-aware pathfinding. When enabled, Detour's
 #                     query filter biases shortest-path search toward
