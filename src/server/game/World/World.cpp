@@ -27,6 +27,7 @@
 #include "ArenaTeamMgr.h"
 #include "AuctionHouseBot.h"
 #include "AuctionHouseMgr.h"
+#include "AutoRestartSchedule.h"
 #include "AuthenticationPackets.h"
 #include "BattlePetMgr.h"
 #include "BattlefieldMgr.h"
@@ -2170,6 +2171,9 @@ bool World::SetInitialWorldSettings()
     TC_LOG_INFO("server.loading", "Calculate guild limitation(s) reset time...");
     InitGuildResetTime();
 
+    TC_LOG_INFO("server.loading", "Calculate next scheduled restart time...");
+    InitAutoRestartTime();
+
     TC_LOG_INFO("server.loading", "Calculate next currency reset time...");
     InitCurrencyResetTime();
 
@@ -2961,6 +2965,16 @@ void World::_UpdateGameTime()
             ShutdownMsg();
         }
     }
+
+    ///- ServerAutoShutdown.*: start the planned restart's countdown, unless a shutdown or restart is already under way
+    if (m_NextAutoRestartAnnounce && GameTime::GetGameTime() >= m_NextAutoRestartAnnounce)
+    {
+        m_NextAutoRestartAnnounce = 0;
+        if (IsStopped() || IsShuttingDown())
+            TC_LOG_INFO("misc", "Scheduled restart: a shutdown or restart is already counting down, leaving it alone");
+        else
+            ShutdownServ(uint32(std::max<time_t>(m_NextAutoRestart - GameTime::GetGameTime(), 1)), SHUTDOWN_MASK_RESTART, RESTART_EXIT_CODE);
+    }
 }
 
 /// Shutdown the server
@@ -3341,6 +3355,58 @@ void World::InitCalendarOldEventsDeletionTime()
 
     if (!currentDeletionTime)
         SetPersistentWorldVariable(NextOldCalendarEventDeletionTimeVarId, uint64(m_NextCalendarOldEventsDeletionTime));
+}
+
+void World::InitAutoRestartTime()
+{
+    m_NextAutoRestartAnnounce = 0;
+    m_NextAutoRestart = 0;
+
+    if (!sConfigMgr->GetBoolDefault("ServerAutoShutdown.Enabled", false))
+        return;
+
+    int32 const weekday = sConfigMgr->GetIntDefault("ServerAutoShutdown.Weekday", -1);
+    int32 const everyDays = sConfigMgr->GetIntDefault("ServerAutoShutdown.EveryDays", 1);
+    if ((weekday < 0 || weekday > 6) && (everyDays < 1 || everyDays > 365))
+    {
+        TC_LOG_ERROR("server.loading", "ServerAutoShutdown.EveryDays = {} is not 1-365: no scheduled restart", everyDays);
+        return;
+    }
+
+    int32 preAnnounce = sConfigMgr->GetIntDefault("ServerAutoShutdown.PreAnnounce.Seconds", HOUR);
+    if (preAnnounce < 0 || preAnnounce > DAY)
+    {
+        TC_LOG_ERROR("server.loading", "ServerAutoShutdown.PreAnnounce.Seconds = {} is not 0-86400: using 3600", preAnnounce);
+        preAnnounce = HOUR;
+    }
+
+    time_t const now = GameTime::GetGameTime();
+    Optional<Trinity::AutoRestart::Plan> next;
+    for (char const* key : { "ServerAutoShutdown.Time", "ServerAutoShutdown.Time2" })
+    {
+        std::string const text = sConfigMgr->GetStringDefault(key, key == std::string_view("ServerAutoShutdown.Time") ? "04:00:00" : "");
+        if (text.empty())
+            continue;
+
+        Optional<Trinity::AutoRestart::TimeOfDay> time = Trinity::AutoRestart::ParseTimeOfDay(text);
+        if (!time)
+        {
+            TC_LOG_ERROR("server.loading", "{} = \"{}\" is not HH:MM:SS: this restart time is not used", key, text);
+            continue;
+        }
+
+        Trinity::AutoRestart::Plan plan = Trinity::AutoRestart::PlanNext(now, *time, weekday, uint32(everyDays), uint32(preAnnounce));
+        if (!next || plan.RestartAt < next->RestartAt)
+            next = plan;
+    }
+
+    if (!next)
+        return;
+
+    m_NextAutoRestartAnnounce = next->AnnounceAt;
+    m_NextAutoRestart = next->RestartAt;
+    TC_LOG_INFO("server.loading", "Scheduled restart in {}, countdown from {} before",
+        secsToTimeString(uint64(next->RestartAt - now)), secsToTimeString(next->AnnounceSeconds));
 }
 
 void World::InitGuildResetTime()
