@@ -4102,7 +4102,7 @@ public:
         return Trinity::StringFormat(
             "{} paths_run={} with_road={} ({:.1f}%) disabled={} ({:.1f}%) "
             "in_instance={} slope_penalty={} ({:.1f}%) "
-            "road_polys={}/{} ({:.2f}%)",
+            "road_polys={}/{} ({:.2f}%) out_of_nodes={} ({:.2f}%) poly_cap={} ({:.2f}%)",
             label,
             st.pathsRun,
             st.pathsWithRoadPoly,
@@ -4113,7 +4113,9 @@ public:
             st.pathsWithSlopePenalty,
             st.pathsRun ? 100.0 * st.pathsWithSlopePenalty / st.pathsRun : 0.0,
             st.roadPolysVisited, st.totalPolysVisited,
-            st.totalPolysVisited ? 100.0 * st.roadPolysVisited / st.totalPolysVisited : 0.0);
+            st.totalPolysVisited ? 100.0 * st.roadPolysVisited / st.totalPolysVisited : 0.0,
+            st.pathsOutOfNodes, st.pathsRun ? 100.0 * st.pathsOutOfNodes / st.pathsRun : 0.0,
+            st.pathsPolyCapHit, st.pathsRun ? 100.0 * st.pathsPolyCapHit / st.pathsRun : 0.0);
     }
 
     static bool HandleRoadStats(ChatHandler* handler, Optional<std::string> argOpt)
