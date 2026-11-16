@@ -88,14 +88,14 @@ constexpr TimeOfDay FourAm = { 4, 0, 0 };
 
 TEST_CASE("Restart times are HH:MM:SS", "[AutoRestartSchedule]")
 {
-    REQUIRE(ParseTimeOfDay("04:00:00"));
+    REQUIRE(ParseTimeOfDay("04:00:00").has_value());
     CHECK(ParseTimeOfDay("23:59:59")->Hour == 23);
     CHECK(ParseTimeOfDay("4:05:09")->Minute == 5);
-    CHECK(!ParseTimeOfDay(""));
-    CHECK(!ParseTimeOfDay("04:00"));
-    CHECK(!ParseTimeOfDay("24:00:00"));
-    CHECK(!ParseTimeOfDay("04:60:00"));
-    CHECK(!ParseTimeOfDay("04:00:00 pm"));
+    CHECK_FALSE(ParseTimeOfDay("").has_value());
+    CHECK_FALSE(ParseTimeOfDay("04:00").has_value());
+    CHECK_FALSE(ParseTimeOfDay("24:00:00").has_value());
+    CHECK_FALSE(ParseTimeOfDay("04:60:00").has_value());
+    CHECK_FALSE(ParseTimeOfDay("04:00:00 pm").has_value());
 }
 
 TEST_CASE("A daily restart is today while its time is ahead, else tomorrow", "[AutoRestartSchedule]")
