@@ -162,9 +162,17 @@ bool ConfigMgr::LoadAdditionalFile(std::string file, bool keepOnReload, std::str
 
     std::scoped_lock lock(_configLock);
 
-    if (!fullTree.empty())
-        for (bpt::ptree::value_type const& child : fullTree.begin()->second)
-            _config.put_child(bpt::ptree::path_type(child.first, '/'), child.second);
+    // A drop-in file usually has one [section] header, like worldserver.conf, but may have none (keys at the root) or more than
+    // one. Reading the first entry as the section dropped every key of a file without a header, because that entry is a key.
+    // An entry with children is a section, whose keys are merged; an entry without is a key at the root.
+    for (bpt::ptree::value_type const& entry : fullTree)
+    {
+        if (entry.second.empty())
+            _config.put_child(bpt::ptree::path_type(entry.first, '/'), entry.second);
+        else
+            for (bpt::ptree::value_type const& child : entry.second)
+                _config.put_child(bpt::ptree::path_type(child.first, '/'), child.second);
+    }
 
     if (keepOnReload)
         _additonalFiles.emplace_back(std::move(file));
@@ -270,7 +278,7 @@ R ConfigMgr::GetValueDefault(std::string_view const& name, T def, bool quiet) co
             }
 
             if (!quiet)
-                TC_LOG_WARN("server.loading", "Missing name {} in config file {}, recovered with environment '{}' value.", name, _filename, *envVar);
+                TC_LOG_WARN("server.loading", "Missing name {} in config file {}, recovered from the environment (value not logged).", name, _filename);
 
             return *castedVar;
         }
@@ -301,7 +309,7 @@ std::string ConfigMgr::GetValueDefault<std::string_view>(std::string_view const&
         if (Optional<std::string> envVar = EnvVarForIniKey(name))
         {
             if (!quiet)
-                TC_LOG_WARN("server.loading", "Missing name {} in config file {}, recovered with environment '{}' value.", name, _filename, *envVar);
+                TC_LOG_WARN("server.loading", "Missing name {} in config file {}, recovered from the environment (value not logged).", name, _filename);
 
             return *envVar;
         }
