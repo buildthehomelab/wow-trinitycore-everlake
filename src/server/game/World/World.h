@@ -836,6 +836,7 @@ class TC_GAME_API World
         void InitRandomBGResetTime();
         void InitCalendarOldEventsDeletionTime();
         void InitGuildResetTime();
+        void InitAutoRestartTime();
         void ResetRandomBG();
         void CalendarDeleteOldEvents();
         void ResetGuildCap();
@@ -893,6 +894,9 @@ class TC_GAME_API World
         time_t m_NextRandomBGReset;
         time_t m_NextCalendarOldEventsDeletionTime;
         time_t m_NextGuildReset;
+        // ServerAutoShutdown.*: when the planned restart's countdown starts (0: none planned, or it already started) and the restart
+        time_t m_NextAutoRestartAnnounce = 0;
+        time_t m_NextAutoRestart = 0;
         time_t m_NextCurrencyReset;
 
         //Player Queue

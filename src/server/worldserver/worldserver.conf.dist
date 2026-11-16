@@ -1460,6 +1460,50 @@ Guild.EventLogRecordsCount = 100
 Guild.ResetHour = 6
 
 #
+#    ServerAutoShutdown.Enabled
+#        Description: Restart the world server on a schedule, with the same in-game countdown as ".server restart"
+#                     (exit code 2). Worked out once at startup; ".reload config" does not change a planned restart.
+#                     A restart or shutdown already counting down when the countdown would start is left alone.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+ServerAutoShutdown.Enabled = 0
+
+#
+#    ServerAutoShutdown.EveryDays
+#        Description: Restart every N days (1-365): the day the server starts if the time is still ahead, else N days
+#                     later. Ignored when ServerAutoShutdown.Weekday is set.
+#        Default:     1
+
+ServerAutoShutdown.EveryDays = 1
+
+#
+#    ServerAutoShutdown.Weekday
+#        Description: Restart only on this day of the week (0 = Sunday ... 6 = Saturday). -1 uses EveryDays.
+#        Default:     -1
+
+ServerAutoShutdown.Weekday = -1
+
+#
+#    ServerAutoShutdown.Time
+#    ServerAutoShutdown.Time2
+#        Description: Restart time, server local time, "HH:MM:SS". Time2 is an optional second time on the same days;
+#                     leave it empty to use only Time.
+#        Default:     "04:00:00" - (Time)
+#                     ""         - (Time2)
+
+ServerAutoShutdown.Time = "04:00:00"
+ServerAutoShutdown.Time2 = ""
+
+#
+#    ServerAutoShutdown.PreAnnounce.Seconds
+#        Description: How long before the restart the countdown starts (0-86400). A server started closer to its
+#                     restart than this counts down from the start.
+#        Default:     3600 - (1 hour)
+
+ServerAutoShutdown.PreAnnounce.Seconds = 3600
+
+#
 #    Guild.BankEventLogRecordsCount
 #        Description: Number of log entries for guild bank events that are stored per guild. Old
 #                     entries will be overwritten if the number of log entries exceed the
