@@ -58,12 +58,38 @@ curve behind `Classic.ForeverCreatureHealth`), and the kill XP rule came in behi
 | Commit | Subject | Why |
 |---|---|---|
 | 493c7689d0 | Resurrection sickness 10 min at every level (advocaite#135) | vanilla scales it 1 min per level from 11 to 19; no Forever source says otherwise; closed upstream unmerged |
-| 83a8c1458f, 82bf3b91be | `.xp rate` personal XP x1-x5 | a gameplay feature, the user's call (192-line script, a characters table, off on hardcore) |
-| a5c2b04dcb | Scheduled restarts (`ServerAutoShutdown.*`, from their AzerothLegionCore) | an ops feature, the user's call; our realms restart from outside |
+| 83a8c1458f, 82bf3b91be | `.xp rate` personal XP x1-x5 | a gameplay feature, the user's call; see "Features" |
+| a5c2b04dcb | Scheduled restarts (`ServerAutoShutdown.*`, from their AzerothLegionCore) | an ops feature, the user's call; see "Features" |
 | 2fc2a17357, 46749c2416, 30e2191795 | Hardcore build without bots; #68 back on hardcore; death recap in Russian | their realm only |
 | 80e9455fc0, da89a6ddc0, c6f777e112 | Russian book pages, greetings, translations, undead start texts | Russian text only (Samuel's Remains drop in c6f777e112: advocaite#129 is ours) |
 | 5cfa05a8ba, 362caeb49d, 20e2aca16b, 4e22868612 (SQL), 89e7cb2b7c | Official server sniff data | see "Data comparison" |
 | 78c891d3c2, adba91fd14 | Merges of advocaite `forever` | upstream, reviewed through advocaite |
+
+## Features
+
+**`.xp rate`** (`scripts/World/xp_rate.cpp`, 192 lines, characters table `character_xp_rate`). Every player picks x1-x5;
+`OnGivePlayerXP` multiplies the XP, so it covers kills, quests and exploration (all go through `Player::GiveXP`), before the rested
+bonus (rest drains as many times faster). Ignored when `Classic.Hardcore = 1`. It works, but as written it is not ready for us:
+- on by default (`XpRateCommand.Enable = 1`): merging it would change every realm's rules at once;
+- the player messages are Russian only;
+- the login reads the rate with a synchronous `PQuery` on the world thread, and writes with formatted `PExecute`, not prepared
+  statements or the login query holder;
+- the client's quest window still shows the base XP (it computes it itself), only the chat line and the bar show the multiplied XP.
+
+Whether Everlake should have a personal rate at all is a realm rule, not a fix. If yes: port it off by default, with English
+`trinity_string` messages, prepared statements and the rate loaded with the character.
+
+**Scheduled restarts** (`World::InitAutoRestartTime`, `ServerAutoShutdown.*`, off by default). Once at startup it works out the
+next restart (every N days or one weekday, at `Time` and an optional `Time2`) and, `PreAnnounce.Seconds` before it, starts the
+normal `ShutdownServ` countdown. The design is sound (one computation per run; the restarted process computes the next one), but:
+- it exits with `SHUTDOWN_EXIT_CODE` (0), not `RESTART_EXIT_CODE` (2) as `.server restart` does. Our containers restart either
+  way (`restart: unless-stopped`), but anything that reads the exit code takes it for a stop;
+- `mktime` keeps the `tm_isdst` of the current day, so a restart computed across a daylight saving change lands an hour off
+  (server time is Toronto, which has DST); `tm_isdst = -1` fixes it;
+- the time calculation is in an anonymous namespace in `World.cpp` and has no test.
+
+Worth taking if we want restarts without a host timer: with those two fixes, the calculation moved where a test can reach it, and a
+test for every-day, weekday, too-close-to-announce and DST cases.
 
 ## Zephras and bug-report SQL
 
