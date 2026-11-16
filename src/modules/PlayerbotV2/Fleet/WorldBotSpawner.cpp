@@ -87,6 +87,9 @@
 #  endif
 #  include <windows.h>
 #  include <psapi.h>
+#elif defined(__APPLE__)
+#  include <mach/mach.h>
+#  include <unistd.h>
 #else
 #  include <unistd.h>
 #endif
@@ -176,6 +179,13 @@ static uint64 ProcessRssKb()
     if (K32GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc)))
         return uint64(pmc.WorkingSetSize / 1024);
     return 0;
+#elif defined(__APPLE__)
+    // macOS has no /proc: ask the kernel for this task's resident size.
+    mach_task_basic_info_data_t info{};
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS)
+        return uint64(info.resident_size / 1024u);
+    return 0;
 #else
     if (FILE* f = std::fopen("/proc/self/statm", "r"))
     {
@@ -207,13 +217,19 @@ static uint64 PhysicalRamMb()
 #endif
 }
 
-// Private (committed, non-shared) bytes in KB; Windows only, 0 elsewhere. The working set can hide memory the OS has paged out.
+// Private (committed, non-shared) bytes in KB; Windows and macOS, 0 elsewhere. The working set can hide memory the OS has paged out.
 static uint64 ProcessPrivateKb()
 {
 #ifdef _WIN32
     PROCESS_MEMORY_COUNTERS_EX pmc{};
     if (K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc)))
         return uint64(pmc.PrivateUsage / 1024);
+#elif defined(__APPLE__)
+    // The physical footprint is what Activity Monitor shows as "Memory": private, dirty and compressed pages of this process.
+    task_vm_info_data_t vm{};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&vm), &count) == KERN_SUCCESS)
+        return uint64(vm.phys_footprint / 1024u);
 #endif
     return 0;
 }
