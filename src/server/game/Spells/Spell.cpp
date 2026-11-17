@@ -2954,6 +2954,17 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
             {
                 caster->SetLastDamagedTargetGuid(spell->unitTarget->GetGUID());
 
+                // Classic 1.60 (WoW Forever): a weapon-damage special (effects 17, 31, 58, 121) takes the white-hit table, where a block
+                // stops the crit; a school-damage special (effect 2) rolls block and crit apart and can do both (wowsims/forever, MIT,
+                // sim/core/spell_outcome.go; no log measurement). The crit chance among unblocked hits is unchanged.
+                if (IsCrit && MissCondition == SPELL_MISS_BLOCK)
+                {
+                    SpellInfo const* info = spell->m_spellInfo;
+                    if (info->HasEffect(SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL) || info->HasEffect(SPELL_EFFECT_WEAPON_PERCENT_DAMAGE)
+                        || info->HasEffect(SPELL_EFFECT_WEAPON_DAMAGE) || info->HasEffect(SPELL_EFFECT_NORMALIZED_WEAPON_DMG))
+                        IsCrit = false;
+                }
+
                 // Add bonuses and fill damageInfo struct
                 caster->CalculateSpellDamageTaken(&damageInfo, spell->m_damage, spell->m_spellInfo, spell->m_attackType, IsCrit, MissCondition == SPELL_MISS_BLOCK, spell);
                 Unit::DealDamageMods(damageInfo.attacker, damageInfo.target, damageInfo.damage, &damageInfo.absorb);
