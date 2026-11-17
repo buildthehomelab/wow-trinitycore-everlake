@@ -896,11 +896,32 @@ class classic_spell_sha_flurry : public AuraScript
 
 // 30160 - Elemental Devastation: "Your offensive spell critical strikes will increase your chance to get a critical strike with
 // melee attacks by X% for 10 sec." 30165 with the talent amount (its own 3% when the amount is not set).
+// Weapon imbue hits don't trigger it: a method test on the beta (Blizzard forum thread 2366738, 2026-09-30, Elemental Devastation 3/3)
+// got it from Lightning Bolt, Earth Shock, Frost Shock and Flame Shock's first hit, never from Flametongue or Frostbrand Weapon. Their
+// damage spells are triggered, which spell_proc lets proc (TRIGGERED_CAN_PROC, kept for Lightning Overload), so they are left out here.
 class classic_spell_sha_elemental_devastation : public AuraScript
 {
+    static bool IsWeaponImbueAttack(uint32 spellId)
+    {
+        switch (spellId)
+        {
+            case 10444: case 16368: case 29469: case 29470:                 // Flametongue Attack (Weapon and Totem)
+            case 8034: case 8037: case 10458: case 16352: case 16353:       // Frostbrand Attack
+                return true;
+            default:
+                return false;
+        }
+    }
+
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo({ SPELL_SHAMAN_ELEMENTAL_DEVASTATION_BUFF });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        return !spellInfo || !IsWeaponImbueAttack(spellInfo->Id);
     }
 
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
@@ -914,6 +935,7 @@ class classic_spell_sha_elemental_devastation : public AuraScript
 
     void Register() override
     {
+        DoCheckProc += AuraCheckProcFn(classic_spell_sha_elemental_devastation::CheckProc);
         OnEffectProc += AuraEffectProcFn(classic_spell_sha_elemental_devastation::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
     }
 };
