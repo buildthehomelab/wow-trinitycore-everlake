@@ -1910,17 +1910,12 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
     // / (|resistance| + 8 * caster level + 19), fitted to Forever logs at levels 20 to 50 (Spell Piercing bonus rates and mobs casting at
     // players of known resistance; wowsims/forever, MIT, docs/evidence EV-0091). Vanilla's resistance * 0.75 / (5 * caster level) gave
     // 75% at 315 resistance against a level 63 caster where Forever gives about 38%. The 75% cap stays as a guard only (it needs about
-    // three times the constant). Creatures above the caster's level resist 8 more per level (not binary spells),
-    // scaled by caster level / 63 and rounded down as in VMaNGOS (SpellCaster::GetSpellResistChance). Unscaled, a level 1 caster
-    // lost 75% of every spell on a level 2 creature (8 * 0.75 / 5 = 1.2).
+    // three times the constant). A creature above the caster's level resists no more for its level: the fit has no level term,
+    // and VMaNGOS's +8 resistance per level (22 in every school for a level 63 boss against a level 60) is gone (wowsims/forever,
+    // sim/core/spell_resistances.go; no direct measurement).
     uint32 casterLevel = 1;
     if (caster && caster->ToUnit())
-    {
         casterLevel = std::max<uint32>(caster->ToUnit()->GetLevelForTarget(victim), 1);
-        int32 levelDiff = int32(victim->GetLevelForTarget(caster)) - int32(casterLevel);
-        if (levelDiff > 0 && victim->GetTypeId() == TYPEID_UNIT && !(spellInfo && spellInfo->HasAttribute(SPELL_ATTR0_CU_BINARY_SPELL)))
-            victimResistance += float(int32(8.0f * levelDiff * casterLevel / 63.0f));
-    }
 
     if (caster)
     {
