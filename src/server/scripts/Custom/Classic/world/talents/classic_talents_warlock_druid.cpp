@@ -62,9 +62,9 @@ enum ClassicWarlockDruidTalentSpells
     SPELL_CWD_DEMONIC_KNOWLEDGE_PET         = 412735,   // spell damage + healing done on the demon itself
     SPELL_CWD_DEMONIC_PACT                  = 425464,
     SPELL_CWD_BURNING_SHADOW                = 18789,    // Demonic Sacrifice: Imp
-    SPELL_CWD_FEL_STAMINA                   = 18790,    // Demonic Sacrifice: Voidwalker
+    SPELL_CWD_FEL_STAMINA                   = 18790,    // Demonic Sacrifice: Felhunter (health every 4 sec)
     SPELL_CWD_TOUCH_OF_FIRE                 = 18791,    // Demonic Sacrifice: Succubus / Incubus
-    SPELL_CWD_FEL_ENERGY                    = 18792,    // Demonic Sacrifice: Felhunter
+    SPELL_CWD_FEL_ENERGY                    = 18792,    // Demonic Sacrifice: Voidwalker (mana every 4 sec)
     SPELL_CWD_SHADOW_AND_FLAME              = 426316,
     SPELL_CWD_SHADOW_AND_FLAME_SHADOW       = 1293816,  // "Shadow": shadow damage done, 20 sec
     SPELL_CWD_SHADOW_AND_FLAME_FIRE         = 426311,   // "Flame": fire damage done, 20 sec
@@ -80,6 +80,11 @@ enum ClassicWarlockDruidTalentSpells
     SPELL_CWD_GRIMOIRE_OF_SYNERGY_BUFF      = 426303,   // all damage done, 15 sec
     SPELL_CWD_DECIMATION                    = 440870,
     SPELL_CWD_DECIMATION_BUFF               = 440873,   // Soul Fire cast time (bp0) and no Soul Shard, 10 sec
+    SPELL_CWD_DEMONIC_BRAND                 = 1293695,  // talent: effect 0 Searing Pain threat, effect 1 brand charges (spell mod)
+    SPELL_CWD_DEMONIC_BRAND_MARK            = 1293696,  // the brand on the target, 10 sec, proc on the hits it takes
+    SPELL_CWD_DEMONIC_BRAND_SHADOW          = 1293697,  // "Consuming a brand deals Shadow damage" (school damage, no value)
+    SPELL_CWD_DEMONIC_BRAND_FIRE            = 1293698,  // "Consuming a brand deals Fire damage" (school damage, no value)
+    SPELL_CWD_DEMONIC_BRAND_PHYSICAL        = 1293699,  // 1 Physical damage
 
     // druid
     SPELL_CWD_THICK_HIDE                    = 16929,
@@ -148,15 +153,17 @@ namespace ClassicTalentsWarlockDruid
         }
     }
 
-    // Demonic Sacrifice buff of each demon (VMaNGOS WarlockDemonicSacrificeScript)
+    // Demonic Sacrifice buff of each demon. WoW Forever swapped the vanilla pairs (18788: "to enhance the opposing aspect of your power"):
+    // Imp - $18789 Shadow damage, Voidwalker - $18792 total Mana every 4 sec, Succubus/Incubus - $18791 Fire damage, Felhunter - $18790
+    // total Health every 4 sec. Imp and Succubus kept their spell ids (18789 is now Shadow, 18791 Fire); Voidwalker and Felhunter trade.
     uint32 GetSacrificeBuff(DemonKind kind)
     {
         switch (kind)
         {
             case DemonKind::Imp:        return SPELL_CWD_BURNING_SHADOW;
-            case DemonKind::Voidwalker: return SPELL_CWD_FEL_STAMINA;
+            case DemonKind::Voidwalker: return SPELL_CWD_FEL_ENERGY;
             case DemonKind::Succubus:   return SPELL_CWD_TOUCH_OF_FIRE;
-            case DemonKind::Felhunter:  return SPELL_CWD_FEL_ENERGY;
+            case DemonKind::Felhunter:  return SPELL_CWD_FEL_STAMINA;
             default:                    return 0;
         }
     }
@@ -359,15 +366,14 @@ using namespace ClassicTalentsWarlockDruid;
 ######*/
 
 // 1454, 1455, 1456, 11687, 11688, 11689 - Life Tap (client: dummy effect, nothing happened)
-// Vanilla (VMaNGOS WarlockLifeTapScript): converts health into the same amount of mana. The health cost is the effect value plus 80% of
-// the warlock's shadow spell damage (VMaNGOS spell_template coefficient 0.8, reduced for ranks learned below level 20); the spell fails
-// when the warlock has no more health than that. 18182 Improved Life Tap: "Increases the amount of Mana awarded by your Life Tap spell
-// by $s1%". 403816 Metamorphosis (effect 3) adds its own %. 1225214 Demonic Energies (effect 1): "When you gain Mana from Life Tap, your
-// summoned demon gains $m2% of the Mana you gain."
+// WoW Forever: "Converts ${($m1+$SPI*1)*(1+$18182m1/100)} Health into ${($m1+$SPI*1)*(1+$18182m1/100)} Mana for you. Spirit increases the
+// amount converted." (client Spell.db2, live 70938 with hotfixes). The health cost is the effect value plus the warlock's Spirit, with no
+// spell power share (the vanilla VMaNGOS 0.8 spell damage coefficient is gone); the spell fails when the warlock has no more health than
+// that. 18182 Improved Life Tap: "Increases the amount of Mana awarded by your Life Tap spell by $s1%": the mana only, as wowsims/forever
+// (MIT, sim/warlock/lifetap.go) models it. 403816 Metamorphosis (effect 3) adds its own %. 1225214 Demonic Energies (effect 1): "When you
+// gain Mana from Life Tap, your summoned demon gains $m2% of the Mana you gain."
 class classic_talent_warl_life_tap : public SpellScript
 {
-    static constexpr float LIFE_TAP_SPELL_POWER_COEFFICIENT = 0.8f;
-
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo({ SPELL_CWD_LIFE_TAP_ENERGIZE });
@@ -376,15 +382,9 @@ class classic_talent_warl_life_tap : public SpellScript
     int32 CalcHealthCost() const
     {
         Unit* caster = GetCaster();
-        SpellInfo const* spellInfo = GetSpellInfo();
-
-        float coefficient = LIFE_TAP_SPELL_POWER_COEFFICIENT;
-        // vanilla level penalty (Unit::SpellDamageBonusDone ClassicSpellLevelPenalty)
-        if (spellInfo->SpellLevel > 0 && spellInfo->SpellLevel < 20)
-            coefficient *= 1.0f - (20.0f - float(spellInfo->SpellLevel)) * 0.0375f;
 
         double cost = GetEffectInfo(EFFECT_0).CalcValue(caster);
-        cost += caster->SpellBaseDamageBonusDone(spellInfo->GetSchoolMask()) * coefficient;
+        cost += caster->GetStat(STAT_SPIRIT);
         return std::max(int32(cost), 0);
     }
 
@@ -784,9 +784,9 @@ class classic_talent_warl_summon_demon : public SpellScript
     }
 };
 
-// 18788 - Demonic Sacrifice: "Sacrifices your summoned demon to grant you an effect that lasts 30 min." The client spell only kills the
-// demon (instakill on the pet); the buff of the sacrificed demon (VMaNGOS WarlockDemonicSacrificeScript): Imp 18789 Burning Shadow,
-// Voidwalker 18790 Fel Stamina, Succubus/Incubus 18791 Touch of Fire, Felhunter 18792 Fel Energy.
+// 18788 - Demonic Sacrifice: "sacrifices your summoned Demon to enhance the opposing aspect of your power, granting you an effect that lasts
+// $18789d." The client spell only kills the demon (instakill on the pet); the buff of the sacrificed demon (see GetSacrificeBuff): Imp 18789
+// Burning Shadow, Voidwalker 18792 Fel Energy, Succubus/Incubus 18791 Touch of Fire, Felhunter 18790 Fel Stamina.
 class classic_talent_warl_demonic_sacrifice : public SpellScript
 {
     bool Validate(SpellInfo const* /*spellInfo*/) override
@@ -944,6 +944,93 @@ class classic_spell_warl_decimation : public SpellScript
     {
         CalcDamage += SpellCalcDamageFn(classic_spell_warl_decimation::HandleCalcDamage);
         BeforeHit += BeforeSpellHitFn(classic_spell_warl_decimation::HandleBeforeHit);
+    }
+};
+
+// Searing Pain (5676, 17919, 17920, 17921, 17922, 17923) with 1293695 - Demonic Brand: "Your Searing Pain generates $s1% less threat and
+// brands the target for $1293696d. Your pet's next $m2 attacks against the target deal $<minDam> to $<maxDam> Fire or Shadow damage based
+// on the pet." The threat part (effect 0) is a spell modifier the client data applies; nothing in the data puts the brand on the target,
+// so a Searing Pain that hits does it here. The brand's charges come from the talent's effect 1 (SpellModOp::ProcCharges on 1293696),
+// which Aura::CalcMaxCharges applies because the warlock casts the brand.
+class classic_spell_warl_demonic_brand : public SpellScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_CWD_DEMONIC_BRAND_MARK });
+    }
+
+    void HandleHit(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!target || !caster->HasAura(SPELL_CWD_DEMONIC_BRAND))
+            return;
+
+        caster->CastSpell(target, SPELL_CWD_DEMONIC_BRAND_MARK, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_warl_demonic_brand::HandleHit, EFFECT_0, SPELL_EFFECT_SCHOOL_DAMAGE);
+    }
+};
+
+// 1293696 - Demonic Brand (on the target): each hit the warlock's demon lands on the branded target uses a charge (the client proc flags
+// are all "taken" hits) and deals the brand's damage: Fire (1293698) from the Imp, Shadow (1293697) from the other demons. The damage rows
+// have no value; their description variables give it: ((level - 26) * 1.5 + 14 to 17 + 0.078 * the warlock's spell damage of the row's
+// school) times the demon's multipliers (Master Demonologist, Unholy Power), which the demon's own damage done modifiers apply when it
+// casts the row. Same reading as wowsims/forever (MIT, sim/warlock/pets.go registerDemonicBrand), which also takes the Imp as Fire and
+// every other demon as Shadow. The 1 Physical damage row (1293699) is left out.
+class classic_talent_warl_demonic_brand_mark : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_CWD_DEMONIC_BRAND_SHADOW, SPELL_CWD_DEMONIC_BRAND_FIRE });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Unit* demon = eventInfo.GetActor();
+        if (!demon || !demon->IsPet() || demon->GetOwnerGUID() != GetCasterGUID() || GetDemonKind(demon->GetEntry()) == DemonKind::None)
+            return false;
+
+        // the brand's own damage does not use a charge
+        if (SpellInfo const* spellInfo = eventInfo.GetSpellInfo())
+            if (spellInfo->Id == SPELL_CWD_DEMONIC_BRAND_SHADOW || spellInfo->Id == SPELL_CWD_DEMONIC_BRAND_FIRE
+                || spellInfo->Id == SPELL_CWD_DEMONIC_BRAND_PHYSICAL)
+                return false;
+
+        return eventInfo.GetDamageInfo() != nullptr;
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        Unit* warlock = GetCaster();
+        Unit* demon = eventInfo.GetActor();
+        if (!warlock || !demon)
+            return;
+
+        bool const imp = GetDemonKind(demon->GetEntry()) == DemonKind::Imp;
+        uint32 const brandSpell = imp ? SPELL_CWD_DEMONIC_BRAND_FIRE : SPELL_CWD_DEMONIC_BRAND_SHADOW;
+        SpellInfo const* brandInfo = sSpellMgr->GetSpellInfo(brandSpell, DIFFICULTY_NONE);
+        if (!brandInfo)
+            return;
+
+        int32 const levels = std::max<int32>(int32(warlock->GetLevel()) - int32(brandInfo->BaseLevel), 0);
+        double damage = levels * 1.5 + frand(14.0f, 17.0f);
+        damage += 0.078 * warlock->SpellBaseDamageBonusDone(imp ? SPELL_SCHOOL_MASK_FIRE : SPELL_SCHOOL_MASK_SHADOW);
+        if (damage < 1.0)
+            return;
+
+        demon->CastSpell(GetTarget(), brandSpell, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(damage));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_talent_warl_demonic_brand_mark::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_talent_warl_demonic_brand_mark::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
     }
 };
 
@@ -2215,6 +2302,8 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_spell_warl_incinerate);
     RegisterSpellScript(classic_talent_warl_decimation);
     RegisterSpellScript(classic_spell_warl_decimation);
+    RegisterSpellScript(classic_spell_warl_demonic_brand);
+    RegisterSpellScript(classic_talent_warl_demonic_brand_mark);
     RegisterSpellScript(classic_talent_warl_shadowburn);
     RegisterSpellScript(classic_talent_warl_bane_of_havoc_tracker);
     RegisterSpellScript(classic_talent_warl_bane_of_havoc);
