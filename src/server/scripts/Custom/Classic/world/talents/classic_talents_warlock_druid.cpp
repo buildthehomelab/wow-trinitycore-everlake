@@ -2370,6 +2370,35 @@ class classic_spell_dru_bloom : public AuraScript
     }
 };
 
+// 768, 5487, 9634, 24858 - Cat, Bear, Dire Bear and Moonkin Form: WoW Forever keeps the druid's health percentage across a change of form,
+// both ways, while the form's health and Stamina move the maximum. The core added or removed the form's flat health (entering Dire Bear
+// at 50% gave about 64%; leaving it at full stayed full) (wowsims/forever, MIT, sim/druid/forms.go, docs/rulings R-0019; evidence
+// pending). The percentage is read before the form's first effect and set again after each effect.
+class classic_spell_dru_form_keeps_health_pct : public AuraScript
+{
+    void SavePct(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        _healthPct = GetTarget()->GetHealthPct();
+    }
+
+    void RestorePct(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* druid = GetTarget();
+        if (_healthPct > 0.0f && druid->IsAlive())
+            druid->SetHealth(std::max<uint64>(1, druid->CountPctFromMaxHealth(_healthPct)));
+    }
+
+    void Register() override
+    {
+        OnEffectApply += AuraEffectApplyFn(classic_spell_dru_form_keeps_health_pct::SavePct, EFFECT_0, SPELL_AURA_MOD_SHAPESHIFT, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectApply += AuraEffectApplyFn(classic_spell_dru_form_keeps_health_pct::RestorePct, EFFECT_ALL, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+        OnEffectRemove += AuraEffectRemoveFn(classic_spell_dru_form_keeps_health_pct::SavePct, EFFECT_0, SPELL_AURA_MOD_SHAPESHIFT, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_dru_form_keeps_health_pct::RestorePct, EFFECT_ALL, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+    }
+
+    float _healthPct = 0.0f;
+};
+
 // 1322605 - Shifting Power: "can no longer be used while already at Full Energy" (Blizzard's 8 October 2026 hotfixes; the rows state no
 // such rule; wowsims/forever, MIT, sim/druid/shifting_power.go)
 class classic_spell_dru_shifting_power : public SpellScript
@@ -2442,6 +2471,7 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_spell_dru_omen_of_clarity);
     RegisterSpellScriptWithArgs(classic_spell_dru_poised, "classic_spell_dru_poised", 1328827u);
     RegisterSpellScript(classic_spell_dru_shifting_power);
+    RegisterSpellScript(classic_spell_dru_form_keeps_health_pct);
     RegisterSpellScriptWithArgs(classic_spell_dru_poised, "classic_spell_rog_poised", 1328826u);
 
     new classic_unit_talent_warlock_druid();
