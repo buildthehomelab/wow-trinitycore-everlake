@@ -2191,6 +2191,7 @@ class classic_spell_dru_frenzied_regeneration : public AuraScript
 // EV-0031, EV-0033, EV-0034, EV-0036; the sim's spell data overrides): Rake 1822, 1823, 1824, 9904 take 6.5% of attack power on the hit
 // and on every tick, Swipe 779, 780, 769, 9754, 9908 3% on each target hit, Pounce Bleed 9007, 9824, 9826 2.5% on every tick. The hit
 // part is added before the damage bonuses; the tick part is fixed when the bleed is applied.
+// Also registered for warrior abilities (Rend, Thunder Clap, Revenge) whose attack power share the client rows leave out.
 class classic_spell_dru_feral_attack_power_hit : public SpellScript
 {
 public:
@@ -2563,6 +2564,12 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellAndAuraScriptPairWithArgs(classic_spell_dru_feral_attack_power_hit, classic_spell_dru_feral_attack_power_tick, "classic_spell_dru_rake_attack_power", 0.065f);
     RegisterSpellScriptWithArgs(classic_spell_dru_feral_attack_power_hit, "classic_spell_dru_swipe_attack_power", 0.03f);
     RegisterSpellScriptWithArgs(classic_spell_dru_feral_attack_power_tick, "classic_spell_dru_pounce_bleed_attack_power", 0.025f);
+    // WoW Forever warrior attack power shares the client rows leave at 0, the same hit / tick scripts (wowsims/forever, MIT,
+    // tools/database/overrides/spell_overrides.go): Rend's ticks 0.02 (EV-0019, EV-0048), Thunder Clap's hits 0.07 (EV-0019, EV-0048),
+    // Revenge's hit 0.25, the tooltip's $APR (EV-0048)
+    RegisterSpellScriptWithArgs(classic_spell_dru_feral_attack_power_tick, "classic_spell_warr_rend_attack_power", 0.02f);
+    RegisterSpellScriptWithArgs(classic_spell_dru_feral_attack_power_hit, "classic_spell_warr_thunder_clap_attack_power", 0.07f);
+    RegisterSpellScriptWithArgs(classic_spell_dru_feral_attack_power_hit, "classic_spell_warr_revenge_attack_power", 0.25f);
     RegisterSpellScript(classic_spell_dru_enrage_armor);
     RegisterSpellScript(classic_spell_dru_faerie_fire_threat);
     RegisterSpellScript(classic_spell_dru_omen_of_clarity);
