@@ -717,7 +717,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "Classic.MountIndoorsRules"sv, .DefaultValue = true, .Index = CONFIG_CLASSIC_MOUNT_INDOORS_RULES },
         { .Name = "Classic.SecuredBagSlotsForAll"sv, .DefaultValue = true, .Index = CONFIG_CLASSIC_SECURED_BAG_SLOTS_FOR_ALL },
         { .Name = "Classic.ForeverCreatureHealth"sv, .DefaultValue = false, .Index = CONFIG_CLASSIC_FOREVER_CREATURE_HEALTH },
-        { .Name = "Classic.ForeverKillXp"sv, .DefaultValue = false, .Index = CONFIG_CLASSIC_FOREVER_KILL_XP },
+        { .Name = "Classic.ForeverKillXp"sv, .DefaultValue = true, .Index = CONFIG_CLASSIC_FOREVER_KILL_XP },
         { .Name = "Classic.AutoEquipNewBags"sv, .DefaultValue = false, .Index = CONFIG_CLASSIC_AUTO_EQUIP_NEW_BAGS },
         { .Name = "Classic.CreatureHealth.Raids"sv, .DefaultValue = false, .Index = CONFIG_CLASSIC_CREATURE_HEALTH_RAIDS },
         { .Name = "Forever.VanillaAoE"sv, .DefaultValue = false, .Index = CONFIG_FOREVER_VANILLA_AOE },
