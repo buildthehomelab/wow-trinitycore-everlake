@@ -1918,8 +1918,11 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
     victimResistance = std::max(victimResistance, 0.0f);
 
     // Classic 1.60: the caller (CalcSpellResistedDamage) wants the average resisted fraction, retail returns the raw resistance
-    // (creatures have none there): with 1 point of resistance every spell was fully resisted. Vanilla formula: resistance
-    // * 0.75 / (5 * caster level), at most 75%; creatures above the caster's level resist 8 more per level (not binary spells),
+    // (creatures have none there): with 1 point of resistance every spell was fully resisted. WoW Forever formula: resistance
+    // / (resistance + 8 * caster level + 19), fitted to Forever logs at levels 20 to 50 (Spell Piercing bonus rates and mobs casting at
+    // players of known resistance; wowsims/forever, MIT, docs/evidence EV-0091). Vanilla's resistance * 0.75 / (5 * caster level) gave
+    // 75% at 315 resistance against a level 63 caster where Forever gives about 38%. The 75% cap stays as a guard only (it needs about
+    // three times the constant). Creatures above the caster's level resist 8 more per level (not binary spells),
     // scaled by caster level / 63 and rounded down as in VMaNGOS (SpellCaster::GetSpellResistChance). Unscaled, a level 1 caster
     // lost 75% of every spell on a level 2 creature (8 * 0.75 / 5 = 1.2).
     uint32 casterLevel = 1;
@@ -1931,7 +1934,7 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
             victimResistance += float(int32(8.0f * levelDiff * casterLevel / 63.0f));
     }
 
-    return std::min(victimResistance * 0.75f / (5.0f * casterLevel), 0.75f);
+    return std::min(victimResistance / (victimResistance + 8.0f * casterLevel + 19.0f), 0.75f);
 }
 
 /*static*/ void Unit::CalcAbsorbResist(DamageInfo& damageInfo, Spell* spell /*= nullptr*/)

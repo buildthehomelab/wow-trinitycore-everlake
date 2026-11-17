@@ -3910,11 +3910,12 @@ void ElectControlledMembers(Election& e)
     }
 }
 
-// A school whose resistance costs a caster of the raid at least this share of every hit on average is avoided. The Classic formula
-// (Unit::CalculateAverageResistReduction: resistance * 0.75 / (5 * caster level), at most 75%) puts the phase 1 drakonids' 400 in
-// their colour's school at the 75% cap, and nothing a raid fights in MC, Onyxia or BWL otherwise comes close: the MC bosses' 200 fire
-// is 55% for a level 60 caster on a level 63 boss, the Chromatic Drakonid's 250 in every school 68%, an Onyxian Warder's 250 fire 66%.
-constexpr float kAvoidResistShare = 0.70f;
+// A school whose resistance costs a caster of the raid at least this share of every hit on average is avoided. The Forever formula
+// (Unit::CalculateAverageResistReduction: resistance / (resistance + 8 * caster level + 19), plus 8 resistance per level the creature
+// is above the caster, scaled by caster level / 63) puts the phase 1 drakonids' 400 in their colour's school at about 45% for a level
+// 60 caster, and nothing a raid fights in MC, Onyxia or BWL otherwise comes close: the MC bosses' 200 fire is about 31% on a level 63
+// boss, the Chromatic Drakonid's 250 in every school about 35%, an Onyxian Warder's 250 fire about 34%.
+constexpr float kAvoidResistShare = 0.40f;
 
 // The schools to prefer / avoid on an enemy: its live immunities, damage-taken auras, spell reflection, and resistances high
 // enough that <caster> (a raid member, for its level and penetration; nullptr = resistances are not read) loses most of each hit.
