@@ -804,6 +804,14 @@ float SpellEffectInfo::ClassicCreatureLevelSpellScale(uint8 casterLevel) const
     return scale;
 }
 
+// The effect's variance as CalcValue rolls it: the vanilla row's when one is loaded, the client's otherwise.
+float SpellEffectInfo::GetClassicVariance(WorldObject const* caster) const
+{
+    if (ClassicSpellValue::Value const* vanilla = GetClassicValue(caster, _spellInfo->Id, EffectIndex))
+        return ClassicSpellValue::Variance(*vanilla);
+    return Scaling.Variance;
+}
+
 SpellEffectValue SpellEffectInfo::CalcBaseValue(WorldObject const* caster, Unit const* target, uint32 itemId, int32 itemLevel) const
 {
     if (ClassicSpellValue::Value const* vanilla = GetClassicValue(caster, _spellInfo->Id, EffectIndex))

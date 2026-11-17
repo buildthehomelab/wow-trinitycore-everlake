@@ -118,6 +118,10 @@ class TC_GAME_API AuraEffect
         SpellEffectValue const m_baseAmount;
         SpellEffectValue _amount;
         Optional<SpellEffectValue> _estimatedAmount;   // for periodic damage and healing auras this will include damage done bonuses
+        // Classic 1.60 (WoW Forever): a DoT whose effect has a variance rolls each tick; the share rolled into the amount and the widest swing
+        SpellEffectValue _classicTickRolled = 0.0;
+        SpellEffectValue _classicTickSpread = 0.0;
+        uint32 ClassicRollTickAmount() const;
 
         // periodic stuff
         int32 _periodicTimer;

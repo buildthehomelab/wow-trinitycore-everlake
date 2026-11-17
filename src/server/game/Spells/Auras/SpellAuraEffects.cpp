@@ -779,12 +779,37 @@ void AuraEffect::GetApplicationList(Container& applicationContainer) const
     }
 }
 
+uint32 AuraEffect::ClassicRollTickAmount() const
+{
+    SpellEffectValue amount = GetAmount();
+    if (_classicTickSpread > 0.0)
+        amount = std::max(0.0, amount - _classicTickRolled + frand(-float(_classicTickSpread), float(_classicTickSpread)));
+    return ClassicRounding::RoundByFraction(amount, rand_norm());
+}
+
 SpellEffectValue AuraEffect::CalculateAmount(Unit* caster)
 {
     Unit* unitOwner = GetBase()->GetOwner()->ToUnit();
 
     // default amount calculation
-    SpellEffectValue amount = GetSpellEffectInfo().CalcValue(caster, &m_baseAmount, unitOwner, nullptr, GetBase()->GetCastItemId(), GetBase()->GetCastItemLevel());
+    float rolledVariance = 0.0f;
+    SpellEffectValue amount = GetSpellEffectInfo().CalcValue(caster, &m_baseAmount, unitOwner, &rolledVariance, GetBase()->GetCastItemId(), GetBase()->GetCastItemLevel());
+
+    // Classic 1.60 (WoW Forever): every DoT tick rolls its effect's amount, where the amount was rolled once when the aura went on. Keep
+    // the share this roll added and the widest swing so each tick can roll afresh (ClassicRollTickAmount). In the client data only Devious
+    // Strike, Caustic Smog Potion, Circle of Flame and Flee have a periodic damage variance (wowsims/forever, MIT, docs/rulings R-0034,
+    // sim/core/spelldata/resolve_aura.go; evidence pending).
+    _classicTickRolled = 0.0;
+    _classicTickSpread = 0.0;
+    if (GetAuraType() == SPELL_AURA_PERIODIC_DAMAGE || GetAuraType() == SPELL_AURA_PERIODIC_LEECH)
+    {
+        if (float const variance = GetSpellEffectInfo().GetClassicVariance(caster))
+        {
+            SpellEffectValue const basePoints = GetSpellEffectInfo().CalcBaseValue(caster, unitOwner, GetBase()->GetCastItemId(), GetBase()->GetCastItemLevel());
+            _classicTickRolled = basePoints * rolledVariance;
+            _classicTickSpread = basePoints * std::fabs(variance * 0.5f);
+        }
+    }
 
     // custom amount calculations go here
     switch (GetAuraType())
@@ -5894,7 +5919,7 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
     uint32 stackAmountForBonuses = !GetSpellEffectInfo().EffectAttributes.HasFlag(SpellEffectAttributes::SuppressPointsStacking) ? GetBase()->GetStackAmount() : 1;
 
     // ignore negative values (can be result apply spellmods to aura damage
-    uint32 damage = ClassicRounding::RoundByFraction(GetAmount(), rand_norm());   // Classic 1.60: each tick rounds by its fraction (EV-0095)
+    uint32 damage = ClassicRollTickAmount();   // Classic 1.60: each tick rolls its variance and rounds by its fraction (R-0034, EV-0095)
 
     // Script Hook For HandlePeriodicDamageAurasTick -- Allow scripts to change the Damage pre class mitigation calculations
     uint32 const damageBeforeHook = damage;
@@ -6030,7 +6055,7 @@ void AuraEffect::HandlePeriodicHealthLeechAuraTick(Unit* target, Unit* caster) c
     uint32 stackAmountForBonuses = !GetSpellEffectInfo().EffectAttributes.HasFlag(SpellEffectAttributes::SuppressPointsStacking) ? GetBase()->GetStackAmount() : 1;
 
     // ignore negative values (can be result apply spellmods to aura damage
-    uint32 damage = ClassicRounding::RoundByFraction(GetAmount(), rand_norm());   // Classic 1.60: each tick rounds by its fraction (EV-0095)
+    uint32 damage = ClassicRollTickAmount();   // Classic 1.60: each tick rolls its variance and rounds by its fraction (R-0034, EV-0095)
 
     if (caster)
         damage = caster->SpellDamageBonusDone(target, GetSpellInfo(), damage, DOT, GetSpellEffectInfo(), stackAmountForBonuses, nullptr, this);
