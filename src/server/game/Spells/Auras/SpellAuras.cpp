@@ -20,6 +20,7 @@
 #include "Common.h"
 #include "Containers.h"
 #include "CreatureAI.h"
+#include "DB2Stores.h"
 #include "DynamicObject.h"
 #include "GridNotifiersImpl.h"
 #include "Item.h"
@@ -2218,6 +2219,16 @@ float Aura::CalcProcChance(SpellProcEntry const& procEntry, ProcEventInfo& event
         if (Player* modOwner = caster->GetSpellModOwner())
             modOwner->ApplySpellMod(GetSpellInfo(), SpellModOp::ProcChance, chance);
     }
+
+    // WoW Forever downranking: a player's lower rank cast far below their level has "a reduced chance to activate your Class abilities
+    // and Talents" (rank 1 Frostbolt at 60: no Frostbite). Only the actor's own class auras, by the spell family of the actor's class;
+    // the share applies to the roll here and so to the chances scripts roll after it too.
+    if (Unit const* actor = eventInfo.GetActor())
+        if (SpellInfo const* triggering = eventInfo.GetSpellInfo())
+            if (actor->GetTypeId() == TYPEID_PLAYER && GetCasterGUID() == actor->GetGUID())
+                if (ChrClassesEntry const* classEntry = sChrClassesStore.LookupEntry(actor->GetClass()))
+                    if (GetSpellInfo()->SpellFamilyName == classEntry->SpellClassSet)
+                        chance *= sSpellMgr->GetClassicDownrankFactor(triggering, actor);
 
     // proc chance is reduced by an additional 3.333% per level past 60
     if ((procEntry.AttributesMask & PROC_ATTR_REDUCE_PROC_60) && eventInfo.GetActor()->GetLevel() > 60)

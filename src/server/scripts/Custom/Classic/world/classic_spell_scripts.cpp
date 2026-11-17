@@ -53,6 +53,8 @@
 #include "Unit.h"
 #include "World.h"
 #include "WorldSession.h"
+#include <algorithm>
+#include <cmath>
 #include <mutex>
 #include <unordered_map>
 
@@ -68,6 +70,8 @@ struct ClassicGroundAreaDamage
 {
     uint32 TickDamage;
     float Coefficient;      // spell power per tick
+    bool TicksAreHits = false;  // each tick is a spell hit on every enemy: it can crit, procs like a direct hit, takes no partial resist
+    uint32 TickSpellId = 0;     // the live tick spell; its class flags pick the critical strike spell mods of a tick that is a hit
 };
 
 static std::unordered_map<uint32, ClassicGroundAreaDamage> const ClassicGroundAreaDamages =
@@ -75,9 +79,14 @@ static std::unordered_map<uint32, ClassicGroundAreaDamage> const ClassicGroundAr
     // Blizzard (frost, 1 s, 8 s channel): 33% spell power over 8 ticks
     { 10,    {  25, 0.0417f } }, { 6141,  {  44, 0.0417f } }, { 8427,  {  65, 0.0417f } },
     { 10185, {  90, 0.0417f } }, { 10186, { 117, 0.0417f } }, { 10187, { 149, 0.0417f } },
-    // Flamestrike burning ground (fire, 2 s, 8 s; the direct hit is effect 0): ~12% spell power over 4 ticks
-    { 2120,  {  12, 0.0305f } }, { 2121,  {  22, 0.0305f } }, { 8422,  {  35, 0.0305f } },
-    { 8423,  {  49, 0.0305f } }, { 10215, {  66, 0.0305f } }, { 10216, {  85, 0.0305f } },
+    // Flamestrike burning ground (fire, 2 s, 8 s; the direct hit is effect 0): ~12% spell power over 4 ticks. Live, each tick is a hit
+    // of the tick spell 1279990 on every enemy in the area (wowsims/forever evidence EV-0028, level 60 combat log): ticks crit at the
+    // sheet chance, Ignite follows 67 of 68 tick crits, Arcane Concentration and Revelation roll per enemy hit. The tick spell has
+    // SPELL_ATTR3_NOT_A_PROC (client 70707), so it triggers procs; Combustion counts its hits and critical hits.
+    // The tick spells (1279983, 1279985, 1279987-1279990) carry class flag 0x4 alone, so Revelation's crit (1248808, not 0x4) does
+    // not reach the ticks while Combustion's (28682, 0x4) does (EV-0028: ticks under Revelation crit 16 of 76, as without it).
+    { 2120,  {  12, 0.0305f, true, 1279983 } }, { 2121,  {  22, 0.0305f, true, 1279985 } }, { 8422,  {  35, 0.0305f, true, 1279987 } },
+    { 8423,  {  49, 0.0305f, true, 1279988 } }, { 10215, {  66, 0.0305f, true, 1279989 } }, { 10216, {  85, 0.0305f, true, 1279990 } },
     // Rain of Fire (fire, 2 s, 8 s channel): 33% spell power over 4 ticks
     { 5740,  {  42, 0.0833f } }, { 6219,  {  96, 0.0833f } }, { 11677, { 155, 0.0833f } }, { 11678, { 226, 0.0833f } },
     // Volley (arcane, 1 s, 6 s channel): no spell power
@@ -93,7 +102,7 @@ class classic_spell_ground_area_damage : public AuraScript
         return ClassicGroundAreaDamages.contains(spellInfo->Id);
     }
 
-    void HandleTick(AuraEffect const* /*aurEff*/)
+    void HandleTick(AuraEffect const* aurEff)
     {
         Unit* caster = GetCaster();
         if (!caster)
@@ -126,12 +135,46 @@ class classic_spell_ground_area_damage : public AuraScript
 
             damage = target->SpellDamageBonusTaken(caster, spellInfo, damage, DOT);
 
+            // Ground ticks that are hits (Flamestrike) roll a critical strike like a direct spell: the sheet chance with the crit spell
+            // mods and the target's taken chance. Other ground ticks never crit (vanilla).
+            bool crit = false;
+            if (values.TicksAreHits && !spellInfo->HasAttribute(SPELL_ATTR2_CANT_CRIT))
+            {
+                float doneChance = 0.0f;
+                SpellInfo const* tickSpell = values.TickSpellId ? sSpellMgr->GetSpellInfo(values.TickSpellId, DIFFICULTY_NONE) : nullptr;
+                if (Player* player = caster->ToPlayer(); player && tickSpell)
+                {
+                    // as Unit::SpellCritChanceDone for a magic spell, with the tick spell's class flags for the spell mods
+                    doneChance = *player->m_activePlayerData->SpellCritPercentage;
+                    player->ApplySpellMod(tickSpell, SpellModOp::CritChance, doneChance);
+                    doneChance = std::max(doneChance, 0.0f);
+                }
+                else
+                    doneChance = caster->SpellCritChanceDone(nullptr, aurEff, spellInfo->GetSchoolMask());
+                crit = roll_chance(target->SpellCritChanceTaken(caster, nullptr, aurEff, spellInfo->GetSchoolMask(), doneChance));
+            }
+
             SpellNonMeleeDamage damageInfo(caster, target, spellInfo, GetAura()->GetSpellVisual(), spellInfo->GetSchoolMask(), GetAura()->GetCastId());
-            damageInfo.periodicLog = true;
-            caster->CalculateSpellDamageTaken(&damageInfo, damage, spellInfo);
+            damageInfo.periodicLog = !values.TicksAreHits;
+            // Ticks that are hits take no partial resist (EV-0028: 2 of 370 ticks against 52 of 189 Scorch hits on the same mobs)
+            caster->CalculateSpellDamageTaken(&damageInfo, damage, spellInfo, BASE_ATTACK, crit, false, nullptr, !values.TicksAreHits);
             Unit::DealDamageMods(damageInfo.attacker, damageInfo.target, damageInfo.damage, &damageInfo.absorb);
             caster->SendSpellNonMeleeDamageLog(&damageInfo);
+
+            // Hit procs (harmful spell, damage, hit phase, normal or critical) without a Spell: listeners that need the cast itself
+            // (Master of Elements' mana cost, spell mod charges such as Clearcasting) do not hear the tick, as live (EV-0028).
+            ProcFlagsInit procAttacker = PROC_FLAG_DEAL_HARMFUL_SPELL;
+            ProcFlagsInit procVictim = PROC_FLAG_TAKE_HARMFUL_SPELL;
+            ProcFlagsHit hitMask = createProcHitMask(&damageInfo, SPELL_MISS_NONE);
+            if (damageInfo.damage)
+                procVictim |= PROC_FLAG_TAKE_ANY_DAMAGE;
+            DamageInfo procDamageInfo(damageInfo, SPELL_DIRECT_DAMAGE, BASE_ATTACK, hitMask);
+
             caster->DealSpellDamage(&damageInfo, true);
+
+            if (values.TicksAreHits)
+                Unit::ProcSkillsAndAuras(caster, target, procAttacker, procVictim, PROC_SPELL_TYPE_DAMAGE, PROC_SPELL_PHASE_HIT, hitMask,
+                    nullptr, &procDamageInfo, nullptr);
         }
     }
 
@@ -147,6 +190,74 @@ class classic_spell_ground_area_damage : public AuraScript
     {
         OnEffectPeriodic += AuraEffectPeriodicFn(classic_spell_ground_area_damage::HandleTick, EFFECT_2, SPELL_AURA_PERIODIC_DUMMY);
         AfterEffectRemove += AuraEffectRemoveFn(classic_spell_ground_area_damage::HandleRemove, EFFECT_2, SPELL_AURA_PERIODIC_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 1248806 - Revelation (weapon enchant 8217, Enchant Weapon - Revelation 1248805): "a chance to trigger Revelation when a non-periodic
+// spell fails to critically strike. Revelation grants 100% increased critical strike chance to the next non-periodic spell cast." The
+// client proc aura (helpful and harmful spells, 100%) names no trigger spell: the buff is the wearer's class one, and the core had no
+// handler, so the enchant did nothing. spell_proc: direct damage or heal hits that do not crit (crits and aura-only hits never roll, a
+// hit while the buff is up rolls and refreshes it; wowsims/forever evidence EV-0129). Flamestrike's ground ticks roll once per enemy
+// hit (EV-0028). Warriors and rogues have no Revelation buff in the client data.
+// The chance: the tooltip says it "is diminished as your critical strike chance increases" and gives no numbers. ProcChance(crit) is
+// the maximum likelihood fit of 12.1% x (1 - sheet spell crit)^4 to EV-0129's eleven logs (druid 8.5-10.1% crit: 189 of 2,233 hits;
+// druid 13.42%: 138 of 2,043; mage 10%: 94 of 1,277): 8.1% at 9.5% crit, 6.9% at 13.4%, 5.0% at 20%, 2.9% at 30%. A linear fit is as
+// good inside the data but reaches 0 at 32% crit; the fit beats a flat rate only weakly (likelihood ratio 3.2, one parameter), and
+// the 13.42% logs are also a higher level, so the curve is the best reading of thin data, to be refit when more logs come.
+class classic_spell_enchant_revelation : public AuraScript
+{
+    static uint32 BuffFor(uint8 playerClass)
+    {
+        switch (playerClass)
+        {
+            case CLASS_MAGE:    return 1248808;
+            case CLASS_PRIEST:  return 1323377;
+            case CLASS_WARLOCK: return 1323392;
+            case CLASS_DRUID:   return 1323400;
+            case CLASS_HUNTER:  return 1323410;
+            case CLASS_SHAMAN:  return 1323418;
+            case CLASS_PALADIN: return 1323419;
+            default:            return 0;
+        }
+    }
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ 1248808, 1323377, 1323392, 1323400, 1323410, 1323418, 1323419 });
+    }
+
+    static float ProcChance(float critPct)
+    {
+        float const crit = std::clamp(critPct / 100.0f, 0.0f, 1.0f);
+        return 12.1f * std::pow(1.0f - crit, 4.0f);
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Player const* wearer = GetTarget()->ToPlayer();
+        if (!wearer || !BuffFor(wearer->GetClass()))
+            return false;
+
+        if (!roll_chance(ProcChance(*wearer->m_activePlayerData->SpellCritPercentage)))
+            return false;
+
+        if (DamageInfo const* damage = eventInfo.GetDamageInfo(); damage && damage->GetDamage())
+            return true;
+        if (HealInfo const* heal = eventInfo.GetHealInfo(); heal && heal->GetHeal())
+            return true;
+        return false;
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        GetTarget()->CastSpell(GetTarget(), BuffFor(GetTarget()->GetClass()), CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_enchant_revelation::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_enchant_revelation::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
     }
 };
 
@@ -2638,6 +2749,7 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_pal_judgement_intermediate);
     RegisterSpellScript(classic_spell_profession_book);
     RegisterSpellScript(classic_spell_ground_area_damage);
+    RegisterSpellScript(classic_spell_enchant_revelation);
     RegisterSpellScript(classic_spell_heal_injured_druid);
     RegisterSpellScript(classic_spell_item_savory_deviate_delight);
     RegisterSpellScript(classic_spell_item_mind_control_cap);

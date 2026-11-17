@@ -9638,13 +9638,18 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
         // Windfury Weapon (vMaNGOS, Player::CastItemCombatSpell): 20% on a melee hit to gain the rank's Windfury Attack, which adds the extra
         // attack and the attack power for it; never on the extra attack itself. Done here on the imbue's enchantment, not through the
         // enchantment's own spell, which Forever points at a dummy aura (Windfury Weapon 439431) with no script.
+        // The client's 439431 also carries the internal cooldown (SpellAuraOptions ProcCategoryRecovery 1500 in the 70790 data and in
+        // live 70938, as in Classic Era 1.15): no new roll until it has run out.
         if (e_slot == TEMP_ENCHANTMENT_SLOT)
         {
             if (uint32 windfuryAttack = ClassicWeaponImbue::WindfuryAttackForEnchant(enchant_id))
             {
-                if (canTrigger && !GetLastExtraAttackSpell())
+                TimePoint const now = GameTime::Now();
+                if (canTrigger && !GetLastExtraAttackSpell() && now >= _classicWindfuryWeaponReadyAt)
                     CombatEnchantProc::Dispatch(20.0f, [](float procChance) { return roll_chance(procChance); }, [&]
                     {
+                        SpellInfo const* windfuryAura = sSpellMgr->GetSpellInfo(ClassicWeaponImbue::WINDFURY_WEAPON_AURA, DIFFICULTY_NONE);
+                        _classicWindfuryWeaponReadyAt = now + Milliseconds(windfuryAura ? windfuryAura->ProcCooldown : ClassicWeaponImbue::WINDFURY_WEAPON_ICD_MS);
                         CastSpell(this, windfuryAttack, CastSpellExtraArgs(item));
                     });
                 continue;
@@ -24063,6 +24068,12 @@ int32 Player::IsAffectedBySpellmod(SpellInfo const* spellInfo, SpellModifier con
 
     // First time this aura applies a mod to us and is out of charges
     if (spell && mod->ownerAura->IsUsingCharges() && !mod->ownerAura->GetCharges() && !spell->m_appliedMods.contains(mod->ownerAura))
+        return 0;
+
+    // Classic 1.60: a crit chance mod paid for with charges ("the next spell": Revelation, Elemental Mastery, Inner Focus) belongs to a
+    // cast. A crit roll with no Spell (damage over time ticks, Flamestrike's ground ticks) could take it for nothing, as the charge is
+    // only spent through a Spell; Revelation's tooltip names non-periodic spells and EV-0028 shows ground ticks without its crit.
+    if (!spell && mod->op == SpellModOp::CritChance && mod->ownerAura->IsUsingCharges())
         return 0;
 
     switch (mod->op)

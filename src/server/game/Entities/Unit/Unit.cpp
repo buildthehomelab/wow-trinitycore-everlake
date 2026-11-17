@@ -1272,7 +1272,8 @@ void Unit::CastStop(uint32 except_spellid)
             InterruptSpell(CurrentSpellTypes(i), false);
 }
 
-void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 damage, SpellInfo const* spellInfo, WeaponAttackType attackType, bool crit /*= false*/, bool blocked /*= false*/, Spell* spell /*= nullptr*/)
+void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 damage, SpellInfo const* spellInfo, WeaponAttackType attackType, bool crit /*= false*/, bool blocked /*= false*/, Spell* spell /*= nullptr*/,
+    bool canPartialResist /*= true*/)
 {
     if (damage < 0)
         return;
@@ -1370,7 +1371,7 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 dama
     damageInfo->damage = damage;
     damageInfo->originalDamage = damage;
     DamageInfo dmgInfo(*damageInfo, SPELL_DIRECT_DAMAGE, BASE_ATTACK, PROC_HIT_NONE);
-    Unit::CalcAbsorbResist(dmgInfo, spell);
+    Unit::CalcAbsorbResist(dmgInfo, spell, canPartialResist);
     damageInfo->absorb = dmgInfo.GetAbsorb();
     damageInfo->resist = dmgInfo.GetResist();
 
@@ -2036,13 +2037,14 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
     return uint32(damage * tenths / 10.0f);
 }
 
-/*static*/ void Unit::CalcAbsorbResist(DamageInfo& damageInfo, Spell* spell /*= nullptr*/)
+/*static*/ void Unit::CalcAbsorbResist(DamageInfo& damageInfo, Spell* spell /*= nullptr*/, bool canPartialResist /*= true*/)
 {
     if (!damageInfo.GetVictim() || !damageInfo.GetVictim()->IsAlive() || !damageInfo.GetDamage())
         return;
 
     bool const periodicTick = damageInfo.GetDamageType() == DOT;
-    uint32 resistedDamage = Unit::CalcSpellResistedDamage(damageInfo.GetAttacker(), damageInfo.GetVictim(), damageInfo.GetDamage(), damageInfo.GetSchoolMask(), damageInfo.GetSpellInfo(), periodicTick);
+    // canPartialResist: false for damage that takes no partial resist (Classic 1.60 Flamestrike ground ticks, EV-0028); absorbs still apply
+    uint32 resistedDamage = canPartialResist ? Unit::CalcSpellResistedDamage(damageInfo.GetAttacker(), damageInfo.GetVictim(), damageInfo.GetDamage(), damageInfo.GetSchoolMask(), damageInfo.GetSpellInfo(), periodicTick) : 0;
 
     // Ignore Absorption Auras
     float auraAbsorbMod = 0.f;
@@ -2059,7 +2061,7 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
     damageInfo.ResistDamage(resistedDamage);
 
     // Classic 1.60 (WoW Forever): Spell Piercing past the target's resistance adds damage, a DoT tick's at a tenth of the share
-    if (!resistedDamage)
+    if (!resistedDamage && canPartialResist)              // the bonus is the partial resist roll's negative side
         if (uint32 piercingBonus = Unit::CalcSpellPiercingBonusDamage(damageInfo.GetAttacker(), damageInfo.GetVictim(), damageInfo.GetDamage(), damageInfo.GetSchoolMask(), damageInfo.GetSpellInfo(), periodicTick))
             damageInfo.ModifyDamage(int32(piercingBonus));
 
@@ -7276,12 +7278,13 @@ static ClassicSpellValue::Value const* ClassicCoefficientRow(SpellInfo const* sp
     return sSpellMgr->GetClassicSpellValue(spellInfo->Id, uint32(effectInfo.EffectIndex));
 }
 
-// Classic 1.60: the spell power / healing power factor of an effect with the vanilla level penalty in. A vanilla table row is
-// already penalised and is taken as it is; the client's coefficient is the unpenalized one and gets 1 - (20 - spell level) * 3.75%
-// below level 20 (Fireball rank 1: 0.429 x 0.2875 = 0.123). See ClassicSpellValue::BonusCoefficientWithLevelPenalty.
-static float ClassicBonusCoefficient(SpellInfo const* spellProto, SpellEffectInfo const& spellEffectInfo)
+// Classic 1.60: the spell power / healing power factor of an effect (ClassicSpellValue::BonusCoefficientOr: the vanilla hold's or the
+// client's, with no sub-level-20 penalty as in WoW Forever). A player's lower rank cast far below the caster's level keeps only part of
+// it (WoW Forever downranking, ClassicSpellValue::DownrankFactor).
+static float ClassicBonusCoefficient(Unit const* caster, SpellInfo const* spellProto, SpellEffectInfo const& spellEffectInfo)
 {
-    return ClassicSpellValue::BonusCoefficientWithLevelPenalty(ClassicCoefficientRow(spellProto, spellEffectInfo), spellEffectInfo.BonusCoefficient, int32(spellProto->SpellLevel));
+    return ClassicSpellValue::BonusCoefficientOr(ClassicCoefficientRow(spellProto, spellEffectInfo), spellEffectInfo.BonusCoefficient)
+        * sSpellMgr->GetClassicDownrankFactor(spellProto, caster);
 }
 
 int32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, int32 pdamage, DamageEffectType damagetype, SpellEffectInfo const& spellEffectInfo, uint32 stack /*= 1*/, Spell* spell /*= nullptr*/, AuraEffect const* aurEff /*= nullptr*/) const
@@ -7390,7 +7393,7 @@ float Unit::SpellDamageBonusDoneExact(Unit* victim, SpellInfo const* spellProto,
     float takenTotal = 0.0f;
     if (DoneAdvertisedBenefit || takenBenefit)
     {
-        float coeff = ClassicBonusCoefficient(spellProto, spellEffectInfo);
+        float coeff = ClassicBonusCoefficient(this, spellProto, spellEffectInfo);
         if (Player* modOwner = GetSpellModOwner())
         {
             coeff *= 100.0f;
@@ -7690,8 +7693,10 @@ float Unit::SpellCritChanceDone(Spell* spell, AuraEffect const* aurEff, SpellSch
     }
     // percent done
     // only players use intelligence for critical chance computations
+    // The Spell goes with it, so a crit mod paid for with charges (Revelation, Elemental Mastery) is noted as applied to this cast and its
+    // proc row (PROC_ATTR_REQ_SPELLMOD) spends the charge; without it a crit-only buff such as Revelation was never spent.
     if (Player* modOwner = GetSpellModOwner())
-        modOwner->ApplySpellMod(spellInfo, SpellModOp::CritChance, crit_chance);
+        modOwner->ApplySpellMod(spellInfo, SpellModOp::CritChance, crit_chance, spell);
 
     return std::max(crit_chance, 0.0f);
 }
@@ -7926,7 +7931,7 @@ int32 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, int
     // Default calculation
     if (DoneAdvertisedBenefit)
     {
-        float coeff = ClassicBonusCoefficient(spellProto, spellEffectInfo);
+        float coeff = ClassicBonusCoefficient(this, spellProto, spellEffectInfo);
         if (Player* modOwner = GetSpellModOwner())
         {
             coeff *= 100.0f;
@@ -8206,7 +8211,7 @@ int32 Unit::SpellAbsorbBonusDone(Unit* victim, SpellInfo const* spellProto, int3
 
     if (doneAdvertisedBenefit)
     {
-        float coeff = ClassicBonusCoefficient(spellProto, spellEffectInfo);
+        float coeff = ClassicBonusCoefficient(this, spellProto, spellEffectInfo);
 
         if (Player* modOwner = GetSpellModOwner())
         {
