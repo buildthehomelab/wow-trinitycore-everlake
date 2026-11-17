@@ -2215,14 +2215,20 @@ class classic_spell_dru_omen_of_clarity : public AuraScript
 // abilities its class mask names, one charge). Every second, a druid out of combat at full energy without the buff gets it; it stays
 // until an ability spends it, an avoided cast included (spell_proc, cast phase: 27 of 27 avoided Claws, Rakes, Pounces and Ravages
 // spent it; wowsims/forever, MIT, docs/evidence EV-0035, sim/druid/poised.go).
+// 1328825 - Poised (rogue passive) is built the same way: its buff 1328826 (-10 energy, Composure adds to it through its spell mod on the
+// buff) was never given either (wowsims/forever, MIT, sim/rogue/poised.go). The script takes the buff as its argument.
 class classic_spell_dru_poised : public AuraScript
 {
-    static constexpr uint32 SPELL_DRUID_POISED_BUFF = 1328827;
+public:
+    explicit classic_spell_dru_poised(uint32 buffSpellId) : _buffSpellId(buffSpellId) { }
+
+private:
     static constexpr int32 CHECK_INTERVAL_MS = 1000;
+    uint32 _buffSpellId;
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_DRUID_POISED_BUFF });
+        return ValidateSpellInfo({ _buffSpellId });
     }
 
     void CalcPeriodic(AuraEffect const* /*aurEff*/, bool& isPeriodic, int32& amplitude)
@@ -2234,14 +2240,14 @@ class classic_spell_dru_poised : public AuraScript
     void CheckEnergy(AuraEffect* /*aurEff*/)
     {
         Unit* druid = GetTarget();
-        if (!druid->IsAlive() || druid->IsInCombat() || druid->HasAura(SPELL_DRUID_POISED_BUFF))
+        if (!druid->IsAlive() || druid->IsInCombat() || druid->HasAura(_buffSpellId))
             return;
 
         int32 const maxEnergy = druid->GetMaxPower(POWER_ENERGY);
         if (maxEnergy <= 0 || druid->GetPower(POWER_ENERGY) < maxEnergy)
             return;
 
-        druid->CastSpell(druid, SPELL_DRUID_POISED_BUFF, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+        druid->CastSpell(druid, _buffSpellId, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
     }
 
     void Register() override
@@ -2415,7 +2421,8 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_spell_dru_enrage_armor);
     RegisterSpellScript(classic_spell_dru_faerie_fire_threat);
     RegisterSpellScript(classic_spell_dru_omen_of_clarity);
-    RegisterSpellScript(classic_spell_dru_poised);
+    RegisterSpellScriptWithArgs(classic_spell_dru_poised, "classic_spell_dru_poised", 1328827u);
+    RegisterSpellScriptWithArgs(classic_spell_dru_poised, "classic_spell_rog_poised", 1328826u);
 
     new classic_unit_talent_warlock_druid();
 }
