@@ -514,6 +514,52 @@ class classic_spell_pri_power_in_light : public SpellScript
     }
 };
 
+// 1326159 - Dark Inspiration: "Your Mind Blast and fully channeled Mind Flay causes Dark Inspiration, increasing yours and your party's Spirit
+// by $m1% for $1326168d." The talent is a bare dummy with no proc data, so nothing cast the buff 1326168 (party Spirit, target 20). A landed
+// Mind Blast, or a Mind Flay channel that runs its full length, casts it with the talent's percent (3..15 by rank). Behaviour from the
+// tooltip and wowsims/forever (MIT, sim/priest/talents_shadow.go); no log reading.
+static constexpr uint32 SPELL_PRI_DARK_INSPIRATION = 1326159;
+static constexpr uint32 SPELL_PRI_DARK_INSPIRATION_BUFF = 1326168;
+
+static void CastClassicDarkInspiration(Unit* priest)
+{
+    if (!priest)
+        return;
+    AuraEffect const* talent = priest->GetAuraEffect(SPELL_PRI_DARK_INSPIRATION, EFFECT_0);
+    if (!talent || talent->GetAmountAsInt() <= 0)
+        return;
+    priest->CastSpell(priest, SPELL_PRI_DARK_INSPIRATION_BUFF, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(talent->GetAmountAsInt()));
+}
+
+// Mind Blast (all ranks): a landed hit
+class classic_spell_pri_dark_inspiration_mind_blast : public SpellScript
+{
+    void HandleHit(SpellEffIndex /*effIndex*/)
+    {
+        CastClassicDarkInspiration(GetCaster());
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_pri_dark_inspiration_mind_blast::HandleHit, EFFECT_0, SPELL_EFFECT_SCHOOL_DAMAGE);
+    }
+};
+
+// Mind Flay (all ranks): the channel aura ends by running out, not by an interrupt or a cancel
+class classic_spell_pri_dark_inspiration_mind_flay : public AuraScript
+{
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (GetTargetApplication()->GetRemoveMode() == AURA_REMOVE_BY_EXPIRE)
+            CastClassicDarkInspiration(GetCaster());
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_pri_dark_inspiration_mind_flay::HandleRemove, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 // 1310076 - Early Demise: "Increases Shadow Word: Death's critical strike chance on targets at or below 20% health by 30%." Effect 0 is the
 // crit bonus, effect 1 the health threshold. Bound to the Shadow Word: Death ranks.
 class classic_spell_pri_early_demise : public SpellScript
@@ -1520,6 +1566,8 @@ void AddSC_classic_talents_priest_paladin()
     RegisterSpellScript(classic_spell_pri_holy_binding);
     // Priest
     RegisterSpellScript(classic_spell_pri_inspiration);
+    RegisterSpellScript(classic_spell_pri_dark_inspiration_mind_blast);
+    RegisterSpellScript(classic_spell_pri_dark_inspiration_mind_flay);
     RegisterSpellScript(classic_spell_pri_blessed_recovery);
     RegisterSpellScript(classic_spell_pri_blessed_recovery_hot);
     RegisterSpellScript(classic_spell_pri_prayer_of_mending);
