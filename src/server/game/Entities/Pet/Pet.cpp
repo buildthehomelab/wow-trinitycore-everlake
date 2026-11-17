@@ -41,6 +41,7 @@
 #include "SpellPackets.h"
 #include "Unit.h"
 #include "Util.h"
+#include "WarlockPetForever.h"
 #include "World.h"
 #include "WorldSession.h"
 #include <algorithm>
@@ -1428,9 +1429,21 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
     {
         case SUMMON_PET:
         {
-            // Classic 1.60 (vanilla): no bonus damage from the warlock's fire or shadow damage (The Burning Crusade)
-            SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, float(petlevel - (petlevel / 4)));
-            SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, float(petlevel + (petlevel / 4)));
+            // No bonus damage here: the warlock's share reaches a demon through 416189 Warlock Pet Scaling (classic_warlock_pet_scaling.cpp)
+            float minDamage = float(petlevel - (petlevel / 4));
+            float maxDamage = float(petlevel + (petlevel / 4));
+
+            // WoW Forever: the Sayaad's and Voidwalker's weapons are shares of the creature dps for their level (wowsims/forever EV-0075,
+            // EV-0076). The Voidwalker's melee is then halved in Guardian::UpdateDamagePhysical.
+            if (WarlockPetForever::SwingModel const* swing = WarlockPetForever::DemonSwing(GetEntry()))
+            {
+                float const creatureDps = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::CreatureAutoAttackDps, petlevel, -2, 0, CLASS_NONE, 0);
+                minDamage = WarlockPetForever::MinDamage(*swing, creatureDps);
+                maxDamage = WarlockPetForever::MaxDamage(*swing, creatureDps);
+            }
+
+            SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, minDamage);
+            SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, maxDamage);
 
             //SetStatFlatModifier(UNIT_MOD_ATTACK_POWER, BASE_VALUE, float(cinfo->attackpower));
             break;

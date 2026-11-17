@@ -25,6 +25,7 @@
 #include "GameTables.h"
 #include "GameTime.h"
 #include "HunterPetForever.h"
+#include "WarlockPetForever.h"
 #include "Log.h"
 #include "ObjectMgr.h"
 #include "SharedDefines.h"
@@ -1534,6 +1535,9 @@ void Guardian::UpdateAttackPowerAndDamage(bool ranged)
 
     if (GetEntry() == ENTRY_IMP)                                   // imp's attack power
         val = GetStat(STAT_STRENGTH) - 10.0f;
+    // WoW Forever: the Voidwalker's and Sayaad's own attack power is 3 x level + 6, nothing from Strength (wowsims/forever EV-0075, EV-0076)
+    else if (IsPet() && (GetEntry() == ENTRY_VOIDWALKER || GetEntry() == ENTRY_SUCCUBUS))
+        val = WarlockPetForever::DemonAttackPower(GetLevel());
     else
         val = 2 * GetStat(STAT_STRENGTH) - 20.0f;
 
@@ -1554,7 +1558,8 @@ void Guardian::UpdateAttackPowerAndDamage(bool ranged)
             bonusAP = owner->GetTotalAttackPowerValue(BASE_ATTACK) * dmg_multiplier;
             SetBonusDamage(int32(owner->GetTotalAttackPowerValue(BASE_ATTACK) * dmg_multiplier));
         }
-        // Classic 1.60 (vanilla): demons get nothing from their warlock's fire or shadow damage
+        // Classic 1.60 (WoW Forever): demons take their share of the warlock's spell damage as attack power and spell damage through
+        // 416189 Warlock Pet Scaling (classic_warlock_pet_scaling.cpp), not here
         else if (IsPet())
         {
         }
@@ -1629,6 +1634,13 @@ void Guardian::UpdateDamagePhysical(WeaponAttackType attType)
         float swingShare = HunterPetForever::SwingShare(ToPet()->GetAttackSpeedPassivePercent());
         mindamage *= swingShare;
         maxdamage *= swingShare;
+    }
+
+    // WoW Forever: the Voidwalker's melee is halved, attack power included (wowsims/forever EV-0076)
+    if (IsPet() && GetEntry() == ENTRY_VOIDWALKER)
+    {
+        mindamage *= WarlockPetForever::VoidwalkerMeleeShare;
+        maxdamage *= WarlockPetForever::VoidwalkerMeleeShare;
     }
 
     SetUpdateFieldStatValue(m_values.ModifyValue(&Unit::m_unitData).ModifyValue(&UF::UnitData::MinDamage), mindamage);
