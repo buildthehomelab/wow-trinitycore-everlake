@@ -96,8 +96,9 @@ static bool IsMageChillEffect(SpellInfo const* spellInfo)
         && spellInfo->HasAura(SPELL_AURA_MOD_DECREASE_SPEED);
 }
 
-// 400647 - Fingers of Frost: a Chill effect has effect 1 % chance to grant effect 0 charges of Fingers of Frost for 15 s
-static void TryGrantFingersOfFrost(Unit* mage)
+// 400647 - Fingers of Frost: a Chill effect has effect 1 % chance to grant effect 0 charges of Fingers of Frost for 15 s. chanceFactor
+// scales the chance for rolls made outside the proc system, which applies the Forever downranking cut itself (Aura::CalcProcChance).
+static void TryGrantFingersOfFrost(Unit* mage, float chanceFactor = 1.0f)
 {
     Aura const* talent = mage->GetAura(SPELL_MAGE_FINGERS_OF_FROST_TALENT);
     if (!talent)
@@ -105,7 +106,7 @@ static void TryGrantFingersOfFrost(Unit* mage)
 
     AuraEffect const* charges = talent->GetEffect(EFFECT_0);
     AuraEffect const* chance = talent->GetEffect(EFFECT_1);
-    if (!charges || !chance || !roll_chance(chance->GetAmount()))
+    if (!charges || !chance || !roll_chance(chance->GetAmount() * chanceFactor))
         return;
 
     mage->CastSpell(mage, SPELL_MAGE_FINGERS_OF_FROST_IGNORE, true);
@@ -349,6 +350,9 @@ class classic_spell_mage_improved_blizzard : public AuraScript
             chill = ClassicVanillaAoe::ImprovedBlizzardChill(chill);
 
         SpellInfo const* spellInfo = GetSpellInfo();
+        // WoW Forever downranking: a Blizzard rank cast far below the mage's level has a smaller Fingers of Frost chance, the same cut
+        // the proc system puts on the mage's other Chill effects (a rank 1 Blizzard at 60 rolls none)
+        float const downrank = sSpellMgr->GetClassicDownrankFactor(spellInfo, caster);
         GuidUnorderedSet targets;
         for (AreaTrigger* areaTrigger : caster->GetAreaTriggers(spellInfo->Id))
             targets.insert(areaTrigger->GetInsideUnits().begin(), areaTrigger->GetInsideUnits().end());
@@ -362,7 +366,7 @@ class classic_spell_mage_improved_blizzard : public AuraScript
             caster->CastSpell(target, SPELL_MAGE_CHILLED, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(chill));
 
             // each chilled enemy rolls (wowsims/forever EV-0030: the gain lands between a tick's damage lines, rolled per target)
-            TryGrantFingersOfFrost(caster);
+            TryGrantFingersOfFrost(caster, downrank);
         }
     }
 
