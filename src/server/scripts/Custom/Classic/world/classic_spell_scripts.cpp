@@ -1815,6 +1815,30 @@ public:
 // 17350 - Argent Defender: "Has a chance when struck in combat", about twice as likely when an Undead strikes (its second effect, a dummy
 // of 2). The spell_proc row prices 1 a minute on the attacker's swing interval, the Undead rate; any other attacker passes half the time,
 // 0.5 a minute, both behind the client's 20 s cooldown (wowsims/forever, MIT, docs/evidence EV-0126).
+// 28849 - Totem of Flowing Water 23005: "Regain up to $28850s1 mana each time you cast Lesser Healing Wave." The aura is a dummy that fired
+// nothing, and its class mask names bit 5 of the shaman family, under which no spell is filed; Lesser Healing Wave is bit 7 (spell_proc row,
+// sql 2026_11_18_07). Each cast restores 28850's mana (wowsims/forever, MIT, tools/database/overrides/spell_overrides.go, tooltip).
+class classic_spell_item_totem_of_flowing_water : public AuraScript
+{
+    static constexpr uint32 SPELL_FLOWING_WATER_MANA = 28850;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_FLOWING_WATER_MANA });
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        GetTarget()->CastSpell(GetTarget(), SPELL_FLOWING_WATER_MANA, CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_item_totem_of_flowing_water::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 class classic_spell_item_argent_defender : public AuraScript
 {
     bool CheckProc(ProcEventInfo& eventInfo)
@@ -2776,6 +2800,7 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_pri_vampiric_embrace);
     RegisterSpellScript(classic_spell_item_moonshadow_stave);
     RegisterSpellScript(classic_spell_item_argent_defender);
+    RegisterSpellScript(classic_spell_item_totem_of_flowing_water);
     RegisterSpellScript(classic_spell_item_set_proc_mana_cast);
     RegisterSpellScript(classic_spell_pal_consecration);
     RegisterSpellScript(classic_spell_pal_seal_of_fury);
