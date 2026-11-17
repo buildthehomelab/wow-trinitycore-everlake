@@ -1834,10 +1834,9 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
     if ((schoolMask & SPELL_SCHOOL_MASK_HOLY) && victim->GetTypeId() != TYPEID_UNIT)
         return 0;
 
-    // Classic 1.60 (vanilla): binary spells (Frostbolt, Frost Nova, crowd control...) are resisted completely or not at all
-    // (WorldObject::MagicSpellHitResult), never partially
-    if (spellInfo && spellInfo->HasAttribute(SPELL_ATTR0_CU_BINARY_SPELL))
-        return 0;
+    // Classic 1.60 (WoW Forever): a binary spell (Frostbolt, Frost Nova...) is resisted in full by its hit roll
+    // (WorldObject::MagicSpellHitResult), and the damage of one that lands rolls a partial resist like any other spell (wowsims/forever,
+    // MIT, sim/core/spell_resistances.go; no log measurement). Vanilla (VMaNGOS) never partially resisted binary spells.
 
     float const averageResist = Unit::CalculateAverageResistReduction(attacker, schoolMask, victim, spellInfo);
     float discreteResistProbability[11] = { };
