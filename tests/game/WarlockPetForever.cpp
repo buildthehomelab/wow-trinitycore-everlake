@@ -53,3 +53,10 @@ TEST_CASE("Demon health, armor, regen and hit from the warlock", "[WarlockPetFor
     warlock.Armor = -50.0f;                                                       // stacked armor debuffs
     CHECK(WarlockPetForever::Armor(warlock) == Catch::Approx(0.0f));
 }
+
+TEST_CASE("The Sayaad's weapon is a share of the creature dps", "[WarlockPetForever]")
+{
+    // EV-0075: at level 30 (creature dps 24.69) the sheet reads about 27 to 42 before attack power
+    CHECK(WarlockPetForever::SayaadMinDamage(24.69f) == Catch::Approx(27.06f).margin(0.05f));
+    CHECK(WarlockPetForever::SayaadMaxDamage(24.69f) == Catch::Approx(41.88f).margin(0.05f));
+}

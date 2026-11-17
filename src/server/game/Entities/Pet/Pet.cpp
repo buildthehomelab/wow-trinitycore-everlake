@@ -41,6 +41,7 @@
 #include "SpellPackets.h"
 #include "Unit.h"
 #include "Util.h"
+#include "WarlockPetForever.h"
 #include "World.h"
 #include "WorldSession.h"
 #include <algorithm>
@@ -1429,8 +1430,20 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
         case SUMMON_PET:
         {
             // No bonus damage here: the warlock's share reaches a demon through 416189 Warlock Pet Scaling (classic_warlock_pet_scaling.cpp)
-            SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, float(petlevel - (petlevel / 4)));
-            SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, float(petlevel + (petlevel / 4)));
+            float minDamage = float(petlevel - (petlevel / 4));
+            float maxDamage = float(petlevel + (petlevel / 4));
+
+            // WoW Forever: the Sayaad's weapon is a share of the creature dps for its level (wowsims/forever EV-0075). Never below the
+            // range above, which it passes from level 2.
+            if (GetEntry() == WarlockPetForever::SayaadEntry)
+            {
+                float const creatureDps = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::CreatureAutoAttackDps, petlevel, -2, 0, CLASS_NONE, 0);
+                minDamage = std::max(minDamage, WarlockPetForever::SayaadMinDamage(creatureDps));
+                maxDamage = std::max(maxDamage, WarlockPetForever::SayaadMaxDamage(creatureDps));
+            }
+
+            SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, minDamage);
+            SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, maxDamage);
 
             //SetStatFlatModifier(UNIT_MOD_ATTACK_POWER, BASE_VALUE, float(cinfo->attackpower));
             break;

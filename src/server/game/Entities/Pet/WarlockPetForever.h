@@ -92,6 +92,29 @@ namespace WarlockPetForever
     {
         return SpellHit(warlock) * MeleeHitShare;
     }
+
+    // The demons' own stats as shares of the client's ExpectedStat creature values for their level (wowsims/forever pets.go, EV-0075,
+    // EV-0076, EV-0078; read at levels 20 and 30, level 60 extrapolated). Armor already matches the vanilla pet_levelstats within 3%;
+    // health is in 2026_11_17_10_world_forever_demon_base_health.sql, the Sayaad's weapon in Pet::InitStatsForLevel.
+    constexpr float ImpHealthShare = 0.359f;
+    constexpr float VoidwalkerHealthShare = 1.400f;
+    constexpr float SayaadHealthShare = 0.699f;
+
+    // The Sayaad's average swing before attack power is 0.698 of the creature dps at its 2.0 s swing, spanning 21.5% either side.
+    constexpr uint32 SayaadEntry = 1863;
+    constexpr float SayaadSwingShare = 0.698f;
+    constexpr float SayaadSwingSpread = 0.215f;
+    constexpr float SayaadSwingSeconds = 2.0f;
+
+    inline float SayaadMinDamage(float creatureDps)
+    {
+        return creatureDps * SayaadSwingSeconds * SayaadSwingShare * (1.0f - SayaadSwingSpread);
+    }
+
+    inline float SayaadMaxDamage(float creatureDps)
+    {
+        return creatureDps * SayaadSwingSeconds * SayaadSwingShare * (1.0f + SayaadSwingSpread);
+    }
 }
 
 #endif // TRINITYCORE_WARLOCK_PET_FOREVER_H
