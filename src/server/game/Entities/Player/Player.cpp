@@ -5505,19 +5505,24 @@ float Player::GetTotalBaseModValue(BaseModGroup modGroup) const
     return m_auraBaseFlatMod[modGroup] * m_auraBasePctMod[modGroup];
 }
 
-// Classic 1.60 (vanilla, VMaNGOS / TrinityCoreClassic): agility per 1% of crit and dodge, between the class rates of level 1 and 60
+// Classic 1.60 (vanilla, VMaNGOS / TrinityCoreClassic): agility per 1% of crit and dodge, between the class rates of level 1 and 60.
+// WoW Forever: the level 60 rates are the client's PlayerExpectedStat CritPerAgility (rogue 0.000345, hunter 0.000189,
+// paladin 0.000506, shaman 0.000508, mage 0.000514, others 0.0005 per point), dodge per agility equal to crit, rogue and hunter twice
+// (wowsims/forever, MIT, sim/core/base_stats_auto_gen.go). The level 1 rates stay vanilla's; the table's lower levels are not checked.
 static float ClassicAgilityRate(Player const* player, bool dodge)
 {
     float level1, level60;
     switch (player->GetClass())
     {
-        case CLASS_ROGUE:   level1 = dodge ? 1.1f : 2.2f;  level60 = dodge ? 14.5f : 29.0f; break;
-        case CLASS_HUNTER:  level1 = dodge ? 1.8f : 3.5f;  level60 = dodge ? 26.5f : 53.0f; break;
-        case CLASS_MAGE:    level1 = 12.9f; level60 = 20.0f; break;
+        case CLASS_ROGUE:   level1 = dodge ? 1.1f : 2.2f;  level60 = (dodge ? 0.5f : 1.0f) / 0.0345f; break;
+        case CLASS_HUNTER:  level1 = dodge ? 1.8f : 3.5f;  level60 = (dodge ? 0.5f : 1.0f) / 0.0189f; break;
+        case CLASS_MAGE:    level1 = 12.9f; level60 = 1.0f / 0.0514f; break;
         case CLASS_PRIEST:  level1 = 11.0f; level60 = 20.0f; break;
         case CLASS_WARLOCK: level1 = 8.4f;  level60 = 20.0f; break;
         case CLASS_WARRIOR: level1 = 3.9f;  level60 = 20.0f; break;
-        default:            level1 = 4.6f;  level60 = 20.0f; break;  // paladin, shaman, druid
+        case CLASS_PALADIN: level1 = 4.6f;  level60 = 1.0f / 0.0506f; break;
+        case CLASS_SHAMAN:  level1 = 4.6f;  level60 = 1.0f / 0.0508f; break;
+        default:            level1 = 4.6f;  level60 = 20.0f; break;  // druid
     }
     float level = float(std::min<uint8>(player->GetLevel(), 60));
     return level1 * (60.0f - level) / 59.0f + level60 * (level - 1.0f) / 59.0f;
@@ -5534,19 +5539,22 @@ void Player::GetDodgeFromAgility(float& diminishing, float& nondiminishing) cons
     nondiminishing = std::max(0.0f, GetStat(STAT_AGILITY)) / ClassicAgilityRate(this, true);
 }
 
-// Classic 1.60 (vanilla): base spell crit and intellect per 1% of spell crit at level 60 per class; lower levels need less
+// Classic 1.60 (vanilla): base spell crit and intellect per 1% of spell crit at level 60 per class; lower levels need less.
+// WoW Forever: the level 60 rates are the client's PlayerExpectedStat SpellCritPerIntellect (mage and priest 0.000168,
+// shaman 0.000169, paladin and druid 0.000167, warlock and hunter 0.000165 per point; wowsims/forever, MIT,
+// sim/core/base_stats_auto_gen.go). Paladins needed 54 (vanilla), now 59.9. The base crit already matched.
 float Player::GetSpellCritFromIntellect() const
 {
     float base, rate60;
     switch (GetClass())
     {
-        case CLASS_MAGE:    base = 0.2f; rate60 = 59.5f; break;
-        case CLASS_PRIEST:  base = 0.8f; rate60 = 59.2f; break;
-        case CLASS_WARLOCK: base = 1.7f; rate60 = 60.6f; break;
-        case CLASS_DRUID:   base = 1.8f; rate60 = 60.0f; break;
-        case CLASS_SHAMAN:  base = 2.3f; rate60 = 59.5f; break;
-        case CLASS_PALADIN: base = 3.5f; rate60 = 54.0f; break;
-        case CLASS_HUNTER:  base = 3.6f; rate60 = 60.0f; break;
+        case CLASS_MAGE:    base = 0.2f; rate60 = 1.0f / 0.0168f; break;
+        case CLASS_PRIEST:  base = 0.8f; rate60 = 1.0f / 0.0168f; break;
+        case CLASS_WARLOCK: base = 1.7f; rate60 = 1.0f / 0.0165f; break;
+        case CLASS_DRUID:   base = 1.8f; rate60 = 1.0f / 0.0167f; break;
+        case CLASS_SHAMAN:  base = 2.3f; rate60 = 1.0f / 0.0169f; break;
+        case CLASS_PALADIN: base = 3.5f; rate60 = 1.0f / 0.0167f; break;
+        case CLASS_HUNTER:  base = 3.6f; rate60 = 1.0f / 0.0165f; break;
         default:            return 0.0f;                    // warrior, rogue
     }
     float level = float(std::min<uint8>(GetLevel(), 60));
