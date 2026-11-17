@@ -65,7 +65,7 @@ struct ClassicGroundAreaDamage
 {
     uint32 TickDamage;
     float Coefficient;      // spell power per tick
-    bool TicksAreHits = false;  // each tick is a spell hit on every enemy: it can crit and procs like a direct hit
+    bool TicksAreHits = false;  // each tick is a spell hit on every enemy: it can crit, procs like a direct hit, takes no partial resist
 };
 
 static std::unordered_map<uint32, ClassicGroundAreaDamage> const ClassicGroundAreaDamages =
@@ -137,7 +137,8 @@ class classic_spell_ground_area_damage : public AuraScript
 
             SpellNonMeleeDamage damageInfo(caster, target, spellInfo, GetAura()->GetSpellVisual(), spellInfo->GetSchoolMask(), GetAura()->GetCastId());
             damageInfo.periodicLog = !values.TicksAreHits;
-            caster->CalculateSpellDamageTaken(&damageInfo, damage, spellInfo, BASE_ATTACK, crit);
+            // Ticks that are hits take no partial resist (EV-0028: 2 of 370 ticks against 52 of 189 Scorch hits on the same mobs)
+            caster->CalculateSpellDamageTaken(&damageInfo, damage, spellInfo, BASE_ATTACK, crit, false, nullptr, !values.TicksAreHits);
             Unit::DealDamageMods(damageInfo.attacker, damageInfo.target, damageInfo.damage, &damageInfo.absorb);
             caster->SendSpellNonMeleeDamageLog(&damageInfo);
 
