@@ -1232,27 +1232,30 @@ namespace ClassicFurorCat
         }
     }
 
+    // Every Cat Form entry sets the energy to Furor's share, the first one after login included, and without the talent the cat starts
+    // at 0: druid logs at 0/5 read 0 energy on 275 of 275 entries, and at 1/5 the first entry in a long while came back at the 1/5 cap
+    // (wowsims/forever, MIT, docs/evidence EV-0037). With no state yet (no Cat Form since login) the time out of Cat Form counts as long.
     static void EnteredCatForm(Unit* druid)
     {
         AuraEffect const* furor = druid->GetAuraEffect(SPELL_CWD_FUROR, EFFECT_1);
-        State state;
+        Optional<State> state;
         {
             std::lock_guard<std::mutex> guard(StatesLock);
             auto itr = States.find(druid->GetGUID());
-            if (itr == States.end())
-                return;
-            state = itr->second;
+            if (itr != States.end())
+                state = itr->second;
         }
-        if (!furor || furor->GetAmount() <= 0)
-            return;
 
-        float const factor = float(furor->GetAmount()) / 100.0f;
-        float energy = state.Energy * factor;
-        if (state.Counting)
-            energy += 10.0f * factor * std::chrono::duration<float>(GameTime::Now() - state.CountingSince).count();
-        energy = std::min(energy, 100.0f * factor);
-        if (int32(energy) > druid->GetPower(POWER_ENERGY))
-            druid->SetPower(POWER_ENERGY, int32(energy));
+        float const factor = furor ? std::max(float(furor->GetAmount()) / 100.0f, 0.0f) : 0.0f;
+        float energy = 100.0f * factor;
+        if (state)
+        {
+            energy = state->Energy * factor;
+            if (state->Counting)
+                energy += 10.0f * factor * std::chrono::duration<float>(GameTime::Now() - state->CountingSince).count();
+            energy = std::min(energy, 100.0f * factor);
+        }
+        druid->SetPower(POWER_ENERGY, int32(energy));
     }
 }
 
@@ -1857,12 +1860,13 @@ class classic_talent_dru_king_of_the_jungle : public SpellScript
 // energy into ($f1+$AP/410) additional damage." The client spell has the damage effect (base points per combo point) and a dummy effect 1
 // holding the energy factor in percent (100 / 150 / 200 / 250 / 270); nothing read it, so the extra energy was never converted into damage
 // and stayed in the pool. Added to the damage effect before the damage bonuses: the energy left after the 35 energy cost times the factor,
-// plus attack power * 3% per combo point; the energy is used up. Behaviour from vMaNGOS (GPL-2.0, src/scripts/spells/spell_druid.cpp,
-// DruidFerociousBiteScript: patch 1.12 "AP * 3% * combo + energy * factor + damage"). The retail script bound to the first rank needs a
+// plus attack power * 3.7% per combo point; the energy is used up. Behaviour from vMaNGOS (GPL-2.0, src/scripts/spells/spell_druid.cpp,
+// DruidFerociousBiteScript: patch 1.12 "AP * 3% * combo + energy * factor + damage"); Forever's share is 3.7% a combo point, measured in
+// game on ranks 1 to 4 (wowsims/forever, MIT, docs/evidence EV-0032 and EV-0034). The retail script bound to the first rank needs a
 // retail spell.
 class classic_spell_dru_ferocious_bite : public SpellScript
 {
-    static constexpr float ATTACK_POWER_PER_COMBO_POINT = 0.03f;    // vMaNGOS: 3% of attack power per combo point (patch 1.12)
+    static constexpr float ATTACK_POWER_PER_COMBO_POINT = 0.037f;   // Forever: 3.7% of attack power per combo point (vMaNGOS 1.12: 3%)
 
     bool Validate(SpellInfo const* spellInfo) override
     {
@@ -1891,11 +1895,13 @@ class classic_spell_dru_ferocious_bite : public SpellScript
 };
 
 // 1079, 9492, 9493, 9752, 9894, 9896 - Rip: patch 1.12 "now increases in potency with greater attack power". Behaviour from vMaNGOS
-// (GPL-2.0, src/game/Spells/SpellAuras.cpp, periodic damage, SPELLFAMILY_DRUID Rip): every tick deals attack power * combo points / 100 more,
-// the combo points counting up to 4 (a fifth adds nothing). The combo points are those the cast spends, read when the aura is created.
+// (GPL-2.0, src/game/Spells/SpellAuras.cpp, periodic damage, SPELLFAMILY_DRUID Rip): every tick deals attack power * combo points * share
+// more, the combo points counting up to 4 (a fifth adds nothing). vMaNGOS uses 1 / 100; Forever's share is 0.0114, measured in game
+// (wowsims/forever, MIT, docs/evidence EV-0031 to EV-0036). The combo points are those the cast spends, read when the aura is created.
 class classic_spell_dru_rip : public AuraScript
 {
     static constexpr int32 MAX_COMBO_POINTS_FOR_ATTACK_POWER = 4;   // vMaNGOS caps the attack power part at 4 combo points
+    static constexpr float ATTACK_POWER_PER_COMBO_POINT = 0.0114f;  // Forever: 0.0114 per tick per combo point (vMaNGOS: 0.01)
 
     void CalculateAmount(AuraEffect const* /*aurEff*/, SpellEffectValue& amount, bool& canBeRecalculated)
     {
@@ -1905,7 +1911,7 @@ class classic_spell_dru_rip : public AuraScript
             return;
 
         int32 const comboPoints = std::min<int32>(druid->GetPower(POWER_COMBO_POINTS), MAX_COMBO_POINTS_FOR_ATTACK_POWER);
-        amount += druid->GetTotalAttackPowerValue(BASE_ATTACK) * comboPoints / 100.0;
+        amount += druid->GetTotalAttackPowerValue(BASE_ATTACK) * comboPoints * ATTACK_POWER_PER_COMBO_POINT;
     }
 
     void Register() override
@@ -2047,14 +2053,13 @@ private:
     uint32 _consumedSpell = 0;
 };
 
-// 22842 - Frenzied Regeneration: "Converts up to 10 rage per second into health for 10 sec. Each point of rage is converted into 10 health."
+// 22842 - Frenzied Regeneration: "Converts up to 10 Rage per second into health for $d. Each point of Rage is converted into $s1% health."
 // The client aura is a periodic trigger spell effect (1 s) without a trigger spell, so it never did anything; the heal spell 22845
-// exists (heal effect, base points 0). Every tick takes up to 10 rage and casts 22845 for 10 health per rage point (power values are in
-// tenths). The vanilla rule is flat health per rage (the percent of maximum health came with a later patch).
+// exists (heal effect, base points 0). Every tick takes up to 10 rage and casts 22845 for effect 0's percent (1) of maximum health per
+// rage point (power values are in tenths). Vanilla gave a flat 10 health per rage; the Forever client states a percent.
 class classic_spell_dru_frenzied_regeneration : public AuraScript
 {
     static constexpr int32 RAGE_PER_TICK = 100;     // 10 rage
-    static constexpr int32 HEALTH_PER_RAGE = 10;
     static constexpr uint32 SPELL_FRENZIED_REGENERATION_HEAL = 22845;
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
@@ -2072,7 +2077,7 @@ class classic_spell_dru_frenzied_regeneration : public AuraScript
             return;
 
         druid->ModifyPower(POWER_RAGE, -rage);
-        int32 heal = (rage / 10) * HEALTH_PER_RAGE;
+        int32 heal = int32(CalculatePct(druid->GetMaxHealth(), aurEff->GetAmount()) * (rage / 10));
         druid->CastSpell(druid, SPELL_FRENZIED_REGENERATION_HEAL, CastSpellExtraArgs(aurEff).AddSpellBP0(heal));
     }
 
@@ -2080,6 +2085,51 @@ class classic_spell_dru_frenzied_regeneration : public AuraScript
     {
         OnEffectPeriodic += AuraEffectPeriodicFn(classic_spell_dru_frenzied_regeneration::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_TRIGGER_SPELL);
     }
+};
+
+// Forever attack power shares of feral abilities whose client rows state none, measured in game (wowsims/forever, MIT, docs/evidence
+// EV-0031, EV-0033, EV-0034, EV-0036; the sim's spell data overrides): Rake 1822, 1823, 1824, 9904 take 6.5% of attack power on the hit
+// and on every tick, Swipe 779, 780, 769, 9754, 9908 3% on each target hit, Pounce Bleed 9007, 9824, 9826 2.5% on every tick. The hit
+// part is added before the damage bonuses; the tick part is fixed when the bleed is applied.
+class classic_spell_dru_feral_attack_power_hit : public SpellScript
+{
+public:
+    explicit classic_spell_dru_feral_attack_power_hit(float coefficient) : _coefficient(coefficient) { }
+
+private:
+    void CalculateDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* /*victim*/, int32& /*damage*/, int32& flatMod, float& /*pctMod*/) const
+    {
+        if (Unit* druid = GetCaster())
+            flatMod += int32(druid->GetTotalAttackPowerValue(BASE_ATTACK) * _coefficient);
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_dru_feral_attack_power_hit::CalculateDamage);
+    }
+
+    float _coefficient;
+};
+
+class classic_spell_dru_feral_attack_power_tick : public AuraScript
+{
+public:
+    explicit classic_spell_dru_feral_attack_power_tick(float coefficient) : _coefficient(coefficient) { }
+
+private:
+    void CalcAmount(AuraEffect const* /*aurEff*/, SpellEffectValue& amount, bool& canBeRecalculated)
+    {
+        canBeRecalculated = false;
+        if (Unit* druid = GetCaster())
+            amount += druid->GetTotalAttackPowerValue(BASE_ATTACK) * _coefficient;
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(classic_spell_dru_feral_attack_power_tick::CalcAmount, EFFECT_ALL, SPELL_AURA_PERIODIC_DAMAGE);
+    }
+
+    float _coefficient;
 };
 
 /*######
@@ -2240,6 +2290,9 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_spell_dru_rip);
     RegisterSpellScript(classic_spell_dru_entangling_roots_limit);
     RegisterSpellScript(classic_talent_dru_predatory_strikes);
+    RegisterSpellAndAuraScriptPairWithArgs(classic_spell_dru_feral_attack_power_hit, classic_spell_dru_feral_attack_power_tick, "classic_spell_dru_rake_attack_power", 0.065f);
+    RegisterSpellScriptWithArgs(classic_spell_dru_feral_attack_power_hit, "classic_spell_dru_swipe_attack_power", 0.03f);
+    RegisterSpellScriptWithArgs(classic_spell_dru_feral_attack_power_tick, "classic_spell_dru_pounce_bleed_attack_power", 0.025f);
 
     new classic_unit_talent_warlock_druid();
 }
