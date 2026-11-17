@@ -8391,6 +8391,23 @@ SpellCastResult Spell::CheckItems(int32* param1 /*= nullptr*/, int32* param2 /*=
     return SPELL_CAST_OK;
 }
 
+// Classic 1.60 (vanilla; forever-bugs #344, #477): the pushback talents (Twilight Focus, Burning Soul, Healing Focus, Eye of the Storm,
+// Intensity, Fel Concentration, Spiritual Focus, Nature's Focus, Improved Channeling, the "Cast Pushback Reduction" items) are percent
+// ResistPushback spell mods whose tooltips say "a $s1% chance to not lose casting time": a roll that skips the whole pushback, not a
+// smaller pushback. Percent mods multiply, so 100 becomes 170 with a 70% talent; Focused Casting (100) always resists.
+// SPELL_AURA_REDUCE_PUSHBACK (Earth Shield: "reducing casting time lost by $s2%") stays a reduction, in the callers.
+bool Spell::RollClassicPushbackResist(Unit const* unitCaster)
+{
+    Player* player = unitCaster->GetSpellModOwner();
+    if (!player)
+        return false;
+
+    float resist = 100.0f;                                  // must be initialized to 100 for percent modifiers
+    player->ApplySpellMod(m_spellInfo, SpellModOp::ResistPushback, resist, this);
+    float const chance = resist - 100.0f;
+    return chance >= 100.0f || (chance > 0.0f && roll_chance(chance));
+}
+
 void Spell::Delayed() // only called in DealDamage()
 {
     Unit* unitCaster = m_caster->ToUnit();
@@ -8403,10 +8420,10 @@ void Spell::Delayed() // only called in DealDamage()
     //check pushback reduce
     int32 delaytime = 500;                                  // spellcasting delay is normally 500ms
 
-    float delayReduce = 100.0f;                             // must be initialized to 100 for percent modifiers
-    if (Player* player = unitCaster->GetSpellModOwner())
-        player->ApplySpellMod(m_spellInfo, SpellModOp::ResistPushback, delayReduce, this);
-    delayReduce += unitCaster->GetTotalAuraModifier(SPELL_AURA_REDUCE_PUSHBACK) - 100.0f;
+    if (RollClassicPushbackResist(unitCaster))
+        return;
+
+    float const delayReduce = unitCaster->GetTotalAuraModifier(SPELL_AURA_REDUCE_PUSHBACK);
     if (delayReduce >= 100)
         return;
 
@@ -8445,10 +8462,10 @@ void Spell::DelayedChannel()
 
     int32 delaytime = CalculatePct(duration, 25); // channeling delay is normally 25% of its time per hit
 
-    float delayReduce = 100.0f;                                 // must be initialized to 100 for percent modifiers
-    if (Player* player = unitCaster->GetSpellModOwner())
-        player->ApplySpellMod(m_spellInfo, SpellModOp::ResistPushback, delayReduce, this);
-    delayReduce += unitCaster->GetTotalAuraModifier(SPELL_AURA_REDUCE_PUSHBACK) - 100.0f;
+    if (RollClassicPushbackResist(unitCaster))
+        return;
+
+    float const delayReduce = unitCaster->GetTotalAuraModifier(SPELL_AURA_REDUCE_PUSHBACK);
     if (delayReduce >= 100)
         return;
 
