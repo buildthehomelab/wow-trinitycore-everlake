@@ -78,6 +78,8 @@ enum ClassicPriestTalents
     SPELL_PRI_EARLY_DEMISE              = 1310076,
     SPELL_PRI_LITANY_OF_LIGHT_ENERGIZE  = 1317007,
     SPELL_PRI_IMPROVED_MIND_FLAY        = 1225139,
+    SPELL_PRI_DARK_INSPIRATION          = 1326159,
+    SPELL_PRI_DARK_INSPIRATION_BUFF     = 1326168,
     SPELL_PRI_DEVOURING_CONTAGION       = 1309950
 };
 
@@ -413,27 +415,36 @@ class classic_spell_pri_renewed_hope : public AuraScript
         return ValidateSpellInfo({ SPELL_PRI_WEAKENED_SOUL }) && ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
     }
 
+    // Penance heals with a bolt at once and every second of its channel; live shortens Weakened Soul once per Penance cast, not per bolt
+    // (forever-bugs #288, not a bug). The bolts are separate heals triggered by the priest's channel aura, so only the first bolt of each
+    // channel (told apart by the channel aura's cast id) procs. The crit bonus (classic_spell_pri_renewed_hope_crit) stays per bolt.
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        if (!spellInfo || !spellInfo->IsAffected(SPELLFAMILY_PRIEST, flag128(0, 0x10000, 0, 0)))
+            return true;    // not a Penance heal bolt
+
+        static constexpr std::array<uint32, 4> PenanceHealChannels = { 402277, 1240732, 1240733, 1316992 };
+        Unit* priest = GetTarget();
+        for (uint32 channelId : PenanceHealChannels)
+        {
+            if (Aura const* channel = priest->GetAura(channelId, priest->GetGUID()))
+            {
+                if (channel->GetCastId() == _lastPenanceCastId)
+                    return false;
+                _lastPenanceCastId = channel->GetCastId();
+                return true;
+            }
+        }
+        return true;
+    }
+
     void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
     {
         Unit* target = eventInfo.GetActionTarget();
         AuraEffect const* reduction = GetEffect(EFFECT_1);
         if (!target || !reduction)
             return;
-
-        // WoW Forever: once per cast. Penance's heal bolts are fired by its channel aura while that channel is the priest's current
-        // channeled spell, so the bolts of one Penance count as that channel's cast and only the first shortens Weakened Soul: 5 s a
-        // Penance, not up to 15 (wowsims/forever, MIT, sim/priest/renewed_hope.go, penance.go)
-        if (Spell const* procSpell = eventInfo.GetProcSpell())
-        {
-            ObjectGuid castId = procSpell->m_castId;
-            if (procSpell->GetTriggeredByAuraSpell())
-                if (Spell const* channel = eventInfo.GetActor()->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
-                    if (channel->GetSpellInfo() == procSpell->GetTriggeredByAuraSpell())
-                        castId = channel->m_castId;
-            if (castId == _lastCastId)
-                return;
-            _lastCastId = castId;
-        }
 
         if (Aura* weakenedSoul = target->GetAura(SPELL_PRI_WEAKENED_SOUL))
         {
@@ -447,10 +458,11 @@ class classic_spell_pri_renewed_hope : public AuraScript
 
     void Register() override
     {
+        DoCheckProc += AuraCheckProcFn(classic_spell_pri_renewed_hope::CheckProc);
         OnEffectProc += AuraEffectProcFn(classic_spell_pri_renewed_hope::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
     }
 
-    ObjectGuid _lastCastId;
+    ObjectGuid _lastPenanceCastId;
 };
 
 // ... and the heals themselves get the crit bonus (effect 0) on targets with Weakened Soul: Flash Heal, Binding Heal, Lesser Heal, Heal,
@@ -803,6 +815,41 @@ class classic_spell_pri_mind_flay : public AuraScript
     void Register() override
     {
         DoEffectCalcDamageAndHealing += AuraEffectCalcDamageFn(classic_spell_pri_mind_flay::CalculateDamage, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_pri_mind_flay::HandleDarkInspiration, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE, AURA_EFFECT_HANDLE_REAL);
+    }
+
+    // 1326159 Dark Inspiration: "Your Mind Blast and fully channeled Mind Flay causes Dark Inspiration" (1326168). Fully channeled = every
+    // tick went out; counting ticks, not the remove mode, also covers the target dying on the last tick or the channel ending first.
+    void HandleDarkInspiration(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* priest = GetCaster();
+        if (!priest || !aurEff->GetTotalTicks() || aurEff->GetTickNumber() < aurEff->GetTotalTicks())
+            return;
+
+        if (priest->HasAura(SPELL_PRI_DARK_INSPIRATION))
+            priest->CastSpell(priest, SPELL_PRI_DARK_INSPIRATION_BUFF, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+    }
+};
+
+// 1326159 - Dark Inspiration: "Your Mind Blast and fully channeled Mind Flay causes Dark Inspiration, increasing yours and your party's
+// Spirit by $m1% for $1326168d." The talent is a dummy aura with no trigger; spell_proc sends it Mind Blast hits (priest 0x2000), Mind Flay
+// is in classic_spell_pri_mind_flay. The buff 1326168 (aura 137, misc B 16) raises total Spirit (forever-bugs #372, fixed on live: it
+// went by base Spirit there).
+class classic_spell_pri_dark_inspiration : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_PRI_DARK_INSPIRATION_BUFF });
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        GetTarget()->CastSpell(GetTarget(), SPELL_PRI_DARK_INSPIRATION_BUFF, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_pri_dark_inspiration::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
     }
 };
 
@@ -1740,6 +1787,7 @@ void AddSC_classic_talents_priest_paladin()
     RegisterSpellScript(classic_spell_pri_litany_of_light);
     RegisterSpellScript(classic_spell_pri_contingency_plan);
     RegisterSpellScript(classic_spell_pri_mind_flay);
+    RegisterSpellScript(classic_spell_pri_dark_inspiration);
     new classic_unit_pri_devouring_contagion();
 
     // Paladin

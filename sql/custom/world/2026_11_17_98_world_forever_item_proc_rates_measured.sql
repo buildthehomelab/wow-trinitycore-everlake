@@ -52,7 +52,8 @@ INSERT INTO `spell_proc` (`SpellId`, `SchoolMask`, `SpellFamilyName`, `SpellFami
 -- Dungeon set procs whose rows state 100% and no rate (EV-0144): procs per minute on a white swing's base weapon speed or a spell cast's
 -- cast time, once per cast (cast phase, a damage-free cast such as a seal or Judgement included); only casts that cost mana roll
 -- (script classic_spell_item_set_proc_mana_cast). Crusader's Wrath 450625 (Lightforge, Soulforge) 0.9, The Furious Storm 450626
--- (The Elements, The Five Thunders) 1, Nature's Bounty 450608 (Wildheart, Feralheart) 1 with its own script. Vestments of the Devout's
+-- (The Elements, The Five Thunders) 1, Nature's Bounty 450608 (Wildheart, Feralheart) 1, measured on 2,827 casts, in place of the 5%
+-- chance of 2026_11_17_44 (forever-bugs #523, whose script classic_spell_item_feralheart_4p casts the mana, energy or rage). Vestments of the Devout's
 -- 450576 keeps its client 5% and takes the mana-cost rule (188 of 3,832 Renews).
 DELETE FROM `spell_proc` WHERE `SpellId` IN (450625, 450626, 450608);
 INSERT INTO `spell_proc` (`SpellId`, `SchoolMask`, `SpellFamilyName`, `SpellFamilyMask0`, `SpellFamilyMask1`, `SpellFamilyMask2`, `SpellFamilyMask3`,
@@ -61,8 +62,9 @@ INSERT INTO `spell_proc` (`SpellId`, `SchoolMask`, `SpellFamilyName`, `SpellFami
 (450626, 0, 0, 0, 0, 0, 0, 0, 0, 7, 1, 0, 0, 0, 1, 0, 0, 0),
 (450608, 0, 0, 0, 0, 0, 0, 0, 0, 7, 1, 0, 0, 0, 1, 0, 0, 0);
 DELETE FROM `spell_script_names` WHERE `ScriptName` IN ('classic_spell_item_set_proc_mana_cast', 'classic_spell_item_natures_bounty');
+-- 450608 keeps classic_spell_item_feralheart_4p (2026_11_17_44) beside the mana-cost rule
 INSERT INTO `spell_script_names` (`spell_id`, `ScriptName`) VALUES
 (450625, 'classic_spell_item_set_proc_mana_cast'),
 (450626, 'classic_spell_item_set_proc_mana_cast'),
 (450576, 'classic_spell_item_set_proc_mana_cast'),
-(450608, 'classic_spell_item_natures_bounty');
+(450608, 'classic_spell_item_set_proc_mana_cast');

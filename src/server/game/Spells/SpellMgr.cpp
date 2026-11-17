@@ -3996,6 +3996,46 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->AuraInterruptFlags &= ~SpellAuraInterruptFlags::EnteringCombat;
     });
 
+    // Classic 1.60 rogue Sap: landing it does not put the rogue (or the target's pack) in combat (forever-bugs #199, fixed on live).
+    // The client data has no no-threat attribute on it, so SetInCombatWith / AtTargetAttacked engaged the target at once.
+    ApplySpellFix({ 2070, 6770, 11297 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->AttributesEx2 |= SPELL_ATTR2_NO_INITIAL_THREAT;
+    });
+
+    // Classic 1.60 paladin Light's Fury (1310927, the Seal of Fury shield): absorbs before other shields, so Power Word: Shield or Divine
+    // Aegis no longer keep it from breaking and returning Improved Seal of Fury's mana (forever-bugs #255, fixed on live 15 Oct). Absorb
+    // auras go lowest MiscValueB first (Trinity::AbsorbAuraOrderPred); Light's Fury, Power Word: Shield and Divine Aegis all have 0.
+    ApplySpellFix({ 1310927 }, [](SpellInfo* spellInfo)
+    {
+        ApplySpellEffectFix(spellInfo, EFFECT_0, [](SpellEffectInfo* spellEffectInfo)
+        {
+            spellEffectInfo->MiscValueB = -1;
+        });
+    });
+
+    // Nature's Bounty 27784 (Feralheart Raiment 4-piece, Wildheart Raiment): "Restores $o1 energy over $d", but its periodic energize names
+    // mana (misc 0), which live players report as the bonus restoring mana in Cat Form (forever-bugs #523). It restores energy.
+    ApplySpellFix({ 27784 }, [](SpellInfo* spellInfo)
+    {
+        ApplySpellEffectFix(spellInfo, EFFECT_0, [](SpellEffectInfo* spellEffectInfo)
+        {
+            spellEffectInfo->MiscValue = POWER_ENERGY;
+        });
+    });
+
+    // Classic 1.60 druid Thorns: each hit adds 6% of the druid's spell power (forever-bugs #117: the scaling is intended on live; wowsims
+    // EV-0067, the ratio Blizzard states for Retribution Aura). Every rank's damage shield effect states coefficient 0 and there is no
+    // vanilla value row, so it took none. The druid's current spell power is read per hit (damage shields in Unit::DealMeleeDamage),
+    // with the usual below-level-20 penalty for ranks 1 and 2 (ClassicSpellValue::BonusCoefficientWithLevelPenalty).
+    ApplySpellFix({ 467, 782, 1075, 8914, 9756, 9910 }, [](SpellInfo* spellInfo)
+    {
+        ApplySpellEffectFix(spellInfo, EFFECT_0, [](SpellEffectInfo* spellEffectInfo)
+        {
+            spellEffectInfo->BonusCoefficient = 0.06f;
+        });
+    });
+
     // Classic 1.60 world buffs: the client's spells are dummy auras that only carry the numbers; live puts the effect on a hidden copy
     // (Rallying Cry 1304452, Warchief's Blessing 1304594, Slip'kik's Savvy 1304751). Each dummy effect becomes the aura the copy has.
     // Rallying Cry of the Dragonslayer: crit chance of all spells and attacks, attack power, ranged attack power, spell damage, healing

@@ -1812,40 +1812,6 @@ public:
     }
 };
 
-// 450608 - Nature's Bounty (Wildheart Raiment 5-piece, Feralheart Raiment reissue 4-piece): a dummy that fired nothing. A spell cast
-// that costs mana restores mana (27782), 1 a minute on the cast time (64 of 2,827 casts, measured); a landed white swing gives 27784
-// and a melee hit taken 10 rage (27783), whose rates are unmeasured and take the same row (wowsims/forever, MIT, EV-0144,
-// sim/common/forever/items_sets.go).
-class classic_spell_item_natures_bounty : public classic_spell_item_set_proc_mana_cast
-{
-    static constexpr uint32 SPELL_NATURES_BOUNTY_MANA = 27782;
-    static constexpr uint32 SPELL_NATURES_BOUNTY_RAGE = 27783;
-    static constexpr uint32 SPELL_NATURES_BOUNTY_ENERGY = 27784;
-
-    bool Validate(SpellInfo const* /*spellInfo*/) override
-    {
-        return ValidateSpellInfo({ SPELL_NATURES_BOUNTY_MANA, SPELL_NATURES_BOUNTY_RAGE, SPELL_NATURES_BOUNTY_ENERGY });
-    }
-
-    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
-    {
-        PreventDefaultAction();
-        Unit* druid = GetTarget();
-        uint32 spellId = SPELL_NATURES_BOUNTY_MANA;
-        if (eventInfo.GetTypeMask() & PROC_FLAG_DEAL_MELEE_SWING)
-            spellId = SPELL_NATURES_BOUNTY_ENERGY;
-        else if (eventInfo.GetTypeMask() & (PROC_FLAG_TAKE_MELEE_SWING | PROC_FLAG_TAKE_MELEE_ABILITY))
-            spellId = SPELL_NATURES_BOUNTY_RAGE;
-        druid->CastSpell(druid, spellId, CastSpellExtraArgs(aurEff));
-    }
-
-    void Register() override
-    {
-        classic_spell_item_set_proc_mana_cast::Register();
-        OnEffectProc += AuraEffectProcFn(classic_spell_item_natures_bounty::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
-    }
-};
-
 // 17350 - Argent Defender: "Has a chance when struck in combat", about twice as likely when an Undead strikes (its second effect, a dummy
 // of 2). The spell_proc row prices 1 a minute on the attacker's swing interval, the Undead rate; any other attacker passes half the time,
 // 0.5 a minute, both behind the client's 20 s cooldown (wowsims/forever, MIT, docs/evidence EV-0126).
@@ -2041,8 +2007,10 @@ class classic_spell_tauren_cultivation : public SpellScript
 
     void HandleAfterCast()
     {
+        // Since the 70888 hotfixes Cultivation and Cultivate share category 2578 (15 min), which Cultivation has just started: the
+        // triggered Cultivate must ignore it or it fails "not ready" and no herb grows (forever-bugs #456)
         if (GameObject* herb = ClassicCultivation::FindHerb(GetCaster()))
-            GetCaster()->CastSpell(herb, ClassicCultivation::SPELL_CULTIVATE_HERB, CastSpellExtraArgs(TRIGGERED_IGNORE_GCD));
+            GetCaster()->CastSpell(herb, ClassicCultivation::SPELL_CULTIVATE_HERB, CastSpellExtraArgs(TRIGGERED_IGNORE_GCD | TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD));
     }
 
     void Register() override
@@ -2702,6 +2670,100 @@ class classic_spell_quest_testing_the_wells : public SpellScript
     }
 };
 
+
+// 1248806 - Revelation, the equip aura of weapon enchant 8217 (Enchant Weapon - Revelation 1248805): "a chance to trigger Revelation when a
+// non-periodic spell fails to critically strike. Revelation grants $s2% increased critical strike chance to the next non-periodic spell
+// cast." The aura names no trigger spell: each class has its own buff, a one-charge crit modifier on that class's spells. Live
+// (forever-bugs #163, #401; wowsims EV-0129): only in combat, about 8% (spell_proc Chance) on each non-crit damage or heal hit of a spell,
+// rolled per target, never on crits, aura-only applications or periodic ticks, and not on seals (melee attacks); it can refresh the buff
+// while it is up. Warriors and rogues have no buff. Not modelled: the lower chance at high crit and for lower ranks (no formula known).
+class classic_spell_item_revelation : public AuraScript
+{
+    static uint32 BuffFor(uint8 playerClass)
+    {
+        switch (playerClass)
+        {
+            case CLASS_MAGE:    return 1248808;
+            case CLASS_PRIEST:  return 1323377;
+            case CLASS_WARLOCK: return 1323392;
+            case CLASS_DRUID:   return 1323400;
+            case CLASS_HUNTER:  return 1323410;
+            case CLASS_SHAMAN:  return 1323418;
+            case CLASS_PALADIN: return 1323419;
+            default:            return 0;
+        }
+    }
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ 1248808, 1323377, 1323392, 1323400, 1323410, 1323418, 1323419 });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Unit* actor = eventInfo.GetActor();
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        if (!actor || !actor->IsPlayer() || !actor->IsInCombat() || !spellInfo || !BuffFor(actor->GetClass()))
+            return false;
+
+        if (spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MELEE || (eventInfo.GetHitMask() & PROC_HIT_CRITICAL))
+            return false;
+
+        DamageInfo const* damageInfo = eventInfo.GetDamageInfo();
+        HealInfo const* healInfo = eventInfo.GetHealInfo();
+        return (damageInfo && damageInfo->GetDamage()) || (healInfo && healInfo->GetHeal());
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        Unit* actor = eventInfo.GetActor();
+        actor->CastSpell(actor, BuffFor(actor->GetClass()), CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_item_revelation::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_item_revelation::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
+// 450608 - "S03 - Druid Energize Trigger - Wildheart Raiment", the Feralheart Raiment 4-piece bonus (item set 1667, also set 1666 6-piece and
+// 185 5-piece): "Chance on spellcast to restore $27782s1 Mana, on melee attack to regenerate $27784o1 Energy over $27784d, and when struck by
+// a melee attack to generate ${$27783s1/10} Rage." The aura is a dummy with proc flags and no trigger, so it did nothing (forever-bugs #523).
+// spell_proc rolls the chance (the effect's 5); this picks the part that fits the event. 27784's energize gives energy (SpellMgr fix).
+class classic_spell_item_feralheart_4p : public AuraScript
+{
+    static constexpr uint32 SPELL_NATURES_BOUNTY_MANA = 27782;
+    static constexpr uint32 SPELL_NATURES_BOUNTY_RAGE = 27783;
+    static constexpr uint32 SPELL_NATURES_BOUNTY_ENERGY = 27784;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_NATURES_BOUNTY_MANA, SPELL_NATURES_BOUNTY_RAGE, SPELL_NATURES_BOUNTY_ENERGY });
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        uint32 spellId = 0;
+        if (eventInfo.GetTypeMask() & (PROC_FLAG_TAKE_MELEE_SWING | PROC_FLAG_TAKE_MELEE_ABILITY))
+            spellId = SPELL_NATURES_BOUNTY_RAGE;
+        else if (eventInfo.GetTypeMask() & PROC_FLAG_DEAL_MELEE_SWING)
+            spellId = SPELL_NATURES_BOUNTY_ENERGY;
+        else if (eventInfo.GetTypeMask() & (PROC_FLAG_DEAL_HARMFUL_SPELL | PROC_FLAG_DEAL_HELPFUL_SPELL))
+            spellId = SPELL_NATURES_BOUNTY_MANA;
+
+        if (spellId)
+            GetTarget()->CastSpell(GetTarget(), spellId, CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_item_feralheart_4p::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 void AddSC_classic_spell_scripts()
 {
     RegisterSpellScript(classic_spell_warr_gore_drinker);
@@ -2715,7 +2777,6 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_item_moonshadow_stave);
     RegisterSpellScript(classic_spell_item_argent_defender);
     RegisterSpellScript(classic_spell_item_set_proc_mana_cast);
-    RegisterSpellScript(classic_spell_item_natures_bounty);
     RegisterSpellScript(classic_spell_pal_consecration);
     RegisterSpellScript(classic_spell_pal_seal_of_fury);
     RegisterSpellScript(classic_spell_pal_seal_of_fury_damage);
@@ -2769,4 +2830,6 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_proc_chance_from_effect);
     RegisterSpellScript(classic_spell_proc_chance_from_effect_dummy);
     RegisterSpellScript(classic_spell_quest_testing_the_wells);
+    RegisterSpellScript(classic_spell_item_revelation);
+    RegisterSpellScript(classic_spell_item_feralheart_4p);
 }

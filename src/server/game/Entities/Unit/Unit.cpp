@@ -3318,15 +3318,64 @@ void Unit::_UpdateAutoRepeatSpell()
             return;
         }
 
-    // Classic 1.60: moving pauses Auto Shot and restarts its half-second wind-up; no shot leaves while the hunter moves
+    bool const shotDue = isAttackReady(RANGED_ATTACK) && m_currentSpells[CURRENT_AUTOREPEAT_SPELL]->getState() != SPELL_STATE_PREPARING;
+
+    // Classic 1.60: wait (range, facing, line of sight) or stop (ammo, weapon, target); the reason is told once. Returns whether
+    // Auto Shot keeps waiting.
+    auto classicAutoShotFailed = [&](SpellCastResult result) -> bool
+    {
+        bool const stop = ClassicAutoShot::OnFailedShot(result) == ClassicAutoShot::FailAction::Stop;
+        if (stop || ClassicAutoShot::ShouldReport(result, m_classicAutoShotLastReported))
+        {
+            Spell::SendCastResult(ToPlayer(), autoRepeatSpellInfo, m_currentSpells[CURRENT_AUTOREPEAT_SPELL]->m_SpellVisual,
+                m_currentSpells[CURRENT_AUTOREPEAT_SPELL]->m_castId, result);
+            m_classicAutoShotLastReported = result;
+        }
+        if (stop)
+            InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
+        return !stop;
+    };
+
+    // Classic 1.60: moving pauses Auto Shot and restarts its half-second wind-up; no shot leaves while the hunter moves. A shot that
+    // comes due while the hunter moves falls onto the half-second retry checks (ClassicAutoShot::RetryMs).
     if (classicAutoShot && isMoving())
     {
-        m_classicAutoShotStillSince = GameTime::GetGameTimeMS();
+        uint32 const now = GameTime::GetGameTimeMS();
+        m_classicAutoShotStillSince = now;
+        if (shotDue && !m_classicAutoShotRetrying)
+            StartClassicAutoShotRetry(now);
+        return;
+    }
+
+    // Classic 1.60 retry: the next attempt waits for the first check after the hunter stopped (and after the last failed check). At
+    // that check the shot is tested without the wind-up, and the wind-up starts there when it can be taken.
+    if (classicAutoShot && shotDue && m_classicAutoShotRetrying)
+    {
+        uint32 const now = GameTime::GetGameTimeMS();
+        uint32 const tick = ClassicAutoShot::RetryTickFrom(m_classicAutoShotRetryAnchor,
+            ClassicAutoShot::Later(m_classicAutoShotStillSince, m_classicAutoShotLastAttempt + 1));
+        if (!ClassicAutoShot::HasReached(now, tick))
+            return;
+
+        m_classicAutoShotLastAttempt = tick;
+        uint32 const stillSince = m_classicAutoShotStillSince;
+        m_classicAutoShotStillSince = now - ClassicAutoShot::WindupMs;   // the check itself does not wait for the wind-up
+        SpellCastResult const result = m_currentSpells[CURRENT_AUTOREPEAT_SPELL]->CheckCast(true);
+        m_classicAutoShotStillSince = stillSince;
+        if (result != SPELL_CAST_OK && result != SPELL_FAILED_DONT_REPORT)
+        {
+            classicAutoShotFailed(result);
+            return;
+        }
+
+        m_classicAutoShotRetrying = false;
+        m_classicAutoShotStillSince = tick;
+        m_classicAutoShotLastReported = SPELL_CAST_OK;
         return;
     }
 
     // castroutine
-    if (isAttackReady(RANGED_ATTACK) && m_currentSpells[CURRENT_AUTOREPEAT_SPELL]->getState() != SPELL_STATE_PREPARING)
+    if (shotDue)
     {
         if (classicAutoShot && !IsClassicAutoShotWindupDone())
             return;
@@ -3337,16 +3386,9 @@ void Unit::_UpdateAutoRepeatSpell()
         {
             if (classicAutoShot)
             {
-                // Classic 1.60: wait (range, facing, line of sight) or stop (ammo, weapon, target); the reason is told once
-                bool const stop = ClassicAutoShot::OnFailedShot(result) == ClassicAutoShot::FailAction::Stop;
-                if (stop || ClassicAutoShot::ShouldReport(result, m_classicAutoShotLastReported))
-                {
-                    Spell::SendCastResult(ToPlayer(), autoRepeatSpellInfo, m_currentSpells[CURRENT_AUTOREPEAT_SPELL]->m_SpellVisual,
-                        m_currentSpells[CURRENT_AUTOREPEAT_SPELL]->m_castId, result);
-                    m_classicAutoShotLastReported = result;
-                }
-                if (stop)
-                    InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
+                // a shot that waits falls onto the half-second retry checks
+                if (classicAutoShotFailed(result) && result != SPELL_FAILED_DONT_REPORT)
+                    StartClassicAutoShotRetry(GameTime::GetGameTimeMS());
             }
             else if (!autoRepeatSpellInfo->IsAutoShot())
                 InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
@@ -3449,7 +3491,14 @@ void Unit::SetCurrentCastSpell(Spell* pSpell)
             {
                 m_classicAutoShotStillSince = GameTime::GetGameTimeMS();
                 m_classicAutoShotLastReported = SPELL_CAST_OK;
+                m_classicAutoShotRetrying = false;
             }
+
+            // Classic 1.60 (forever-bugs #408, fixed on live): a wand (Shoot) or thrown weapon (Throw) waits half a second before its first
+            // shot, whatever the weapon speed; later shots follow the weapon speed. Without this the first shot left at once.
+            if (IsPlayer() && pSpell->GetSpellInfo()->IsAutoRepeatRangedSpell() && pSpell->GetSpellInfo()->Id != ClassicAutoShot::SpellId
+                && (!m_currentSpells[CSpellType] || m_currentSpells[CSpellType]->GetSpellInfo()->Id != pSpell->GetSpellInfo()->Id))
+                setAttackTimer(RANGED_ATTACK, std::max<uint32>(getAttackTimer(RANGED_ATTACK), ClassicAutoShot::WindupMs));
 
             if (m_currentSpells[CSpellType] && m_currentSpells[CSpellType]->getState() == SPELL_STATE_IDLE)
                 m_currentSpells[CSpellType]->setState(SPELL_STATE_FINISHED);
@@ -3533,6 +3582,13 @@ void Unit::FinishSpell(CurrentSpellTypes spellType, SpellCastResult result /*= S
         spell->SendChannelUpdate(0, result);
 
     spell->finish(result);
+}
+
+void Unit::StartClassicAutoShotRetry(uint32 now)
+{
+    m_classicAutoShotRetrying = true;
+    m_classicAutoShotRetryAnchor = now;
+    m_classicAutoShotLastAttempt = now;
 }
 
 bool Unit::IsClassicAutoShotWindupDone() const

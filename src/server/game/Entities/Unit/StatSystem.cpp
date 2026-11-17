@@ -1105,6 +1105,11 @@ void Player::UpdatePowerRegen(Powers power)
     if (power == POWER_MANA)
         flat_modifier           *= regenPercentAuras;
 
+    // Classic 1.60: "mana per 5 sec." on items (ITEM_MOD_MANA_REGENERATION, ApplyManaRegenBonus) is mana every five seconds, cast or not,
+    // like the mp5 aura above (forever-bugs #54). It was summed into m_baseManaRegen and never read, so the item stat gave nothing.
+    if (power == POWER_MANA)
+        flat_modifier           += m_baseManaRegen / 5.f;
+
     result_regen                *= pct_modifier;
     result_regen_interrupted    *= pct_modifier;
 

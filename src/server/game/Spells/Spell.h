@@ -554,6 +554,7 @@ class TC_GAME_API Spell
         SpellEffectValue CalculateDamage(SpellEffectInfo const& spellEffectInfo, Unit const* target, float* var = nullptr) const;
 
         void Delayed();
+        bool RollClassicPushbackResist(Unit const* unitCaster);
         void DelayedChannel();
         SpellState getState() const { return m_spellState; }
         void setState(SpellState state) { m_spellState = state; }

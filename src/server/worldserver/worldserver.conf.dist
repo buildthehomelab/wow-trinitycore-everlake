@@ -5266,12 +5266,13 @@ Classic.ForeverCreatureHealth = 0
 
 #    Classic.ForeverKillXp
 #        Description: Mobs below the player's level give kill XP from the mob's own base (5 * mob level + 45) instead of the
-#                     player's base, as reported from official Forever sniffs by the Azeroth project (not verified by us).
-#                     Lower mobs then give less (player 10, mob 8: 61 instead of 68). Equal and higher mobs are unchanged.
-#        Default:     0 - (Disabled, vanilla VMaNGOS formula)
-#                     1 - (Enabled, Forever sniff formula)
+#                     player's base, as on live Forever (Blizzard: intended, forever-bugs #138; a level 10 killing a level 5
+#                     gets 20 base / 40 rested there, the vanilla formula gives 27 / 54). Lower mobs then give less
+#                     (player 10, mob 8: 61 instead of 68). Equal and higher mobs are unchanged.
+#        Default:     1 - (Enabled, live Forever formula)
+#                     0 - (Disabled, vanilla VMaNGOS formula)
 
-Classic.ForeverKillXp = 0
+Classic.ForeverKillXp = 1
 
 #    Classic.CreatureSpellLevelScaling
 #        Description: Vanilla creature spells flagged "scales with creature level" (Fireball 20793, Lightning Bolt 9532,

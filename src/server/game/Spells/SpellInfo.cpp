@@ -2643,6 +2643,13 @@ SpellCastResult SpellInfo::CheckTarget(WorldObject const* caster, WorldObject co
 
         if (HasAttribute(SPELL_ATTR5_NOT_ON_PLAYER_CONTROLLED_NPC) && unitTarget->IsControlledByPlayer())
             return SPELL_FAILED_TARGET_IS_PLAYER_CONTROLLED;
+
+        // Classic 1.60 (WoW Forever, not a bug per Blizzard: forever-bugs #27, #41, #149): players' pets take no stat buffs from players
+        // (Mark of the Wild, Power Word: Fortitude, Arcane Intellect, scrolls fail with "Target is not a player"); pets get their stats
+        // from their owner's scaling aura instead. Thorns, heals and other helpful spells still land on them.
+        // Explicit targets only: talents that buff the own pet (Demonic Ally, Nature's Ally) aim at it implicitly.
+        if (!implicit && caster->IsPlayer() && unitTarget->IsControlledByPlayer() && IsPositive() && HasAura(SPELL_AURA_MOD_STAT))
+            return SPELL_FAILED_TARGET_NOT_PLAYER;
     }
     else if (HasAttribute(SPELL_ATTR5_NOT_ON_PLAYER))
         return SPELL_FAILED_TARGET_IS_PLAYER;
@@ -4869,6 +4876,38 @@ bool SpellInfo::IsDifferentRankOf(SpellInfo const* spellInfo) const
     if (Id == spellInfo->Id)
         return false;
     return IsRankOf(spellInfo);
+}
+
+// Classic 1.60: a rank pair the client data does not chain through SkillLineAbility (Rejuvenation, Power Word: Shield, Blessing of Sacrifice
+// 6940 / 20729). Rank-like: same name, same family and class mask, the same effect/aura layout in every effect, both timed and not passive,
+// neither enchant-proc, and neither triggers the other. Talent + proc pairs and multi-part buffs differ in one of those.
+bool SpellInfo::IsClassicUnchainedRankOf(SpellInfo const* other) const
+{
+    if (ChainEntry || other->ChainEntry || Id == other->Id)
+        return false;
+    if (!SpellName || !other->SpellName || !IsPositive() || !other->IsPositive())
+        return false;
+    if (IsPassive() || other->IsPassive() || GetDuration() <= 0 || other->GetDuration() <= 0)
+        return false;
+    if (HasAttribute(SPELL_ATTR0_CU_ENCHANT_PROC) || other->HasAttribute(SPELL_ATTR0_CU_ENCHANT_PROC))
+        return false;
+    if (SpellFamilyName == SPELLFAMILY_GENERIC || SpellFamilyName != other->SpellFamilyName
+        || SpellFamilyFlags[0] != other->SpellFamilyFlags[0] || SpellFamilyFlags[1] != other->SpellFamilyFlags[1]
+        || SpellFamilyFlags[2] != other->SpellFamilyFlags[2] || SpellFamilyFlags[3] != other->SpellFamilyFlags[3])
+        return false;
+    if (strcmp((*SpellName)[sWorld->GetDefaultDbcLocale()], (*other->SpellName)[sWorld->GetDefaultDbcLocale()]) != 0)
+        return false;
+    // Ranks may differ in their number of effects (Mark of the Wild 1126 has one, 5234 eight): compare the effects both have. GetEffect past the
+    // other spell's last effect asserts (235 crash 01:35, a druid bot's 5234 on a target holding 1126).
+    SpellInfo const* fewer = GetEffects().size() <= other->GetEffects().size() ? this : other;
+    SpellInfo const* more = fewer == this ? other : this;
+    for (SpellEffectInfo const& a : fewer->GetEffects())
+    {
+        SpellEffectInfo const& b = more->GetEffect(a.EffectIndex);
+        if (a.Effect != b.Effect || a.ApplyAuraName != b.ApplyAuraName || a.TriggerSpell == more->Id || b.TriggerSpell == fewer->Id)
+            return false;
+    }
+    return true;
 }
 
 bool SpellInfo::IsHighRankOf(SpellInfo const* spellInfo) const

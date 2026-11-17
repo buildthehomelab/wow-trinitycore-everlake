@@ -31,6 +31,7 @@
 // - A shot that cannot be taken either waits (out of range, facing, line of sight: the hunter can fix that by moving or turning) or
 //   stops Auto Shot (no ammo, wrong or no ranged weapon, a dead or friendly target). The reason is told once, not every update: the
 //   server used to repeat the error to the client every half second while the toggle stayed on.
+// - A shot that came due but could not start falls onto the hidden half-second retry checks (RetryMs below).
 namespace ClassicAutoShot
 {
     constexpr uint32_t SpellId = 75;
@@ -50,6 +51,36 @@ namespace ClassicAutoShot
     inline bool IsWindupDone(uint32_t nowMs, uint32_t stillSinceMs, uint32_t windupMs = WindupMs)
     {
         return uint32_t(nowMs - stillSinceMs) >= windupMs;   // unsigned difference: correct across the 49-day wrap of the ms clock
+    }
+
+    // The hidden retry timer (Blizzard's WoW Classic "Not a Bug" list; the forever-hunter wiki's Shot Mechanics page, and Forever's
+    // patch notes say it is still there). When a shot comes due but cannot start (the hunter is moving, or out of range, facing
+    // away, out of sight), Auto Shot checks again only every half second from that moment. The wind-up of the next shot starts at
+    // the first check the hunter passes, so stopping just after a check costs almost half a second. A retry that ends before the
+    // weapon is ready costs nothing: the retry only starts once a shot is due.
+    constexpr uint32_t RetryMs = 500;
+
+    // The first retry check at or after notBeforeMs on the grid anchorMs + k * RetryMs, k >= 1: the failed attempt at anchorMs is
+    // not a check. Unsigned differences: correct across the wrap of the ms clock.
+    inline uint32_t RetryTickFrom(uint32_t anchorMs, uint32_t notBeforeMs)
+    {
+        int32_t const since = int32_t(notBeforeMs - anchorMs);
+        if (since <= 0)
+            return anchorMs + RetryMs;
+        uint32_t const steps = (uint32_t(since) + RetryMs - 1) / RetryMs;
+        return anchorMs + steps * RetryMs;
+    }
+
+    // Whether game time nowMs has reached timeMs (wrap-safe)
+    inline bool HasReached(uint32_t nowMs, uint32_t timeMs)
+    {
+        return int32_t(nowMs - timeMs) >= 0;
+    }
+
+    // The later of two game times (wrap-safe)
+    inline uint32_t Later(uint32_t aMs, uint32_t bMs)
+    {
+        return int32_t(aMs - bMs) >= 0 ? aMs : bMs;
     }
 
     enum class FailAction

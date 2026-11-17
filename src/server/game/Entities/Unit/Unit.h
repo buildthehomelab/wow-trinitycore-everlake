@@ -1946,6 +1946,12 @@ class TC_GAME_API Unit : public WorldObject
         // counts from here), and the last failure reason told to the client (told once, not every update)
         uint32 m_classicAutoShotStillSince = 0;
         SpellCastResult m_classicAutoShotLastReported = SPELL_CAST_OK;
+        // Classic 1.60 Auto Shot retry timer: a shot came due but could not start at m_classicAutoShotRetryAnchor, so attempts wait
+        // for the half-second checks after it; m_classicAutoShotLastAttempt is the last check made
+        bool m_classicAutoShotRetrying = false;
+        uint32 m_classicAutoShotRetryAnchor = 0;
+        uint32 m_classicAutoShotLastAttempt = 0;
+        void StartClassicAutoShotRetry(uint32 now);
 
         bool m_ControlledByPlayer;
 
