@@ -378,10 +378,8 @@ class classic_talent_warl_life_tap : public SpellScript
         Unit* caster = GetCaster();
         SpellInfo const* spellInfo = GetSpellInfo();
 
-        float coefficient = LIFE_TAP_SPELL_POWER_COEFFICIENT;
-        // vanilla level penalty (Unit::SpellDamageBonusDone ClassicSpellLevelPenalty)
-        if (spellInfo->SpellLevel > 0 && spellInfo->SpellLevel < 20)
-            coefficient *= 1.0f - (20.0f - float(spellInfo->SpellLevel)) * 0.0375f;
+        // no sub-level-20 penalty in WoW Forever (ClassicSpellValue::BonusCoefficient)
+        float const coefficient = LIFE_TAP_SPELL_POWER_COEFFICIENT;
 
         double cost = GetEffectInfo(EFFECT_0).CalcValue(caster);
         cost += caster->SpellBaseDamageBonusDone(spellInfo->GetSchoolMask()) * coefficient;

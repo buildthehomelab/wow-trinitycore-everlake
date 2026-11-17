@@ -7130,14 +7130,12 @@ static ClassicSpellValue::Value const* ClassicCoefficientRow(SpellInfo const* sp
     return sSpellMgr->GetClassicSpellValue(spellInfo->Id, uint32(effectInfo.EffectIndex));
 }
 
-// Classic 1.60: the spell power / healing power factor of an effect with the vanilla level penalty in. A vanilla table row is
-// already penalised and is taken as it is; the client's coefficient is the unpenalized one and gets 1 - (20 - spell level) * 3.75%
-// below level 20 (Fireball rank 1: 0.429 x 0.2875 = 0.123). See ClassicSpellValue::BonusCoefficientWithLevelPenalty.
-// A player's lower rank cast far below the caster's level then keeps only part of it (WoW Forever downranking,
-// ClassicSpellValue::DownrankFactor).
+// Classic 1.60: the spell power / healing power factor of an effect (ClassicSpellValue::BonusCoefficient: the vanilla hold's or the
+// client's, with no sub-level-20 penalty as in WoW Forever). A player's lower rank cast far below the caster's level keeps only part of
+// it (WoW Forever downranking, ClassicSpellValue::DownrankFactor).
 static float ClassicBonusCoefficient(Unit const* caster, SpellInfo const* spellProto, SpellEffectInfo const& spellEffectInfo)
 {
-    return ClassicSpellValue::BonusCoefficientWithLevelPenalty(ClassicCoefficientRow(spellProto, spellEffectInfo), spellEffectInfo.BonusCoefficient, int32(spellProto->SpellLevel))
+    return ClassicSpellValue::BonusCoefficient(ClassicCoefficientRow(spellProto, spellEffectInfo), spellEffectInfo.BonusCoefficient)
         * sSpellMgr->GetClassicDownrankFactor(spellProto, caster);
 }
 
