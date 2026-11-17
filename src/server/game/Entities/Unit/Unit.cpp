@@ -2941,7 +2941,9 @@ float Unit::GetUnitParryChance(WeaponAttackType attType, Unit const* victim) con
     }
 
     // Classic 1.60 (vanilla): players 0.04% per point of weapon skill difference; creatures 0.2% per point of the capped skill
-    // difference, 0.6% when more than 10 below; creatures below level 10 parry less
+    // difference, 0.6% when more than 10 below; creatures below level 10 parry less. WoW Forever: 0.1% per point when 1-10 below,
+    // like dodge (6% against a level +2 creature, 5.5% at +1; 14% at +3 is unchanged). Forever's beta measures 10.8% at +2, an open
+    // Blizzard bug (ClassicWoWCommunity/forever-bugs#192, magey/forever-warrior#1); the intended 6% is used.
     if (chance > 0.0f)
     {
         int32 const weaponSkill = GetClassicWeaponSkill(attType, victim);
@@ -2951,7 +2953,7 @@ float Unit::GetUnitParryChance(WeaponAttackType attType, Unit const* victim) con
         else
         {
             int32 const cappedDiff = std::min(int32(GetMaxSkillValueForLevel(victim)), weaponSkill) - victimMaxSkill;
-            chance -= cappedDiff * (cappedDiff < -10 ? 0.6f : 0.2f);
+            chance -= cappedDiff * (cappedDiff < -10 ? 0.6f : cappedDiff < 0 ? 0.1f : 0.2f);
             if (victim->GetLevel() < 10)
                 chance *= victim->GetLevel() / 10.0f;
         }
