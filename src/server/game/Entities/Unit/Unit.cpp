@@ -7309,11 +7309,24 @@ float Unit::SpellDamageBonusDoneExact(Unit* victim, SpellInfo const* spellProto,
 
     // Done fixed damage bonus auras
     int32 DoneAdvertisedBenefit  = SpellBaseDamageBonusDone(spellProto->GetSchoolMask());
-    // modify spell power by victim's SPELL_AURA_MOD_DAMAGE_TAKEN auras (eg Amplify/Dampen Magic)
-    DoneAdvertisedBenefit += victim->GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_DAMAGE_TAKEN, spellProto->GetSchoolMask());
-    // Classic 1.60 item stats: spell damage versus a creature type
+    // Classic 1.60 (WoW Forever): the victim's SPELL_AURA_MOD_DAMAGE_TAKEN (Judgement of the Crusader, Amplify / Dampen Magic) adds at the
+    // spell's coefficient after the done multipliers, which do not scale it (Seal of Fury, Judgement of Fury and Consecration's marked tick;
+    // wowsims/forever, MIT, docs/evidence EV-0143). Retail folded it into the spell power before them.
+    int32 const takenBenefit = victim->GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_DAMAGE_TAKEN, spellProto->GetSchoolMask());
+    // Classic 1.60 item stats: spell damage versus a creature type. WoW Forever: Seal of Fury's hit and Judgement of Fury take none of it
+    // (Courier's Clasp +10 against Humanoids: Seal of Fury fit +10 on 0 of 437 hits, Consecration's marked tick on 266 of 266; EV-0143)
     if (Player const* thisPlayer = ToPlayer())
-        DoneAdvertisedBenefit += thisPlayer->GetClassicSpellDamageVersus(victim->GetCreatureTypeMask());
+    {
+        switch (spellProto->Id)
+        {
+            case 20163: case 20231: case 20415: case 20416: case 20417: case 20418: case 20419: case 20421: case 20422: case 1311647: // Seal of Fury
+            case 20183: case 20232: case 20411: case 20412: case 20413: case 20414: case 1311650: case 1311655:                     // Judgement of Fury
+                break;
+            default:
+                DoneAdvertisedBenefit += thisPlayer->GetClassicSpellDamageVersus(victim->GetCreatureTypeMask());
+                break;
+        }
+    }
 
     // Pets just add their bonus damage to their spell damage
     // note that their spell damage is just gain of their own auras
@@ -7347,7 +7360,8 @@ float Unit::SpellDamageBonusDoneExact(Unit* victim, SpellInfo const* spellProto,
     }
 
     // Default calculation
-    if (DoneAdvertisedBenefit)
+    float takenTotal = 0.0f;
+    if (DoneAdvertisedBenefit || takenBenefit)
     {
         float coeff = ClassicBonusCoefficient(spellProto, spellEffectInfo);
         if (Player* modOwner = GetSpellModOwner())
@@ -7358,11 +7372,12 @@ float Unit::SpellDamageBonusDoneExact(Unit* victim, SpellInfo const* spellProto,
         }
 
         DoneTotal += float(DoneAdvertisedBenefit) * coeff * float(stack);
+        takenTotal = float(takenBenefit) * coeff * float(stack);
     }
 
     callDamageScript(pdamage, DoneTotal, DoneTotalMod);
 
-    float tmpDamage = (pdamage + DoneTotal) * DoneTotalMod;
+    float tmpDamage = (pdamage + DoneTotal) * DoneTotalMod + takenTotal;
 
     // apply spellmod to Done damage (flat and pct)
     if (Player* modOwner = GetSpellModOwner())
