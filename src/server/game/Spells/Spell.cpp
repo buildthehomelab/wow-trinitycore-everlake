@@ -4461,6 +4461,7 @@ void Spell::finish(SpellCastResult result)
     m_spellState = SPELL_STATE_FINISHED;
 
     SpendPendingComboPoints();                              // a finisher that never reached its finish phase still pays
+    ClassicSpendReservedCharges();                          // Classic 1.60: a channel spends the charges it held (R-0048)
 
     if (m_scriptResult && (m_scriptWaitsForSpellHit || result != SPELL_CAST_OK))
         m_scriptResult.SetResult(result);
@@ -5739,6 +5740,37 @@ void Spell::TakePower()
         if (cost.Power == POWER_MANA && cost.Amount > 0)
             if (Player* manaPlayer = unitCaster->ToPlayer())
                 manaPlayer->InterruptPowerRegen(POWER_MANA);
+    }
+}
+
+void Spell::ClassicReserveCharge(ObjectGuid const& auraCaster, uint32 auraSpellId)
+{
+    std::pair<ObjectGuid, uint32> const key{ auraCaster, auraSpellId };
+    if (std::ranges::find(m_classicReservedCharges, key) == m_classicReservedCharges.end())
+        m_classicReservedCharges.push_back(key);
+}
+
+void Spell::ClassicSpendReservedCharges()
+{
+    if (m_classicReservedCharges.empty())
+        return;
+
+    std::vector<std::pair<ObjectGuid, uint32>> const reserved = std::move(m_classicReservedCharges);
+    m_classicReservedCharges.clear();
+    Unit* wearer = m_caster->ToUnit();
+    if (!wearer)
+        return;
+
+    for (auto const& [auraCaster, auraSpellId] : reserved)
+    {
+        Aura* aura = wearer->GetAura(auraSpellId, auraCaster);
+        if (!aura)
+            continue;
+        SpellProcEntry const* procEntry = sSpellMgr->GetSpellProcEntry(aura->GetSpellInfo());
+        if (procEntry && (procEntry->AttributesMask & PROC_ATTR_USE_STACKS_FOR_CHARGES))
+            aura->ModStackAmount(-1);
+        else if (aura->IsUsingCharges())
+            aura->ModCharges(-1);
     }
 }
 

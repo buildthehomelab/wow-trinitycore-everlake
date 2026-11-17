@@ -605,6 +605,28 @@ void Aura::_ApplyForTarget(Unit* target, Unit* caster, AuraApplication* auraApp)
 
     m_applications[target->GetGUID()] = auraApp;
 
+    // Classic 1.60 (WoW Forever): a charge buff gained while its wearer channels a spell its modifiers name is spent at that channel's end
+    // (R-0048; Clearcasting during Arcane Missiles)
+    if (IsUsingCharges() && target == GetUnitOwner())
+    {
+        if (Spell* channel = target->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
+        {
+            if (channel->GetSpellInfo()->IsChanneled())
+            {
+                for (AuraEffect const* aurEff : GetAuraEffects())
+                {
+                    if (!aurEff || (aurEff->GetAuraType() != SPELL_AURA_ADD_FLAT_MODIFIER && aurEff->GetAuraType() != SPELL_AURA_ADD_PCT_MODIFIER))
+                        continue;
+                    if (channel->GetSpellInfo()->IsAffected(m_spellInfo->SpellFamilyName, aurEff->GetSpellEffectInfo().SpellClassMask))
+                    {
+                        channel->ClassicReserveCharge(GetCasterGUID(), GetId());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     // set infinity cooldown state for spells
     if (caster && caster->GetTypeId() == TYPEID_PLAYER)
     {
@@ -1918,11 +1940,46 @@ void Aura::PrepareProcToTrigger(AuraApplication* aurApp, ProcEventInfo& eventInf
     SetLastProcSuccessTime(now);
 }
 
+// Classic 1.60 (WoW Forever): a charge buff hit by its wearer's channel (the channel's cast or one of its ticks) is spent when that channel
+// ends, interrupted or not, not at its first hit: the channel holds one charge (Spell::ClassicReserveCharge) and its later ticks use the
+// buff for free (wowsims/forever, MIT, docs/rulings R-0048, sim/core/spelldata/charges.go; evidence pending).
+bool Aura::ClassicReserveChannelCharge(ProcEventInfo const& eventInfo)
+{
+    Unit* owner = GetUnitOwner();
+    if (!owner || eventInfo.GetActor() != owner)
+        return false;
+
+    Spell* channel = owner->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
+    if (!channel || !channel->GetSpellInfo()->IsChanneled())
+        return false;
+
+    if (Spell const* procSpell = eventInfo.GetProcSpell())
+    {
+        if (procSpell != channel && procSpell->GetTriggeredByAuraSpell() != channel->GetSpellInfo())
+            return false;
+    }
+    else if (eventInfo.GetSpellInfo() != channel->GetSpellInfo())     // a periodic tick of the channel's own aura
+        return false;
+
+    channel->ClassicReserveCharge(GetCasterGUID(), GetId());
+    return true;
+}
+
 void Aura::PrepareProcChargeDrop(SpellProcEntry const* procEntry, ProcEventInfo const& eventInfo)
 {
+    m_classicChargeReserved = false;
+
     // Failed attempts may burn a charge; unrelated event types must not.
     if (GetSpellInfo()->HasAttribute(SPELL_ATTR15_UNK13) && !(eventInfo.GetTypeMask() & procEntry->ProcFlags))
         return;
+
+    bool const consumes = (procEntry->AttributesMask & PROC_ATTR_USE_STACKS_FOR_CHARGES)
+        || (IsUsingCharges() && (!eventInfo.GetSpellInfo() || !eventInfo.GetSpellInfo()->HasAttribute(SPELL_ATTR6_DO_NOT_CONSUME_RESOURCES)));
+    if (consumes && ClassicReserveChannelCharge(eventInfo))
+    {
+        m_classicChargeReserved = true;
+        return;
+    }
 
     // take one charge, aura expiration will be handled in Aura::TriggerProcOnEvent (if needed)
     if (!(procEntry->AttributesMask & PROC_ATTR_USE_STACKS_FOR_CHARGES) && IsUsingCharges() && (!eventInfo.GetSpellInfo() || !eventInfo.GetSpellInfo()->HasAttribute(SPELL_ATTR6_DO_NOT_CONSUME_RESOURCES)))
@@ -1934,6 +1991,13 @@ void Aura::PrepareProcChargeDrop(SpellProcEntry const* procEntry, ProcEventInfo 
 
 void Aura::ConsumeProcCharges(SpellProcEntry const* procEntry)
 {
+    // Classic 1.60: the wearer's channel holds this charge and spends it at its end (ClassicReserveChannelCharge)
+    if (m_classicChargeReserved)
+    {
+        m_classicChargeReserved = false;
+        return;
+    }
+
     // Remove aura if we've used last charge to proc
     if (procEntry->AttributesMask & PROC_ATTR_USE_STACKS_FOR_CHARGES)
     {
