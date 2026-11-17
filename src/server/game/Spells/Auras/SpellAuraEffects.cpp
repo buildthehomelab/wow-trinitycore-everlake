@@ -16,6 +16,7 @@
  */
 
 #include "SpellAuraEffects.h"
+#include "ClassicFeignDeath.h"
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"
 #include "Battleground.h"
@@ -2377,6 +2378,12 @@ void AuraEffect::HandleAuraCloneCaster(AuraApplication const* aurApp, uint8 mode
 /***      FIGHT       ***/
 /************************/
 
+namespace
+{
+    // the enemies that resisted the Feign Death being applied right now (AuraEffect::HandleFeignDeath)
+    thread_local GuidUnorderedSet const* FeignDeathResisters = nullptr;
+}
+
 void AuraEffect::HandleFeignDeath(AuraApplication const* aurApp, uint8 mode, bool apply) const
 {
     if (!(mode & AURA_EFFECT_HANDLE_REAL))
@@ -2386,8 +2393,38 @@ void AuraEffect::HandleFeignDeath(AuraApplication const* aurApp, uint8 mode, boo
 
     if (apply)
     {
+        // Classic 1.60: every enemy within 40 yd of a player rolls to resist Feign Death (ClassicFeignDeath.h); one that resists keeps
+        // its threat and its fight with the player
+        GuidUnorderedSet resisters;
+        if (target->GetTypeId() == TYPEID_PLAYER)
+        {
+            std::vector<Unit*> enemies;
+            for (auto const& [guid, ref] : target->GetThreatManager().GetThreatenedByMeList())
+                enemies.push_back(ref->GetOwner());
+            for (Unit* attacker : target->getAttackers())
+                enemies.push_back(attacker);
+
+            float const hitBonus = std::max(target->m_modSpellHitChance, target->m_modRangedHitChance);
+            GuidUnorderedSet rolled;   // an enemy can be in both lists: one roll each
+            for (Unit* enemy : enemies)
+            {
+                if (!rolled.insert(enemy->GetGUID()).second || !enemy->IsWithinDist(target, ClassicFeignDeath::CheckRange))
+                    continue;
+                int32 const levelGap = int32(enemy->GetLevelForTarget(target)) - int32(target->GetLevelForTarget(enemy));
+                if (roll_chance_f(ClassicFeignDeath::ResistChance(levelGap, hitBonus, enemy->GetTypeId() == TYPEID_PLAYER)))
+                {
+                    resisters.insert(enemy->GetGUID());
+                    target->SendSpellMiss(enemy, GetId(), SPELL_MISS_RESIST);
+                }
+            }
+        }
+        // CombatStop takes a plain function as its filter, so the filter reads the resisters through this pointer
+        FeignDeathResisters = &resisters;
+
         auto isAffectedByFeignDeath = [](Unit const* attacker)
         {
+            if (FeignDeathResisters && FeignDeathResisters->count(attacker->GetGUID()))
+                return false;
             Creature const* attackerCreature = attacker->ToCreature();
             return !attackerCreature || !attackerCreature->IsIgnoringFeignDeath();
         };
@@ -2422,6 +2459,7 @@ void AuraEffect::HandleFeignDeath(AuraApplication const* aurApp, uint8 mode, boo
         }
         else
             target->CombatStop(false, false, isAffectedByFeignDeath);
+        FeignDeathResisters = nullptr;
 
         // prevent interrupt message
         if (GetCasterGUID() == target->GetGUID() && target->GetCurrentSpell(CURRENT_GENERIC_SPELL))
