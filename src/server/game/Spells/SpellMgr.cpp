@@ -4015,7 +4015,7 @@ void SpellMgr::LoadSpellInfoCorrections()
         });
         ApplySpellEffectFix(spellInfo, EFFECT_1, [](SpellEffectInfo* spellEffectInfo)
         {
-            spellEffectInfo->ApplyAuraName = SPELL_AURA_MELEE_SLOW;
+            spellEffectInfo->ApplyAuraName = SPELL_AURA_MOD_MELEE_RANGED_CASTING_HASTE;
         });
         ApplySpellEffectFix(spellInfo, EFFECT_2, [](SpellEffectInfo* spellEffectInfo)
         {
