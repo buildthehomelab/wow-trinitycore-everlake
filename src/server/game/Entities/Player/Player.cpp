@@ -9507,13 +9507,18 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
         // Windfury Weapon (vMaNGOS, Player::CastItemCombatSpell): 20% on a melee hit to gain the rank's Windfury Attack, which adds the extra
         // attack and the attack power for it; never on the extra attack itself. Done here on the imbue's enchantment, not through the
         // enchantment's own spell, which Forever points at a dummy aura (Windfury Weapon 439431) with no script.
+        // The client's 439431 also carries the internal cooldown (SpellAuraOptions ProcCategoryRecovery 1500 in the 70790 data and in
+        // live 70938, as in Classic Era 1.15): no new roll until it has run out.
         if (e_slot == TEMP_ENCHANTMENT_SLOT)
         {
             if (uint32 windfuryAttack = ClassicWeaponImbue::WindfuryAttackForEnchant(enchant_id))
             {
-                if (canTrigger && !GetLastExtraAttackSpell())
+                TimePoint const now = GameTime::Now();
+                if (canTrigger && !GetLastExtraAttackSpell() && now >= _classicWindfuryWeaponReadyAt)
                     CombatEnchantProc::Dispatch(20.0f, [](float procChance) { return roll_chance(procChance); }, [&]
                     {
+                        SpellInfo const* windfuryAura = sSpellMgr->GetSpellInfo(ClassicWeaponImbue::WINDFURY_WEAPON_AURA, DIFFICULTY_NONE);
+                        _classicWindfuryWeaponReadyAt = now + Milliseconds(windfuryAura ? windfuryAura->ProcCooldown : ClassicWeaponImbue::WINDFURY_WEAPON_ICD_MS);
                         CastSpell(this, windfuryAttack, CastSpellExtraArgs(item));
                     });
                 continue;

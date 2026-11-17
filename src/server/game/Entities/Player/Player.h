@@ -3364,6 +3364,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         int32 m_classicSpellHealingDone = 0;                   // ITEM_MOD_SPELL_HEALING_DONE of equipped items and enchantments
         int32 m_classicSpellDamageDone = 0;                    // ITEM_MOD_SPELL_DAMAGE_DONE of equipped items and enchantments
         mutable TimePoint _classicFreeHelpfulSpellsUntil;            // Legacy perk The Quick and the Dead: free helpful spells after resurrection
+        TimePoint _classicWindfuryWeaponReadyAt = TimePoint::min();  // Windfury Weapon's internal cooldown (439431 ProcCategoryRecovery, 1.5 s)
 
         SpellModContainer m_spellMods;
 
