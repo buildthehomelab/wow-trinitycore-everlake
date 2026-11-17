@@ -2411,7 +2411,7 @@ void AuraEffect::HandleFeignDeath(AuraApplication const* aurApp, uint8 mode, boo
                 if (!rolled.insert(enemy->GetGUID()).second || !enemy->IsWithinDist(target, ClassicFeignDeath::CheckRange))
                     continue;
                 int32 const levelGap = int32(enemy->GetLevelForTarget(target)) - int32(target->GetLevelForTarget(enemy));
-                if (roll_chance_f(ClassicFeignDeath::ResistChance(levelGap, hitBonus, enemy->GetTypeId() == TYPEID_PLAYER)))
+                if (roll_chance(ClassicFeignDeath::ResistChance(levelGap, hitBonus, enemy->GetTypeId() == TYPEID_PLAYER)))
                 {
                     resisters.insert(enemy->GetGUID());
                     target->SendSpellMiss(enemy, GetId(), SPELL_MISS_RESIST);
