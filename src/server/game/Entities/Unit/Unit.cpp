@@ -2619,14 +2619,15 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
     }
 
     // 4. GLANCING
-    // Max 40% chance to score a glancing blow against mobs that are higher level (can do only players and pets and not with ranged weapon)
+    // Glancing blows against higher-level mobs (only players and pets, not with a ranged weapon)
     // Classic 1.60 (vanilla, VMaNGOS): players / pets against creatures, 10% + 2% per point of the victim's defense above the
-    // attacker's capped weapon skill, at most 40%
+    // attacker's capped weapon skill. WoW Forever: no 40% cap, so a weapon skill well below the level maximum glances more (70% at 285
+    // skill against a level 63; at the full 300 it is 40% either way) (wowsims/forever, MIT, sim/core/target.go; no log measurement)
     if ((GetTypeId() == TYPEID_PLAYER || IsPet()) &&
         victim->GetTypeId() != TYPEID_PLAYER && !victim->IsPet() && attType != RANGED_ATTACK)
     {
         int32 const skill = std::min(GetClassicWeaponSkill(attType, victim), int32(GetMaxSkillValueForLevel(victim)));
-        tmp = std::clamp((10 + (victim->GetClassicDefenseSkill(this) - skill) * 2) * 100, 0, 4000);
+        tmp = std::clamp((10 + (victim->GetClassicDefenseSkill(this) - skill) * 2) * 100, 0, 10000);
         if (tmp > 0 && roll < (sum += tmp))
             return MELEE_HIT_GLANCING;
     }
