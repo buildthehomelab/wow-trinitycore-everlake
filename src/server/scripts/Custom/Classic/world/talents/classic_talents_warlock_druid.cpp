@@ -2174,6 +2174,37 @@ class classic_spell_dru_faerie_fire_threat : public SpellScript
     }
 };
 
+// 16864 - Omen of Clarity: its row also rolls on damage-free hits (Faerie Fire 23 of 365, Bash 2 of 22; Aura::CalcProcChance), but never on
+// Growl (0 of 150), and the 15 October 2026 development notes take Faerie Fire cast in Cat, Bear or Dire Bear Form off it (wowsims/forever,
+// MIT, docs/evidence EV-0020, sim/druid/omen_of_clarity.go).
+class classic_spell_dru_omen_of_clarity : public AuraScript
+{
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        if (!spellInfo)
+            return true;
+
+        switch (spellInfo->Id)
+        {
+            case 6795:                                      // Growl
+                return false;
+            case 770: case 778: case 9749: case 9907:       // Faerie Fire
+            {
+                ShapeshiftForm const form = GetTarget()->GetShapeshiftForm();
+                return form != FORM_CAT_FORM && form != FORM_BEAR_FORM && form != FORM_DIRE_BEAR_FORM;
+            }
+            default:
+                return true;
+        }
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_dru_omen_of_clarity::CheckProc);
+    }
+};
+
 /*######
 ## Damage hooks without a client aura effect
 ######*/
@@ -2337,6 +2368,7 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScriptWithArgs(classic_spell_dru_feral_attack_power_tick, "classic_spell_dru_pounce_bleed_attack_power", 0.025f);
     RegisterSpellScript(classic_spell_dru_enrage_armor);
     RegisterSpellScript(classic_spell_dru_faerie_fire_threat);
+    RegisterSpellScript(classic_spell_dru_omen_of_clarity);
 
     new classic_unit_talent_warlock_druid();
 }

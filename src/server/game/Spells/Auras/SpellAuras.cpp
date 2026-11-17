@@ -2106,6 +2106,22 @@ float Aura::CalcProcChance(SpellProcEntry const& procEntry, ProcEventInfo& event
             uint32 WeaponSpeed = caster->GetBaseAttackTime(eventInfo.GetDamageInfo()->GetAttackType());
             chance = caster->GetPPMProcChance(WeaponSpeed, procEntry.ProcsPerMinute, GetSpellInfo());
         }
+        // Classic 1.60 (WoW Forever): a procs-per-minute row that hears damage-free spells (PROC_SPELL_TYPE_NO_DMG_HEAL) rolls on them too,
+        // which had no damage to read a weapon from and so a chance of 0. A melee ability (Bash) rolls on the main-hand (paw) speed, a spell
+        // (Faerie Fire) on its cast time, an instant at 1.5 s. Omen of Clarity: Faerie Fire 23 of 365, Bash 2 of 22 (wowsims/forever, MIT,
+        // docs/evidence EV-0020).
+        else if (procEntry.ProcsPerMinute != 0 && (procEntry.SpellTypeMask & PROC_SPELL_TYPE_NO_DMG_HEAL))
+        {
+            if (SpellInfo const* procSpell = eventInfo.GetSpellInfo())
+            {
+                uint32 speed = 0;
+                if (procSpell->DmgClass == SPELL_DAMAGE_CLASS_MELEE)
+                    speed = caster->GetBaseAttackTime(BASE_ATTACK);
+                else
+                    speed = std::max<uint32>(procSpell->CalcCastTime(), 1500);
+                chance = caster->GetPPMProcChance(speed, procEntry.ProcsPerMinute, GetSpellInfo());
+            }
+        }
 
         if (GetSpellInfo()->ProcBasePPM > 0.0f)
             chance = CalcPPMProcChance(caster);
