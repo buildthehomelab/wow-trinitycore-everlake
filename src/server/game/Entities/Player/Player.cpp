@@ -8885,6 +8885,17 @@ void Player::_ApplyItemBonuses(Item* item, uint8 slot, bool apply)
             SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::ShieldBlock), apply ? int32(GetClassicShieldBlockValue()) : 0);
     }
 
+    // Classic 1.60 (WoW Forever): an armor item's ItemSparse QualityModifier is its green bonus armor, the "+60 Armor" line under Tree Bark
+    // Jacket's "44 Armor" (44 + 60 = its vanilla 104). The core read only the table armor, so 491 items in wowsims' item list lost it
+    // (Heavy Mithril Breastplate +90, Green Iron Hauberk +120). It counts as item armor, as ITEM_MOD_EXTRA_ARMOR does (wowsims/forever, MIT,
+    // tools/database/dbc/item.go GetStats; Wowhead Forever tooltip of item 1486)
+    if (proto->GetClass() == ITEM_CLASS_ARMOR && proto->GetQualityModifier() > 0.0f)
+    {
+        float const bonusArmor = std::floor(proto->GetQualityModifier());
+        HandleStatFlatModifier(UNIT_MOD_ARMOR, TOTAL_VALUE, bonusArmor, apply);
+        m_classicItemArmor += apply ? bonusArmor : -bonusArmor;
+    }
+
     WeaponAttackType attType = Player::GetAttackBySlot(slot, proto->GetInventoryType());
     if (attType != MAX_ATTACK)
         _ApplyWeaponDamage(slot, item, apply);
