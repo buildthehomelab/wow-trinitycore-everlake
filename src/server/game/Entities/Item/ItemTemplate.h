@@ -993,6 +993,8 @@ struct TC_GAME_API ItemTemplate
     float GetDPS(uint32 itemLevel) const;
     float GetClassicDPS(uint32 itemLevel, bool reducedCasterDps) const;
     float GetClassicBonusArmor() const;
+    // Classic 1.60 (WoW Forever): a caster weapon's implicit spell power (ItemSparse Flags[3] 0x200) or healing and damage (0x400)
+    void GetClassicCasterPower(uint32 itemLevel, int32& spellPower, int32& healing, int32& damage) const;
     void GetClassicDamage(uint32 itemLevel, bool reducedCasterDps, float& minDamage, float& maxDamage) const;
     void GetDamage(uint32 itemLevel, float& minDamage, float& maxDamage) const;
     bool IsUsableByLootSpecialization(Player const* player, bool alwaysAllowBoundToAccount) const;

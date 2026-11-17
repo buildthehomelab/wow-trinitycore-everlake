@@ -222,6 +222,14 @@ public:
             if (int32 bonusArmor = int32(proto.GetClassicBonusArmor()))
                 stats += Trinity::StringFormat("{}{}:{}", stats.empty() ? "" : ",", int32(ITEM_MOD_EXTRA_ARMOR), bonusArmor);
 
+            // Classic 1.60 (WoW Forever): a caster weapon's implicit spell power, or healing and damage (EV-0112)
+            int32 casterSpellPower = 0, casterHealing = 0, casterDamage = 0;
+            proto.GetClassicCasterPower(itemLevel, casterSpellPower, casterHealing, casterDamage);
+            for (auto [type, value] : { std::pair<int32, int32>{ ITEM_MOD_SPELL_POWER, casterSpellPower },
+                     { ITEM_MOD_SPELL_HEALING_DONE, casterHealing }, { ITEM_MOD_SPELL_DAMAGE_DONE, casterDamage } })
+                if (value)
+                    stats += Trinity::StringFormat("{}{}:{}", stats.empty() ? "" : ",", type, value);
+
             std::string effects;
             for (ItemEffectEntry const* effect : proto.Effects)
             {
