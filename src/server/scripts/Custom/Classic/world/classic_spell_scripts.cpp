@@ -1867,6 +1867,37 @@ class classic_spell_item_zandalarian_hero_badge : public SpellScript
     }
 };
 
+// 1318323 - Scented Runewood Brooch 269741: "Harmful spell casts and attacks against Furbolg have a chance to deal $1318324s1 Nature
+// damage." No client row limits the target and the chance reads 100, so it struck on every hit against anything. The spell_proc row prices
+// 1.2 a minute on the weapon's speed (a log fit wowsims marks not yet validated, EV-0136); this keeps it to Furbolgs. Neither the client
+// nor the server files a creature as a Furbolg, so the creature's name tells: the furbolg tribes of Kalimdor and the word itself
+// (wowsims/forever, MIT, sim/common/forever/items_trinkets.go).
+class classic_spell_item_scented_runewood_brooch : public AuraScript
+{
+    static bool IsFurbolg(Unit const* target)
+    {
+        Creature const* creature = target ? target->ToCreature() : nullptr;
+        if (!creature)
+            return false;
+
+        std::string const& name = creature->GetCreatureTemplate()->Name;
+        for (char const* word : { "Furbolg", "Timbermaw", "Deadwood", "Winterfall", "Foulweald", "Thistlefur", "Gnarlpine", "Blackwood" })
+            if (name.find(word) != std::string::npos)
+                return true;
+        return false;
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        return IsFurbolg(eventInfo.GetActionTarget());
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_item_scented_runewood_brooch::CheckProc);
+    }
+};
+
 class classic_spell_item_argent_defender : public AuraScript
 {
     bool CheckProc(ProcEventInfo& eventInfo)
@@ -2828,6 +2859,7 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_pri_vampiric_embrace);
     RegisterSpellScript(classic_spell_item_moonshadow_stave);
     RegisterSpellScript(classic_spell_item_argent_defender);
+    RegisterSpellScript(classic_spell_item_scented_runewood_brooch);
     RegisterSpellScript(classic_spell_item_zandalarian_hero_badge);
     RegisterSpellScript(classic_spell_item_totem_of_flowing_water);
     RegisterSpellScript(classic_spell_item_set_proc_mana_cast);
