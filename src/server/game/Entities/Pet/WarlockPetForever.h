@@ -24,7 +24,8 @@
 // Classic 1.60 (WoW Forever) demon stat inheritance from the warlock. 416189 Warlock Pet Scaling names what a demon takes (health, attack
 // power, spell damage, resistances, armor, hit, crit, haste, mana regen) but every amount is 0 in the client: the server supplies them.
 // The shares are wowsims/forever's (sim/warlock/pets.go, petStatInheritance), each read in game at one level:
-//  - health: 2 per point of the warlock's Stamina (WoW Forever patch notes, Nov 3)
+//  - health: 2 per point of the warlock's Stamina (Blizzard's WoW Forever notes of 3 November 2026: "Pets now gain 2 Health per point
+//    of Master's Stamina")
 //  - armor: 35% of the warlock's armor, Demon Armor included, fixed at the summon (EV-0078)
 //  - spell damage: 10% of the warlock's, the better of Shadow and Fire (EV-0079, read on the Sayaad)
 //  - attack power: 17% of that same spell damage

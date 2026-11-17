@@ -2000,9 +2000,11 @@ TalentsInspecting = 1
 # CREATURE SETTINGS
 #
 #    ThreatRadius
-#        Description: Distance for creatures to evade after being pulled away from the combat
-#                     starting point. If ThreatRadius is less than creature aggro radius then aggro
-#                     radius will be used.
+#        Description: Distance from its home position at which a creature in the open world
+#                     gives up and evades. If ThreatRadius is less than the creature's aggro
+#                     radius, the aggro radius is used. A creature damaged or taunted in the last
+#                     10 seconds keeps chasing out to the visibility range (Visibility.Distance.*,
+#                     at most 133 yards) instead. Dungeons and world bosses are not affected.
 #        Default:     60
 
 ThreatRadius = 60
