@@ -77,7 +77,7 @@ enum ClassicShamanTalentSpells
     SPELL_SHAMAN_LIGHTNING_BOLT_MAELSTROM   = 1291078,  // lets Lightning Bolt hits activate Maelstrom Weapon (effect 0: chance)
     SPELL_SHAMAN_EARTHBOUND_TALENT          = 1222988,
     SPELL_SHAMAN_EARTHBOUND_ROOT            = 1238289,
-    SPELL_SHAMAN_IMPROVED_STORMSTRIKE       = 1223031,  // effect 0: buff chance, effect 2: cooldown reset chance
+    SPELL_SHAMAN_IMPROVED_STORMSTRIKE       = 1223031,  // effect 0: buff chance ($m1), effect 1: cooldown reset chance ($m2)
     SPELL_SHAMAN_IMPROVED_STORMSTRIKE_BUFF  = 1238931,  // 50% mana regeneration while casting, 15 s
     SPELL_SHAMAN_STORMSTRIKE                = 17364,
     SPELL_SHAMAN_ANCESTRAL_GUIDANCE_HEAL    = 409333,
@@ -902,11 +902,32 @@ class classic_spell_sha_flurry : public AuraScript
 
 // 30160 - Elemental Devastation: "Your offensive spell critical strikes will increase your chance to get a critical strike with
 // melee attacks by X% for 10 sec." 30165 with the talent amount (its own 3% when the amount is not set).
+// Weapon imbue hits don't trigger it: a method test on the beta (Blizzard forum thread 2366738, 2026-09-30, Elemental Devastation 3/3)
+// got it from Lightning Bolt, Earth Shock, Frost Shock and Flame Shock's first hit, never from Flametongue or Frostbrand Weapon. Their
+// damage spells are triggered, which spell_proc lets proc (TRIGGERED_CAN_PROC, kept for Lightning Overload), so they are left out here.
 class classic_spell_sha_elemental_devastation : public AuraScript
 {
+    static bool IsWeaponImbueAttack(uint32 spellId)
+    {
+        switch (spellId)
+        {
+            case 10444: case 16368: case 29469: case 29470:                 // Flametongue Attack (Weapon and Totem)
+            case 8034: case 8037: case 10458: case 16352: case 16353:       // Frostbrand Attack
+                return true;
+            default:
+                return false;
+        }
+    }
+
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo({ SPELL_SHAMAN_ELEMENTAL_DEVASTATION_BUFF });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        return !spellInfo || !IsWeaponImbueAttack(spellInfo->Id);
     }
 
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
@@ -920,6 +941,7 @@ class classic_spell_sha_elemental_devastation : public AuraScript
 
     void Register() override
     {
+        DoCheckProc += AuraCheckProcFn(classic_spell_sha_elemental_devastation::CheckProc);
         OnEffectProc += AuraEffectProcFn(classic_spell_sha_elemental_devastation::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
     }
 };
@@ -987,12 +1009,20 @@ class classic_spell_sha_lightning_overload : public AuraScript
     }
 };
 
-// 408498 - Maelstrom Weapon: "When you deal damage with a melee attack, you have a chance to reduce the cast time and Mana cost of
-// your next Lightning Bolt spell by 20%. Stacks up to 5 times. Lasts 30 sec." Effect 1 is the chance per melee hit, effect 2 the
-// stack count that shows "Maelstrom Ready!" (408501). With 1291078 Lightning Bolt hits can also add a stack (its amount = chance).
-// 408505 and 408501 are used by the next Lightning Bolt (spell_proc).
+// 408498 - Maelstrom Weapon: "When you deal damage with a melee attack, you have a ${($mws*$s2/60)*100}% chance (based on weapon
+// speed) to reduce the cast time and Mana cost of your next Lightning Bolt spell by $m1%. Stacks up to $s3 times." (live 70938
+// tooltip). Effect 1 is a rate per minute on the main hand's speed (6 at one point up to 10 at five), not a flat chance; live
+// combat logs show ~0.59 stacks per landed white hit on a 3.4-3.5 s two-hander at 5/5 (wowsims/forever EV-0009, MIT), which is
+// 10 PPM. Effect 2 is the stack count that shows "Maelstrom Ready!" (408501). With 1291078 Lightning Bolt hits can also add a
+// stack "with a $s1% reduced chance" (the same roll less that share). Windfury Totem's extra attack never adds a stack
+// (EV-0009: 0 of 261 landed strikes); Windfury Weapon's do. 408505 and 408501 are used by the next Lightning Bolt (spell_proc).
 class classic_spell_sha_maelstrom_weapon : public AuraScript
 {
+    static bool IsWindfuryTotemAttack(uint32 spellId)
+    {
+        return spellId == 8516 || spellId == 10608 || spellId == 10610;
+    }
+
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo({ SPELL_SHAMAN_MAELSTROM_WEAPON_BUFF, SPELL_SHAMAN_MAELSTROM_READY })
@@ -1005,8 +1035,9 @@ class classic_spell_sha_maelstrom_weapon : public AuraScript
         if (!damageInfo || !damageInfo->GetDamage())
             return false;
 
+        // an extra swing of Windfury Totem runs while its attack spell is the last extra attack spell
         if (eventInfo.GetTypeMask() & PROC_FLAG_DEAL_MELEE_SWING)
-            return true;
+            return !IsWindfuryTotemAttack(GetTarget()->GetLastExtraAttackSpell());
         if (eventInfo.GetTypeMask() & PROC_FLAG_DEAL_MELEE_ABILITY)
             return true;
 
@@ -1020,10 +1051,12 @@ class classic_spell_sha_maelstrom_weapon : public AuraScript
         PreventDefaultAction();
 
         Unit* shaman = GetTarget();
-        SpellEffectValue chance = GetAura()->GetEffect(EFFECT_1)->GetAmount();
+        // $mws: the main hand's weapon speed, whichever hand or spell rolls
+        float const ppm = float(GetAura()->GetEffect(EFFECT_1)->GetAmount());
+        float chance = shaman->GetPPMProcChance(shaman->GetBaseAttackTime(BASE_ATTACK), ppm, GetSpellInfo());
         if (!(eventInfo.GetTypeMask() & PROC_FLAG_DEAL_MELEE_SWING) && !(eventInfo.GetTypeMask() & PROC_FLAG_DEAL_MELEE_ABILITY))
             if (AuraEffect const* lightningBolt = shaman->GetAuraEffect(SPELL_SHAMAN_LIGHTNING_BOLT_MAELSTROM, EFFECT_0))
-                chance = lightningBolt->GetAmount();
+                chance = CalculatePct(chance, std::max(0.0f, 100.0f - float(lightningBolt->GetAmount())));
 
         if (!roll_chance(chance))
             return;
@@ -1108,32 +1141,23 @@ class classic_spell_sha_stormstrike : public SpellScript
                 caster->CastSpell(caster, SPELL_SHAMAN_IMPROVED_STORMSTRIKE_BUFF, CastSpellExtraArgs(talent));
     }
 
-    // "Instantly attack with both weapons": the client spell has one normalized weapon damage effect, which the spell code runs with the
-    // main hand only, so the off-hand weapon gets its swing here, after the main hand hit.
-    void HandleOffHandStrike()
-    {
-        Unit* caster = GetCaster();
-        Unit* target = GetHitUnit();
-        if (!target || !target->IsAlive() || !caster->haveOffhandWeapon())
-            return;
-
-        caster->AttackerStateUpdate(target, OFF_ATTACK, true);
-    }
+    // No off-hand swing: Forever's Stormstrike is one main-hand strike ("Instantly strike for $s3% weapon damage", live 70938 tooltip;
+    // effect 0 normalized weapon damage, effect 2 weapon percent 100), not Classic's "attack with both weapons".
 
     void Register() override
     {
-        AfterHit += SpellHitFn(classic_spell_sha_stormstrike::HandleOffHandStrike);
         AfterCast += SpellCastFn(classic_spell_sha_stormstrike::HandleAfterCast);
     }
 };
 
-// 1223031 - Improved Stormstrike (proc part): "Stormstrike's cooldown has a 20% chance to reset each time you Dodge or Parry."
-// (spell_proc: taken melee, dodge or parry; talent effect 2 = chance)
+// 1223031 - Improved Stormstrike (proc part): "Stormstrike's cooldown has a $m2% chance to reset each time you Dodge or Parry."
+// (spell_proc: taken melee, dodge or parry). $m2 is effect 1, which the talent rank raises to 50/100%; effect 2 is a flat 20 that
+// no rank changes and the tooltip does not name (live 70938 data; wowsims/forever reads effect 1 too).
 class classic_spell_sha_improved_stormstrike : public AuraScript
 {
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellEffect({ { SPELL_SHAMAN_IMPROVED_STORMSTRIKE, EFFECT_2 } });
+        return ValidateSpellEffect({ { SPELL_SHAMAN_IMPROVED_STORMSTRIKE, EFFECT_1 } });
     }
 
     bool CheckProc(ProcEventInfo& /*eventInfo*/)
@@ -1157,8 +1181,8 @@ class classic_spell_sha_improved_stormstrike : public AuraScript
     {
         DoCheckProc += AuraCheckProcFn(classic_spell_sha_improved_stormstrike::CheckProc);
         OnEffectProc += AuraEffectProcFn(classic_spell_sha_improved_stormstrike::PreventProc, EFFECT_0, SPELL_AURA_DUMMY);
-        OnEffectProc += AuraEffectProcFn(classic_spell_sha_improved_stormstrike::PreventProc, EFFECT_1, SPELL_AURA_DUMMY);
-        OnEffectProc += AuraEffectProcFn(classic_spell_sha_improved_stormstrike::HandleProc, EFFECT_2, SPELL_AURA_DUMMY);
+        OnEffectProc += AuraEffectProcFn(classic_spell_sha_improved_stormstrike::HandleProc, EFFECT_1, SPELL_AURA_DUMMY);
+        OnEffectProc += AuraEffectProcFn(classic_spell_sha_improved_stormstrike::PreventProc, EFFECT_2, SPELL_AURA_DUMMY);
     }
 };
 
@@ -1540,10 +1564,29 @@ class classic_spell_sha_weapon_totem_aura : public AuraScript
         return proc && ValidateSpellInfo({ proc->ProcSpellId });
     }
 
-    // melee hits only: the 1.60 data lets a spell hit of the party member proc these auras too
+    static bool HasWindfuryTotemAura(Unit const* member)
+    {
+        for (TotemProc const& proc : Procs)
+            if (proc.OnSelf && member->HasAura(proc.AuraSpellId))
+                return true;
+        return false;
+    }
+
+    // Main hand melee hits only: the 1.60 data lets a spell hit of the party member proc these auras too, and both live 70938
+    // tooltips say "Each main hand hit" (off-hand swings rolled Windfury Totem here). Flametongue Totem "no longer stacks with ...
+    // Windfury Totem" (Blizzard beta notes 2026-09-24), still so on 70425 ("Flametongue Totem still does nothing under Windfury
+    // Totem", wowsims/forever EV-0102, MIT); Grace of Air does stack with Windfury there, so no other air rule.
     bool CheckProc(ProcEventInfo& eventInfo)
     {
-        return (eventInfo.GetTypeMask() & PROC_FLAG_DEAL_MELEE_SWING) || (eventInfo.GetTypeMask() & PROC_FLAG_DEAL_MELEE_ABILITY);
+        if (!(eventInfo.GetTypeMask() & PROC_FLAG_DEAL_MELEE_SWING) && !(eventInfo.GetTypeMask() & PROC_FLAG_DEAL_MELEE_ABILITY))
+            return false;
+
+        DamageInfo const* damageInfo = eventInfo.GetDamageInfo();
+        if (!damageInfo || damageInfo->GetAttackType() != BASE_ATTACK)
+            return false;
+
+        TotemProc const* proc = Find(GetSpellInfo()->Id);
+        return proc && (proc->OnSelf || !HasWindfuryTotemAura(GetTarget()));
     }
 
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
@@ -1563,6 +1606,53 @@ class classic_spell_sha_weapon_totem_aura : public AuraScript
     {
         DoCheckProc += AuraCheckProcFn(classic_spell_sha_weapon_totem_aura::CheckProc);
         OnEffectProc += AuraEffectProcFn(classic_spell_sha_weapon_totem_aura::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
+// 408510 - Water Shield: "When a spell, melee, or ranged attack hits the caster or when one of the caster's spells gets a critical result,
+// 2% of maximum mana is restored to the caster, expending one water globe. Only one globe will activate every few seconds." (live 70938).
+// The client row hears hits taken and the shaman's own helpful and harmful spells on one mask (ProcFlags 221864) with no hit mask, so
+// every spell the shaman landed spent a globe; the crit condition is on the dealt side only. Charges (3), the 3.5 s internal cooldown
+// and the trigger spell 408511 stay the client's.
+class classic_spell_sha_water_shield : public AuraScript
+{
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        if (eventInfo.GetTypeMask() & (PROC_FLAG_DEAL_HELPFUL_SPELL | PROC_FLAG_DEAL_HARMFUL_SPELL))
+            return (eventInfo.GetHitMask() & PROC_HIT_CRITICAL) != 0;
+        return true;
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_sha_water_shield::CheckProc);
+    }
+};
+
+// 437009 - Totemic Call (level 22 trainer spell, Totemic Projection in the beta): "Relocates your active totems to your location." (live
+// 70938; 30 s cooldown, 25% of base mana). The client effect only summons NPC 15214 (SummonProperties 5878) at the caster, which moved
+// nothing; the summon is replaced by moving every totem the shaman has out to the shaman's position.
+class classic_spell_sha_totemic_call : public SpellScript
+{
+    void HandleRelocate(SpellEffIndex effIndex)
+    {
+        PreventHitDefaultEffect(effIndex);
+
+        Unit* caster = GetCaster();
+        for (uint8 slot = SUMMON_SLOT_TOTEM; slot < MAX_TOTEM_SLOT; ++slot)
+        {
+            if (caster->m_SummonSlot[slot].IsEmpty())
+                continue;
+
+            Creature* totem = ObjectAccessor::GetCreature(*caster, caster->m_SummonSlot[slot]);
+            if (totem && totem->IsTotem() && totem->IsAlive())
+                totem->NearTeleportTo(caster->GetPositionX(), caster->GetPositionY(), caster->GetPositionZ(), totem->GetOrientation());
+        }
+    }
+
+    void Register() override
+    {
+        OnEffectHit += SpellEffectFn(classic_spell_sha_totemic_call::HandleRelocate, EFFECT_0, SPELL_EFFECT_SUMMON);
     }
 };
 
@@ -1643,4 +1733,6 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_sha_lightning_shield);
     RegisterSpellScript(classic_spell_sha_weapon_totem_aura);
     RegisterSpellScript(classic_spell_sha_ancestral_healing);
+    RegisterSpellScript(classic_spell_sha_water_shield);
+    RegisterSpellScript(classic_spell_sha_totemic_call);
 }
