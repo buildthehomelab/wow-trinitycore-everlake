@@ -560,6 +560,41 @@ class classic_spell_pri_dark_inspiration_mind_flay : public AuraScript
     }
 };
 
+// 1309595, 1309633, 1309635, 1309636 - Shadow Word: Death: "If your target is not killed by Shadow Word: Death, you take backlash damage
+// equal to $s3% of your maximum health." Effect 2 holds the percent (30) as a dummy, so the priest never took the backlash. After the hit,
+// a target still alive deals the priest that share of maximum health as Shadow damage from the priest (tooltip; wowsims/forever, MIT,
+// sim/priest/shadow_word_death.go deals it on every cast; no log reading).
+class classic_spell_pri_shadow_word_death_backlash : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_2 } });
+    }
+
+    void HandleAfterHit()
+    {
+        Unit* priest = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!priest || !priest->IsAlive() || (target && !target->IsAlive()))
+            return;
+
+        int32 const percent = GetEffectInfo(EFFECT_2).CalcValueAsInt(priest);
+        uint32 const damage = uint32(priest->CountPctFromMaxHealth(percent));
+        if (!damage)
+            return;
+
+        SpellNonMeleeDamage damageInfo(priest, priest, GetSpellInfo(), GetSpell()->m_SpellVisual, SPELL_SCHOOL_MASK_SHADOW, GetSpell()->m_castId);
+        damageInfo.damage = damage;
+        priest->DealSpellDamage(&damageInfo, false);
+        priest->SendSpellNonMeleeDamageLog(&damageInfo);
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(classic_spell_pri_shadow_word_death_backlash::HandleAfterHit);
+    }
+};
+
 // 1310076 - Early Demise: "Increases Shadow Word: Death's critical strike chance on targets at or below 20% health by 30%." Effect 0 is the
 // crit bonus, effect 1 the health threshold. Bound to the Shadow Word: Death ranks.
 class classic_spell_pri_early_demise : public SpellScript
@@ -1568,6 +1603,7 @@ void AddSC_classic_talents_priest_paladin()
     RegisterSpellScript(classic_spell_pri_inspiration);
     RegisterSpellScript(classic_spell_pri_dark_inspiration_mind_blast);
     RegisterSpellScript(classic_spell_pri_dark_inspiration_mind_flay);
+    RegisterSpellScript(classic_spell_pri_shadow_word_death_backlash);
     RegisterSpellScript(classic_spell_pri_blessed_recovery);
     RegisterSpellScript(classic_spell_pri_blessed_recovery_hot);
     RegisterSpellScript(classic_spell_pri_prayer_of_mending);
