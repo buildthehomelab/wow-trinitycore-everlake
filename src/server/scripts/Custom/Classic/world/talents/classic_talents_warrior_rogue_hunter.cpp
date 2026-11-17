@@ -362,6 +362,32 @@ class classic_spell_warr_flurry : public AuraScript
     }
 };
 
+// 12966 - Flurry (the buff): which swings spend a charge beyond its spell_proc row (2026_11_16_40). Windfury Totem's strike spends none,
+// and a crit always leaves 3 charges: the talent 12319 recasts the buff on the same event, and the charge drop ran after that recast in
+// part of the cases (wowsims/forever, MIT, docs/evidence EV-0140: 60 of 60 crits end at 3; EV-0138).
+class classic_spell_warr_flurry_buff : public AuraScript
+{
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Unit* warrior = GetTarget();
+        switch (warrior->GetLastExtraAttackSpell())
+        {
+            case 8516: case 10608: case 10610:          // Windfury Totem's strike
+                return false;
+            default:
+                break;
+        }
+        if ((eventInfo.GetHitMask() & PROC_HIT_CRITICAL) && warrior->HasAura(12319))
+            return false;
+        return true;
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_warr_flurry_buff::CheckProc);
+    }
+};
+
 // 12322 - Unbridled Wrath (talent): "Gives you a $m1% chance to generate an additional Rage point when you deal melee damage with a weapon."
 // The client talent triggers 12964 (one rage) with the spell's own 100% proc chance; the rank (aura amount) is the chance.
 class classic_spell_warr_unbridled_wrath : public AuraScript
@@ -2065,6 +2091,7 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScript(classic_spell_warr_deep_wounds);
     RegisterSpellScript(classic_spell_warr_deep_wound_bleed);
     RegisterSpellScript(classic_spell_warr_flurry);
+    RegisterSpellScript(classic_spell_warr_flurry_buff);
     RegisterSpellScript(classic_spell_warr_bloodthirst);
     RegisterSpellScript(classic_spell_warr_unbridled_wrath);
     RegisterSpellScript(classic_spell_warr_sweeping_strikes);
