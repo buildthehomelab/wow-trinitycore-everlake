@@ -6904,6 +6904,21 @@ SpellCastResult Spell::CheckCast(bool strict, int32* param1 /*= nullptr*/, int32
 
                 if (unitCaster->HasUnitState(UNIT_STATE_ROOT))
                     return SPELL_FAILED_ROOTED;
+
+                // Classic 1.60 (WoW Forever, not a bug per Blizzard: forever-bugs #86): Feral Charge (Cat) leaps behind its target only when
+                // the target can be reached on foot, "There is no path" otherwise (a target on a roof), like Feral Charge (Bear). The jump
+                // itself is an arc, so the walkable path is checked here, as SPELL_EFFECT_CHARGE does.
+                if (spellEffectInfo.IsEffect(SPELL_EFFECT_JUMP_DEST_3) && unitCaster->IsPlayer())
+                {
+                    if (Unit const* target = m_targets.GetUnitTarget())
+                    {
+                        PathGenerator path(unitCaster);
+                        path.SetPathLengthLimit(m_spellInfo->GetMaxRange(false, unitCaster, this) * 1.5f + target->GetCombatReach());
+                        bool const result = path.CalculatePath(target->GetPositionX(), target->GetPositionY(), target->GetPositionZ(), false);
+                        if (!result || (path.GetPathType() & (PATHFIND_SHORT | PATHFIND_NOPATH | PATHFIND_INCOMPLETE)) || path.IsInvalidDestinationZ(target))
+                            return SPELL_FAILED_NOPATH;
+                    }
+                }
                 break;
             }
             case SPELL_EFFECT_TALENT_SPEC_SELECT:
