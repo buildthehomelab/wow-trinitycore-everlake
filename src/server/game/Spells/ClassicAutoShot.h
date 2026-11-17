@@ -19,6 +19,7 @@
 #define TRINITY_CLASSIC_AUTO_SHOT_H
 
 #include "SharedDefines.h"
+#include <algorithm>
 #include <cstdint>
 
 // Classic 1.60 (vanilla): the hunter's Auto Shot (spell 75).
@@ -35,10 +36,20 @@ namespace ClassicAutoShot
     constexpr uint32_t SpellId = 75;
     constexpr uint32_t WindupMs = 500;
 
-    // stillSinceMs: game time the hunter last moved, or turned Auto Shot on (whichever is later).
-    inline bool IsWindupDone(uint32_t nowMs, uint32_t stillSinceMs)
+    // Ranged haste shortens the wind-up as it shortens the swing: 0.5 sec / 1.10 with a 10% quiver (wowsims/forever
+    // RangedSwingWindup / swing speed; the forever-hunter wiki's Shot Mechanics page). attackSpeedPct is the unit's ranged attack time
+    // multiplier (m_modAttackSpeedPct[RANGED_ATTACK], 1 / haste: 0.909 with a 10% quiver).
+    inline uint32_t WindupFor(float attackSpeedPct)
     {
-        return uint32_t(nowMs - stillSinceMs) >= WindupMs;   // unsigned difference: correct across the 49-day wrap of the ms clock
+        if (!(attackSpeedPct > 0.0f))   // also catches NaN
+            return WindupMs;
+        return uint32_t(float(WindupMs) * std::min(attackSpeedPct, 1.0f) + 0.5f);
+    }
+
+    // stillSinceMs: game time the hunter last moved, or turned Auto Shot on (whichever is later).
+    inline bool IsWindupDone(uint32_t nowMs, uint32_t stillSinceMs, uint32_t windupMs = WindupMs)
+    {
+        return uint32_t(nowMs - stillSinceMs) >= windupMs;   // unsigned difference: correct across the 49-day wrap of the ms clock
     }
 
     enum class FailAction

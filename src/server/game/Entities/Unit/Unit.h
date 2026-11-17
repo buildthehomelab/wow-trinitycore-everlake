@@ -428,6 +428,7 @@ struct CleanDamage
 
     uint32 absorbed_damage;
     uint32 mitigated_damage;
+    float rageDamage = -1.0f;    // WoW Forever: a melee swing's damage before armor and the block (crit x2, crushing x1.5), for rage taken; < 0: not a swing
 
     WeaponAttackType attackType;
     MeleeHitOutcome hitOutCome;
@@ -563,6 +564,7 @@ struct CalcDamageInfo
     ProcFlagsInit ProcAttacker;
     ProcFlagsInit ProcVictim;
     uint32 CleanDamage;          // Used only for rage calculation
+    float RageDamage;            // WoW Forever: damage before armor and the block (crit x2, crushing x1.5), the victim's rage taken
     MeleeHitOutcome HitOutCome;  /// @todo remove this field (need use TargetState)
 };
 
@@ -1002,6 +1004,7 @@ class TC_GAME_API Unit : public WorldObject
         float GetUnitCriticalChanceDone(WeaponAttackType attackType) const;
         float GetUnitCriticalChanceTaken(Unit const* attacker, WeaponAttackType attackType, float critDone) const;
         float GetUnitCriticalChanceAgainst(WeaponAttackType attackType, Unit const* victim) const;
+        float GetClassicCritAgainst(WeaponAttackType attackType, Unit const* victim, float critChance) const;
         float GetMechanicResistChance(SpellInfo const* spellInfo) const;
         bool CanUseAttackType(uint8 attacktype) const;
 
@@ -1845,7 +1848,8 @@ class TC_GAME_API Unit : public WorldObject
 
         int32 RewardRage(uint32 baseRage);
         // Classic 1.60 (vanilla) combat: rage from damage, weapon / defense skill of the attack table, blocked amount
-        int32 RewardClassicRage(float damage, bool attacker);   // damage stays fractional (Dual Wield Specialization bonus on small hits)
+        int32 RewardClassicRage(float ragePoints, bool attacker);   // Forever rage (ClassicRage.h), points stay fractional until here
+        float GetClassicSwingRage(WeaponAttackType attType, bool crit) const;
         int32 GetClassicWeaponSkill(WeaponAttackType attType, Unit const* victim) const;
         int32 GetClassicDefenseSkill(Unit const* attacker) const;
         virtual uint32 GetClassicShieldBlockValue() const { return GetLevel() / 2 + uint32(std::max(0.0f, GetStat(STAT_STRENGTH)) / 20.0f); }

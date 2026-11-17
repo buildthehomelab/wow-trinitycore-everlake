@@ -39,13 +39,18 @@
 
 namespace
 {
-// Base mana cost of a spell (flat cost plus the percentage of base mana), before cost modifiers
+// Base mana cost of a spell (flat cost plus the percentage of base mana), before cost modifiers. A spell whose mana cost is held at
+// its vanilla value (classic_spell_cost) has that one as its base, as SpellInfo::CalcPowerCost charges it.
 int32 GetClassicBaseManaCost(SpellInfo const* spellInfo, Unit const* caster)
 {
     for (SpellPowerEntry const* power : spellInfo->PowerCosts)
     {
         if (!power || power->PowerType != POWER_MANA)
             continue;
+
+        if (ClassicSpellValue::AppliesToSpell(spellInfo->Id))
+            if (ClassicSpellValue::Cost const* vanillaCost = sSpellMgr->GetClassicSpellCost(spellInfo->Id))
+                return ClassicSpellValue::ManaCost(*vanillaCost, int32(caster->GetCreateMana()));
 
         int32 cost = power->ManaCost;
         if (power->PowerCostPct > 0.0f)
@@ -1407,6 +1412,24 @@ class classic_spell_pal_forbearance : public SpellScript
     }
 };
 
+// Lay on Hands (633, 2800, 10310): "Drains all of the Paladin's remaining Mana when used, but does not interrupt Mana regeneration." The
+// client spell has no power cost and no Use All Mana attribute, so nothing drained the mana. The cast empties the paladin's mana pool
+// directly; no cost is paid, so the five second rule does not start.
+class classic_spell_pal_lay_on_hands_drain : public SpellScript
+{
+    void HandleCast()
+    {
+        Unit* paladin = GetCaster();
+        if (paladin->GetPower(POWER_MANA) > 0)
+            paladin->SetPower(POWER_MANA, 0);
+    }
+
+    void Register() override
+    {
+        OnCast += SpellCastFn(classic_spell_pal_lay_on_hands_drain::HandleCast);
+    }
+};
+
 // Rank of a talent: Forever's talents are trait nodes with one spell, the ranks are held on the node entry of the active spec's trait config.
 // Returns 0 when the player does not have the talent.
 static int32 GetClassicTalentRank(Player const* player, uint32 spellId)
@@ -1425,24 +1448,53 @@ static int32 GetClassicTalentRank(Player const* player, uint32 spellId)
     return 0;
 }
 
-// 20210 - Illumination: "After getting a critical effect from your Flash of Light, Holy Light, or Holy Shock heal spell, gives you a 20% chance
-// per rank to gain mana equal to the base cost of the spell." The client aura procs the dummy-only spell 18350, so nothing returned mana. VMaNGOS
-// casts the energize 20272 on the paladin with the mana cost of the spell as the amount; the chance is 20% x the talent rank (read from the node).
-// The cost of the heal is read from the cast; the Holy Shock heals are triggered with no cost of their own and give nothing here.
+// 20210 - Illumination (1.60 live): "After getting a critical effect from your Flash of Light, Holy Light, Light's Vigil, or Holy Shock heal
+// spell you have a $m1% chance to gain Mana equal to $m3% of the base cost of the spell." The client aura procs the dummy-only spell 18350,
+// so nothing returned mana; the energize is 20272 (VMaNGOS). The chance is 20% x the talent rank (read from the node), the refund effect 2
+// (50%) of the base cost, before cost reductions (player tests: "Returns 50% of the base cost. Cost decreases do not decrease the return",
+// forever-paladin-feedback; wowsims Forever applyIllumination). The Holy Shock and Light's Vigil heals are triggered spells with no cost of
+// their own: their refund is from the cast that triggered them.
 class classic_spell_pal_illumination : public AuraScript
 {
     static constexpr uint32 SPELL_PALADIN_ILLUMINATION_ENERGIZE = 20272;
 
-    bool Validate(SpellInfo const* /*spellInfo*/) override
+    bool Validate(SpellInfo const* spellInfo) override
     {
-        return ValidateSpellInfo({ SPELL_PALADIN_ILLUMINATION_ENERGIZE });
+        return ValidateSpellInfo({ SPELL_PALADIN_ILLUMINATION_ENERGIZE }) && ValidateSpellEffect({ { spellInfo->Id, EFFECT_2 } });
+    }
+
+    // The spell whose base cost is refunded: the heal itself, or the cast behind a triggered Holy Shock / Light's Vigil heal
+    static uint32 GetCostSpell(uint32 healId)
+    {
+        switch (healId)
+        {
+            case 25914:   return 20473;     // Holy Shock rank 1
+            case 25913:   return 20929;     // Holy Shock rank 2
+            case 25903:   return 20930;     // Holy Shock rank 3
+            case 1311605: return 1311606;   // Holy Shock (Forever talent)
+            case 1310912: return 1310911;   // Light's Vigil rank 1
+            case 1311591: return 1311590;   // Light's Vigil rank 2
+            case 1311596: return 1311595;   // Light's Vigil rank 3
+            default:      return healId;
+        }
+    }
+
+    int32 GetRefund(ProcEventInfo& eventInfo) const
+    {
+        HealInfo* healInfo = eventInfo.GetHealInfo();
+        SpellInfo const* heal = healInfo ? healInfo->GetSpellInfo() : nullptr;
+        AuraEffect const* pct = GetEffect(EFFECT_2);
+        if (!heal || !pct)
+            return 0;
+
+        SpellInfo const* costSpell = sSpellMgr->GetSpellInfo(GetCostSpell(heal->Id), DIFFICULTY_NONE);
+        return costSpell ? CalculatePct(GetClassicBaseManaCost(costSpell, GetTarget()), pct->GetAmount()) : 0;
     }
 
     bool CheckProc(ProcEventInfo& eventInfo)
     {
-        Spell const* spell = eventInfo.GetProcSpell();
         Player const* paladin = GetTarget()->ToPlayer();
-        return spell && paladin && spell->GetPowerTypeCostAmount(POWER_MANA).value_or(0) > 0
+        return paladin && GetRefund(eventInfo) > 0
             && roll_chance(20 * std::max(1, GetClassicTalentRank(paladin, GetId())));
     }
 
@@ -1450,7 +1502,7 @@ class classic_spell_pal_illumination : public AuraScript
     {
         PreventDefaultAction();
         CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
-        args.AddSpellBP0(*eventInfo.GetProcSpell()->GetPowerTypeCostAmount(POWER_MANA));
+        args.AddSpellBP0(GetRefund(eventInfo));
         GetTarget()->CastSpell(GetTarget(), SPELL_PALADIN_ILLUMINATION_ENERGIZE, args);
     }
 
@@ -1544,4 +1596,5 @@ void AddSC_classic_talents_priest_paladin()
     RegisterSpellScript(classic_spell_pal_sacred_shield);
     RegisterSpellScript(classic_spell_pal_forbearance);
     RegisterSpellScript(classic_spell_pal_illumination);
+    RegisterSpellScript(classic_spell_pal_lay_on_hands_drain);
 }
