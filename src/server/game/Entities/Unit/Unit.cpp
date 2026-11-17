@@ -1831,9 +1831,20 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
             float arpPct = attacker->ToPlayer()->GetRatingBonusValue(CR_ARMOR_PENETRATION);
 
             Item const* weapon = attacker->ToPlayer()->GetWeaponForAttack(attackType, true);
-            arpPct += attacker->GetTotalAuraModifier(SPELL_AURA_MOD_ARMOR_PENETRATION_PCT, [weapon](AuraEffect const* aurEff) -> bool
+            Player const* attackerPlayer = attacker->ToPlayer();
+            arpPct += attacker->GetTotalAuraModifier(SPELL_AURA_MOD_ARMOR_PENETRATION_PCT, [weapon, attackerPlayer](AuraEffect const* aurEff) -> bool
             {
-                return aurEff->GetSpellInfo()->IsItemFitToSpellRequirements(weapon);
+                // Classic 1.60 (WoW Forever): Weaponmaster's (12284) and Hack and Slash's (13709) armor ignore covers every attack while the
+                // weapon type is in either hand, once; it counted only for hits by the hand holding it (wowsims/forever, MIT,
+                // docs/rulings R-0017, evidence pending)
+                switch (aurEff->GetId())
+                {
+                    case 12284:
+                    case 13709:
+                        return attackerPlayer->HasItemFitToSpellRequirements(aurEff->GetSpellInfo());
+                    default:
+                        return aurEff->GetSpellInfo()->IsItemFitToSpellRequirements(weapon);
+                }
             });
 
             // no more than 100%
