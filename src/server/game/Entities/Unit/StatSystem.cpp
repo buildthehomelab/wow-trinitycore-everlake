@@ -290,9 +290,13 @@ void Player::UpdateArmor()
 
     float baseValue = value;
 
+    // Classic 1.60 (WoW Forever): SPELL_AURA_MOD_BONUS_ARMOR_PCT (Bear Form 180%, Dire Bear Form and Moonkin Form 360%) multiplies the
+    // armor of the equipped items only; the armor from Agility and from buffs (Mark of the Wild, Devotion Aura) stays whole. Druid logs read
+    // 1.8 and 3.6 times the items' armor added and nothing more (wowsims/forever, MIT, docs/evidence EV-0037).
+    float itemArmor = std::max(m_classicItemArmor, 0.0f);
     value += GetFlatModifierValue(unitMod, TOTAL_VALUE);        // bonus armor from auras and items
+    value += itemArmor * (GetTotalAuraMultiplier(SPELL_AURA_MOD_BONUS_ARMOR_PCT) - 1.0f);
     value *= GetPctModifierValue(unitMod, TOTAL_PCT);
-    value *= GetTotalAuraMultiplier(SPELL_AURA_MOD_BONUS_ARMOR_PCT);
 
     SetArmor(int32(value), int32(value - baseValue));
 

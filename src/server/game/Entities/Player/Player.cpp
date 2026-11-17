@@ -8752,6 +8752,7 @@ void Player::_ApplyItemBonuses(Item* item, uint8 slot, bool apply)
                 break;
             case ITEM_MOD_EXTRA_ARMOR:
                 HandleStatFlatModifier(UNIT_MOD_ARMOR, TOTAL_VALUE, float(val), apply);
+                m_classicItemArmor += apply ? float(val) : -float(val);
                 break;
             case ITEM_MOD_FIRE_RESISTANCE:
                 HandleStatFlatModifier(UNIT_MOD_RESISTANCE_FIRE, BASE_VALUE, float(val), apply);
@@ -8835,6 +8836,7 @@ void Player::_ApplyItemBonuses(Item* item, uint8 slot, bool apply)
     if (uint32 armor = proto->GetArmor(itemLevel))
     {
         HandleStatFlatModifier(UNIT_MOD_ARMOR, TOTAL_VALUE, float(armor), apply);
+        m_classicItemArmor += apply ? float(armor) : -float(armor);
         if (proto->GetClass() == ITEM_CLASS_ARMOR && proto->GetSubClass() == ITEM_SUBCLASS_ARMOR_SHIELD)
             SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::ShieldBlock), apply ? int32(GetClassicShieldBlockValue()) : 0);
     }
