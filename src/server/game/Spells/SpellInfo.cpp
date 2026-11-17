@@ -32,6 +32,7 @@
 #include "Pet.h"
 #include "Player.h"
 #include "Random.h"
+#include "ClassicRounding.h"
 #include "Spell.h"
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
@@ -685,15 +686,18 @@ SpellEffectValue SpellEffectInfo::CalcValue(WorldObject const* caster /*= nullpt
 
     switch (Effect)
     {
+        // Classic 1.60 (WoW Forever): a hit's or heal's amount rounds up with a chance equal to its fraction (ClassicRounding.h, EV-0095)
         case SPELL_EFFECT_SCHOOL_DAMAGE:
-        case SPELL_EFFECT_ENVIRONMENTAL_DAMAGE:
         case SPELL_EFFECT_HEALTH_LEECH:
         case SPELL_EFFECT_HEAL:
+        case SPELL_EFFECT_HEAL_MECHANICAL:
+            value = ClassicRounding::RoundByFraction(value, rand_norm());
+            break;
+        case SPELL_EFFECT_ENVIRONMENTAL_DAMAGE:
         case SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL:
         case SPELL_EFFECT_WEAPON_PERCENT_DAMAGE:
         case SPELL_EFFECT_WEAPON_DAMAGE:
         case SPELL_EFFECT_HEAL_MAX_HEALTH:
-        case SPELL_EFFECT_HEAL_MECHANICAL:
         case SPELL_EFFECT_NORMALIZED_WEAPON_DMG:
         case SPELL_EFFECT_POWER_DRAIN:
         case SPELL_EFFECT_ENERGIZE:
@@ -712,9 +716,12 @@ SpellEffectValue SpellEffectInfo::CalcValue(WorldObject const* caster /*= nullpt
         case SPELL_EFFECT_APPLY_AREA_AURA_SUMMONS:
             switch (ApplyAuraName)
             {
+                // Classic 1.60 (WoW Forever): a tick's amount keeps its fraction; each tick rounds it by the fraction
+                // (AuraEffect::HandlePeriodic*Tick, ClassicRounding.h, EV-0095)
                 case SPELL_AURA_PERIODIC_DAMAGE:
                 case SPELL_AURA_PERIODIC_HEAL:
                 case SPELL_AURA_PERIODIC_LEECH:
+                    break;
                 case SPELL_AURA_PERIODIC_HEALTH_FUNNEL:
                 case SPELL_AURA_PERIODIC_WEAPON_PERCENT_DAMAGE:
                 case SPELL_AURA_DAMAGE_SHIELD:

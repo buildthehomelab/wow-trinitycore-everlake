@@ -80,6 +80,7 @@
 #include "RecentAllies.h"
 #include "Spell.h"
 #include "ScheduledChangeAI.h"
+#include "ClassicRounding.h"
 #include "SpellAuraEffects.h"
 #include "SpellAuras.h"
 #include "SpellHistory.h"
@@ -7186,6 +7187,7 @@ int32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, int3
 
     int32 DoneTotal = 0;
     float DoneTotalMod = 1.0f;
+    float DoneFraction = 0.0f;  // Classic 1.60: the fractions of the power bonuses, kept to the end (ClassicRounding.h, EV-0095)
 
     auto callDamageScript = [&](int32& dmg, int32& flatMod, float& pctMod)
     {
@@ -7245,7 +7247,9 @@ int32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, int3
         }();
         float attackPowerBonus = float(victim->GetTotalAuraModifier(attType != RANGED_ATTACK ? SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS : SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS));
         attackPowerBonus += GetTotalAttackPowerValue(attType);
-        DoneTotal += int32(stack * attackPowerCoeff * attackPowerBonus);
+        float const attackPowerDone = stack * attackPowerCoeff * attackPowerBonus;
+        DoneTotal += int32(attackPowerDone);
+        DoneFraction += attackPowerDone - float(int32(attackPowerDone));
     }
 
     // Default calculation
@@ -7259,18 +7263,20 @@ int32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, int3
             coeff /= 100.0f;
         }
 
-        DoneTotal += int32(DoneAdvertisedBenefit * coeff * stack);
+        float const spellPowerDone = DoneAdvertisedBenefit * coeff * stack;
+        DoneTotal += int32(spellPowerDone);
+        DoneFraction += spellPowerDone - float(int32(spellPowerDone));
     }
 
     callDamageScript(pdamage, DoneTotal, DoneTotalMod);
 
-    float tmpDamage = float(pdamage + DoneTotal) * DoneTotalMod;
+    float tmpDamage = (float(pdamage + DoneTotal) + DoneFraction) * DoneTotalMod;
 
     // apply spellmod to Done damage (flat and pct)
     if (Player* modOwner = GetSpellModOwner())
         modOwner->ApplySpellMod(spellProto, damagetype == DOT ? SpellModOp::PeriodicHealingAndDamage : SpellModOp::HealingAndDamage, tmpDamage);
 
-    return int32(std::max(tmpDamage, 0.0f));
+    return ClassicRounding::RoundByFraction(tmpDamage, rand_norm());   // Classic 1.60: EV-0095
 }
 
 float Unit::SpellDamagePctDone(Unit* victim, SpellInfo const* spellProto, DamageEffectType damagetype, SpellEffectInfo const& spellEffectInfo) const
@@ -7456,7 +7462,7 @@ int32 Unit::SpellDamageBonusTaken(Unit* caster, SpellInfo const* spellProto, int
     }
 
     float tmpDamage = pdamage * TakenTotalMod;
-    return int32(std::max(tmpDamage, 0.0f));
+    return ClassicRounding::RoundByFraction(tmpDamage, rand_norm());   // Classic 1.60: EV-0095
 }
 
 int32 Unit::SpellBaseDamageBonusDone(SpellSchoolMask schoolMask) const
@@ -7719,6 +7725,7 @@ int32 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, int
         return healamount;
 
     int32 DoneTotal = 0;
+    float DoneFraction = 0.0f;  // Classic 1.60: the fractions of the power bonuses, kept to the end (ClassicRounding.h, EV-0095)
     float DoneTotalMod = SpellHealingPctDone(victim, spellProto);
 
     // done scripted mod (take it from owner)
@@ -7772,7 +7779,9 @@ int32 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, int
         }();
         float attackPowerBonus = float(victim->GetTotalAuraModifier(attType != RANGED_ATTACK ? SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS : SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS));
         attackPowerBonus += GetTotalAttackPowerValue(attType);
-        DoneTotal += int32(stack * attackPowerCoeff * attackPowerBonus);
+        float const attackPowerDone = stack * attackPowerCoeff * attackPowerBonus;
+        DoneTotal += int32(attackPowerDone);
+        DoneFraction += attackPowerDone - float(int32(attackPowerDone));
     }
 
     // Default calculation
@@ -7786,7 +7795,9 @@ int32 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, int
             coeff /= 100.0f;
         }
 
-        DoneTotal += int32(DoneAdvertisedBenefit * coeff * stack);
+        float const spellPowerDone = DoneAdvertisedBenefit * coeff * stack;
+        DoneTotal += int32(spellPowerDone);
+        DoneFraction += spellPowerDone - float(int32(spellPowerDone));
     }
 
     for (SpellEffectInfo const& otherSpellEffect : spellProto->GetEffects())
@@ -7810,13 +7821,13 @@ int32 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, int
     else if (aurEff)
         aurEff->GetBase()->CallScriptCalcDamageAndHealingHandlers(aurEff, aurEff->GetBase()->GetApplicationOfTarget(victim->GetGUID()), victim, healamount, DoneTotal, DoneTotalMod);
 
-    float heal = float(healamount + DoneTotal) * DoneTotalMod;
+    float heal = (float(healamount + DoneTotal) + DoneFraction) * DoneTotalMod;
 
     // apply spellmod to Done amount
     if (Player* modOwner = GetSpellModOwner())
         modOwner->ApplySpellMod(spellProto, damagetype == DOT ? SpellModOp::PeriodicHealingAndDamage : SpellModOp::HealingAndDamage, heal);
 
-    return int32(std::max(heal, 0.0f));
+    return ClassicRounding::RoundByFraction(heal, rand_norm());   // Classic 1.60: EV-0095
 }
 
 float Unit::SpellHealingPctDone(Unit* victim, SpellInfo const* spellProto) const
@@ -7959,7 +7970,7 @@ int32 Unit::SpellHealingBonusTaken(Unit* caster, SpellInfo const* spellProto, in
     }
 
     float heal = healamount * TakenTotalMod;
-    return int32(std::max(heal, 0.0f));
+    return ClassicRounding::RoundByFraction(heal, rand_norm());   // Classic 1.60: EV-0095
 }
 
 int32 Unit::SpellBaseHealingBonusDone(SpellSchoolMask schoolMask) const
