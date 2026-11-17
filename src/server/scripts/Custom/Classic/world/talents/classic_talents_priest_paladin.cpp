@@ -410,6 +410,30 @@ class classic_spell_pri_renewed_hope : public AuraScript
         return ValidateSpellInfo({ SPELL_PRI_WEAKENED_SOUL }) && ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
     }
 
+    // Penance heals with a bolt at once and every second of its channel; live shortens Weakened Soul once per Penance cast, not per bolt
+    // (forever-bugs #288, not a bug). The bolts are separate heals triggered by the priest's channel aura, so only the first bolt of each
+    // channel (told apart by the channel aura's cast id) procs. The crit bonus (classic_spell_pri_renewed_hope_crit) stays per bolt.
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        if (!spellInfo || !spellInfo->IsAffected(SPELLFAMILY_PRIEST, flag128(0, 0x10000, 0, 0)))
+            return true;    // not a Penance heal bolt
+
+        static constexpr std::array<uint32, 4> PenanceHealChannels = { 402277, 1240732, 1240733, 1316992 };
+        Unit* priest = GetTarget();
+        for (uint32 channelId : PenanceHealChannels)
+        {
+            if (Aura const* channel = priest->GetAura(channelId, priest->GetGUID()))
+            {
+                if (channel->GetCastId() == _lastPenanceCastId)
+                    return false;
+                _lastPenanceCastId = channel->GetCastId();
+                return true;
+            }
+        }
+        return true;
+    }
+
     void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
     {
         Unit* target = eventInfo.GetActionTarget();
@@ -429,8 +453,11 @@ class classic_spell_pri_renewed_hope : public AuraScript
 
     void Register() override
     {
+        DoCheckProc += AuraCheckProcFn(classic_spell_pri_renewed_hope::CheckProc);
         OnEffectProc += AuraEffectProcFn(classic_spell_pri_renewed_hope::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
     }
+
+    ObjectGuid _lastPenanceCastId;
 };
 
 // ... and the heals themselves get the crit bonus (effect 0) on targets with Weakened Soul: Flash Heal, Binding Heal, Lesser Heal, Heal,
