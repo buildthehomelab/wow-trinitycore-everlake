@@ -383,6 +383,131 @@ class classic_spell_rog_deadly_poison_attack_power : public AuraScript
     }
 };
 
+// 1329283, 1329549 - Shank, with the Forever talents that hang on it. Both talents are bare dummies that name their spell, so nothing
+// happened (wowsims/forever, MIT, sim/rogue/shank.go; tooltips; no log reading). On a Shank hit (the row always hits):
+//   1329328 Venom: "Causes your Shank ability to increase your Poison damage by $1310703s1% and your chance to apply Poisons by
+//           $1310703s3% for $1310703d": the rogue gets 1310703.
+//   1329286 Boot Knife: "Grants your Shank ability a $s1% chance to add $s2 Combo Points to the target": effect 0 (20..100 by rank) is
+//           the chance, and 1329285 gives the combo points.
+class classic_spell_rog_shank_talents : public SpellScript
+{
+    static constexpr uint32 SPELL_ROGUE_VENOM = 1329328;
+    static constexpr uint32 SPELL_ROGUE_VENOM_BUFF = 1310703;
+    static constexpr uint32 SPELL_ROGUE_BOOT_KNIFE = 1329286;
+    static constexpr uint32 SPELL_ROGUE_BOOT_KNIFE_POINTS = 1329285;
+
+    void HandleHit(SpellEffIndex /*effIndex*/)
+    {
+        Unit* rogue = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!rogue || !target)
+            return;
+
+        if (rogue->HasAura(SPELL_ROGUE_VENOM))
+            rogue->CastSpell(rogue, SPELL_ROGUE_VENOM_BUFF, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+
+        if (AuraEffect const* bootKnife = rogue->GetAuraEffect(SPELL_ROGUE_BOOT_KNIFE, EFFECT_0))
+            if (roll_chance(bootKnife->GetAmountAsInt()))
+                rogue->CastSpell(target, SPELL_ROGUE_BOOT_KNIFE_POINTS, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_rog_shank_talents::HandleHit, EFFECT_0, SPELL_EFFECT_WEAPON_PERCENT_DAMAGE);
+    }
+};
+
+// 1316709, 1325756, 1325757, 1325758 - Death Mark: "Finishing move that marks the target, storing a portion of the damage dealt by your
+// attacks per Combo Point. Garrote and Rupture damage is stored at twice the rate. After $d, the stored damage is dealt, up to a maximum
+// increased by Attack Power and Critical Strike chance". The rows hold only an empty periodic damage effect (one tick at the end) and a
+// dummy. The rates are in the tooltip: $ratio 12% stored per combo point, and a cap of (base + per point x points + 0.04 x attack power
+// x points) x (1 + melee crit / 100) x Coup de Grace, with base / per point 63/102, 98/158, 138/217, 156/245 by rank. Coup de Grace's
+// effect 1 (7/13/20%) raises both the storage rate and the cap. The stored damage already carries every modifier, so the payout takes
+// none again (wowsims/forever, MIT, sim/rogue/death_mark.go; tooltip; no log reading).
+class classic_spell_rog_death_mark : public AuraScript
+{
+    static constexpr uint32 SPELL_ROGUE_COUP_DE_GRACE = 14162;
+    static constexpr float STORED_PER_COMBO_POINT = 0.12f;
+    static constexpr float CAP_ATTACK_POWER_PER_COMBO_POINT = 0.04f;
+    static constexpr uint32 ROGUE_GARROTE_OR_RUPTURE = 0x00100100;     // family flags word 0: Garrote 0x100, Rupture 0x100000
+
+    struct CapRow { uint32 SpellId; float Base; float PerPoint; };
+    static constexpr CapRow CapRows[] = { { 1316709, 63.0f, 102.0f }, { 1325756, 98.0f, 158.0f }, { 1325757, 138.0f, 217.0f }, { 1325758, 156.0f, 245.0f } };
+
+    float CoupDeGrace(Unit const* rogue) const
+    {
+        AuraEffect const* coup = rogue->GetAuraEffect(SPELL_ROGUE_COUP_DE_GRACE, EFFECT_1);
+        return coup ? 1.0f + coup->GetAmountAsInt() / 100.0f : 1.0f;
+    }
+
+    void CalcAmount(AuraEffect const* /*aurEff*/, SpellEffectValue& amount, bool& canBeRecalculated)
+    {
+        canBeRecalculated = false;
+        amount = 0;
+        // the combo points the finisher spends are still on the rogue while the aura is created
+        if (Unit* rogue = GetCaster())
+            _comboPoints = rogue->GetPower(POWER_COMBO_POINTS);
+        _stored = 0.0f;
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Unit* rogue = GetCaster();
+        DamageInfo* damageInfo = eventInfo.GetDamageInfo();
+        if (!rogue || !damageInfo || !damageInfo->GetDamage() || eventInfo.GetActor() != rogue || _comboPoints <= 0)
+            return false;
+
+        SpellInfo const* spellInfo = damageInfo->GetSpellInfo();
+        if (spellInfo && spellInfo->Id == GetId())
+            return false;
+
+        float rate = STORED_PER_COMBO_POINT * _comboPoints * CoupDeGrace(rogue);
+        if (spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_ROGUE && (spellInfo->SpellFamilyFlags[0] & ROGUE_GARROTE_OR_RUPTURE))
+            rate *= 2.0f;
+        _stored += damageInfo->GetDamage() * rate;
+        return false;   // stored only; the mark deals it when it ends
+    }
+
+    void HandleTick(AuraEffect const* /*aurEff*/)
+    {
+        PreventDefaultAction();
+        Unit* rogue = GetCaster();
+        Unit* target = GetTarget();
+        if (!rogue || !target->IsAlive() || _stored <= 0.0f)
+            return;
+
+        CapRow const* row = nullptr;
+        for (CapRow const& candidate : CapRows)
+            if (candidate.SpellId == GetId())
+                row = &candidate;
+        if (!row)
+            return;
+
+        float const points = float(_comboPoints);
+        float const cap = (row->Base + row->PerPoint * points + CAP_ATTACK_POWER_PER_COMBO_POINT * points * rogue->GetTotalAttackPowerValue(BASE_ATTACK))
+            * (1.0f + rogue->GetUnitCriticalChanceDone(BASE_ATTACK) / 100.0f) * CoupDeGrace(rogue);
+        uint32 const damage = uint32(std::min(_stored, cap));
+        if (!damage)
+            return;
+
+        SpellNonMeleeDamage damageInfo(rogue, target, GetSpellInfo(), GetAura()->GetSpellVisual(), GetSpellInfo()->SchoolMask, GetAura()->GetCastId());
+        damageInfo.periodicLog = true;
+        damageInfo.damage = damage;
+        rogue->DealSpellDamage(&damageInfo, false);
+        rogue->SendSpellNonMeleeDamageLog(&damageInfo);
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(classic_spell_rog_death_mark::CalcAmount, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE);
+        DoCheckProc += AuraCheckProcFn(classic_spell_rog_death_mark::CheckProc);
+        OnEffectPeriodic += AuraEffectPeriodicFn(classic_spell_rog_death_mark::HandleTick, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE);
+    }
+
+    int32 _comboPoints = 0;
+    float _stored = 0.0f;
+};
+
 // 1856, 1857, 27617 - Vanish: ported from vMaNGOS (GPL-2.0, scripts/spells/spell_rogue.cpp, RogueVanishScript). Vanish also ends effects that let
 // an enemy always know where the rogue is (Hunter's Mark, Mind Vision; patch 1.12) and puts the rogue straight into the highest Stealth rank
 // known, so the stealth stays after the Vanish aura (10 s in the client data) runs out.
@@ -419,6 +544,8 @@ void AddSC_classic_rogue_abilities()
     RegisterSpellScript(classic_spell_rog_instant_poison_attack_power);
     RegisterSpellScript(classic_spell_rog_deadly_poison_attack_power);
     RegisterSpellScript(classic_spell_rog_vanish);
+    RegisterSpellScript(classic_spell_rog_shank_talents);
+    RegisterSpellScript(classic_spell_rog_death_mark);
     RegisterSpellScript(classic_spell_rog_bleed_attack_power);
     RegisterSpellScript(classic_spell_rog_relentless_strikes);
     RegisterSpellScript(classic_spell_rog_ruthlessness);
