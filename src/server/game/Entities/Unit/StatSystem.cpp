@@ -644,12 +644,22 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
     SpellShapeshiftFormEntry const* shapeshift = sSpellShapeshiftFormStore.LookupEntry(GetShapeshiftForm());
     if (shapeshift && shapeshift->CombatRoundTime)
     {
-        // Classic 1.60 (vanilla, VMaNGOS Player::CalculateMinMaxDamage): in cat and bear form the equipped weapon's damage is ignored; the
-        // range is level * 0.85 .. level * 1.25 (level capped at 60) times the form's speed. Rescaling the weapon kept a Forever staff's
-        // full swing damage in every cat hit (druid 156: about 350 per white swing against 91 from attack power).
-        float const formLevel = float(std::min<uint32>(GetLevel(), 60));
-        weaponMinDamage = formLevel * 0.85f * attackPowerMod;
-        weaponMaxDamage = formLevel * 1.25f * attackPowerMod;
+        // Classic 1.60 (WoW Forever): the paw takes the main-hand weapon's damage table DPS (the item's own damage range and speed left out)
+        // times the form's swing time (1 s Cat, 2.5 s Bear and Dire Bear), spread by the form's DamageVariance (0.4: +-20%), the low end
+        // rounded down and the high end to nearest, at least 1; with no weapon it is 1 - 1 (wowsims/forever, MIT, sim/druid/forms.go,
+        // docs/evidence EV-0041). A 60 DPS staff gives a cat 48 - 72 before attack power. Vanilla (VMaNGOS) ignored the weapon and used
+        // level * 0.85 .. level * 1.25 times the form's speed. Scaling the weapon's own range kept a staff's full swing damage in every
+        // cat hit (druid 156: about 350 per white swing against 91 from attack power).
+        float const formSpeed = shapeshift->CombatRoundTime / 1000.0f;
+        float const halfVariance = shapeshift->DamageVariance * 0.5f;
+        weaponMinDamage = 1.0f;
+        weaponMaxDamage = 1.0f;
+        if (Item const* weapon = GetUseableItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND))
+        {
+            float const mean = weapon->GetTemplate()->GetDPS(weapon->GetItemLevel(this)) * formSpeed;
+            weaponMinDamage = std::max(1.0f, std::floor(mean * (1.0f - halfVariance)));
+            weaponMaxDamage = std::max(1.0f, std::round(mean * (1.0f + halfVariance)));
+        }
     }
     else if (!CanUseAttackType(attType)) // check if player not in form but still can't use (disarm case)
     {

@@ -11719,7 +11719,9 @@ void Unit::SetCantProc(bool apply)
 
 float Unit::GetAPMultiplier(WeaponAttackType attType, bool normalized) const
 {
-    if (GetTypeId() != TYPEID_PLAYER || (IsInFeralForm() && !normalized))
+    // Classic 1.60 (WoW Forever): in a form the normalized speed is the form's own swing time too (1 s Cat, 2.5 s Bear), not the held
+    // weapon's normalization (a staff's 3.3 s) (wowsims/forever, MIT, sim/druid/forms.go NormalizedSwingSpeed)
+    if (GetTypeId() != TYPEID_PLAYER || IsInFeralForm())
         return GetBaseAttackTime(attType) / 1000.0f;
 
     Item* weapon = ToPlayer()->GetWeaponForAttack(attType, true);
