@@ -2113,6 +2113,10 @@ float Aura::CalcProcChance(SpellProcEntry const& procEntry, ProcEventInfo& event
             if (Spell const* procSpell = eventInfo.GetProcSpell())
                 castTime = procSpell->GetCastTime();
             chance = caster->GetPPMProcChance(std::max<int32>(castTime, 1500), procEntry.ProcsPerMinute, GetSpellInfo());
+            // Highborne Research Tablet: weapon hits on procs per minute, spell hits a flat chance whatever the cast time (about 7% on
+            // instants and 3 s casts alike; wowsims/forever, MIT, docs/evidence EV-0131)
+            if (procEntry.AttributesMask & PROC_ATTR_CLASSIC_SPELL_FLAT_CHANCE)
+                chance = procEntry.Chance;
         }
         // calculate ppm chance if present and we're using weapon
         else if (eventInfo.GetDamageInfo() && procEntry.ProcsPerMinute != 0)

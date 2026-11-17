@@ -266,6 +266,8 @@ enum ProcAttributes : uint32
 
     PROC_ATTR_REDUCE_PROC_60            = 0x0000080, // aura should have a reduced chance to proc if level of proc Actor > 60
     PROC_ATTR_CANT_PROC_FROM_ITEM_CAST  = 0x0000100, // do not allow aura proc if proc is caused by a spell casted by item
+
+    PROC_ATTR_CLASSIC_SPELL_FLAT_CHANCE = 0x0010000, // Classic 1.60: a procs-per-minute row whose spell hits roll the row's Chance flat, not the cast time (Highborne Research Tablet)
 };
 
 DEFINE_ENUM_FLAG(ProcAttributes);
@@ -276,7 +278,8 @@ DEFINE_ENUM_FLAG(ProcAttributes);
                                PROC_ATTR_REQ_SPELLMOD           | \
                                PROC_ATTR_USE_STACKS_FOR_CHARGES | \
                                PROC_ATTR_REDUCE_PROC_60         | \
-                               PROC_ATTR_CANT_PROC_FROM_ITEM_CAST)
+                               PROC_ATTR_CANT_PROC_FROM_ITEM_CAST | \
+                               PROC_ATTR_CLASSIC_SPELL_FLAT_CHANCE)
 
 struct SpellProcEntry
 {

@@ -1634,6 +1634,62 @@ class classic_spell_pri_vampiric_embrace : public AuraScript
 // its 10 ms cooldown lets one cast proc it once. Aura::CalcProcChance prices the row's 1.5 a minute on the cast time. Each proc fires
 // Shadow 1300437 or Arcane 1300438, one in two each, at the target (165 Shadow, 194 Arcane of 359; wowsims/forever, MIT, docs/evidence
 // EV-0115).
+// WoW Forever dungeon set procs that roll on spell casts (Crusader's Wrath 450625, The Furious Storm 450626, Nature's Bounty 450608,
+// Vestments of the Devout 450576): only a cast that costs mana rolls, on the global cooldown or off it (Judgement, Holy Shield, seals,
+// Counterspell); a free one rolls nothing (Swift Judgement 0 of 65, Water Shield 0 of 75, Evocation 0 of 91). White swings roll as their
+// rows say (wowsims/forever, MIT, docs/evidence EV-0144). PROC_ATTR_REQ_POWER_COST would refuse the swings too.
+class classic_spell_item_set_proc_mana_cast : public AuraScript
+{
+protected:
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Spell const* procSpell = eventInfo.GetProcSpell();
+        if (!procSpell)
+            return true;
+        return std::ranges::any_of(procSpell->GetPowerCost(), [](SpellPowerCost const& cost) { return cost.Power == POWER_MANA && cost.Amount > 0; });
+    }
+
+public:
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_item_set_proc_mana_cast::CheckProc);
+    }
+};
+
+// 450608 - Nature's Bounty (Wildheart Raiment 5-piece, Feralheart Raiment reissue 4-piece): a dummy that fired nothing. A spell cast
+// that costs mana restores mana (27782), 1 a minute on the cast time (64 of 2,827 casts, measured); a landed white swing gives 27784
+// and a melee hit taken 10 rage (27783), whose rates are unmeasured and take the same row (wowsims/forever, MIT, EV-0144,
+// sim/common/forever/items_sets.go).
+class classic_spell_item_natures_bounty : public classic_spell_item_set_proc_mana_cast
+{
+    static constexpr uint32 SPELL_NATURES_BOUNTY_MANA = 27782;
+    static constexpr uint32 SPELL_NATURES_BOUNTY_RAGE = 27783;
+    static constexpr uint32 SPELL_NATURES_BOUNTY_ENERGY = 27784;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_NATURES_BOUNTY_MANA, SPELL_NATURES_BOUNTY_RAGE, SPELL_NATURES_BOUNTY_ENERGY });
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        Unit* druid = GetTarget();
+        uint32 spellId = SPELL_NATURES_BOUNTY_MANA;
+        if (eventInfo.GetTypeMask() & PROC_FLAG_DEAL_MELEE_SWING)
+            spellId = SPELL_NATURES_BOUNTY_ENERGY;
+        else if (eventInfo.GetTypeMask() & (PROC_FLAG_TAKE_MELEE_SWING | PROC_FLAG_TAKE_MELEE_ABILITY))
+            spellId = SPELL_NATURES_BOUNTY_RAGE;
+        druid->CastSpell(druid, spellId, CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        classic_spell_item_set_proc_mana_cast::Register();
+        OnEffectProc += AuraEffectProcFn(classic_spell_item_natures_bounty::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 class classic_spell_item_moonshadow_stave : public AuraScript
 {
     static constexpr uint32 SPELL_MOONSHADOW_SHADOW = 1300437;
@@ -2482,6 +2538,8 @@ void AddSC_classic_spell_scripts()
     new classic_unit_tigers_fury();
     RegisterSpellScript(classic_spell_pri_vampiric_embrace);
     RegisterSpellScript(classic_spell_item_moonshadow_stave);
+    RegisterSpellScript(classic_spell_item_set_proc_mana_cast);
+    RegisterSpellScript(classic_spell_item_natures_bounty);
     RegisterSpellScript(classic_spell_pal_consecration);
     RegisterSpellScript(classic_spell_pal_seal_of_fury);
     RegisterSpellScript(classic_spell_pal_seal_of_fury_damage);
