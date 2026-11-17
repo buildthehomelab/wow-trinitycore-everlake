@@ -18,13 +18,13 @@
 // Classic 1.60 port of VMaNGOS src/scripts/eastern_kingdoms/burning_steppes/blackwing_lair/boss_vaelastrasz.cpp (ScriptDev2 lineage, GPL-2)
 // Scripts: boss_vaelastrasz, npc_death_talon_Captain, npc_death_talon_Seether
 
+#include "ObjectAccessor.h"
 #include "ScriptMgr.h"
 #include "DB2Stores.h"
 #include "GossipDef.h"
 #include "InstanceScript.h"
 #include "Map.h"
 #include "MotionMaster.h"
-#include "ObjectAccessor.h"
 #include "Player.h"
 #include "QuestDef.h"
 #include "ScriptedCreature.h"

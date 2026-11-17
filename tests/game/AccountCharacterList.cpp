@@ -98,3 +98,12 @@ TEST_CASE("Account character list answer goes out between exploration XP and the
     CHECK(rename == list + 2);
     CHECK(list == 0x47020Du);
 }
+
+TEST_CASE("Account character list answer is never sent: its 70790+ number crashes the 70938 client", "[AccountCharacterList]")
+{
+    // 2026-11-16: every login on a 1.60.1.70938 client crashed (ERROR #132) a few seconds after this answer went out on 0x47020D;
+    // the client's crash data held our answer as the last message of that number
+    CHECK(ClassicOpcodes::IsServerOpcodeBlocked(SMSG_GET_ACCOUNT_CHARACTER_LIST_RESULT, 70938));
+    CHECK(ClassicOpcodes::IsServerOpcodeBlocked(SMSG_GET_ACCOUNT_CHARACTER_LIST_RESULT, 70790));
+    CHECK_FALSE(ClassicOpcodes::IsServerOpcodeBlocked(SMSG_EXPLORATION_EXPERIENCE, 70938));
+}
