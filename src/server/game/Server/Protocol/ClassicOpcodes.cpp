@@ -65,6 +65,10 @@ std::unordered_set<uint32> const BlockedServerOpcodes =
     SMSG_HEALTH_UPDATE,     // does not exist in Classic (health is sent through UnitData)
     SMSG_GUILD_CHALLENGE_COMPLETED, // does not exist in Classic (guild switch has one case less, see TranslateServerOpcode)
     SMSG_CHANNEL_LIST,      // Classic chat index 0x1D (reader rva 0xA10E70), layout not verified yet
+    // Our number for it on 70790+ clients (0x47020D) was worked out, never seen in a sniff. A 1.60.1.70938 client reads it as
+    // another message and crashes entering the world (ERROR #132, a packed GUID read from an empty buffer), on every
+    // character. Without the answer the mail window's To box offers no own characters, as before core PR #57.
+    SMSG_GET_ACCOUNT_CHARACTER_LIST_RESULT,
 };
 
 // Classic layout differs; the client waits for the message, so send a placeholder of the expected size
