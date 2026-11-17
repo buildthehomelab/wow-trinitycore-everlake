@@ -1271,7 +1271,8 @@ void Unit::CastStop(uint32 except_spellid)
             InterruptSpell(CurrentSpellTypes(i), false);
 }
 
-void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 damage, SpellInfo const* spellInfo, WeaponAttackType attackType, bool crit /*= false*/, bool blocked /*= false*/, Spell* spell /*= nullptr*/)
+void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 damage, SpellInfo const* spellInfo, WeaponAttackType attackType, bool crit /*= false*/, bool blocked /*= false*/, Spell* spell /*= nullptr*/,
+    bool canPartialResist /*= true*/)
 {
     if (damage < 0)
         return;
@@ -1369,7 +1370,7 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 dama
     damageInfo->damage = damage;
     damageInfo->originalDamage = damage;
     DamageInfo dmgInfo(*damageInfo, SPELL_DIRECT_DAMAGE, BASE_ATTACK, PROC_HIT_NONE);
-    Unit::CalcAbsorbResist(dmgInfo, spell);
+    Unit::CalcAbsorbResist(dmgInfo, spell, canPartialResist);
     damageInfo->absorb = dmgInfo.GetAbsorb();
     damageInfo->resist = dmgInfo.GetResist();
 
@@ -1967,12 +1968,13 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
     return std::min(victimResistance * 0.75f / (5.0f * casterLevel), 0.75f);
 }
 
-/*static*/ void Unit::CalcAbsorbResist(DamageInfo& damageInfo, Spell* spell /*= nullptr*/)
+/*static*/ void Unit::CalcAbsorbResist(DamageInfo& damageInfo, Spell* spell /*= nullptr*/, bool canPartialResist /*= true*/)
 {
     if (!damageInfo.GetVictim() || !damageInfo.GetVictim()->IsAlive() || !damageInfo.GetDamage())
         return;
 
-    uint32 resistedDamage = Unit::CalcSpellResistedDamage(damageInfo.GetAttacker(), damageInfo.GetVictim(), damageInfo.GetDamage(), damageInfo.GetSchoolMask(), damageInfo.GetSpellInfo());
+    // canPartialResist: false for damage that takes no partial resist (Classic 1.60 Flamestrike ground ticks, EV-0028); absorbs still apply
+    uint32 resistedDamage = canPartialResist ? Unit::CalcSpellResistedDamage(damageInfo.GetAttacker(), damageInfo.GetVictim(), damageInfo.GetDamage(), damageInfo.GetSchoolMask(), damageInfo.GetSpellInfo()) : 0;
 
     // Ignore Absorption Auras
     float auraAbsorbMod = 0.f;
@@ -7570,8 +7572,10 @@ float Unit::SpellCritChanceDone(Spell* spell, AuraEffect const* aurEff, SpellSch
     }
     // percent done
     // only players use intelligence for critical chance computations
+    // The Spell goes with it, so a crit mod paid for with charges (Revelation, Elemental Mastery) is noted as applied to this cast and its
+    // proc row (PROC_ATTR_REQ_SPELLMOD) spends the charge; without it a crit-only buff such as Revelation was never spent.
     if (Player* modOwner = GetSpellModOwner())
-        modOwner->ApplySpellMod(spellInfo, SpellModOp::CritChance, crit_chance);
+        modOwner->ApplySpellMod(spellInfo, SpellModOp::CritChance, crit_chance, spell);
 
     return std::max(crit_chance, 0.0f);
 }
