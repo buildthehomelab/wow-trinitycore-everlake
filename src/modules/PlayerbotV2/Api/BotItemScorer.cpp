@@ -669,10 +669,11 @@ int32 ScoreItemRaid(ItemTemplate const* tpl, uint8 cls, uint16 spec, uint8 level
 
     // Armor of the piece (tanks live on it) and weapon damage per second.
     if (w.armor > 0.0f && tpl->GetClass() == ITEM_CLASS_ARMOR)
-        total += w.armor * float(tpl->GetArmor(ilvl));
+        total += w.armor * (float(tpl->GetArmor(ilvl)) + tpl->GetClassicBonusArmor());   // Classic 1.60: green bonus armor too
     if (tpl->GetClass() == ITEM_CLASS_WEAPON)
     {
-        float const dps = tpl->GetDPS(ilvl);
+        // Classic 1.60 (WoW Forever): a reduced caster weapon deals its share of the table (EV-0097)
+        float const dps = tpl->GetClassicDPS(ilvl, tpl->HasFlag(ITEM_FLAG4_REGULATED_COMMODITY));
         if (slot == EQUIPMENT_SLOT_RANGED)
             total += w.ranged_dps * dps;
         else if (slot == EQUIPMENT_SLOT_OFFHAND)

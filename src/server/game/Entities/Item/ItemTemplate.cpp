@@ -257,6 +257,38 @@ float ItemTemplate::GetDPS(uint32 itemLevel) const
     return dps;
 }
 
+// Classic 1.60 (WoW Forever): the table DPS with a reduced caster weapon's share, 2/3 one-hand, 29/39 two-hand (EV-0097). The flag is
+// ItemSparse Flags[3] 0x100 (retail's REGULATED_COMMODITY bit); a random suffix can set it too (Item::GetClassicWeaponDPS).
+float ItemTemplate::GetClassicDPS(uint32 itemLevel, bool reducedCasterDps) const
+{
+    float dps = GetDPS(itemLevel);
+    if (reducedCasterDps)
+    {
+        switch (GetInventoryType())
+        {
+            case INVTYPE_WEAPON:
+            case INVTYPE_WEAPONMAINHAND:
+            case INVTYPE_WEAPONOFFHAND:
+                dps *= 2.0f / 3.0f;
+                break;
+            case INVTYPE_2HWEAPON:
+                dps *= 29.0f / 39.0f;
+                break;
+            default:
+                break;
+        }
+    }
+    return dps;
+}
+
+// Classic 1.60 (WoW Forever): an armor item's green bonus armor, stored as its ItemSparse QualityModifier (Tree Bark Jacket +60)
+float ItemTemplate::GetClassicBonusArmor() const
+{
+    if (GetClass() != ITEM_CLASS_ARMOR || GetQualityModifier() <= 0.0f)
+        return 0.0f;
+    return std::floor(GetQualityModifier());
+}
+
 void ItemTemplate::GetDamage(uint32 itemLevel, float& minDamage, float& maxDamage) const
 {
     minDamage = maxDamage = 0.0f;

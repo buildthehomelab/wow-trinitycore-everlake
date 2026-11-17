@@ -2349,25 +2349,7 @@ uint32 Item::GetRetailSellPrice(ItemTemplate const* proto, uint32 quality, uint3
 // EV-0110). Without them Death Speaker Scepter hit for 42 - 78 where the game shows 28 - 52.
 float Item::GetClassicWeaponDPS(Player const* owner) const
 {
-    ItemTemplate const* proto = GetTemplate();
-    float dps = proto->GetDPS(GetItemLevel(owner));
-    if (_bonusData.ClassicReducedCasterDps)
-    {
-        switch (proto->GetInventoryType())
-        {
-            case INVTYPE_WEAPON:
-            case INVTYPE_WEAPONMAINHAND:
-            case INVTYPE_WEAPONOFFHAND:
-                dps *= 2.0f / 3.0f;
-                break;
-            case INVTYPE_2HWEAPON:
-                dps *= 29.0f / 39.0f;
-                break;
-            default:
-                break;
-        }
-    }
-    return dps;
+    return GetTemplate()->GetClassicDPS(GetItemLevel(owner), _bonusData.ClassicReducedCasterDps);
 }
 
 // Classic 1.60 (WoW Forever): the equipped damage range, the table DPS spread by the item's damage variance plus the item's

@@ -8889,9 +8889,8 @@ void Player::_ApplyItemBonuses(Item* item, uint8 slot, bool apply)
     // Jacket's "44 Armor" (44 + 60 = its vanilla 104). The core read only the table armor, so 491 items in wowsims' item list lost it
     // (Heavy Mithril Breastplate +90, Green Iron Hauberk +120). It counts as item armor, as ITEM_MOD_EXTRA_ARMOR does (wowsims/forever, MIT,
     // tools/database/dbc/item.go GetStats; Wowhead Forever tooltip of item 1486)
-    if (proto->GetClass() == ITEM_CLASS_ARMOR && proto->GetQualityModifier() > 0.0f)
+    if (float const bonusArmor = proto->GetClassicBonusArmor())
     {
-        float const bonusArmor = std::floor(proto->GetQualityModifier());
         HandleStatFlatModifier(UNIT_MOD_ARMOR, TOTAL_VALUE, bonusArmor, apply);
         m_classicItemArmor += apply ? bonusArmor : -bonusArmor;
     }
