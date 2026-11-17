@@ -419,6 +419,28 @@ class classic_spell_pal_judgement_of_command : public SpellScript
     }
 };
 
+// 20467, 20963, 20964, 20965, 20966 - Judgement of Command (damage): "instantly causing $/2;20966s1 Holy damage, $20966s1 if the target
+// is stunned or incapacitated" (Seal of Command tooltip). The spell holds the stunned amount; the base is halved on any other target.
+// Spell power is added after, in full (wowsims Forever registerSealOfCommand).
+class classic_spell_pal_judgement_of_command_damage : public SpellScript
+{
+    void HandleCalcDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& damage, int32& /*flatMod*/, float& /*pctMod*/)
+    {
+        if (!victim)
+            return;
+
+        bool const stunned = victim->HasUnitState(UNIT_STATE_STUNNED)
+            || victim->HasAuraWithMechanic((1 << MECHANIC_STUN) | (1 << MECHANIC_KNOCKOUT) | (1 << MECHANIC_SAPPED));
+        if (!stunned)
+            damage /= 2;
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_pal_judgement_of_command_damage::HandleCalcDamage);
+    }
+};
+
 // 5373, 1826 - Judgement of Light / Judgement of Wisdom "Intermediate": the judgement debuff (20185, 20186 and their ranks) procs this dummy
 // from the judged enemy at whoever hits it, and nothing turned it into the heal or the mana (the client spell does neither itself). The rank's
 // own spell (20267 / 20341-20343 heal, 20268 / 20352-20353 mana) is cast by the paladin that judged, so its talents (Improved Judgement of
@@ -1496,13 +1518,25 @@ class classic_spell_pal_unsealed_wrath : public AuraScript
 
 // Judgement of Fury (20183 20411-20414 1311650 1311655): "Unleashing this Seal's energy causes Holy damage to an enemy and taunts the
 // target to attack you for 4 sec." Effect 1 (dummy) is the taunt, effect 2 (dummy) the extra threat.
+// Live order (player tests, forever-paladin-feedback): the damage lands first, then the taunt copies the top threat, so the damage's
+// threat is not added on top of the copied value. The effect handlers run before the damage is dealt, so the effect only marks the
+// target and the taunt itself waits for AfterHit, which comes after the damage.
 class classic_spell_pal_judgement_of_fury : public SpellScript
 {
-    void HandleTaunt(SpellEffIndex /*effIndex*/)
+    void MarkTaunt(SpellEffIndex /*effIndex*/)
     {
+        _taunt = true;
+    }
+
+    void HandleTaunt()
+    {
+        if (!_taunt)
+            return;
+        _taunt = false;
+
         Creature* target = Object::ToCreature(GetHitUnit());
         Unit* paladin = GetCaster()->ToUnit();
-        if (!target || !paladin || !target->CanHaveThreatList())
+        if (!target || !paladin || !target->IsAlive() || !target->CanHaveThreatList())
             return;
 
         target->GetThreatManager().MatchUnitThreatToHighestThreat(paladin);
@@ -1521,9 +1555,12 @@ class classic_spell_pal_judgement_of_fury : public SpellScript
 
     void Register() override
     {
-        OnEffectHitTarget += SpellEffectFn(classic_spell_pal_judgement_of_fury::HandleTaunt, EFFECT_1, SPELL_EFFECT_DUMMY);
+        OnEffectHitTarget += SpellEffectFn(classic_spell_pal_judgement_of_fury::MarkTaunt, EFFECT_1, SPELL_EFFECT_DUMMY);
+        AfterHit += SpellHitFn(classic_spell_pal_judgement_of_fury::HandleTaunt);
         OnEffectHit += SpellEffectFn(classic_spell_pal_judgement_of_fury::HandleThreat, EFFECT_2, SPELL_EFFECT_DUMMY);
     }
+
+    bool _taunt = false;
 };
 
 // 26573, 20116, 20922, 20923, 20924 - Consecration (Classic 1.60, official dungeon sniff): the cast puts a 1 sec periodic dummy on the
@@ -2432,6 +2469,7 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_pal_seal_of_righteousness);
     RegisterSpellScript(classic_spell_pal_judgement);
     RegisterSpellScript(classic_spell_pal_judgement_of_command);
+    RegisterSpellScript(classic_spell_pal_judgement_of_command_damage);
     RegisterSpellScript(classic_spell_pal_judgement_intermediate);
     RegisterSpellScript(classic_spell_profession_book);
     RegisterSpellScript(classic_spell_ground_area_damage);
