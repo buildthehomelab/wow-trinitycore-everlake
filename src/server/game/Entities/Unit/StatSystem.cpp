@@ -426,23 +426,22 @@ float Player::GetClassicDefenseSkillBonus() const
     return (int32(GetSkillValue(SKILL_DEFENSE)) - int32(GetMaxSkillValueForLevel())) * 0.04f;
 }
 
-// Classic 1.60 (vanilla, VMaNGOS / TrinityCoreClassic): mana per second from spirit (the values are per 2 second tick)
+// Classic 1.60 (WoW Forever): mana per second from spirit, 6.25 + Spirit / 8 for every mana class (12.5 + Spirit / 4 per 2 second tick,
+// vanilla's mage and priest rate). Vanilla gave shamans 17 + Spirit / 5 and druids, hunters, paladins and warlocks 15 + Spirit / 5 per
+// tick. Source: wowsims/forever (MIT), sim/core/mana.go and mana_regen_test.go; no log measurement is published, so low confidence.
 float Player::OCTRegenMPPerSpirit() const
 {
-    float spirit = GetStat(STAT_SPIRIT);
-    float perTick;
     switch (GetClass())
     {
         case CLASS_MAGE:
-        case CLASS_PRIEST:  perTick = spirit / 4.0f + 12.5f; break;
-        case CLASS_SHAMAN:  perTick = spirit / 5.0f + 17.0f; break;
+        case CLASS_PRIEST:
+        case CLASS_SHAMAN:
         case CLASS_DRUID:
         case CLASS_HUNTER:
         case CLASS_PALADIN:
-        case CLASS_WARLOCK: perTick = spirit / 5.0f + 15.0f; break;
+        case CLASS_WARLOCK: return 6.25f + GetStat(STAT_SPIRIT) / 8.0f;
         default:            return 0.0f;
     }
-    return perTick / 2.0f;
 }
 
 // Classic 1.60 (vanilla, VMaNGOS / TrinityCoreClassic): health per 2 second tick from spirit, out of combat
