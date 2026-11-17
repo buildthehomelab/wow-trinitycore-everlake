@@ -272,6 +272,8 @@ void Player::UpdateResistances(uint32 school)
         UpdateArmor();
 }
 
+static constexpr uint32 CLASSIC_SPELL_DRUID_ENRAGE = 5229;
+
 void Player::UpdateArmor()
 {
     UnitMods unitMod = UNIT_MOD_ARMOR;
@@ -294,9 +296,25 @@ void Player::UpdateArmor()
     // armor of the equipped items only; the armor from Agility and from buffs (Mark of the Wild, Devotion Aura) stays whole. Druid logs read
     // 1.8 and 3.6 times the items' armor added and nothing more (wowsims/forever, MIT, docs/evidence EV-0037).
     float itemArmor = std::max(m_classicItemArmor, 0.0f);
+    float const formArmorMultiplier = GetTotalAuraMultiplier(SPELL_AURA_MOD_BONUS_ARMOR_PCT);
     value += GetFlatModifierValue(unitMod, TOTAL_VALUE);        // bonus armor from auras and items
-    value += itemArmor * (GetTotalAuraMultiplier(SPELL_AURA_MOD_BONUS_ARMOR_PCT) - 1.0f);
+    value += itemArmor * (formArmorMultiplier - 1.0f);
+
+    // Classic 1.60 (WoW Forever): Enrage 5229 "reduces base armor by 27% in Bear Form and 16% in Dire Bear Form" (effect 3, a dummy). The
+    // game takes the share of the items' armor after the form's multiplier and of the 2 armor per Agility; buff armor, Thick Hide and
+    // the level stay whole (wowsims/forever, MIT, docs/evidence EV-0032, EV-0109: 1206 -> 962 = 0.27 x 904; EV-0034 for Dire Bear Form).
+    if (HasAura(CLASSIC_SPELL_DRUID_ENRAGE))
+    {
+        float enragePenalty = 0.0f;
+        if (GetShapeshiftForm() == FORM_BEAR_FORM)
+            enragePenalty = 0.27f;
+        else if (GetShapeshiftForm() == FORM_DIRE_BEAR_FORM)
+            enragePenalty = 0.16f;
+        value -= enragePenalty * (itemArmor * formArmorMultiplier + GetStat(STAT_AGILITY) * 2.0f);
+    }
+
     value *= GetPctModifierValue(unitMod, TOTAL_PCT);
+    value = std::max(value, 0.0f);
 
     SetArmor(int32(value), int32(value - baseValue));
 

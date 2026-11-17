@@ -2132,6 +2132,23 @@ private:
     float _coefficient;
 };
 
+// 5229 - Enrage: "reduces base armor by 27% in Bear Form and 16% in Dire Bear Form". Effect 3 is a dummy; Player::UpdateArmor takes the
+// share while the aura is up, so its armor is worked out again when the aura comes and goes.
+class classic_spell_dru_enrage_armor : public AuraScript
+{
+    void UpdateArmor(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (Player* druid = GetTarget()->ToPlayer())
+            druid->UpdateArmor();
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_spell_dru_enrage_armor::UpdateArmor, EFFECT_3, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_dru_enrage_armor::UpdateArmor, EFFECT_3, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 /*######
 ## Damage hooks without a client aura effect
 ######*/
@@ -2293,6 +2310,7 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellAndAuraScriptPairWithArgs(classic_spell_dru_feral_attack_power_hit, classic_spell_dru_feral_attack_power_tick, "classic_spell_dru_rake_attack_power", 0.065f);
     RegisterSpellScriptWithArgs(classic_spell_dru_feral_attack_power_hit, "classic_spell_dru_swipe_attack_power", 0.03f);
     RegisterSpellScriptWithArgs(classic_spell_dru_feral_attack_power_tick, "classic_spell_dru_pounce_bleed_attack_power", 0.025f);
+    RegisterSpellScript(classic_spell_dru_enrage_armor);
 
     new classic_unit_talent_warlock_druid();
 }
