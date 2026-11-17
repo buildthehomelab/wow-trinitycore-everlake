@@ -656,7 +656,7 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
         weaponMaxDamage = 1.0f;
         if (Item const* weapon = GetUseableItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND))
         {
-            float const mean = weapon->GetTemplate()->GetDPS(weapon->GetItemLevel(this)) * formSpeed;
+            float const mean = weapon->GetClassicWeaponDPS(this) * formSpeed;   // a reduced caster weapon's share included (EV-0097)
             weaponMinDamage = std::max(1.0f, std::floor(mean * (1.0f - halfVariance)));
             weaponMaxDamage = std::max(1.0f, std::round(mean * (1.0f + halfVariance)));
         }

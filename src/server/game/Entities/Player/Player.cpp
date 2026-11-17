@@ -9024,9 +9024,8 @@ void Player::_ApplyWeaponDamage(uint8 slot, Item* item, bool apply)
         return;
 
     float damage = 0.0f;
-    uint32 itemLevel = item->GetItemLevel(this);
     float minDamage, maxDamage;
-    proto->GetDamage(itemLevel, minDamage, maxDamage);
+    item->GetClassicWeaponDamage(this, minDamage, maxDamage);   // Classic 1.60: caster share and QualityModifier (EV-0097)
 
     if (minDamage > 0)
     {
