@@ -3681,6 +3681,20 @@ void SpellMgr::LoadClassicSpellValues()
         mClassicSpellValues.size(), mismatched, GetMSTimeDiffToNow(oldMSTime));
 }
 
+// Only a player's magic spell that has a higher rank above it (rank chains from SkillLineAbility.SupercedesSpell) is a lower rank: the
+// top rank of a chain, single-rank spells, melee and ranged abilities (Blizzard's note speaks of spell ranks and Spell Damage / Spell
+// Healing), triggered spells and creature spells keep everything.
+float SpellMgr::GetClassicDownrankFactor(SpellInfo const* spellInfo, Unit const* caster) const
+{
+    if (!spellInfo || !caster || caster->GetTypeId() != TYPEID_PLAYER)
+        return 1.0f;
+    if (spellInfo->DmgClass != SPELL_DAMAGE_CLASS_MAGIC)
+        return 1.0f;
+    if (!GetNextSpellInChain(spellInfo->Id))
+        return 1.0f;
+    return ClassicSpellValue::DownrankFactor(int32(caster->GetLevel()), int32(spellInfo->SpellLevel));
+}
+
 ClassicSpellValue::Value const* SpellMgr::GetClassicSpellValue(uint32 spellId, uint32 effectIndex) const
 {
     return Trinity::Containers::MapGetValuePtr(mClassicSpellValues, (uint64(spellId) << 8) | effectIndex);

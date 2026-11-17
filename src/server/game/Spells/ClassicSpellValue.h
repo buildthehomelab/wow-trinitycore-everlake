@@ -110,6 +110,20 @@ namespace ClassicSpellValue
         return 1.0f - (20.0f - float(spellLevel)) * 0.0375f;
     }
 
+    // WoW Forever's downranking penalty (Blizzard beta notes 2026-10-01: "spells cast using spell ranks vastly below your current level
+    // receive less benefit from your Spell Damage and Spell Healing and have a reduced chance to activate your Class abilities and
+    // Talents ... a Rank 1 Frostbolt at level 60 will result in a 0% chance to get a Frostbite activation"). Blizzard published no
+    // formula; this is the community one (Ozgar's Forever downranking calculator: max(0, min(1, 1 - 0.05 x (character level - spell's
+    // required level - 16)))), which fits the beta measurement of about 5% less per level from ~17-18 levels past the rank and gives
+    // Blizzard's example 0 (Frostbolt rank 1, level 4, at 60). The share of the spell power bonus and of the class proc chance kept.
+    inline float DownrankFactor(int32_t casterLevel, int32_t spellLevel)
+    {
+        if (spellLevel <= 0 || casterLevel <= 0)
+            return 1.0f;
+        float const factor = 1.0f - 0.05f * float(casterLevel - spellLevel - 16);
+        return factor < 0.0f ? 0.0f : (factor > 1.0f ? 1.0f : factor);
+    }
+
     // The spell power factor an effect gets with the level penalty in: a table value is VMaNGOS's effectBonusCoefficient, which
     // already carries the penalty (Fireball rank 1: 0.123 = 0.429 x 0.2875), so it is taken as it is; the client's unpenalized
     // value takes the penalty here. VMaNGOS SpellCaster.cpp only penalises a coefficient it computed from the cast time, never a

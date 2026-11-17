@@ -7133,9 +7133,12 @@ static ClassicSpellValue::Value const* ClassicCoefficientRow(SpellInfo const* sp
 // Classic 1.60: the spell power / healing power factor of an effect with the vanilla level penalty in. A vanilla table row is
 // already penalised and is taken as it is; the client's coefficient is the unpenalized one and gets 1 - (20 - spell level) * 3.75%
 // below level 20 (Fireball rank 1: 0.429 x 0.2875 = 0.123). See ClassicSpellValue::BonusCoefficientWithLevelPenalty.
-static float ClassicBonusCoefficient(SpellInfo const* spellProto, SpellEffectInfo const& spellEffectInfo)
+// A player's lower rank cast far below the caster's level then keeps only part of it (WoW Forever downranking,
+// ClassicSpellValue::DownrankFactor).
+static float ClassicBonusCoefficient(Unit const* caster, SpellInfo const* spellProto, SpellEffectInfo const& spellEffectInfo)
 {
-    return ClassicSpellValue::BonusCoefficientWithLevelPenalty(ClassicCoefficientRow(spellProto, spellEffectInfo), spellEffectInfo.BonusCoefficient, int32(spellProto->SpellLevel));
+    return ClassicSpellValue::BonusCoefficientWithLevelPenalty(ClassicCoefficientRow(spellProto, spellEffectInfo), spellEffectInfo.BonusCoefficient, int32(spellProto->SpellLevel))
+        * sSpellMgr->GetClassicDownrankFactor(spellProto, caster);
 }
 
 int32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, int32 pdamage, DamageEffectType damagetype, SpellEffectInfo const& spellEffectInfo, uint32 stack /*= 1*/, Spell* spell /*= nullptr*/, AuraEffect const* aurEff /*= nullptr*/) const
@@ -7210,7 +7213,7 @@ int32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, int3
     // Default calculation
     if (DoneAdvertisedBenefit)
     {
-        float coeff = ClassicBonusCoefficient(spellProto, spellEffectInfo);
+        float coeff = ClassicBonusCoefficient(this, spellProto, spellEffectInfo);
         if (Player* modOwner = GetSpellModOwner())
         {
             coeff *= 100.0f;
@@ -7737,7 +7740,7 @@ int32 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, int
     // Default calculation
     if (DoneAdvertisedBenefit)
     {
-        float coeff = ClassicBonusCoefficient(spellProto, spellEffectInfo);
+        float coeff = ClassicBonusCoefficient(this, spellProto, spellEffectInfo);
         if (Player* modOwner = GetSpellModOwner())
         {
             coeff *= 100.0f;
@@ -8015,7 +8018,7 @@ int32 Unit::SpellAbsorbBonusDone(Unit* victim, SpellInfo const* spellProto, int3
 
     if (doneAdvertisedBenefit)
     {
-        float coeff = ClassicBonusCoefficient(spellProto, spellEffectInfo);
+        float coeff = ClassicBonusCoefficient(this, spellProto, spellEffectInfo);
 
         if (Player* modOwner = GetSpellModOwner())
         {
