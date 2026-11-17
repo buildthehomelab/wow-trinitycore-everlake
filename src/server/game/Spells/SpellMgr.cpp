@@ -3984,6 +3984,17 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->AttributesEx2 |= SPELL_ATTR2_NO_INITIAL_THREAT;
     });
 
+    // Classic 1.60 paladin Light's Fury (1310927, the Seal of Fury shield): absorbs before other shields, so Power Word: Shield or Divine
+    // Aegis no longer keep it from breaking and returning Improved Seal of Fury's mana (forever-bugs #255, fixed on live 15 Oct). Absorb
+    // auras go lowest MiscValueB first (Trinity::AbsorbAuraOrderPred); Light's Fury, Power Word: Shield and Divine Aegis all have 0.
+    ApplySpellFix({ 1310927 }, [](SpellInfo* spellInfo)
+    {
+        ApplySpellEffectFix(spellInfo, EFFECT_0, [](SpellEffectInfo* spellEffectInfo)
+        {
+            spellEffectInfo->MiscValueB = -1;
+        });
+    });
+
     // Classic 1.60 druid Thorns: each hit adds 6% of the druid's spell power (forever-bugs #117: the scaling is intended on live; wowsims
     // EV-0067, the ratio Blizzard states for Retribution Aura). Every rank's damage shield effect states coefficient 0 and there is no
     // vanilla value row, so it took none. The druid's current spell power is read per hit (damage shields in Unit::DealMeleeDamage),
