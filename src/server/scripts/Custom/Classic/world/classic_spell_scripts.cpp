@@ -873,6 +873,26 @@ private:
     bool _blockedByInnervate;
 };
 
+// Skyborne Attuned (1259691) and Charged (1270893), the 1 hour markers of Read Ley Line and Skysight: they stay through death but are
+// removed on entering a raid (forever-hunter wiki, Racials page). The client data has no interrupt flag for it.
+class classic_player_skyborne_markers_raid : public PlayerScript
+{
+public:
+    classic_player_skyborne_markers_raid() : PlayerScript("classic_player_skyborne_markers_raid") { }
+
+    static constexpr uint32 SPELL_ATTUNED = 1259691;
+    static constexpr uint32 SPELL_CHARGED = 1270893;
+
+    void OnMapChanged(Player* player) override
+    {
+        if (player->GetMap()->IsRaid())
+        {
+            player->RemoveAurasDueToSpell(SPELL_ATTUNED);
+            player->RemoveAurasDueToSpell(SPELL_CHARGED);
+        }
+    }
+};
+
 // 29166, 456195 - Innervate: replaces Read Ley Line's Energized 1270842 as the more powerful effect (WoW Forever beta notes 2026-10-26).
 class classic_spell_innervate_replaces_energized : public AuraScript
 {
@@ -2679,6 +2699,7 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_pal_judgement_of_fury);
     RegisterSpellScript(classic_spell_legacy_high_alert);
     new classic_player_high_alert_map();
+    new classic_player_skyborne_markers_raid();
     RegisterSpellScript(classic_spell_legacy_dedicated_study);
     RegisterSpellScript(classic_spell_recently_bandaged_field_medicine);
     new classic_player_thrill_of_adventure();
