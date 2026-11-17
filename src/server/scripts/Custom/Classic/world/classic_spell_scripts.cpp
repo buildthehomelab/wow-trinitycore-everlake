@@ -2395,6 +2395,64 @@ class classic_spell_quest_testing_the_wells : public SpellScript
     }
 };
 
+
+// 1248806 - Revelation, the equip aura of weapon enchant 8217 (Enchant Weapon - Revelation 1248805): "a chance to trigger Revelation when a
+// non-periodic spell fails to critically strike. Revelation grants $s2% increased critical strike chance to the next non-periodic spell
+// cast." The aura names no trigger spell: each class has its own buff, a one-charge crit modifier on that class's spells. Live
+// (forever-bugs #163, #401; wowsims EV-0129): only in combat, about 8% (spell_proc Chance) on each non-crit damage or heal hit of a spell,
+// rolled per target, never on crits, aura-only applications or periodic ticks, and not on seals (melee attacks); it can refresh the buff
+// while it is up. Warriors and rogues have no buff. Not modelled: the lower chance at high crit and for lower ranks (no formula known).
+class classic_spell_item_revelation : public AuraScript
+{
+    static uint32 BuffFor(uint8 playerClass)
+    {
+        switch (playerClass)
+        {
+            case CLASS_MAGE:    return 1248808;
+            case CLASS_PRIEST:  return 1323377;
+            case CLASS_WARLOCK: return 1323392;
+            case CLASS_DRUID:   return 1323400;
+            case CLASS_HUNTER:  return 1323410;
+            case CLASS_SHAMAN:  return 1323418;
+            case CLASS_PALADIN: return 1323419;
+            default:            return 0;
+        }
+    }
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ 1248808, 1323377, 1323392, 1323400, 1323410, 1323418, 1323419 });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Unit* actor = eventInfo.GetActor();
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        if (!actor || !actor->IsPlayer() || !actor->IsInCombat() || !spellInfo || !BuffFor(actor->GetClass()))
+            return false;
+
+        if (spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MELEE || (eventInfo.GetHitMask() & PROC_HIT_CRITICAL))
+            return false;
+
+        DamageInfo const* damageInfo = eventInfo.GetDamageInfo();
+        HealInfo const* healInfo = eventInfo.GetHealInfo();
+        return (damageInfo && damageInfo->GetDamage()) || (healInfo && healInfo->GetHeal());
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        Unit* actor = eventInfo.GetActor();
+        actor->CastSpell(actor, BuffFor(actor->GetClass()), CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_item_revelation::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_item_revelation::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
 void AddSC_classic_spell_scripts()
 {
     RegisterSpellScript(classic_spell_warr_gore_drinker);
@@ -2456,4 +2514,5 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_proc_chance_from_effect);
     RegisterSpellScript(classic_spell_proc_chance_from_effect_dummy);
     RegisterSpellScript(classic_spell_quest_testing_the_wells);
+    RegisterSpellScript(classic_spell_item_revelation);
 }
