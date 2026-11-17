@@ -5,10 +5,13 @@
 --  * Class buffs (+100% crit chance to the next spell their class flags name, one charge, 15 sec): only a spell the crit mod changed
 --    spends the charge. The mage's goes as the cast completes (EV-0028: 81 of 84 in the millisecond of the cast's success, no ground
 --    tick spends it); the other classes' with the spell's hit.
---  * Mage buff 1248808: Pyroblast (class flag 0x400000) and Fireball (0x1) join its crit mod. The client mask (0x20a21af2, 0x8000, 0, 0x8)
+--  * Mage buff 1248808: Pyroblast (class flag 0x400000), Fireball (0x1) and Frostfire Bolt (0x1000 in the second word) join its crit mod. The client mask (0x20a21af2, 0x8000, 0, 0x8)
 --    leaves both out, but in game both buffed Pyroblasts spent the charge and crit (EV-0028), and the enchant tooltip (1248805) says
 --    "the next non-periodic spell cast". No log shows a Fireball under the buff; it follows the tooltip and the Pyroblast logs, which
---    show the client mask is not what the game uses. The only other mage spell with 0x1 is the item-set aura 21230 (not cast).
+--    show the client mask is not what the game uses. The only other mage spell with 0x1 is the item-set aura 21230 (not cast); only
+--    Frostfire Bolt has the second word's 0x1000. Frostfire Bolt is the last Forever mage damage spell outside the client mask; the
+--    others (Living Bomb, Living Flame, Deep Freeze, Frozen Orb, Arcane Surge, Spellfrost and Balefire Bolt) are Season of Discovery
+--    runes Forever leaves out. The damage over time of Fireball, Pyroblast and Frostfire Bolt does not take the crit (Player.cpp).
 -- Safe to run again.
 
 DELETE FROM `spell_script_names` WHERE `ScriptName` = 'classic_spell_enchant_revelation';
@@ -27,6 +30,6 @@ INSERT INTO `spell_proc` (`SpellId`, `SchoolMask`, `SpellFamilyName`, `SpellFami
 (1323419, 0, 0, 0, 0, 0, 0, 0x14000, 0, 7, 2, 0, 8, 0, 0, 100, 0, 1); -- Revelation (paladin)
 
 -- classic_spell_effect (created by 2026_10_13_11_world_classic_curse_of_the_elements.sql): aura 107 (flat modifier), misc 7 (crit chance)
--- as in the client, class mask with Pyroblast's 0x400000 and Fireball's 0x1 added (0x20e21af3)
+-- as in the client, class mask with Pyroblast's 0x400000, Fireball's 0x1 (0x20e21af3) and Frostfire Bolt's 0x1000 (0x9000) added
 REPLACE INTO `classic_spell_effect` (`spell_id`,`effect_index`,`apply_aura`,`misc_value`,`class_mask0`,`class_mask1`,`class_mask2`,`class_mask3`,`spell_name`) VALUES
-(1248808,0,107,7,551688947,32768,0,8,'Revelation');
+(1248808,0,107,7,551688947,36864,0,8,'Revelation');

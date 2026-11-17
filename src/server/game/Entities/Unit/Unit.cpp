@@ -7529,8 +7529,10 @@ float Unit::SpellCritChanceDone(Spell* spell, AuraEffect const* aurEff, SpellSch
     }
     // percent done
     // only players use intelligence for critical chance computations
+    // The Spell goes with it, so a crit mod paid for with charges (Revelation, Elemental Mastery) is noted as applied to this cast and its
+    // proc row (PROC_ATTR_REQ_SPELLMOD) spends the charge; without it a crit-only buff such as Revelation was never spent.
     if (Player* modOwner = GetSpellModOwner())
-        modOwner->ApplySpellMod(spellInfo, SpellModOp::CritChance, crit_chance);
+        modOwner->ApplySpellMod(spellInfo, SpellModOp::CritChance, crit_chance, spell);
 
     return std::max(crit_chance, 0.0f);
 }

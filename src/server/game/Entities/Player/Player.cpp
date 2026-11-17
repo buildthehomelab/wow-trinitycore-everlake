@@ -23990,6 +23990,12 @@ int32 Player::IsAffectedBySpellmod(SpellInfo const* spellInfo, SpellModifier con
     if (spell && mod->ownerAura->IsUsingCharges() && !mod->ownerAura->GetCharges() && !spell->m_appliedMods.contains(mod->ownerAura))
         return 0;
 
+    // Classic 1.60: a crit chance mod paid for with charges ("the next spell": Revelation, Elemental Mastery, Inner Focus) belongs to a
+    // cast. A crit roll with no Spell (damage over time ticks, Flamestrike's ground ticks) could take it for nothing, as the charge is
+    // only spent through a Spell; Revelation's tooltip names non-periodic spells and EV-0028 shows ground ticks without its crit.
+    if (!spell && mod->op == SpellModOp::CritChance && mod->ownerAura->IsUsingCharges())
+        return 0;
+
     switch (mod->op)
     {
         case SpellModOp::Duration: // +duration to infinite duration spells making them limited
