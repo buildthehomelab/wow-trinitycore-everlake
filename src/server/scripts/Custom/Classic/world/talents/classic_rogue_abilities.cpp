@@ -107,12 +107,13 @@ class classic_spell_rog_preparation : public SpellScript
     }
 };
 
-// 14179 - Relentless Strikes: "Your finishing moves have a 20% chance per combo point to restore 25 energy." The client aura only names the
-// dummy 14181 (25 energy in its base points); the chance is the vanilla 20% per combo point spent (not in the client data).
+// 14179 - Relentless Strikes: "Your finishing moves have a $m1% chance per Combo Point to restore $14181s1 Energy." Forever makes it a
+// five-rank talent: effect 0 carries the chance per combo point from the talent's points (trait definition 145964: 4/8/12/16/20 by rank),
+// and 14181 holds the 25 energy. The vanilla 20% per point is kept only when the effect has no amount (the talent learned outside the tree).
 class classic_spell_rog_relentless_strikes : public AuraScript
 {
     static constexpr uint32 SPELL_ROGUE_RELENTLESS_STRIKES_EFFECT = 14181;
-    static constexpr int32 CHANCE_PER_COMBO_POINT = 20;
+    static constexpr int32 VANILLA_CHANCE_PER_COMBO_POINT = 20;
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
@@ -126,7 +127,15 @@ class classic_spell_rog_relentless_strikes : public AuraScript
             return false;
 
         int32 points = procSpell->GetPowerTypeCostAmount(POWER_COMBO_POINTS).value_or(0);
-        return points > 0 && roll_chance(points * CHANCE_PER_COMBO_POINT);
+        if (points <= 0)
+            return false;
+
+        int32 chancePerPoint = VANILLA_CHANCE_PER_COMBO_POINT;
+        if (AuraEffect const* talent = GetEffect(EFFECT_0))
+            if (talent->GetAmountAsInt() > 0)
+                chancePerPoint = talent->GetAmountAsInt();
+
+        return roll_chance(points * chancePerPoint);
     }
 
     void HandleProc(ProcEventInfo& /*eventInfo*/)
@@ -310,10 +319,11 @@ class classic_spell_rog_bleed_attack_power : public AuraScript
 };
 
 // 2098, 6760, 6761, 6762, 8623, 8624, 11299, 11300, 31016 - Eviscerate: patch 1.12 made it grow with attack power. Ported from vMaNGOS
-// (GPL-2.0, scripts/spells/spell_rogue.cpp, RogueEviscerateScript): attack power * combo points * 3 / 100 is added to the damage.
+// (GPL-2.0, scripts/spells/spell_rogue.cpp, RogueEviscerateScript), where attack power * combo points * 3 / 100 is added to the damage.
+// Forever's in-game tests read 4 / 100 a combo point instead (wowsims/forever, MIT, docs/evidence EV-0086, sim/rogue/eviscerate.go).
 class classic_spell_rog_eviscerate : public SpellScript
 {
-    static constexpr float EVISCERATE_AP_PER_COMBO_POINT = 0.03f;
+    static constexpr float EVISCERATE_AP_PER_COMBO_POINT = 0.04f;
 
     void CalculateDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* /*victim*/, int32& /*damage*/, int32& flatMod, float& /*pctMod*/) const
     {
@@ -324,6 +334,52 @@ class classic_spell_rog_eviscerate : public SpellScript
     void Register() override
     {
         CalcDamage += SpellCalcDamageFn(classic_spell_rog_eviscerate::CalculateDamage);
+    }
+};
+
+// 8680, 8685, 8689, 11335, 11336, 11337 - Instant Poison: Forever adds 1% of the rogue's melee attack power to each hit; the client row
+// states no attack power share (a tester's in-game reading, wowsims/forever, MIT, docs/evidence EV-0086, sim/rogue/poisons.go).
+class classic_spell_rog_instant_poison_attack_power : public SpellScript
+{
+    static constexpr float INSTANT_POISON_AP_COEFFICIENT = 0.01f;
+
+    void CalculateDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* /*victim*/, int32& /*damage*/, int32& flatMod, float& /*pctMod*/) const
+    {
+        if (Unit* rogue = GetCaster())
+            flatMod += int32(rogue->GetTotalAttackPowerValue(BASE_ATTACK) * INSTANT_POISON_AP_COEFFICIENT);
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_rog_instant_poison_attack_power::CalculateDamage);
+    }
+};
+
+// 2818, 2819, 11353, 11354, 25349 - Deadly Poison: Forever adds 0.9% of the rogue's melee attack power over the whole poison, split evenly
+// over its ticks, for every stack (wowsims/forever, MIT, docs/evidence EV-0086, sim/rogue/poisons.go). The amount is read again when a
+// stack is added, so it follows the rogue's attack power then, like the sim (dots do not snapshot, R-0006).
+class classic_spell_rog_deadly_poison_attack_power : public AuraScript
+{
+    static constexpr float DEADLY_POISON_AP_COEFFICIENT = 0.009f;
+
+    void CalcAmount(AuraEffect const* aurEff, SpellEffectValue& amount, bool& /*canBeRecalculated*/)
+    {
+        Unit* rogue = GetCaster();
+        int32 period = aurEff->GetPeriod();
+        int32 duration = GetSpellInfo()->GetDuration();
+        if (!rogue || period <= 0 || duration <= 0)
+            return;
+
+        float ticks = float(duration / period);
+        if (ticks <= 0.0f)
+            return;
+
+        amount += rogue->GetTotalAttackPowerValue(BASE_ATTACK) * DEADLY_POISON_AP_COEFFICIENT / ticks;
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(classic_spell_rog_deadly_poison_attack_power::CalcAmount, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE);
     }
 };
 
@@ -360,6 +416,8 @@ void AddSC_classic_rogue_abilities()
     RegisterSpellScript(classic_spell_rog_blade_flurry);
     RegisterSpellScript(classic_spell_rog_preparation);
     RegisterSpellScript(classic_spell_rog_eviscerate);
+    RegisterSpellScript(classic_spell_rog_instant_poison_attack_power);
+    RegisterSpellScript(classic_spell_rog_deadly_poison_attack_power);
     RegisterSpellScript(classic_spell_rog_vanish);
     RegisterSpellScript(classic_spell_rog_bleed_attack_power);
     RegisterSpellScript(classic_spell_rog_relentless_strikes);
