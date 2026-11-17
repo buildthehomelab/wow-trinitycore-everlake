@@ -4092,6 +4092,17 @@ void SpellMgr::LoadSpellInfoCorrections()
         });
     });
 
+    // Classic 1.60 (WoW Forever): Ice Lance's damage effect states no spell power coefficient, though the spell scales with spell power in
+    // game; TBC's 1/7 until measured (wowsims/forever, MIT,
+    // tools/database/overrides/spell_overrides.go, a TBC carry-over). All six ranks; no vanilla row exists for this Forever spell.
+    ApplySpellFix({ 400640, 1240044, 1240045, 1240046, 1240047, 1312002 }, [](SpellInfo* spellInfo)
+    {
+        ApplySpellEffectFix(spellInfo, EFFECT_0, [](SpellEffectInfo* spellEffectInfo)
+        {
+            spellEffectInfo->BonusCoefficient = 1.0f / 7.0f;
+        });
+    });
+
     // Classic 1.60 warrior Deep Wounds: the bleed tick (412613) never misses, never crits and ignores armor; WoW Forever: the warrior's
     // damage bonuses (Death Wish, Enrage) do not scale it either (wowsims/forever, MIT, docs/evidence EV-0139)
     ApplySpellFix({ 412613 }, [](SpellInfo* spellInfo)
