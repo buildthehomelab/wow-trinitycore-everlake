@@ -595,6 +595,36 @@ class classic_spell_pri_shadow_word_death_backlash : public SpellScript
     }
 };
 
+// 1277324-1277328 - Dark Sacrifice: "Cannibalize $o1 of your own Health over $d to gain ${$o2+$SPI} Mana." Effect 0 (the health) is a
+// periodic dummy, so nothing was taken, and effect 1 (mana) gave the row's amount without the Spirit. Each tick now takes effect 0's health
+// from the priest (never the last point) and the mana ticks share the priest's Spirit evenly (tooltip; wowsims/forever, MIT,
+// sim/priest/dark_sacrifice.go; no log reading).
+class classic_spell_pri_dark_sacrifice : public AuraScript
+{
+    void CalcManaAmount(AuraEffect const* aurEff, SpellEffectValue& amount, bool& canBeRecalculated)
+    {
+        canBeRecalculated = false;
+        Unit* priest = GetCaster();
+        uint32 const ticks = aurEff->GetTotalTicks();
+        if (priest && ticks)
+            amount += priest->GetStat(STAT_SPIRIT) / float(ticks);
+    }
+
+    void HandleHealthTick(AuraEffect const* aurEff)
+    {
+        Unit* priest = GetTarget();
+        int64 const take = std::min<int64>(aurEff->GetAmountAsInt(), int64(priest->GetHealth()) - 1);
+        if (take > 0)
+            priest->ModifyHealth(-take);
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(classic_spell_pri_dark_sacrifice::CalcManaAmount, EFFECT_1, SPELL_AURA_PERIODIC_ENERGIZE);
+        OnEffectPeriodic += AuraEffectPeriodicFn(classic_spell_pri_dark_sacrifice::HandleHealthTick, EFFECT_0, SPELL_AURA_PERIODIC_DUMMY);
+    }
+};
+
 // 1310076 - Early Demise: "Increases Shadow Word: Death's critical strike chance on targets at or below 20% health by 30%." Effect 0 is the
 // crit bonus, effect 1 the health threshold. Bound to the Shadow Word: Death ranks.
 class classic_spell_pri_early_demise : public SpellScript
@@ -1604,6 +1634,7 @@ void AddSC_classic_talents_priest_paladin()
     RegisterSpellScript(classic_spell_pri_dark_inspiration_mind_blast);
     RegisterSpellScript(classic_spell_pri_dark_inspiration_mind_flay);
     RegisterSpellScript(classic_spell_pri_shadow_word_death_backlash);
+    RegisterSpellScript(classic_spell_pri_dark_sacrifice);
     RegisterSpellScript(classic_spell_pri_blessed_recovery);
     RegisterSpellScript(classic_spell_pri_blessed_recovery_hot);
     RegisterSpellScript(classic_spell_pri_prayer_of_mending);
