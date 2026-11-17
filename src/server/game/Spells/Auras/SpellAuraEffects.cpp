@@ -784,7 +784,11 @@ uint32 AuraEffect::ClassicRollTickAmount() const
 {
     SpellEffectValue amount = GetAmount();
     if (_classicTickSpread > 0.0)
-        amount = std::max(0.0, amount - _classicTickRolled + frand(-float(_classicTickSpread), float(_classicTickSpread)));
+    {
+        // the amount holds every stack's share (CalculateAmount multiplies by the stacks), the roll one stack's
+        SpellEffectValue const stacks = GetSpellEffectInfo().EffectAttributes.HasFlag(SpellEffectAttributes::SuppressPointsStacking) ? 1.0 : double(GetBase()->GetStackAmount());
+        amount = std::max(0.0, amount + stacks * (frand(-float(_classicTickSpread), float(_classicTickSpread)) - _classicTickRolled));
+    }
     return ClassicRounding::RoundByFraction(amount, rand_norm());
 }
 

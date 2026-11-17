@@ -380,6 +380,7 @@ class classic_spell_warr_intercept_stun : public SpellScript
             return;
 
         PreventHitDefaultEffect(effIndex);
+        PreventHitAura();   // the aura object is built before the hit; without this an empty stun icon still lands
         if (GetEffectInfo().IsEffect(SPELL_EFFECT_SCHOOL_DAMAGE))
         {
             PreventHitDamage();

@@ -691,7 +691,8 @@ SpellEffectValue SpellEffectInfo::CalcValue(WorldObject const* caster /*= nullpt
         case SPELL_EFFECT_HEALTH_LEECH:
         case SPELL_EFFECT_HEAL:
         case SPELL_EFFECT_HEAL_MECHANICAL:
-            value = ClassicRounding::RoundByFraction(value, rand_norm());
+            // a negative amount (a script's or row's deliberate one) keeps its sign: RoundByFraction answers 0 for anything below 1
+            value = value < 0.0 ? std::round(value) : ClassicRounding::RoundByFraction(value, rand_norm());
             break;
         case SPELL_EFFECT_ENVIRONMENTAL_DAMAGE:
         case SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL:
