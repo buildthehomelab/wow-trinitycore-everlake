@@ -65,6 +65,7 @@ struct ClassicGroundAreaDamage
 {
     uint32 TickDamage;
     float Coefficient;      // spell power per tick
+    bool TicksAreHits = false;  // each tick is a spell hit on every enemy: it can crit and procs like a direct hit
 };
 
 static std::unordered_map<uint32, ClassicGroundAreaDamage> const ClassicGroundAreaDamages =
@@ -72,9 +73,11 @@ static std::unordered_map<uint32, ClassicGroundAreaDamage> const ClassicGroundAr
     // Blizzard (frost, 1 s, 8 s channel): 33% spell power over 8 ticks
     { 10,    {  25, 0.0417f } }, { 6141,  {  44, 0.0417f } }, { 8427,  {  65, 0.0417f } },
     { 10185, {  90, 0.0417f } }, { 10186, { 117, 0.0417f } }, { 10187, { 149, 0.0417f } },
-    // Flamestrike burning ground (fire, 2 s, 8 s; the direct hit is effect 0): ~12% spell power over 4 ticks
-    { 2120,  {  12, 0.0305f } }, { 2121,  {  22, 0.0305f } }, { 8422,  {  35, 0.0305f } },
-    { 8423,  {  49, 0.0305f } }, { 10215, {  66, 0.0305f } }, { 10216, {  85, 0.0305f } },
+    // Flamestrike burning ground (fire, 2 s, 8 s; the direct hit is effect 0): ~12% spell power over 4 ticks. Live, each tick is a hit
+    // of the tick spell 1279990 on every enemy in the area (wowsims/forever evidence EV-0028, level 60 combat log): ticks crit at the
+    // sheet chance, Ignite follows 67 of 68 tick crits, Arcane Concentration and Revelation roll per enemy hit.
+    { 2120,  {  12, 0.0305f, true } }, { 2121,  {  22, 0.0305f, true } }, { 8422,  {  35, 0.0305f, true } },
+    { 8423,  {  49, 0.0305f, true } }, { 10215, {  66, 0.0305f, true } }, { 10216, {  85, 0.0305f, true } },
     // Rain of Fire (fire, 2 s, 8 s channel): 33% spell power over 4 ticks
     { 5740,  {  42, 0.0833f } }, { 6219,  {  96, 0.0833f } }, { 11677, { 155, 0.0833f } }, { 11678, { 226, 0.0833f } },
     // Volley (arcane, 1 s, 6 s channel): no spell power
@@ -90,7 +93,7 @@ class classic_spell_ground_area_damage : public AuraScript
         return ClassicGroundAreaDamages.contains(spellInfo->Id);
     }
 
-    void HandleTick(AuraEffect const* /*aurEff*/)
+    void HandleTick(AuraEffect const* aurEff)
     {
         Unit* caster = GetCaster();
         if (!caster)
@@ -123,12 +126,35 @@ class classic_spell_ground_area_damage : public AuraScript
 
             damage = target->SpellDamageBonusTaken(caster, spellInfo, damage, DOT);
 
+            // Ground ticks that are hits (Flamestrike) roll a critical strike like a direct spell: the sheet chance with the crit spell
+            // mods and the target's taken chance. Other ground ticks never crit (vanilla).
+            bool crit = false;
+            if (values.TicksAreHits && !spellInfo->HasAttribute(SPELL_ATTR2_CANT_CRIT))
+            {
+                float const doneChance = caster->SpellCritChanceDone(nullptr, aurEff, spellInfo->GetSchoolMask());
+                crit = roll_chance(target->SpellCritChanceTaken(caster, nullptr, aurEff, spellInfo->GetSchoolMask(), doneChance));
+            }
+
             SpellNonMeleeDamage damageInfo(caster, target, spellInfo, GetAura()->GetSpellVisual(), spellInfo->GetSchoolMask(), GetAura()->GetCastId());
-            damageInfo.periodicLog = true;
-            caster->CalculateSpellDamageTaken(&damageInfo, damage, spellInfo);
+            damageInfo.periodicLog = !values.TicksAreHits;
+            caster->CalculateSpellDamageTaken(&damageInfo, damage, spellInfo, BASE_ATTACK, crit);
             Unit::DealDamageMods(damageInfo.attacker, damageInfo.target, damageInfo.damage, &damageInfo.absorb);
             caster->SendSpellNonMeleeDamageLog(&damageInfo);
+
+            // Hit procs (harmful spell, damage, hit phase, normal or critical) without a Spell: listeners that need the cast itself
+            // (Master of Elements' mana cost, spell mod charges such as Clearcasting) do not hear the tick, as live (EV-0028).
+            ProcFlagsInit procAttacker = PROC_FLAG_DEAL_HARMFUL_SPELL;
+            ProcFlagsInit procVictim = PROC_FLAG_TAKE_HARMFUL_SPELL;
+            ProcFlagsHit hitMask = createProcHitMask(&damageInfo, SPELL_MISS_NONE);
+            if (damageInfo.damage)
+                procVictim |= PROC_FLAG_TAKE_ANY_DAMAGE;
+            DamageInfo procDamageInfo(damageInfo, SPELL_DIRECT_DAMAGE, BASE_ATTACK, hitMask);
+
             caster->DealSpellDamage(&damageInfo, true);
+
+            if (values.TicksAreHits)
+                Unit::ProcSkillsAndAuras(caster, target, procAttacker, procVictim, PROC_SPELL_TYPE_DAMAGE, PROC_SPELL_PHASE_HIT, hitMask,
+                    nullptr, &procDamageInfo, nullptr);
         }
     }
 
