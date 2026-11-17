@@ -142,7 +142,7 @@ namespace ClassicProcRules
         { 18119,   SPELLFAMILY_WARLOCK, flag128(0, 0x00800000),                0, 0 },                              // Aftermath: Conflagrate
         { 18094,   SPELLFAMILY_WARLOCK, flag128(0x0000400A, 0x00040000),       0, TalentRequires::Damage },         // Nightfall: Corruption 0x2, Drain Life 0x8, Drain Soul 0x4000, Wrack [1] 0x40000
         { 14909,   SPELLFAMILY_PRIEST,  flag128(0x00100000),                   0, TalentRequires::Periodic },       // Searing Light: Holy Fire's periodic damage
-        { 15257,   SPELLFAMILY_PRIEST,  flag128(),                             SPELL_SCHOOL_MASK_SHADOW, TalentRequires::Damage }, // Shadow Weaving: Shadow damage spells
+        { 15257,   SPELLFAMILY_PRIEST,  flag128(0x0280A000, 0x00180002),       0, 0 },                              // Shadow Weaving: Shadow damage spells landing, an application without damage included (WoW Forever: SW:Pain 0x8000, Devouring Plague 0x2000000, Mind Flay 0x800000, Mind Blast 0x2000, SW:Death [1] 0x2, Mind Sear [1] 0x180000; wowsims/forever talents_shadow.go)
         { 15326,   SPELLFAMILY_PRIEST,  flag128(),                             SPELL_SCHOOL_MASK_SHADOW, TalentRequires::Damage }, // Blackout: Shadow damage spells
         { 14531,   SPELLFAMILY_GENERIC, flag128(),                             0, TalentRequires::Critical },       // Martyrdom: a melee or ranged critical strike taken
         { 20210,   SPELLFAMILY_PALADIN, flag128(0x00206000, 0, 0, 0x04000000), 0, TalentRequires::Critical },       // Illumination: Flash of Light 0x2000, Holy Light 0x4000, Holy Shock 0x200000, Light's Vigil [3] 0x4000000
