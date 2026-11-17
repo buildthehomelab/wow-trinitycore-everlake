@@ -1824,7 +1824,28 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
     return std::max<uint32>(uint32(damage * (1.0f - mitigation) + 0.5f), 1);
 }
 
-/*static*/ uint32 Unit::CalcSpellResistedDamage(Unit const* attacker, Unit* victim, uint32 damage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo)
+// Classic 1.60 (WoW Forever): a DoT tick meets a tenth of the target's resistance share, Spell Piercing included, where a direct hit or a
+// channel's tick meets all of it. Shadow Word: Pain, Corruption, Curse of Agony, Immolate, Fireball's and Frostfire Bolt's ticks bin
+// from piercing 3 times in 6,232 ticks while direct hits bin at 4 to 25%. Insect Swarm (wowsims), Devouring Plague and Pyroblast's DoT
+// meet the full share: their ticks bin at the caster's direct rate, and no row property tells them apart (wowsims/forever, MIT,
+// sim/core/spell_resistances.go, docs/evidence EV-0092; wowsims flags only Insect Swarm, EV-0092 shows the other two).
+/*static*/ float Unit::ClassicTickResistShare(SpellInfo const* spellInfo, bool periodicTick)
+{
+    if (!periodicTick || !spellInfo || spellInfo->IsChanneled())
+        return 1.0f;
+
+    switch (spellInfo->Id)
+    {
+        case 5570: case 24974: case 24975: case 24976: case 24977:                      // Insect Swarm
+        case 2944: case 19276: case 19277: case 19278: case 19279: case 19280:          // Devouring Plague
+        case 11366: case 12505: case 12522: case 12523: case 12524: case 12525: case 12526: case 18809: // Pyroblast
+            return 1.0f;
+        default:
+            return 0.1f;
+    }
+}
+
+/*static*/ uint32 Unit::CalcSpellResistedDamage(Unit const* attacker, Unit* victim, uint32 damage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo, bool periodicTick /*= false*/)
 {
     // Magic damage, check for resists
     if (!(schoolMask & SPELL_SCHOOL_MASK_MAGIC))
@@ -1838,7 +1859,7 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
     // (WorldObject::MagicSpellHitResult), and the damage of one that lands rolls a partial resist like any other spell (wowsims/forever,
     // MIT, sim/core/spell_resistances.go; no log measurement). Vanilla (VMaNGOS) never partially resisted binary spells.
 
-    float const averageResist = Unit::CalculateAverageResistReduction(attacker, schoolMask, victim, spellInfo);
+    float const averageResist = Unit::CalculateAverageResistReduction(attacker, schoolMask, victim, spellInfo) * ClassicTickResistShare(spellInfo, periodicTick);
     float discreteResistProbability[11] = { };
     if (averageResist <= 0.1f)
     {
@@ -1935,16 +1956,15 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
 
 // Classic 1.60 (WoW Forever): Spell Piercing beyond the target's resistance makes the average resist negative, and the partial resist roll
 // on its size pays out bonus damage in tenths instead: a hit gains 10% or 20% (wowsims/forever, MIT, docs/evidence EV-0091 and EV-0092:
-// pierced hits carry a negative resisted amount of exactly 10% or 20%, about 2:1, at the caster's piercing rate). Only direct hits: the
-// ticks of Shadow Word: Pain, Corruption, Curse of Agony, Immolate, Fireball and Frostfire Bolt bin 3 of 6,232 (EV-0092), and the few
-// DoTs that do bin (Devouring Plague, Pyroblast, Starshards) share no row property with each other. Binary spells (Frostbolt) gain it
-// too: the mages in the logs bin at the same rate.
-/*static*/ uint32 Unit::CalcSpellPiercingBonusDamage(Unit const* attacker, Unit* victim, uint32 damage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo)
+// pierced hits carry a negative resisted amount of exactly 10% or 20%, about 2:1, at the caster's piercing rate). A DoT tick meets a
+// tenth of the share (ClassicTickResistShare), so at 7 to 15 piercing it almost never bins; channels, Devouring Plague and Pyroblast's
+// DoT bin at the direct rate (EV-0092). Binary spells (Frostbolt) gain it too: the mages in the logs bin at the same rate.
+/*static*/ uint32 Unit::CalcSpellPiercingBonusDamage(Unit const* attacker, Unit* victim, uint32 damage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo, bool periodicTick /*= false*/)
 {
     if (!attacker || !(schoolMask & SPELL_SCHOOL_MASK_MAGIC))
         return 0;
 
-    float const averageResist = Unit::CalculateSignedAverageResist(attacker, schoolMask, victim, spellInfo);
+    float const averageResist = Unit::CalculateSignedAverageResist(attacker, schoolMask, victim, spellInfo) * ClassicTickResistShare(spellInfo, periodicTick);
     if (averageResist >= 0.0f)
         return 0;
 
@@ -1965,7 +1985,8 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
     if (!damageInfo.GetVictim() || !damageInfo.GetVictim()->IsAlive() || !damageInfo.GetDamage())
         return;
 
-    uint32 resistedDamage = Unit::CalcSpellResistedDamage(damageInfo.GetAttacker(), damageInfo.GetVictim(), damageInfo.GetDamage(), damageInfo.GetSchoolMask(), damageInfo.GetSpellInfo());
+    bool const periodicTick = damageInfo.GetDamageType() == DOT;
+    uint32 resistedDamage = Unit::CalcSpellResistedDamage(damageInfo.GetAttacker(), damageInfo.GetVictim(), damageInfo.GetDamage(), damageInfo.GetSchoolMask(), damageInfo.GetSpellInfo(), periodicTick);
 
     // Ignore Absorption Auras
     float auraAbsorbMod = 0.f;
@@ -1981,9 +2002,9 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
 
     damageInfo.ResistDamage(resistedDamage);
 
-    // Classic 1.60 (WoW Forever): Spell Piercing past the target's resistance adds damage to a direct hit
-    if (!resistedDamage && damageInfo.GetDamageType() != DOT)
-        if (uint32 piercingBonus = Unit::CalcSpellPiercingBonusDamage(damageInfo.GetAttacker(), damageInfo.GetVictim(), damageInfo.GetDamage(), damageInfo.GetSchoolMask(), damageInfo.GetSpellInfo()))
+    // Classic 1.60 (WoW Forever): Spell Piercing past the target's resistance adds damage, a DoT tick's at a tenth of the share
+    if (!resistedDamage)
+        if (uint32 piercingBonus = Unit::CalcSpellPiercingBonusDamage(damageInfo.GetAttacker(), damageInfo.GetVictim(), damageInfo.GetDamage(), damageInfo.GetSchoolMask(), damageInfo.GetSpellInfo(), periodicTick))
             damageInfo.ModifyDamage(int32(piercingBonus));
 
     // We're going to call functions which can modify content of the list during iteration over it's elements
