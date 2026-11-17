@@ -1898,6 +1898,29 @@ class classic_spell_item_scented_runewood_brooch : public AuraScript
     }
 };
 
+// Melee procs whose tooltips name no trigger condition hear only hits with a damage component: a hit that deals damage, or the landing of
+// a damage-over-time effect such as Rend's; a damage-free melee ability (Sunder Armor, Disarm, Taunt) rolls nothing. Blazefury Medallion
+// 7711, Fiery Plate Gauntlets 7721, Storm Gauntlets 16615, Darkmoon Card: Maelstrom 23686, Badge of the Swarmguard 26480 (wowsims/forever,
+// MIT, tools/database/overrides/spell_overrides.go, ProcHintDamage; the wowsims maintainers' ruling, PR #99, not a measurement).
+class classic_spell_item_proc_damage_component : public AuraScript
+{
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        if (!spellInfo)
+            return true;    // a white swing or shot
+        if (DamageInfo const* damageInfo = eventInfo.GetDamageInfo())
+            if (damageInfo->GetDamage() > 0)
+                return true;
+        return spellInfo->HasAura(SPELL_AURA_PERIODIC_DAMAGE);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_item_proc_damage_component::CheckProc);
+    }
+};
+
 class classic_spell_item_argent_defender : public AuraScript
 {
     bool CheckProc(ProcEventInfo& eventInfo)
@@ -2859,6 +2882,7 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_pri_vampiric_embrace);
     RegisterSpellScript(classic_spell_item_moonshadow_stave);
     RegisterSpellScript(classic_spell_item_argent_defender);
+    RegisterSpellScript(classic_spell_item_proc_damage_component);
     RegisterSpellScript(classic_spell_item_scented_runewood_brooch);
     RegisterSpellScript(classic_spell_item_zandalarian_hero_badge);
     RegisterSpellScript(classic_spell_item_totem_of_flowing_water);
