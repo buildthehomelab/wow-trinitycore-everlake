@@ -1743,6 +1743,8 @@ class TC_GAME_API Unit : public WorldObject
         static uint32 CalcSpellResistedDamage(Unit const* attacker, Unit* victim, uint32 damage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo);
         // Classic 1.60: true when the power a spell gives threatens with the threat modifiers (druid Enrage)
         static bool ClassicRageThreatTakesModifiers(SpellInfo const* spellInfo);
+        // Classic 1.60: the current cast is an explosive thrown from an item (the melee swing keeps running through it)
+        bool IsClassicExplosiveCast() const;
         static uint32 CalcSpellPiercingBonusDamage(Unit const* attacker, Unit* victim, uint32 damage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo);
         static void CalcAbsorbResist(DamageInfo& damageInfo, Spell* spell = nullptr);
         static void CalcHealAbsorb(HealInfo& healInfo);

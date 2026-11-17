@@ -2280,6 +2280,17 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
     }
 }
 
+// Classic 1.60: the only spell being cast is one thrown from an explosive item (trade goods, explosives: dynamite, bombs, grenades)
+bool Unit::IsClassicExplosiveCast() const
+{
+    Spell const* generic = GetCurrentSpell(CURRENT_GENERIC_SPELL);
+    if (!generic || GetCurrentSpell(CURRENT_CHANNELED_SPELL) || !generic->m_castItemEntry)
+        return false;
+
+    ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(generic->m_castItemEntry);
+    return itemTemplate && itemTemplate->GetClass() == ITEM_CLASS_TRADE_GOODS && itemTemplate->GetSubClass() == ITEM_SUBCLASS_EXPLOSIVES;
+}
+
 void Unit::DoMeleeAttackIfReady()
 {
     if (!HasUnitState(UNIT_STATE_MELEE_ATTACKING))
@@ -2291,8 +2302,17 @@ void Unit::DoMeleeAttackIfReady()
     if (IsCreature() && !ToCreature()->CanMelee())
         return;
 
+    // Classic 1.60 (WoW Forever): throwing an explosive (dynamite, bombs, grenades: trade goods, explosives) does not hold the swing; a swing
+    // due during the 1 s cast lands in it as a plain white swing. Six Forever throws by meleeing players had one land inside the cast, and
+    // none of 271 swings inside an explosive's cast in Classic Era logs was a queued Heroic Strike or Cleave, so the cast drops the queued
+    // attack (wowsims/forever, MIT, docs/evidence EV-0088).
     if (HasUnitState(UNIT_STATE_CASTING))
-        return;
+    {
+        if (!IsClassicExplosiveCast())
+            return;
+        if (GetCurrentSpell(CURRENT_MELEE_SPELL))
+            InterruptSpell(CURRENT_MELEE_SPELL);
+    }
 
     Unit* victim = GetVictim();
     if (!victim)
