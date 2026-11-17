@@ -1273,7 +1273,7 @@ void Unit::CastStop(uint32 except_spellid)
 }
 
 void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 damage, SpellInfo const* spellInfo, WeaponAttackType attackType, bool crit /*= false*/, bool blocked /*= false*/, Spell* spell /*= nullptr*/,
-    bool canPartialResist /*= true*/)
+    ClassicResistRoll resistRoll /*= ClassicResistRoll::Spell*/)
 {
     if (damage < 0)
         return;
@@ -1371,7 +1371,7 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 dama
     damageInfo->damage = damage;
     damageInfo->originalDamage = damage;
     DamageInfo dmgInfo(*damageInfo, SPELL_DIRECT_DAMAGE, BASE_ATTACK, PROC_HIT_NONE);
-    Unit::CalcAbsorbResist(dmgInfo, spell, canPartialResist);
+    Unit::CalcAbsorbResist(dmgInfo, spell, resistRoll);
     damageInfo->absorb = dmgInfo.GetAbsorb();
     damageInfo->resist = dmgInfo.GetResist();
 
@@ -1881,28 +1881,44 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
     return std::max<uint32>(uint32(damage * (1.0f - mitigation) + 0.5f), 1);
 }
 
-// Classic 1.60 (WoW Forever): a DoT tick meets a tenth of the target's resistance share, Spell Piercing included, where a direct hit or a
-// channel's tick meets all of it. Shadow Word: Pain, Corruption, Curse of Agony, Immolate, Fireball's and Frostfire Bolt's ticks bin
-// from piercing 3 times in 6,232 ticks while direct hits bin at 4 to 25%. Insect Swarm (wowsims), Devouring Plague and Pyroblast's DoT
-// meet the full share: their ticks bin at the caster's direct rate, and no row property tells them apart (wowsims/forever, MIT,
-// sim/core/spell_resistances.go, docs/evidence EV-0092; wowsims flags only Insect Swarm, EV-0092 shows the other two).
-/*static*/ float Unit::ClassicTickResistShare(SpellInfo const* spellInfo, bool periodicTick)
+// Classic 1.60 (WoW Forever): a periodic tick, a channel's included, meets a tenth of the target's resistance share, where a direct hit
+// meets all of it; a hit or tick at a tenth takes no Spell Piercing bonus. Shadow Word: Pain, Corruption, Flame Shock, Drain Life and Wrack
+// ticks resist at a tenth (Drain Life 23 of 79 ticks with a partial against 25.3 at a tenth and 79 at the full share). Devouring Plague's,
+// Pyroblast's and Starshards' ticks meet the full share (DP 262 of 262, Starshards 232 of 237 against 64.2 at a tenth), and no row field
+// tells them apart, so they are named here; Flamestrike's ground ticks are hits at a tenth (ClassicResistRoll::TenthShare). A binary spell
+// takes no partial resist at all (SPELL_ATTR0_CU_BINARY_SPELL, Unit::CalcSpellResistedDamage). Arcane Missiles' missiles are hits and meet
+// the full share (wowsims/forever, MIT, sim/core/spell_resistances.go, docs/evidence EV-0092 and EV-0142).
+/*static*/ float Unit::ClassicTickResistShare(SpellInfo const* spellInfo, bool periodicTick, ClassicResistRoll resistRoll /*= ClassicResistRoll::Spell*/)
 {
-    if (!periodicTick || !spellInfo || spellInfo->IsChanneled())
+    if (resistRoll == ClassicResistRoll::TenthShare)
+        return 0.1f;
+
+    if (!periodicTick || !spellInfo)
         return 1.0f;
 
     switch (spellInfo->Id)
     {
-        case 5570: case 24974: case 24975: case 24976: case 24977:                      // Insect Swarm
         case 2944: case 19276: case 19277: case 19278: case 19279: case 19280:          // Devouring Plague
         case 11366: case 12505: case 12522: case 12523: case 12524: case 12525: case 12526: case 18809: // Pyroblast
+        case 10797: case 19296: case 19299: case 19302: case 19303: case 19304: case 19305: // Starshards
             return 1.0f;
         default:
             return 0.1f;
     }
 }
 
-/*static*/ uint32 Unit::CalcSpellResistedDamage(Unit const* attacker, Unit* victim, uint32 damage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo, bool periodicTick /*= false*/)
+// Classic 1.60 (WoW Forever): a binary spell's hit roll took its whole resist, so a hit or tick of one that lands takes no partial resist
+// and no Spell Piercing bonus (EV-0142: 0 partial resists on the live realms' binary hits and ticks against hundreds expected, where the
+// beta realms still rolled them).
+static bool IsClassicBinaryResistRoll(SpellInfo const* spellInfo, ClassicResistRoll resistRoll)
+{
+    if (resistRoll == ClassicResistRoll::Binary)
+        return true;
+    return resistRoll == ClassicResistRoll::Spell && spellInfo && spellInfo->HasAttribute(SPELL_ATTR0_CU_BINARY_SPELL);
+}
+
+/*static*/ uint32 Unit::CalcSpellResistedDamage(Unit const* attacker, Unit* victim, uint32 damage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo, bool periodicTick /*= false*/,
+    ClassicResistRoll resistRoll /*= ClassicResistRoll::Spell*/)
 {
     // Magic damage, check for resists
     if (!(schoolMask & SPELL_SCHOOL_MASK_MAGIC))
@@ -1913,10 +1929,11 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
         return 0;
 
     // Classic 1.60 (WoW Forever): a binary spell (Frostbolt, Frost Nova...) is resisted in full by its hit roll
-    // (WorldObject::MagicSpellHitResult), and the damage of one that lands rolls a partial resist like any other spell (wowsims/forever,
-    // MIT, sim/core/spell_resistances.go; no log measurement). Vanilla (VMaNGOS) never partially resisted binary spells.
+    // (WorldObject::MagicSpellHitResult), and one that lands takes no partial resist (EV-0142), as in vanilla
+    if (IsClassicBinaryResistRoll(spellInfo, resistRoll))
+        return 0;
 
-    float const averageResist = Unit::CalculateAverageResistReduction(attacker, schoolMask, victim, spellInfo) * ClassicTickResistShare(spellInfo, periodicTick);
+    float const averageResist = Unit::CalculateAverageResistReduction(attacker, schoolMask, victim, spellInfo) * ClassicTickResistShare(spellInfo, periodicTick, resistRoll);
     float discreteResistProbability[11] = { };
     if (averageResist <= 0.1f)
     {
@@ -1938,7 +1955,9 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
         if (roll < (probabilitySum += discreteResistProbability[resistance]))
             break;
 
-    float damageResisted = damage * resistance / 10.f;
+    // Classic 1.60 (WoW Forever): a partial resist never takes more than 75% of a hit; the roll's 80, 90 and 100% steps land on 75%, so a
+    // damage spell is never resisted whole by this roll (EV-0142: no live-realm hit lost more than 75%, 61 lost exactly 75%)
+    float damageResisted = damage * std::min(resistance / 10.f, 0.75f);
     if (damageResisted > 0.0f) // if any damage was resisted
     {
         float ignoredResistance = 0.0f;
@@ -2013,15 +2032,20 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
 
 // Classic 1.60 (WoW Forever): Spell Piercing beyond the target's resistance makes the average resist negative, and the partial resist roll
 // on its size pays out bonus damage in tenths instead: a hit gains 10% or 20% (wowsims/forever, MIT, docs/evidence EV-0091 and EV-0092:
-// pierced hits carry a negative resisted amount of exactly 10% or 20%, about 2:1, at the caster's piercing rate). A DoT tick meets a
-// tenth of the share (ClassicTickResistShare), so at 7 to 15 piercing it almost never bins; channels, Devouring Plague and Pyroblast's
-// DoT bin at the direct rate (EV-0092). Binary spells (Frostbolt) gain it too: the mages in the logs bin at the same rate.
-/*static*/ uint32 Unit::CalcSpellPiercingBonusDamage(Unit const* attacker, Unit* victim, uint32 damage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo, bool periodicTick /*= false*/)
+// pierced hits carry a negative resisted amount of exactly 10% or 20%, about 2:1, at the caster's piercing rate). Only a hit or tick at the
+// full share takes it: a tick at a tenth (Shadow Word: Pain 0 of 515 at 8 piercing, Flamestrike's ground ticks 0 of 4,177) and a binary
+// spell (Frostbolt 0 of 425, Frost Nova 0 of 1,258, Mind Flay ticks 0 of 320) take none, while Fire Blast, Blizzard's ticks and
+// Devouring Plague's, Pyroblast's and Starshards' ticks take it in full (EV-0092, EV-0142).
+/*static*/ uint32 Unit::CalcSpellPiercingBonusDamage(Unit const* attacker, Unit* victim, uint32 damage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo, bool periodicTick /*= false*/,
+    ClassicResistRoll resistRoll /*= ClassicResistRoll::Spell*/)
 {
     if (!attacker || !(schoolMask & SPELL_SCHOOL_MASK_MAGIC))
         return 0;
 
-    float const averageResist = Unit::CalculateSignedAverageResist(attacker, schoolMask, victim, spellInfo) * ClassicTickResistShare(spellInfo, periodicTick);
+    if (IsClassicBinaryResistRoll(spellInfo, resistRoll) || ClassicTickResistShare(spellInfo, periodicTick, resistRoll) < 1.0f)
+        return 0;
+
+    float const averageResist = Unit::CalculateSignedAverageResist(attacker, schoolMask, victim, spellInfo);
     if (averageResist >= 0.0f)
         return 0;
 
@@ -2037,14 +2061,13 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
     return uint32(damage * tenths / 10.0f);
 }
 
-/*static*/ void Unit::CalcAbsorbResist(DamageInfo& damageInfo, Spell* spell /*= nullptr*/, bool canPartialResist /*= true*/)
+/*static*/ void Unit::CalcAbsorbResist(DamageInfo& damageInfo, Spell* spell /*= nullptr*/, ClassicResistRoll resistRoll /*= ClassicResistRoll::Spell*/)
 {
     if (!damageInfo.GetVictim() || !damageInfo.GetVictim()->IsAlive() || !damageInfo.GetDamage())
         return;
 
     bool const periodicTick = damageInfo.GetDamageType() == DOT;
-    // canPartialResist: false for damage that takes no partial resist (Classic 1.60 Flamestrike ground ticks, EV-0028); absorbs still apply
-    uint32 resistedDamage = canPartialResist ? Unit::CalcSpellResistedDamage(damageInfo.GetAttacker(), damageInfo.GetVictim(), damageInfo.GetDamage(), damageInfo.GetSchoolMask(), damageInfo.GetSpellInfo(), periodicTick) : 0;
+    uint32 resistedDamage = Unit::CalcSpellResistedDamage(damageInfo.GetAttacker(), damageInfo.GetVictim(), damageInfo.GetDamage(), damageInfo.GetSchoolMask(), damageInfo.GetSpellInfo(), periodicTick, resistRoll);
 
     // Ignore Absorption Auras
     float auraAbsorbMod = 0.f;
@@ -2060,9 +2083,9 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
 
     damageInfo.ResistDamage(resistedDamage);
 
-    // Classic 1.60 (WoW Forever): Spell Piercing past the target's resistance adds damage, a DoT tick's at a tenth of the share
-    if (!resistedDamage && canPartialResist)              // the bonus is the partial resist roll's negative side
-        if (uint32 piercingBonus = Unit::CalcSpellPiercingBonusDamage(damageInfo.GetAttacker(), damageInfo.GetVictim(), damageInfo.GetDamage(), damageInfo.GetSchoolMask(), damageInfo.GetSpellInfo(), periodicTick))
+    // Classic 1.60 (WoW Forever): Spell Piercing past the target's resistance adds damage on hits and ticks at the full share
+    if (!resistedDamage)                                  // the bonus is the partial resist roll's negative side
+        if (uint32 piercingBonus = Unit::CalcSpellPiercingBonusDamage(damageInfo.GetAttacker(), damageInfo.GetVictim(), damageInfo.GetDamage(), damageInfo.GetSchoolMask(), damageInfo.GetSpellInfo(), periodicTick, resistRoll))
             damageInfo.ModifyDamage(int32(piercingBonus));
 
     // We're going to call functions which can modify content of the list during iteration over it's elements

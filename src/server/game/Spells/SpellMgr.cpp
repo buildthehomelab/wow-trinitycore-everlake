@@ -3341,6 +3341,79 @@ void SpellMgr::LoadSpellInfoCustomAttributes()
             }
         }
 
+        // Classic 1.60 (WoW Forever): a spell resists all or nothing when its row is magic, on the magic hit table, deals damage and, beside
+        // the damage, applies an aura other than a dummy to an enemy, interrupts, or carries a dummy, script, energize or area trigger effect
+        // on any target. Its hit roll resists it in full (WorldObject::MagicSpellHitResult), and a hit or tick that lands takes no partial
+        // resist and no Spell Piercing bonus (Unit::CalcSpellResistedDamage). Frostbolt, Ice Lance, Immolate, Shadow Word: Death, Arcane
+        // Wrath, Earth Shock, Flamestrike's cast, Mind Flay, Hurricane and Insect Swarm are binary; Flame Shock (a dummy aura on the target),
+        // Arcane Missiles and the plain nukes are not (wowsims/forever, MIT, sim/core/spelldata/spell.go IsBinary, docs/evidence EV-0142:
+        // 0 partial resists on 2,158 held-out casters' binary hits against hundreds expected, full resists at the target's share). This
+        // replaces TrinityCore's rule above (any non-damage effect with a value, with Frostbolt and Haunt excepted) for every spell that
+        // deals damage; a spell that deals none (Polymorph, Fear) keeps it.
+        {
+            bool dealsDamage = false;
+            bool besideDamage = false;
+            for (SpellEffectInfo const& spellEffectInfo : spellInfoMutable->GetEffects())
+            {
+                bool const appliesAura = spellEffectInfo.IsEffect(SPELL_EFFECT_APPLY_AURA) || spellEffectInfo.IsEffect(SPELL_EFFECT_APPLY_AREA_AURA_PARTY)
+                    || spellEffectInfo.IsEffect(SPELL_EFFECT_APPLY_AREA_AURA_RAID) || spellEffectInfo.IsEffect(SPELL_EFFECT_APPLY_AREA_AURA_ENEMY);
+                switch (spellEffectInfo.Effect)
+                {
+                    case SPELL_EFFECT_SCHOOL_DAMAGE:
+                    case SPELL_EFFECT_WEAPON_DAMAGE:
+                    case SPELL_EFFECT_WEAPON_PERCENT_DAMAGE:
+                    case SPELL_EFFECT_NORMALIZED_WEAPON_DMG:
+                    case SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL:
+                    case SPELL_EFFECT_HEALTH_LEECH:
+                    case SPELL_EFFECT_POWER_BURN:
+                        dealsDamage = true;
+                        continue;
+                    case SPELL_EFFECT_INTERRUPT_CAST:
+                    case SPELL_EFFECT_DUMMY:
+                    case SPELL_EFFECT_SCRIPT_EFFECT:
+                    case SPELL_EFFECT_ENERGIZE:
+                    case SPELL_EFFECT_CREATE_AREATRIGGER:
+                        besideDamage = true;
+                        continue;
+                    default:
+                        break;
+                }
+
+                if (!appliesAura)
+                    continue;
+
+                switch (spellEffectInfo.ApplyAuraName)
+                {
+                    case SPELL_AURA_PERIODIC_DAMAGE:
+                    case SPELL_AURA_PERIODIC_LEECH:
+                    case SPELL_AURA_PERIODIC_DAMAGE_PERCENT:
+                    case SPELL_AURA_DAMAGE_SHIELD:
+                    case SPELL_AURA_PROC_TRIGGER_DAMAGE:
+                    case SPELL_AURA_PERIODIC_MANA_LEECH:
+                    case SPELL_AURA_POWER_BURN:
+                        dealsDamage = true;
+                        break;
+                    case SPELL_AURA_DUMMY:
+                    case SPELL_AURA_PERIODIC_DUMMY:
+                        break;
+                    default:
+                        if (spellEffectInfo.TargetA.GetCheckType() == TARGET_CHECK_ENEMY || spellEffectInfo.TargetB.GetCheckType() == TARGET_CHECK_ENEMY)
+                            besideDamage = true;
+                        break;
+                }
+            }
+
+            if (dealsDamage)
+            {
+                bool const magicRow = !(spellInfoMutable->SchoolMask & SPELL_SCHOOL_MASK_NORMAL) && (spellInfoMutable->SchoolMask & SPELL_SCHOOL_MASK_MAGIC)
+                    && spellInfoMutable->DmgClass == SPELL_DAMAGE_CLASS_MAGIC;
+                if (magicRow && besideDamage)
+                    spellInfoMutable->AttributesCu |= SPELL_ATTR0_CU_BINARY_SPELL;
+                else
+                    spellInfoMutable->AttributesCu &= ~SPELL_ATTR0_CU_BINARY_SPELL;
+            }
+        }
+
         // Remove normal school mask to properly calculate damage
         if ((spellInfoMutable->SchoolMask & SPELL_SCHOOL_MASK_NORMAL) && (spellInfoMutable->SchoolMask & SPELL_SCHOOL_MASK_MAGIC))
         {

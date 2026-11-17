@@ -70,8 +70,9 @@ struct ClassicGroundAreaDamage
 {
     uint32 TickDamage;
     float Coefficient;      // spell power per tick
-    bool TicksAreHits = false;  // each tick is a spell hit on every enemy: it can crit, procs like a direct hit, takes no partial resist
-    uint32 TickSpellId = 0;     // the live tick spell; its class flags pick the critical strike spell mods of a tick that is a hit
+    bool TicksAreHits = false;  // each tick is a spell hit on every enemy: it can crit, procs like a direct hit, resists at a tenth of the share
+    uint32 TickSpellId = 0;     // the live tick spell; its class flags pick the critical strike spell mods of a tick that is a hit, and a
+                                // binary one (Hurricane's) resists whole or not at all
 };
 
 static std::unordered_map<uint32, ClassicGroundAreaDamage> const ClassicGroundAreaDamages =
@@ -91,8 +92,11 @@ static std::unordered_map<uint32, ClassicGroundAreaDamage> const ClassicGroundAr
     { 5740,  {  42, 0.0833f } }, { 6219,  {  96, 0.0833f } }, { 11677, { 155, 0.0833f } }, { 11678, { 226, 0.0833f } },
     // Volley (arcane, 1 s, 6 s channel): no spell power
     { 1510,  {  50, 0.0f } }, { 14294, {  65, 0.0f } }, { 14295, {  80, 0.0f } },
-    // Hurricane (nature, 1 s, 10 s channel): base points + die of the three ranks (classic_spell_value), 10.7% spell power per tick
-    { 16914, {  70, 0.107f } }, { 17401, { 100, 0.107f } }, { 17402, { 134, 0.107f } },
+    // Hurricane (nature, 1 s, 10 s channel): base points + die of the three ranks (classic_spell_value), 10.7% spell power per tick. The
+    // live tick spells (1278965, 1278968, 1278759, paired by rank) deal the damage and slow the target, so they are binary: a tick resists
+    // whole at the target's share and one that lands takes no partial resist (EV-0142: 0 partial resists on 30,053 landed ticks, full
+    // resists 64 of 131 against 68.8 at the share)
+    { 16914, {  70, 0.107f, false, 1278965 } }, { 17401, { 100, 0.107f, false, 1278968 } }, { 17402, { 134, 0.107f, false, 1278759 } },
 };
 
 class classic_spell_ground_area_damage : public AuraScript
@@ -111,6 +115,14 @@ class classic_spell_ground_area_damage : public AuraScript
         SpellInfo const* spellInfo = GetSpellInfo();
         ClassicGroundAreaDamage const& values = ClassicGroundAreaDamages.at(spellInfo->Id);
 
+        SpellInfo const* tickSpell = values.TickSpellId ? sSpellMgr->GetSpellInfo(values.TickSpellId, DIFFICULTY_NONE) : nullptr;
+        // Flamestrike's ground ticks resist at a tenth of the share with no Spell Piercing bonus (EV-0142, replacing EV-0028's no partial
+        // resist: 57 of 235 ticks with a partial, 0.09 of the target's share, and 0 of 4,177 with a piercing bonus). Blizzard's, Rain of
+        // Fire's and Volley's tick spells deal damage alone and resist like a direct hit (Blizzard's ticks take piercing at the full rate).
+        bool const binaryTicks = tickSpell && tickSpell->HasAttribute(SPELL_ATTR0_CU_BINARY_SPELL);
+        ClassicResistRoll const resistRoll = values.TicksAreHits ? ClassicResistRoll::TenthShare
+            : binaryTicks ? ClassicResistRoll::Binary : ClassicResistRoll::Spell;
+
         GuidUnorderedSet targets;
         for (AreaTrigger* areaTrigger : caster->GetAreaTriggers(spellInfo->Id))
             targets.insert(areaTrigger->GetInsideUnits().begin(), areaTrigger->GetInsideUnits().end());
@@ -120,6 +132,13 @@ class classic_spell_ground_area_damage : public AuraScript
             Unit* target = ObjectAccessor::GetUnit(*caster, guid);
             if (!target || !target->IsAlive() || !caster->IsValidAttackTarget(target, spellInfo))
                 continue;
+
+            // a binary tick resists whole at the target's average resist
+            if (binaryTicks && roll_chance(100.0f * Unit::CalculateAverageResistReduction(caster, tickSpell->GetSchoolMask(), target, tickSpell)))
+            {
+                caster->SendSpellMiss(target, spellInfo->Id, SPELL_MISS_RESIST);
+                continue;
+            }
 
             int32 damage = values.TickDamage;
             if (values.Coefficient > 0.0f)
@@ -141,7 +160,6 @@ class classic_spell_ground_area_damage : public AuraScript
             if (values.TicksAreHits && !spellInfo->HasAttribute(SPELL_ATTR2_CANT_CRIT))
             {
                 float doneChance = 0.0f;
-                SpellInfo const* tickSpell = values.TickSpellId ? sSpellMgr->GetSpellInfo(values.TickSpellId, DIFFICULTY_NONE) : nullptr;
                 if (Player* player = caster->ToPlayer(); player && tickSpell)
                 {
                     // as Unit::SpellCritChanceDone for a magic spell, with the tick spell's class flags for the spell mods
@@ -156,8 +174,7 @@ class classic_spell_ground_area_damage : public AuraScript
 
             SpellNonMeleeDamage damageInfo(caster, target, spellInfo, GetAura()->GetSpellVisual(), spellInfo->GetSchoolMask(), GetAura()->GetCastId());
             damageInfo.periodicLog = !values.TicksAreHits;
-            // Ticks that are hits take no partial resist (EV-0028: 2 of 370 ticks against 52 of 189 Scorch hits on the same mobs)
-            caster->CalculateSpellDamageTaken(&damageInfo, damage, spellInfo, BASE_ATTACK, crit, false, nullptr, !values.TicksAreHits);
+            caster->CalculateSpellDamageTaken(&damageInfo, damage, spellInfo, BASE_ATTACK, crit, false, nullptr, resistRoll);
             Unit::DealDamageMods(damageInfo.attacker, damageInfo.target, damageInfo.damage, &damageInfo.absorb);
             caster->SendSpellNonMeleeDamageLog(&damageInfo);
 
