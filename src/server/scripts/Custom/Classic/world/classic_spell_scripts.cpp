@@ -1839,6 +1839,34 @@ class classic_spell_item_totem_of_flowing_water : public AuraScript
     }
 };
 
+// 24574 - Brittle Armor (Zandalarian Hero Badge 19948 on use): "Increases your armor by 2000 and defense skill by 30 for 20 sec. Every time
+// you take melee or ranged damage, this bonus is reduced by 200 armor and 3 defense." The on-use row puts on the hit listener (24590, whose
+// script spell_item_brittle_armor takes a stack off) and triggers 29284, which the client does not have, so the 10-stack buff 24575 never
+// went on and the badge gave nothing. The cast now applies it at its 10 stacks (wowsims/forever, MIT, tools/database/overrides/
+// hand_triggers.go, tooltip).
+class classic_spell_item_zandalarian_hero_badge : public SpellScript
+{
+    static constexpr uint32 SPELL_BRITTLE_ARMOR_BUFF = 24575;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_BRITTLE_ARMOR_BUFF });
+    }
+
+    void HandleAfterCast()
+    {
+        Unit* caster = GetCaster();
+        caster->CastSpell(caster, SPELL_BRITTLE_ARMOR_BUFF, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+        if (Aura* buff = caster->GetAura(SPELL_BRITTLE_ARMOR_BUFF, caster->GetGUID()))
+            buff->SetStackAmount(uint8(buff->GetSpellInfo()->StackAmount ? buff->GetSpellInfo()->StackAmount : 10));
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(classic_spell_item_zandalarian_hero_badge::HandleAfterCast);
+    }
+};
+
 class classic_spell_item_argent_defender : public AuraScript
 {
     bool CheckProc(ProcEventInfo& eventInfo)
@@ -2800,6 +2828,7 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_pri_vampiric_embrace);
     RegisterSpellScript(classic_spell_item_moonshadow_stave);
     RegisterSpellScript(classic_spell_item_argent_defender);
+    RegisterSpellScript(classic_spell_item_zandalarian_hero_badge);
     RegisterSpellScript(classic_spell_item_totem_of_flowing_water);
     RegisterSpellScript(classic_spell_item_set_proc_mana_cast);
     RegisterSpellScript(classic_spell_pal_consecration);
