@@ -1501,6 +1501,11 @@ void SpellMgr::LoadSpellGroupStackRules()
                 TC_LOG_ERROR("sql.sql", "SpellId {} listed in `spell_group` with stack rule 3 does not share aura assigned for group {}", spellId, group_id);
         }
 
+        // Classic 1.60 (WoW Forever): the elixir crit group (sql 2026_11_18_03, R-0025) shares only the crit chance; its elixirs also
+        // carry a stat, which must keep stacking whatever the aura count picks
+        if (group_id == 1400910)
+            auraTypes = { SPELL_AURA_MOD_CRIT_PCT };
+
         mSpellSameEffectStack[SpellGroup(group_id)] = auraTypes;
         ++count;
     }
