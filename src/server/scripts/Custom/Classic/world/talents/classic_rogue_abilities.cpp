@@ -74,9 +74,18 @@ class classic_spell_rog_blade_flurry : public AuraScript
         if (!damageInfo || !_procTarget)
             return;
 
-        CastSpellExtraArgs args(GetEffect(EFFECT_0));
-        args.AddSpellBP0(SpellEffectValue(damageInfo->GetDamage()));
-        GetTarget()->CastSpell(_procTarget, SPELL_ROGUE_BLADE_FLURRY_STRIKE, args);
+        // WoW Forever: the copy is the damage the first target took, after its armor; it takes no armor or modifiers again and procs
+        // nothing (wowsims/forever, MIT, sim/rogue/talents_combat.go: the strike ignores resists and modifiers and has no proc mask).
+        // Casting 12723 (a physical school damage spell) ran it through the second target's armor and the damage bonuses once more.
+        Unit* rogue = GetTarget();
+        SpellInfo const* strike = sSpellMgr->GetSpellInfo(SPELL_ROGUE_BLADE_FLURRY_STRIKE, DIFFICULTY_NONE);
+        if (strike && _procTarget->IsAlive())
+        {
+            SpellNonMeleeDamage copy(rogue, _procTarget, strike, GetAura()->GetSpellVisual(), SPELL_SCHOOL_MASK_NORMAL, GetAura()->GetCastId());
+            copy.damage = damageInfo->GetDamage();
+            rogue->DealSpellDamage(&copy, false);
+            rogue->SendSpellNonMeleeDamageLog(&copy);
+        }
         _procTarget = nullptr;
     }
 
