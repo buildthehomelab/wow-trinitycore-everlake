@@ -16,6 +16,7 @@
  */
 
 #include "AuctionHouseBotSeller.h"
+#include "ItemStackSize.h"
 #include "AuctionHouseBotVanilla.h"
 #include "AuctionHouseMgr.h"
 #include "DatabaseEnv.h"
@@ -704,7 +705,8 @@ void AuctionBotSeller::SetPricesOfItem(ItemTemplate const* itemProto, SellerConf
 uint32 AuctionBotSeller::GetStackSizeForItem(ItemTemplate const* itemProto, SellerConfiguration& config) const
 {
     if (config.GetRandomStackRatioPerClass(ItemClass(itemProto->GetClass())) > urand(0, 99))
-        return urand(1, itemProto->GetMaxStackSize());
+        // stock stack size, so StackSize.* (999 trade goods) doesn't turn every bot listing into a huge stack
+        return urand(1, ItemStackSize::GetStockMaxStackSize(itemProto->GetId(), itemProto->GetMaxStackSize()));
     else
         return 1;
 }
