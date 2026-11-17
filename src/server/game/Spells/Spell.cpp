@@ -3023,8 +3023,14 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
             // item spells (spell hit of non-damage spell may also activate items, for example seal of corruption hidden hit)
             if (caster->GetTypeId() == TYPEID_PLAYER && (procSpellType & (PROC_SPELL_TYPE_DAMAGE | PROC_SPELL_TYPE_NO_DMG_HEAL)))
             {
+                // Classic 1.60 (WoW Forever): an ability that requires a shield (Shield Slam, Shield Bash) strikes with the shield, so a weapon's
+                // chance-on-hit spell and its combat enchant never hear it; equip auras still do. Fiery Blaze 0 of 617 Shield Slams and 0 of
+                // 78 Shield Bashes against 212 of 1,517 white hits; Rock on Stick 0 of 157 Shield Slams (wowsims/forever, MIT, docs/evidence
+                // EV-0021, docs/rulings R-0041).
+                bool const requiresShield = spell->m_spellInfo->EquippedItemClass == ITEM_CLASS_ARMOR
+                    && (spell->m_spellInfo->EquippedItemSubClassMask & (1 << ITEM_SUBCLASS_ARMOR_SHIELD));
                 if (spell->m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MELEE || spell->m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_RANGED)
-                    if (!spell->m_spellInfo->HasAttribute(SPELL_ATTR0_CANCELS_AUTO_ATTACK_COMBAT) && !spell->m_spellInfo->HasAttribute(SPELL_ATTR4_SUPPRESS_WEAPON_PROCS))
+                    if (!spell->m_spellInfo->HasAttribute(SPELL_ATTR0_CANCELS_AUTO_ATTACK_COMBAT) && !spell->m_spellInfo->HasAttribute(SPELL_ATTR4_SUPPRESS_WEAPON_PROCS) && !requiresShield)
                         caster->ToPlayer()->CastItemCombatSpell(*spellDamageInfo);
             }
         }
