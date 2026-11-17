@@ -2205,6 +2205,47 @@ class classic_spell_dru_omen_of_clarity : public AuraScript
     }
 };
 
+// 1328829 - Poised (Feral Combat passive): "While at maximum Energy, and out of combat, reduce the Energy cost of your next ability by
+// $1328827s1." The passive's only effect procs a marker aura on entering combat, so nothing gave the buff 1328827 (-10 energy on the cat
+// abilities its class mask names, one charge). Every second, a druid out of combat at full energy without the buff gets it; it stays
+// until an ability spends it, an avoided cast included (spell_proc, cast phase: 27 of 27 avoided Claws, Rakes, Pounces and Ravages
+// spent it; wowsims/forever, MIT, docs/evidence EV-0035, sim/druid/poised.go).
+class classic_spell_dru_poised : public AuraScript
+{
+    static constexpr uint32 SPELL_DRUID_POISED_BUFF = 1328827;
+    static constexpr int32 CHECK_INTERVAL_MS = 1000;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_DRUID_POISED_BUFF });
+    }
+
+    void CalcPeriodic(AuraEffect const* /*aurEff*/, bool& isPeriodic, int32& amplitude)
+    {
+        isPeriodic = true;
+        amplitude = CHECK_INTERVAL_MS;
+    }
+
+    void CheckEnergy(AuraEffect* /*aurEff*/)
+    {
+        Unit* druid = GetTarget();
+        if (!druid->IsAlive() || druid->IsInCombat() || druid->HasAura(SPELL_DRUID_POISED_BUFF))
+            return;
+
+        int32 const maxEnergy = druid->GetMaxPower(POWER_ENERGY);
+        if (maxEnergy <= 0 || druid->GetPower(POWER_ENERGY) < maxEnergy)
+            return;
+
+        druid->CastSpell(druid, SPELL_DRUID_POISED_BUFF, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+    }
+
+    void Register() override
+    {
+        DoEffectCalcPeriodic += AuraEffectCalcPeriodicFn(classic_spell_dru_poised::CalcPeriodic, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+        OnEffectUpdatePeriodic += AuraEffectUpdatePeriodicFn(classic_spell_dru_poised::CheckEnergy, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
 /*######
 ## Damage hooks without a client aura effect
 ######*/
@@ -2369,6 +2410,7 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_spell_dru_enrage_armor);
     RegisterSpellScript(classic_spell_dru_faerie_fire_threat);
     RegisterSpellScript(classic_spell_dru_omen_of_clarity);
+    RegisterSpellScript(classic_spell_dru_poised);
 
     new classic_unit_talent_warlock_druid();
 }
