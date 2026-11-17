@@ -64,6 +64,8 @@ enum class LearnResult : int32
 struct PlayerDataAccessor
 {
     /*implicit*/ PlayerDataAccessor(Player const* player) : _player(player) { }
+    // ignoreClassicTalented: count talent points as if the Legacy perk Talented were not learned (the Legacy reset checks a deficit)
+    PlayerDataAccessor(Player const* player, bool ignoreClassicTalented) : _player(player), _ignoreClassicTalented(ignoreClassicTalented) { }
 
     uint64 GetMoney() const;
     int32 GetCurrencyQuantity(int32 currencyId) const;
@@ -77,6 +79,7 @@ struct PlayerDataAccessor
 
 private:
     Player const* _player;
+    bool _ignoreClassicTalented = false;
 };
 
 struct SpentCurrency

@@ -15142,6 +15142,14 @@ void Player::PrepareGossipMenu(WorldObject* source, uint32 menuId, bool showQues
                 canTalk = false;
         }
 
+        // Classic 1.60 Legacy perk reset: class trainers of the player's class, once the Legacy system is open
+        if (IsClassicLegacyResetGossipOption(gossipMenuItem.GossipOptionID))
+        {
+            Creature* creature = source->ToCreature();
+            if (!creature || !creature->CanResetTalents(this) || !GetClassicLegacyTraitConfig())
+                canTalk = false;
+        }
+
         if (canTalk)
             PlayerTalkClass->GetGossipMenu().AddMenuItem(gossipMenuItem, gossipMenuItem.MenuID, gossipMenuItem.OrderIndex);
     }
@@ -15262,6 +15270,27 @@ void Player::OnGossipSelect(WorldObject* source, int32 gossipOptionId, uint32 me
             {
                 PlayerTalkClass->SendCloseGossip();
                 UntrainClassicPet(cost);
+            }
+            else if (IsClassicLegacyResetGossipOption(gossipOptionId))
+            {
+                PlayerTalkClass->SendCloseGossip();
+                Creature* creature = source->ToCreature();
+                if (!creature || !creature->CanResetTalents(this))
+                    return;
+
+                switch (CanResetClassicLegacyPerks())
+                {
+                    case ClassicLegacyResetResult::NothingToReset:
+                        SendDirectMessage(WorldPackets::Misc::DisplayGameError(GameError::ERR_TALENT_WIPE_ERROR).Write());
+                        break;
+                    case ClassicLegacyResetResult::TalentPointDeficit:
+                        // client string ERR_LEGACY_WIPE_ERROR_CLASS_POINTS has no GameError value in this core
+                        GetSession()->SendNotification("%s", "Unlearning your \"Talented\" legacy perk would put you at a talent point deficit. You must unlearn your class talents first.");
+                        break;
+                    default:
+                        SendRespecWipeConfirm(guid, GetNextClassicLegacyResetCost(), SPEC_RESET_CLASSIC_LEGACY_PERKS);
+                        break;
+                }
             }
             else if (optionSpellId)
             {
@@ -19910,6 +19939,13 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     // Classic 1.60: stable slots bought (BuyStableSlot)
     if (QueryResult stableSlots = CharacterDatabase.PQuery("SELECT slots FROM character_stable_slots WHERE guid = {}", GetGUID().GetCounter()))
         SetNumStableSlots(std::min<uint8>((*stableSlots)[0].GetUInt8(), MAX_CLASSIC_STABLE_SLOTS));
+
+    // Classic 1.60: last Legacy perk reset price and time (ResetClassicLegacyPerks)
+    if (QueryResult legacyReset = CharacterDatabase.PQuery("SELECT cost, time FROM character_legacy_reset WHERE guid = {}", GetGUID().GetCounter()))
+    {
+        _classicLegacyResetCost = (*legacyReset)[0].GetUInt64();
+        _classicLegacyResetTime = time_t((*legacyReset)[1].GetUInt64());
+    }
 
     // companion pet summoned at last logout, resummoned once the player is in world
     if (fields.lastSummonedBattlePet)
@@ -29996,6 +30032,95 @@ bool Player::UntrainClassicPet(int64 cost)
     return true;
 }
 
+// Classic 1.60 Legacy perks are unlearned at a class trainer (the Legacy trees are CannotRefund, so the Legacy window cannot take
+// points back): forever-bugs #503, "Legacy Point talent respec starts at 10g for first respec", rising with each reset. Gossip
+// options 97000000 + menu (sql/custom/world 2026_11_17_46); the client asks with CONFIRM_TALENT_WIPE_5 and confirms with
+// CMSG_CONFIRM_RESPEC_WIPE type 4 (WorldSession::HandleConfirmRespecWipeOpcode).
+bool Player::IsClassicLegacyResetGossipOption(int32 gossipOptionId)
+{
+    return gossipOptionId >= 97000000 && gossipOptionId < 98000000;
+}
+
+UF::TraitConfig const* Player::GetClassicLegacyTraitConfig() const
+{
+    static constexpr int32 LegacyTraitSystemID = 45;
+    return m_activePlayerData->TraitConfigs.FindIf([](UF::TraitConfig const& config)
+    {
+        return static_cast<TraitConfigType>(*config.Type) == TraitConfigType::Generic && config.TraitSystemID == LegacyTraitSystemID;
+    }).second;
+}
+
+// Live charges 10 gold for the first reset and more for each one after; Blizzard has not published the steps. Until a live number
+// is known this follows the class talent reset (GetNextResetTalentsCost) from 10 gold: +5 gold a reset up to 50 gold, and 5 gold
+// less for every month without one, down to 10 gold.
+uint64 Player::GetNextClassicLegacyResetCost() const
+{
+    if (sWorld->getBoolConfig(CONFIG_NO_RESET_TALENT_COST))
+        return 0;
+
+    static constexpr uint64 FirstCost = 10 * GOLD;
+    static constexpr uint64 Step = 5 * GOLD;
+    static constexpr uint64 MaxCost = 50 * GOLD;
+    if (_classicLegacyResetCost < FirstCost)
+        return FirstCost;
+
+    uint64 months = uint64(std::max<time_t>(0, GameTime::GetGameTime() - _classicLegacyResetTime)) / MONTH;
+    if (months > 0)
+        return _classicLegacyResetCost > FirstCost + Step * months ? _classicLegacyResetCost - Step * months : FirstCost;
+
+    return std::min(_classicLegacyResetCost + Step, MaxCost);
+}
+
+Player::ClassicLegacyResetResult Player::CanResetClassicLegacyPerks() const
+{
+    UF::TraitConfig const* legacyConfig = GetClassicLegacyTraitConfig();
+    if (!legacyConfig || std::ranges::none_of(legacyConfig->Entries, [](UF::TraitEntry const& entry) { return entry.Rank > 0; }))
+        return ClassicLegacyResetResult::NothingToReset;
+
+    // Talented gives class talent points before level 10; with them spent, the client refuses the reset
+    // (ERR_LEGACY_WIPE_ERROR_CLASS_POINTS) until the class talents are unlearned.
+    if (TraitMgr::PlayerDataAccessor(this).GetClassicTalentedStartLevel() > 0)
+    {
+        for (auto const& [_, config] : m_activePlayerData->TraitConfigs)
+        {
+            if (static_cast<TraitConfigType>(*config.value.Type) != TraitConfigType::Combat)
+                continue;
+
+            WorldPackets::Traits::TraitConfig combatConfig(config.value);
+            if (TraitMgr::ValidateConfig(combatConfig, TraitMgr::PlayerDataAccessor(this, true)) == TraitMgr::LearnResult::NotEnoughTalentsInPrimaryTree)
+                return ClassicLegacyResetResult::TalentPointDeficit;
+        }
+    }
+
+    return ClassicLegacyResetResult::Ok;
+}
+
+bool Player::ResetClassicLegacyPerks(uint64 cost)
+{
+    if (CanResetClassicLegacyPerks() != ClassicLegacyResetResult::Ok || !HasEnoughMoney(cost))
+        return false;
+
+    UF::TraitConfig const* legacyConfig = GetClassicLegacyTraitConfig();
+    WorldPackets::Traits::TraitConfig newConfig(*legacyConfig);
+    // bought ranks go, ranks the game grants stay
+    std::erase_if(newConfig.Entries, [](WorldPackets::Traits::TraitEntry const& entry) { return !entry.GrantedRanks; });
+    for (WorldPackets::Traits::TraitEntry& entry : newConfig.Entries)
+        entry.Rank = 0;
+
+    UpdateTraitConfig(std::move(newConfig), 0, false);
+
+    ModifyMoney(-int64(cost));
+    if (cost > 0)   // a free reset (NoResetTalentsCost) keeps the price where it was, as for class talents
+        _classicLegacyResetCost = cost;
+    _classicLegacyResetTime = GameTime::GetGameTime();
+    CharacterDatabase.PExecute("REPLACE INTO character_legacy_reset (guid, cost, time) VALUES ({}, {}, {})",
+        GetGUID().GetCounter(), _classicLegacyResetCost, uint64(_classicLegacyResetTime));
+
+    UpdateCriteria(CriteriaType::MoneySpentOnRespecs, cost);
+    UpdateCriteria(CriteriaType::TotalRespecs, 1);
+    return true;
+}
+
 bool Player::PurchaseClassicDualSpec()
 {
     if (GetClassicSpecGroupConfig(true))
@@ -33584,6 +33709,9 @@ int32 TraitMgr::PlayerDataAccessor::GetClassicTalentedStartLevel() const
     // advocaite/TrinityCore #150). Every entry granting the perk counts: the 5 rank node's curve gives 9..5 by rank, the
     // single rank nodes give a fixed 9, 8, 7, 6 or 5 (TraitDefinitionEffectPoints, Set); the lowest start level wins.
     static constexpr uint32 TalentedSpellId = 1225474;
+    if (_ignoreClassicTalented)
+        return 0;
+
     int32 startLevel = 0;
     for (auto const& [configId, config] : _player->m_activePlayerData->TraitConfigs)
     {
