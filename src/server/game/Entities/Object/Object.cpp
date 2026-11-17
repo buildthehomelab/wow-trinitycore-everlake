@@ -1951,8 +1951,10 @@ SpellMissInfo WorldObject::MagicSpellHitResult(Unit* victim, SpellInfo const* sp
             && !((schoolMask & SPELL_SCHOOL_MASK_HOLY) && victim->GetTypeId() != TYPEID_UNIT))
             HitChance *= 1.0f - Unit::CalculateAverageResistReduction(this, schoolMask, victim, spellInfo);
 
-        // vanilla: always at least 1% hit and at least 1% miss
-        RoundToInterval(HitChance, 1.0f, 99.0f);
+        // Classic 1.60 (WoW Forever): no 1% minimum miss and no 99% hit cap. Spell hit past the level-based miss keeps counting (against a
+        // binary spell's resist, Unit::CalculateAverageResistReduction above), and a target 4 or more levels below is never missed
+        // (wowsims/forever, MIT, sim/core/spell_result.go; no log measurement). Vanilla kept 1% hit and 1% miss.
+        RoundToInterval(HitChance, 0.0f, 100.0f);
 
         return 100.0f - HitChance;
     }();
