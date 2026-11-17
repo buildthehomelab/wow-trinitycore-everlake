@@ -1893,33 +1893,26 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
 
 /*static*/ float Unit::CalculateAverageResistReduction(WorldObject const* caster, SpellSchoolMask schoolMask, Unit const* victim, SpellInfo const* spellInfo /*= nullptr*/)
 {
-    float victimResistance = float(victim->GetResistance(schoolMask));
-    if (caster)
-    {
-        // pets inherit 100% of masters penetration
-        if (Player const* player = caster->GetSpellModOwner())
-        {
-            victimResistance += float(player->GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_TARGET_RESISTANCE, schoolMask));
-            victimResistance -= float(player->GetSpellPenetrationItemMod());
-            victimResistance -= float(player->GetClassicSpellPenetration(schoolMask));
-        }
-        else if (Unit const* unitCaster = caster->ToUnit())
-            victimResistance += float(unitCaster->GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_TARGET_RESISTANCE, schoolMask));
-    }
+    return std::max(CalculateSignedAverageResist(caster, schoolMask, victim, spellInfo), 0.0f);
+}
 
+/*static*/ float Unit::CalculateSignedAverageResist(WorldObject const* caster, SpellSchoolMask schoolMask, Unit const* victim, SpellInfo const* spellInfo /*= nullptr*/)
+{
     // holy resistance exists in pve and comes from level difference, ignore template values
     if (schoolMask & SPELL_SCHOOL_MASK_HOLY)
-        victimResistance = 0.0f;
+        return 0.0f;
 
     // Chaos Bolt exception, ignore all target resistances (unknown attribute?)
     if (spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_WARLOCK && spellInfo->Id == 116858)
-        victimResistance = 0.0f;
+        return 0.0f;
 
-    victimResistance = std::max(victimResistance, 0.0f);
+    // Classic 1.60 (WoW Forever): the target's own resistance stops at 0, so a debuff that lowers it below 0 adds nothing; the caster's
+    // Spell Piercing is taken off after that and may take the total below 0 (wowsims/forever, MIT, sim/core/spell_resistances.go).
+    float victimResistance = std::max(float(victim->GetResistance(schoolMask)), 0.0f);
 
     // Classic 1.60: the caller (CalcSpellResistedDamage) wants the average resisted fraction, retail returns the raw resistance
     // (creatures have none there): with 1 point of resistance every spell was fully resisted. WoW Forever formula: resistance
-    // / (resistance + 8 * caster level + 19), fitted to Forever logs at levels 20 to 50 (Spell Piercing bonus rates and mobs casting at
+    // / (|resistance| + 8 * caster level + 19), fitted to Forever logs at levels 20 to 50 (Spell Piercing bonus rates and mobs casting at
     // players of known resistance; wowsims/forever, MIT, docs/evidence EV-0091). Vanilla's resistance * 0.75 / (5 * caster level) gave
     // 75% at 315 resistance against a level 63 caster where Forever gives about 38%. The 75% cap stays as a guard only (it needs about
     // three times the constant). Creatures above the caster's level resist 8 more per level (not binary spells),
@@ -1934,7 +1927,47 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
             victimResistance += float(int32(8.0f * levelDiff * casterLevel / 63.0f));
     }
 
-    return std::min(victimResistance / (victimResistance + 8.0f * casterLevel + 19.0f), 0.75f);
+    if (caster)
+    {
+        // pets inherit 100% of masters penetration
+        if (Player const* player = caster->GetSpellModOwner())
+        {
+            victimResistance += float(player->GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_TARGET_RESISTANCE, schoolMask));
+            victimResistance -= float(player->GetSpellPenetrationItemMod());
+            victimResistance -= float(player->GetClassicSpellPenetration(schoolMask));
+        }
+        else if (Unit const* unitCaster = caster->ToUnit())
+            victimResistance += float(unitCaster->GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_TARGET_RESISTANCE, schoolMask));
+    }
+
+    return std::min(victimResistance / (std::fabs(victimResistance) + 8.0f * casterLevel + 19.0f), 0.75f);
+}
+
+// Classic 1.60 (WoW Forever): Spell Piercing beyond the target's resistance makes the average resist negative, and the partial resist roll
+// on its size pays out bonus damage in tenths instead: a hit gains 10% or 20% (wowsims/forever, MIT, docs/evidence EV-0091 and EV-0092:
+// pierced hits carry a negative resisted amount of exactly 10% or 20%, about 2:1, at the caster's piercing rate). Only direct hits: the
+// ticks of Shadow Word: Pain, Corruption, Curse of Agony, Immolate, Fireball and Frostfire Bolt bin 3 of 6,232 (EV-0092), and the few
+// DoTs that do bin (Devouring Plague, Pyroblast, Starshards) share no row property with each other. Binary spells (Frostbolt) gain it
+// too: the mages in the logs bin at the same rate.
+/*static*/ uint32 Unit::CalcSpellPiercingBonusDamage(Unit const* attacker, Unit* victim, uint32 damage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo)
+{
+    if (!attacker || !(schoolMask & SPELL_SCHOOL_MASK_MAGIC))
+        return 0;
+
+    float const averageResist = Unit::CalculateSignedAverageResist(attacker, schoolMask, victim, spellInfo);
+    if (averageResist >= 0.0f)
+        return 0;
+
+    // the same tenths roll as CalcSpellResistedDamage, on the size of the negative share (always under 10% in practice)
+    float const a = std::min(-averageResist, 0.1f);
+    float const roll = rand_norm();
+    uint32 tenths = 0;
+    if (roll >= 1.0f - 2.5f * a)
+        tenths = 2;
+    else if (roll >= 1.0f - 7.5f * a)
+        tenths = 1;
+
+    return uint32(damage * tenths / 10.0f);
 }
 
 /*static*/ void Unit::CalcAbsorbResist(DamageInfo& damageInfo, Spell* spell /*= nullptr*/)
@@ -1957,6 +1990,11 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
         spell->CallScriptOnResistAbsorbCalculateHandlers(damageInfo, resistedDamage, absorbIgnoringDamage);
 
     damageInfo.ResistDamage(resistedDamage);
+
+    // Classic 1.60 (WoW Forever): Spell Piercing past the target's resistance adds damage to a direct hit
+    if (!resistedDamage && damageInfo.GetDamageType() != DOT)
+        if (uint32 piercingBonus = Unit::CalcSpellPiercingBonusDamage(damageInfo.GetAttacker(), damageInfo.GetVictim(), damageInfo.GetDamage(), damageInfo.GetSchoolMask(), damageInfo.GetSpellInfo()))
+            damageInfo.ModifyDamage(int32(piercingBonus));
 
     // We're going to call functions which can modify content of the list during iteration over it's elements
     // Let's copy the list so we can prevent iterator invalidation

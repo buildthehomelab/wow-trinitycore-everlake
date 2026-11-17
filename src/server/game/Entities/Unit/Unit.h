@@ -801,6 +801,8 @@ class TC_GAME_API Unit : public WorldObject
         void SetResistance(SpellSchools school, int32 val) { SetUpdateFieldValue(m_values.ModifyValue(&Unit::m_unitData).ModifyValue(&UF::UnitData::Resistances, school), val); }
         void SetBonusResistanceMod(SpellSchools school, int32 val) { SetUpdateFieldValue(m_values.ModifyValue(&Unit::m_unitData).ModifyValue(&UF::UnitData::BonusResistanceMods, school), val); }
         static float CalculateAverageResistReduction(WorldObject const* caster, SpellSchoolMask schoolMask, Unit const* victim, SpellInfo const* spellInfo = nullptr);
+        // Classic 1.60: the average resist before it is floored at 0; Spell Piercing past the target's resistance makes it negative
+        static float CalculateSignedAverageResist(WorldObject const* caster, SpellSchoolMask schoolMask, Unit const* victim, SpellInfo const* spellInfo = nullptr);
 
         uint64 GetHealth()    const { return m_unitData->Health; }
         uint64 GetMaxHealth() const { return m_unitData->MaxHealth; }
@@ -1737,6 +1739,7 @@ class TC_GAME_API Unit : public WorldObject
         static bool IsDamageReducedByArmor(SpellSchoolMask damageSchoolMask, SpellInfo const* spellInfo = nullptr);
         static uint32 CalcArmorReducedDamage(Unit const* attacker, Unit* victim, uint32 damage, SpellInfo const* spellInfo, WeaponAttackType attackType = MAX_ATTACK, uint8 attackerLevel = 0);
         static uint32 CalcSpellResistedDamage(Unit const* attacker, Unit* victim, uint32 damage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo);
+        static uint32 CalcSpellPiercingBonusDamage(Unit const* attacker, Unit* victim, uint32 damage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo);
         static void CalcAbsorbResist(DamageInfo& damageInfo, Spell* spell = nullptr);
         static void CalcHealAbsorb(HealInfo& healInfo);
 
