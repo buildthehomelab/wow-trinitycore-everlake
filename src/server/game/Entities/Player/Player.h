@@ -251,7 +251,8 @@ enum SpecResetType
     SPEC_RESET_TALENTS = 0,
     SPEC_RESET_SPECIALIZATION = 1,
     SPEC_RESET_GLYPHS = 2,
-    SPEC_RESET_PET_TALENTS = 3
+    SPEC_RESET_PET_TALENTS = 3,
+    SPEC_RESET_CLASSIC_LEGACY_PERKS = 4     // Classic 1.60: client popup CONFIRM_TALENT_WIPE_5 "unlearn all of your legacy perks?"
 };
 
 // Spell modifier (used for modify other spells)
@@ -2067,6 +2068,13 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         bool PurchaseClassicDualSpec();
         bool UntrainClassicPet(int64 cost);
         static bool IsClassicDualSpecGossipOption(int32 gossipOptionId);
+        // Classic 1.60 Legacy perk reset at class trainers (gossip options 97000000 + menu)
+        static bool IsClassicLegacyResetGossipOption(int32 gossipOptionId);
+        UF::TraitConfig const* GetClassicLegacyTraitConfig() const;
+        uint64 GetNextClassicLegacyResetCost() const;
+        enum class ClassicLegacyResetResult : uint8 { Ok, NothingToReset, TalentPointDeficit };
+        ClassicLegacyResetResult CanResetClassicLegacyPerks() const;
+        bool ResetClassicLegacyPerks(uint64 cost);
         TalentLearnResult LearnTalent(uint32 talentId, int32* spellOnCooldown);
         bool AddTalent(TalentEntry const* talent, uint8 spec, bool learning);
         bool HasTalent(uint32 spell_id, uint8 spec) const;
@@ -3382,6 +3390,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         uint32 m_baseHealthRegen;
         int32 m_spellPenetrationItemMod;
         std::array<int32, 140 - 83> m_classicItemMods = { };   // ItemModType 83 .. 139 (ITEM_MOD_CLASSIC_*), from equipped items
+        uint64 _classicLegacyResetCost = 0;                          // last Legacy perk reset price (character_legacy_reset)
+        time_t _classicLegacyResetTime = 0;                          // when it was paid
         int32 m_classicBlockValueBonus = 0;                    // ITEM_MOD_BLOCK_VALUE of equipped items
         int32 m_classicSpellHealingDone = 0;                   // ITEM_MOD_SPELL_HEALING_DONE of equipped items and enchantments
         int32 m_classicSpellDamageDone = 0;                    // ITEM_MOD_SPELL_DAMAGE_DONE of equipped items and enchantments

@@ -300,8 +300,9 @@ class classic_spell_campfire_rest : public AuraScript
         if (!buffs.empty() && sSpellMgr->GetSpellInfo(SPELL_CAMP_BENEFITS, DIFFICULTY_NONE))
             target->AddAura(SPELL_CAMP_BENEFITS, target);
 
-        if (target->IsSitState())
-            target->CastSpell(target, SPELL_CAMPFIRE_REST, true);
+        // the rest runs again for as long as the player stays: it expired, so they did not move (moving removes it), whether they sit or
+        // stand crafting at the fire (forever-bugs #115)
+        target->CastSpell(target, SPELL_CAMPFIRE_REST, true);
     }
 
     void Register() override

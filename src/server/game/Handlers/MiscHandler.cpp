@@ -419,7 +419,7 @@ void WorldSession::HandleStandStateChangeOpcode(WorldPackets::Misc::StandStateCh
 }
 
 // Classic 1.60 (WoW Forever): sitting near a campfire (spell focus 4) starts a 60 s rest (1289723) that gives Boosted Rest
-// (classic_spell_campfire_rest); standing up ends it (ymir sniff of the official beta: /sit by a campfire -> the player casts it).
+// (classic_spell_campfire_rest); moving ends it (ymir sniff of the official beta: /sit by a campfire -> the player casts it).
 // Also called for the sit text emote: a typed /sit in another language (ruRU "/сесть", 2026-11-05 report) can reach the server
 // only as the emote, without a stand state change, and then the rest never started.
 // Also called when the player sits down on a chair or bench (GameObject::Use), which sits them without a stand state packet.
@@ -440,6 +440,9 @@ void WorldSession::UpdateCampfireRest(uint8 standState)
     static constexpr uint32 SPELL_FOCUS_CAMPFIRE = 4;
     static constexpr float CAMPFIRE_RANGE = 15.0f;
 
+    // Sitting, lying down or kneeling starts the rest; once it runs, standing up (crafting stands the player up) does not end it, only
+    // moving does (the aura's Moving interrupt flag): Blizzard on forever-bugs #115 (fixed on live), and the tooltip "You may also craft
+    // using tradeskills, as long as you do not move". Standing up used to remove it, so crafting at a fire never gave the buffs.
     switch (standState)
     {
         case UNIT_STAND_STATE_SIT:
@@ -447,9 +450,10 @@ void WorldSession::UpdateCampfireRest(uint8 standState)
         case UNIT_STAND_STATE_SIT_LOW_CHAIR:
         case UNIT_STAND_STATE_SIT_MEDIUM_CHAIR:
         case UNIT_STAND_STATE_SIT_HIGH_CHAIR:
+        case UNIT_STAND_STATE_SLEEP:
+        case UNIT_STAND_STATE_KNEEL:
             break;
         default:
-            _player->RemoveAurasDueToSpell(SPELL_CAMPFIRE_REST);
             return;
     }
 

@@ -3355,6 +3355,12 @@ void Unit::SetCurrentCastSpell(Spell* pSpell)
                 m_classicAutoShotLastReported = SPELL_CAST_OK;
             }
 
+            // Classic 1.60 (forever-bugs #408, fixed on live): a wand (Shoot) or thrown weapon (Throw) waits half a second before its first
+            // shot, whatever the weapon speed; later shots follow the weapon speed. Without this the first shot left at once.
+            if (IsPlayer() && pSpell->GetSpellInfo()->IsAutoRepeatRangedSpell() && pSpell->GetSpellInfo()->Id != ClassicAutoShot::SpellId
+                && (!m_currentSpells[CSpellType] || m_currentSpells[CSpellType]->GetSpellInfo()->Id != pSpell->GetSpellInfo()->Id))
+                setAttackTimer(RANGED_ATTACK, std::max<uint32>(getAttackTimer(RANGED_ATTACK), ClassicAutoShot::WindupMs));
+
             if (m_currentSpells[CSpellType] && m_currentSpells[CSpellType]->getState() == SPELL_STATE_IDLE)
                 m_currentSpells[CSpellType]->setState(SPELL_STATE_FINISHED);
 

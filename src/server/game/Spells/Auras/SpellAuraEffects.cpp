@@ -5937,6 +5937,14 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
     uint32 const damageBeforeHook = damage;
     sScriptMgr->ModifyPeriodicDamageAurasTick(target, caster, damage);
 
+    // Classic 1.60 druid Rend and Tear 1223246: "Increases damage done by your melee abilities on Bleeding targets by $m1%." The bleeds
+    // of melee abilities (Rake, Rip, Pounce Bleed, Lacerate) get it too (forever-bugs #473, fixed on live). The direct part is in
+    // classic_unit_talent_warlock_druid::ModifySpellDamageTaken; the tick hook above carries no spell, so it is done here.
+    if (caster && caster->IsPlayer() && damage && GetSpellInfo()->DmgClass == SPELL_DAMAGE_CLASS_MELEE
+        && target->HasAuraWithMechanic(UI64LIT(1) << MECHANIC_BLEED))
+        if (AuraEffect const* rendAndTear = caster->GetAuraEffect(1223246, EFFECT_0); rendAndTear && rendAndTear->GetAmount() > 0)
+            AddPct(damage, rendAndTear->GetAmount());
+
     switch (GetAuraType())
     {
         case SPELL_AURA_PERIODIC_DAMAGE:

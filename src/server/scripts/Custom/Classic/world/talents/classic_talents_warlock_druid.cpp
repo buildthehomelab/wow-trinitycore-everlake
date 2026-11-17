@@ -1473,8 +1473,11 @@ class classic_talent_dru_form_talents : public AuraScript
 
     void Register() override
     {
-        AfterEffectApply += AuraEffectApplyFn(classic_talent_dru_form_talents::HandleApply, EFFECT_0, SPELL_AURA_MOD_SHAPESHIFT, AURA_EFFECT_HANDLE_REAL);
-        AfterEffectRemove += AuraEffectRemoveFn(classic_talent_dru_form_talents::HandleRemove, EFFECT_0, SPELL_AURA_MOD_SHAPESHIFT, AURA_EFFECT_HANDLE_REAL);
+        // REAPPLY too: recasting the form you are in (a powershift, Cat -> Cat) refreshes the aura as a reapply, whose remove half strips
+        // Leader of the Pack, Heart of the Wild and Feral Swiftness (HandleShapeshiftBoosts); with REAL only they stayed off until the next
+        // real form change (forever-bugs #275, fixed on live). A powershift also runs Furor again, as it always did.
+        AfterEffectApply += AuraEffectApplyFn(classic_talent_dru_form_talents::HandleApply, EFFECT_0, SPELL_AURA_MOD_SHAPESHIFT, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_talent_dru_form_talents::HandleRemove, EFFECT_0, SPELL_AURA_MOD_SHAPESHIFT, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
     }
 };
 

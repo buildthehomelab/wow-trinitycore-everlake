@@ -6608,6 +6608,12 @@ SpellCastResult Spell::CheckCast(bool strict, int32* param1 /*= nullptr*/, int32
                     return SPELL_FAILED_TARGET_UNSKINNABLE;
 
                 Creature* creature = m_targets.GetUnitTarget()->ToCreature();
+
+                // Classic 1.60: a corpse is skinned once, by one player (forever-bugs #171, acknowledged). Retail skinning loot is
+                // personal, so every player could skin the same corpse.
+                if (creature->HasUnitFlag3(UNIT_FLAG3_ALREADY_SKINNED) && !creature->IsSkinnedBy(m_caster->ToPlayer()))
+                    return SPELL_FAILED_TARGET_UNSKINNABLE;
+
                 Loot* loot = creature->GetLootForPlayer(m_caster->ToPlayer());
                 if (loot && (!loot->isLooted() || loot->loot_type == LOOT_SKINNING))
                     return SPELL_FAILED_TARGET_NOT_LOOTED;
@@ -6898,6 +6904,21 @@ SpellCastResult Spell::CheckCast(bool strict, int32* param1 /*= nullptr*/, int32
 
                 if (unitCaster->HasUnitState(UNIT_STATE_ROOT))
                     return SPELL_FAILED_ROOTED;
+
+                // Classic 1.60 (WoW Forever, not a bug per Blizzard: forever-bugs #86): Feral Charge (Cat) leaps behind its target only when
+                // the target can be reached on foot, "There is no path" otherwise (a target on a roof), like Feral Charge (Bear). The jump
+                // itself is an arc, so the walkable path is checked here, as SPELL_EFFECT_CHARGE does.
+                if (spellEffectInfo.IsEffect(SPELL_EFFECT_JUMP_DEST_3) && unitCaster->IsPlayer())
+                {
+                    if (Unit const* target = m_targets.GetUnitTarget())
+                    {
+                        PathGenerator path(unitCaster);
+                        path.SetPathLengthLimit(m_spellInfo->GetMaxRange(false, unitCaster, this) * 1.5f + target->GetCombatReach());
+                        bool const result = path.CalculatePath(target->GetPositionX(), target->GetPositionY(), target->GetPositionZ(), false);
+                        if (!result || (path.GetPathType() & (PATHFIND_SHORT | PATHFIND_NOPATH | PATHFIND_INCOMPLETE)) || path.IsInvalidDestinationZ(target))
+                            return SPELL_FAILED_NOPATH;
+                    }
+                }
                 break;
             }
             case SPELL_EFFECT_TALENT_SPEC_SELECT:
@@ -7181,6 +7202,26 @@ SpellCastResult Spell::CheckCast(bool strict, int32* param1 /*= nullptr*/, int32
                     spellEffectInfo.CalcValue(m_caster, &m_spellValue->EffectBasePoints[spellEffectInfo.EffectIndex], nullptr, nullptr, m_castItemEntry, m_castItemLevel),
                     approximateAuraEffectMask, false))
                     return SPELL_FAILED_AURA_BOUNCED;
+    }
+
+    // Classic 1.60 (WoW Forever, fixed on live: forever-bugs #161 Rejuvenation, #241 Power Word: Shield): a lower rank cast on a target that
+    // holds the caster's own higher rank fails with "A more powerful spell is already active" (no mana, no Weakened Soul) instead of
+    // replacing it. Most class ranks are not chained in the client data, so the rank-like test of Aura::CanStackWith decides.
+    if (!IsTriggered() && m_spellInfo->SpellLevel && !m_spellInfo->IsTargetingArea())
+    {
+        if (Unit const* target = m_targets.GetUnitTarget())
+        {
+            ObjectGuid const casterGuid = m_originalCasterGUID.IsEmpty() ? m_caster->GetGUID() : m_originalCasterGUID;
+            for (auto const& [auraId, aurApp] : target->GetAppliedAuras())
+            {
+                Aura const* aura = aurApp->GetBase();
+                if (aura->GetCasterGUID() != casterGuid || aura->GetSpellInfo()->SpellLevel <= m_spellInfo->SpellLevel)
+                    continue;
+                if (aura->GetSpellInfo()->IsClassicUnchainedRankOf(m_spellInfo)
+                    || (aura->GetSpellInfo()->ChainEntry && m_spellInfo->IsPositive() && aura->GetSpellInfo()->IsDifferentRankOf(m_spellInfo)))
+                    return SPELL_FAILED_AURA_BOUNCED;
+            }
+        }
     }
 
     // check trade slot case (last, for allow catch any another cast problems)
@@ -8350,6 +8391,23 @@ SpellCastResult Spell::CheckItems(int32* param1 /*= nullptr*/, int32* param2 /*=
     return SPELL_CAST_OK;
 }
 
+// Classic 1.60 (vanilla; forever-bugs #344, #477): the pushback talents (Twilight Focus, Burning Soul, Healing Focus, Eye of the Storm,
+// Intensity, Fel Concentration, Spiritual Focus, Nature's Focus, Improved Channeling, the "Cast Pushback Reduction" items) are percent
+// ResistPushback spell mods whose tooltips say "a $s1% chance to not lose casting time": a roll that skips the whole pushback, not a
+// smaller pushback. Percent mods multiply, so 100 becomes 170 with a 70% talent; Focused Casting (100) always resists.
+// SPELL_AURA_REDUCE_PUSHBACK (Earth Shield: "reducing casting time lost by $s2%") stays a reduction, in the callers.
+bool Spell::RollClassicPushbackResist(Unit const* unitCaster)
+{
+    Player* player = unitCaster->GetSpellModOwner();
+    if (!player)
+        return false;
+
+    float resist = 100.0f;                                  // must be initialized to 100 for percent modifiers
+    player->ApplySpellMod(m_spellInfo, SpellModOp::ResistPushback, resist, this);
+    float const chance = resist - 100.0f;
+    return chance >= 100.0f || (chance > 0.0f && roll_chance(chance));
+}
+
 void Spell::Delayed() // only called in DealDamage()
 {
     Unit* unitCaster = m_caster->ToUnit();
@@ -8362,10 +8420,10 @@ void Spell::Delayed() // only called in DealDamage()
     //check pushback reduce
     int32 delaytime = 500;                                  // spellcasting delay is normally 500ms
 
-    float delayReduce = 100.0f;                             // must be initialized to 100 for percent modifiers
-    if (Player* player = unitCaster->GetSpellModOwner())
-        player->ApplySpellMod(m_spellInfo, SpellModOp::ResistPushback, delayReduce, this);
-    delayReduce += unitCaster->GetTotalAuraModifier(SPELL_AURA_REDUCE_PUSHBACK) - 100.0f;
+    if (RollClassicPushbackResist(unitCaster))
+        return;
+
+    float const delayReduce = unitCaster->GetTotalAuraModifier(SPELL_AURA_REDUCE_PUSHBACK);
     if (delayReduce >= 100)
         return;
 
@@ -8404,10 +8462,10 @@ void Spell::DelayedChannel()
 
     int32 delaytime = CalculatePct(duration, 25); // channeling delay is normally 25% of its time per hit
 
-    float delayReduce = 100.0f;                                 // must be initialized to 100 for percent modifiers
-    if (Player* player = unitCaster->GetSpellModOwner())
-        player->ApplySpellMod(m_spellInfo, SpellModOp::ResistPushback, delayReduce, this);
-    delayReduce += unitCaster->GetTotalAuraModifier(SPELL_AURA_REDUCE_PUSHBACK) - 100.0f;
+    if (RollClassicPushbackResist(unitCaster))
+        return;
+
+    float const delayReduce = unitCaster->GetTotalAuraModifier(SPELL_AURA_REDUCE_PUSHBACK);
     if (delayReduce >= 100)
         return;
 
@@ -9593,7 +9651,14 @@ void Spell::TriggerGlobalCooldown()
             gcd = Milliseconds(intGcd);
         }
 
-        // Classic 1.60 (vanilla): the global cooldown is not shortened by spell haste or haste regen (retail scaled it down to 0.75 s)
+        // Classic 1.60 (WoW Forever, Blizzard on forever-bugs #389, not a bug): spell haste lowers the global cooldown, floor 1.0 s,
+        // ceiling 1.5 s. Only haste counts: a cast speed slow (Curse of Tongues) does not lengthen it (#284, fixed on live).
+        if (Unit const* unitCaster = m_caster->ToUnit(); unitCaster && m_caster->GetTypeId() == TYPEID_PLAYER)
+        {
+            float const castSpeed = unitCaster->m_unitData->ModCastingSpeed;
+            if (castSpeed > 0.0f && castSpeed < 1.0f && gcd > 1000ms)
+                gcd = std::max(Milliseconds(int64(gcd.count() * castSpeed)), Milliseconds(1000));
+        }
 
         // PlayerbotV2 pacing multiplier (bots only): scales the GCD, floor 750 ms.
         if (m_caster->GetTypeId() == TYPEID_PLAYER)
