@@ -24,15 +24,15 @@ using Catch::Approx;
 
 TEST_CASE("Arcane Shot and Explosive Trap take their share on the hit only", "[ClassicHunterApShare]")
 {
-    REQUIRE(ClassicHunterApShare::For(3044, false) == Approx(0.15f));
-    REQUIRE(ClassicHunterApShare::For(14287, false) == Approx(0.15f));
+    REQUIRE(ClassicHunterApShare::For(3044, false) == Approx(0.10f));
+    REQUIRE(ClassicHunterApShare::For(14287, false) == Approx(0.10f));
     REQUIRE(ClassicHunterApShare::For(13812, false) == Approx(0.10f));
     REQUIRE(ClassicHunterApShare::For(13812, true) == Approx(0.0f));
 }
 
 TEST_CASE("Serpent Sting and Immolation Trap take their share on each tick", "[ClassicHunterApShare]")
 {
-    REQUIRE(ClassicHunterApShare::For(25295, true) == Approx(0.05f));
+    REQUIRE(ClassicHunterApShare::For(25295, true) == Approx(0.03f));
     REQUIRE(ClassicHunterApShare::For(1978, false) == Approx(0.0f));
     REQUIRE(ClassicHunterApShare::For(14301, true) == Approx(0.02f));
 }
