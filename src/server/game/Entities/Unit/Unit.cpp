@@ -7148,6 +7148,13 @@ void Unit::SendEnergizeSpellLog(Unit* victim, uint32 spellID, int32 damage, int3
     SendCombatLogMessage(&data);
 }
 
+// Classic 1.60 (WoW Forever): druid Enrage 5229's rage, the instant part and every tick, threatens with the threat modifiers (the bear forms'
+// +115%): about 21.5 threat a 2 rage tick in Bear Form, 2 x 5 x 2.15 (wowsims/forever, MIT, docs/evidence EV-0037).
+bool Unit::ClassicRageThreatTakesModifiers(SpellInfo const* spellInfo)
+{
+    return spellInfo && spellInfo->Id == 5229;
+}
+
 void Unit::EnergizeBySpell(Unit* victim, SpellInfo const* spellInfo, int32 damage, Powers powerType)
 {
     // Classic 1.60 (vanilla): only paying mana starts the five second rule (Spell::TakePower); receiving it does not (Judgement of
@@ -7160,7 +7167,9 @@ void Unit::EnergizeBySpell(Unit* victim, SpellInfo const* spellInfo, int32 damag
 
     int32 gain = victim->ModifyPower(powerType, damage, false);
     int32 overEnergize = damage - gain;
-    victim->GetThreatManager().ForwardThreatForAssistingMe(this, float(damage) / 2, spellInfo, true);
+    // Classic 1.60 (WoW Forever): Enrage's rage threatens with the bear form's threat multiplier; other rage gains (Blood Frenzy, Shifting
+    // Power) stay unscaled (wowsims/forever, MIT, docs/evidence EV-0035, EV-0037)
+    victim->GetThreatManager().ForwardThreatForAssistingMe(this, float(damage) / 2, spellInfo, !ClassicRageThreatTakesModifiers(spellInfo));
     SendEnergizeSpellLog(victim, spellInfo->Id, gain, overEnergize, powerType);
 }
 
