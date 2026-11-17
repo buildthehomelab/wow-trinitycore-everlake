@@ -5751,7 +5751,9 @@ public:
         }
 
         int32 const before = p->GetPower(POWER_RAGE);
-        float const expected = ClassicRage::RageFromDamage(float(damage), float(p->GetLevel()), false) * sWorld->getRate(RATE_POWER_RAGE_INCOME) * 10.0f;
+        float const expected = ClassicRage::RageFromDamageTaken(float(damage), float(attacker->GetLevelForTarget(p)),
+            (attacker->GetPowerType() == POWER_MANA || attacker->GetPowerType() == POWER_ENERGY) ? ClassicRage::NonRageAttackerMultiplier : 1.0f)
+            * sWorld->getRate(RATE_POWER_RAGE_INCOME) * 10.0f;
         CleanDamage clean(0, 0, BASE_ATTACK, MELEE_HIT_NORMAL);
         Unit::DealDamage(attacker, p, damage, &clean, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
         int32 const after = p->GetPower(POWER_RAGE);

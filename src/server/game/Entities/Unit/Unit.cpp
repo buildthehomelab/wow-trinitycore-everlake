@@ -964,12 +964,29 @@ TC_GAME_API std::atomic<uint64> g_classicRageHitGained(0);
         }
     }
 
+    // WoW Forever: rage from damage taken (ClassicRage.h), absorbed damage included
+    if (attacker && attacker != victim && damagetype != NODAMAGE && victim->GetTypeId() == TYPEID_PLAYER && victim->GetPowerType() == POWER_RAGE)
+    {
+        float const absorbed = cleanDamage ? float(cleanDamage->absorbed_damage) : 0.0f;
+        float rageDamage = float(damageTaken) + absorbed;
+        float multiplier = 1.0f;
+        bool const meleeSwing = damagetype == DIRECT_DAMAGE && !spellProto;
+        if (meleeSwing && cleanDamage && cleanDamage->rageDamage >= 0.0f)
+            rageDamage = cleanDamage->rageDamage;
+        else if (meleeSwing && cleanDamage)
+            rageDamage += float(cleanDamage->mitigated_damage);   // a swing from elsewhere (no pre-armor amount): landed + mitigated
+        // non-physical damage, periodic ticks and physical specials: twice the swing rule (on the landed damage for specials and spells)
+        if (!meleeSwing || (damageSchoolMask & ~SPELL_SCHOOL_MASK_NORMAL))
+            multiplier *= ClassicRage::NonSwingTakenMultiplier;
+        Powers const attackerPower = attacker->GetPowerType();
+        if (attackerPower == POWER_MANA || attackerPower == POWER_ENERGY)
+            multiplier *= ClassicRage::NonRageAttackerMultiplier;
+        if (rageDamage > 0.0f)
+            victim->RewardClassicRage(ClassicRage::RageFromDamageTaken(rageDamage, float(attacker->GetLevelForTarget(victim)), multiplier), false);
+    }
+
     if (!damageDone)
         return 0;
-
-    // Classic 1.60 (vanilla): rage from damage taken
-    if (attacker && attacker != victim && damagetype != NODAMAGE && damageTaken && victim->GetTypeId() == TYPEID_PLAYER && victim->GetPowerType() == POWER_RAGE)
-        victim->RewardClassicRage(float(damageTaken), false);
 
     uint32 health = victim->GetHealth();
 
@@ -1407,6 +1424,7 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
     damageInfo->ProcAttacker     = PROC_FLAG_NONE;
     damageInfo->ProcVictim       = PROC_FLAG_NONE;
     damageInfo->CleanDamage      = 0;
+    damageInfo->RageDamage       = 0.0f;
     damageInfo->HitOutCome       = MELEE_HIT_EVADE;
 
     if (!victim)
@@ -1461,6 +1479,13 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
         damageInfo->Damage = damage;
 
     damageInfo->HitOutCome = RollMeleeOutcomeAgainst(damageInfo->Target, damageInfo->AttackType);
+
+    // WoW Forever: the victim's rage taken counts the swing's damage before armor and the block, x2 on a crit, x1.5 on a crushing blow
+    damageInfo->RageDamage = float(damage);
+    if (damageInfo->HitOutCome == MELEE_HIT_CRIT)
+        damageInfo->RageDamage *= 2.0f;
+    else if (damageInfo->HitOutCome == MELEE_HIT_CRUSHING)
+        damageInfo->RageDamage *= 1.5f;
 
     switch (damageInfo->HitOutCome)
     {
@@ -1643,6 +1668,12 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
 
     // Call default DealDamage
     CleanDamage cleanDamage(damageInfo->CleanDamage, damageInfo->Absorb, damageInfo->AttackType, damageInfo->HitOutCome);
+    // WoW Forever: a hit blocked in full gives no rage taken (wowsims/forever sim/core/rage.go)
+    if (damageInfo->HitOutCome == MELEE_HIT_CRIT || damageInfo->HitOutCome == MELEE_HIT_CRUSHING || damageInfo->HitOutCome == MELEE_HIT_NORMAL
+        || damageInfo->HitOutCome == MELEE_HIT_GLANCING || (damageInfo->HitOutCome == MELEE_HIT_BLOCK && damageInfo->Damage + damageInfo->Absorb > 0))
+        cleanDamage.rageDamage = damageInfo->RageDamage;
+    else
+        cleanDamage.rageDamage = 0.0f;
     Unit::DealDamage(this, victim, damageInfo->Damage, &cleanDamage, DIRECT_DAMAGE, SpellSchoolMask(damageInfo->DamageSchoolMask), nullptr, durabilityLoss);
 
     // If this is a creature and it attacks from behind it has a probability to daze it's victim
@@ -2408,24 +2439,17 @@ void Unit::AttackerStateUpdate(Unit* victim, WeaponAttackType attType, bool extr
                     damageInfo.HitInfo |= HITINFO_FAKE_DAMAGE;
             }
 
-            // Classic 1.60 (vanilla): rage from the damage dealt, 75% of the damage on a dodge / parry (retail: per weapon speed)
-            if (this != victim && damageInfo.HitOutCome != MELEE_HIT_MISS && GetPowerType() == POWER_RAGE)
+            // WoW Forever: a landed white swing gives rage by the weapon's base speed (ClassicRage.h); a miss, dodge or parry gives none
+            // (vanilla: rage from the damage dealt, 75% of it on a dodge / parry)
+            if (this != victim && GetPowerType() == POWER_RAGE && damageInfo.HitOutCome != MELEE_HIT_MISS && damageInfo.HitOutCome != MELEE_HIT_DODGE
+                && damageInfo.HitOutCome != MELEE_HIT_PARRY && damageInfo.HitOutCome != MELEE_HIT_EVADE)
             {
-                // Classic 1.60 (client 70374): Dual Wield Specialization 23584 "Increases the damage done by your off-hand weapon by $m1%
-                // and the Rage generated by your off-hand attacks by $m2%" (effect 1: server-side dummy, 10-50% by talent rank)
-                float offHandRageBonusPct = 0.0f;
-                if (damageInfo.AttackType == OFF_ATTACK)
-                    if (AuraEffect const* dualWieldSpec = GetAuraEffect(23584, EFFECT_1))
-                        if (dualWieldSpec->GetAuraType() == SPELL_AURA_DUMMY)
-                            offHandRageBonusPct = float(dualWieldSpec->GetAmount());
-                // kept fractional until the rage is worked out, so the talent's bonus is not rounded away on small hits
-                float const rageDamage = ClassicRage::SwingRageDamage(damageInfo.HitOutCome == MELEE_HIT_DODGE || damageInfo.HitOutCome == MELEE_HIT_PARRY,
-                    damageInfo.CleanDamage, damageInfo.Damage + damageInfo.Absorb, offHandRageBonusPct);
-                if (rageDamage > 0.0f)
+                float const rage = GetClassicSwingRage(damageInfo.AttackType, damageInfo.HitOutCome == MELEE_HIT_CRIT);
+                if (rage > 0.0f)
                 {
                     damageInfo.HitInfo |= HITINFO_RAGE_GAIN;
-                    damageInfo.RageGained = RewardClassicRage(rageDamage, true);
-                    g_classicRageHitDamage.fetch_add(uint64(rageDamage + 0.5f), std::memory_order_relaxed);
+                    damageInfo.RageGained = RewardClassicRage(rage, true);
+                    g_classicRageHitDamage.fetch_add(uint64(damageInfo.Damage + damageInfo.Absorb), std::memory_order_relaxed);
                     g_classicRageHitGained.fetch_add(uint64(std::max<int64>(int64(damageInfo.RageGained), 0)), std::memory_order_relaxed);
                 }
             }
@@ -13100,8 +13124,9 @@ float Unit::MeleeSpellMissChance(Unit const* victim, WeaponAttackType attType, S
     int32 const classicSkillDiff = GetClassicWeaponSkill(attType, victim) - victim->GetClassicDefenseSkill(this);
 
     // melee attacks while dual wielding have +19% chance to miss; Classic 1.60 (vanilla, VMaNGOS): not while a spell of the physical
-    // school is being cast
-    if (!spellInfo && haveOffhandWeapon() && attType != RANGED_ATTACK && !m_currentSpells[CURRENT_MELEE_SPELL]
+    // school is being cast. WoW Forever: a queued Heroic Strike / Cleave no longer lifts the penalty from the off-hand (beta development
+    // notes, 1 October 2026: "Queueing Heroic Strike will no longer increase off-hand hit chance"; magey/forever-warrior#2)
+    if (!spellInfo && haveOffhandWeapon() && attType != RANGED_ATTACK
         && !IsInFeralForm() && !HasAuraType(SPELL_AURA_IGNORE_DUAL_WIELD_HIT_PENALTY))
     {
         bool physicalSpellCast = false;
@@ -13133,10 +13158,8 @@ float Unit::MeleeSpellMissChance(Unit const* victim, WeaponAttackType attType, S
     // miss chance from auras after calculating skill based miss
     hitChance += GetTotalAuraModifier(SPELL_AURA_MOD_HIT_CHANCE);
 
-    // Classic 1.60 (vanilla, VMaNGOS GetMeleeMissChance): the first 1% of +hit from talents and gear is ignored against a victim whose
-    // maximum defense is more than 10 above the attacker's weapon skill (a boss three levels above a 300 skill player)
-    if (hitChance > 0.0f && GetClassicWeaponSkill(attType, victim) - int32(victim->GetMaxSkillValueForLevel(this)) < -10)
-        hitChance -= 1.0f;
+    // WoW Forever: no hit suppression. Vanilla ignored the first 1% of +hit against a victim whose defense was more than 10 above the
+    // weapon skill; Forever logs at +1% hit against +3 level mobs miss 7.04% (n 4,259), the unsuppressed 7% (magey/forever-warrior#1)
 
     missChance -= hitChance;
     if (attType == RANGED_ATTACK)
@@ -13815,14 +13838,47 @@ void Unit::UpdateHeight(float newZ)
         GetVehicleKit()->RelocatePassengers();
 }
 
-// Classic 1.60 (vanilla, VMaNGOS): rage = damage / conversion(level) * 7.5 when dealing, * 2.5 when taking damage
-int32 Unit::RewardClassicRage(float damage, bool attacker)
+// WoW Forever: rage points (ClassicRage.h) to the rage bar, in tenths; rage auras on dealt rage, then the server rate
+int32 Unit::RewardClassicRage(float ragePoints, bool attacker)
 {
-    float addRage = ClassicRage::RageFromDamage(damage, float(GetLevel()), attacker);
+    float addRage = ragePoints;
     if (attacker)
         AddPct(addRage, GetTotalAuraModifier(SPELL_AURA_MOD_RAGE_FROM_DAMAGE_DEALT));
     addRage *= sWorld->getRate(RATE_POWER_RAGE_INCOME);
-    return ModifyPower(POWER_RAGE, int32(addRage * 10), false);
+    return ModifyPower(POWER_RAGE, int32(addRage * 10.0f + 0.5f), false);
+}
+
+// WoW Forever: rage points of a landed white swing with this hand (ClassicRage::SwingRage). The weapon's base speed (haste does not
+// change the rage), fists at 2.0, bear forms at a normalized 2.5 with the two-hand factor.
+float Unit::GetClassicSwingRage(WeaponAttackType attType, bool crit) const
+{
+    float speed = ClassicRage::UnarmedSpeed;
+    bool twoHand = false;
+    if (Player const* player = ToPlayer())
+    {
+        if (player->IsInFeralForm())
+        {
+            speed = ClassicRage::BearNormalizedSpeed;
+            twoHand = true;
+        }
+        else if (Item const* weapon = player->GetWeaponForAttack(attType, true))
+        {
+            speed = float(weapon->GetTemplate()->GetDelay()) / 1000.0f;
+            twoHand = weapon->GetTemplate()->GetInventoryType() == INVTYPE_2HWEAPON;
+        }
+    }
+    else
+        speed = float(m_baseAttackSpeed[attType]) / 1000.0f;
+
+    // Dual Wield Specialization 23584 "Increases the damage done by your off-hand weapon by $m1% and the Rage generated by your off-hand
+    // attacks by $m2%" (effect 1: server-side dummy, 10-50% by talent rank)
+    float offHandBonusPct = 0.0f;
+    if (attType == OFF_ATTACK)
+        if (AuraEffect const* dualWieldSpec = GetAuraEffect(23584, EFFECT_1))
+            if (dualWieldSpec->GetAuraType() == SPELL_AURA_DUMMY)
+                offHandBonusPct = float(dualWieldSpec->GetAmount());
+
+    return ClassicRage::SwingRage(speed, attType == OFF_ATTACK, twoHand, crit, offHandBonusPct);
 }
 
 // Classic 1.60 (vanilla) combat table: weapon skill of an attack. Players: skill of the weapon (with bonuses), feral forms and
