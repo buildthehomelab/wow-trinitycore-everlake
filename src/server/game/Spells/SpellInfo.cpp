@@ -553,6 +553,21 @@ static ClassicSpellValue::Value const* GetClassicValue(WorldObject const* caster
     return sSpellMgr->GetClassicSpellValue(spellId, effectIndex);
 }
 
+bool SpellEffectInfo::ClassicRollsWholeAmount() const
+{
+    switch (Effect)
+    {
+        case SPELL_EFFECT_SCHOOL_DAMAGE:
+        case SPELL_EFFECT_POWER_DRAIN:
+        case SPELL_EFFECT_HEAL:
+        case SPELL_EFFECT_HEAL_MECHANICAL:
+        case SPELL_EFFECT_HEALTH_LEECH:
+            return _spellInfo->GetSchoolMask() != SPELL_SCHOOL_MASK_NORMAL;
+        default:
+            return false;
+    }
+}
+
 int32 SpellEffectInfo::CalcValueAsInt(WorldObject const* caster /*= nullptr*/, SpellEffectValue const* basePoints /*= nullptr*/, Unit const* target /*= nullptr*/, float* variance /*= nullptr*/, uint32 castItemId /*= 0*/, int32 itemLevel /*= -1*/) const
 {
     return int32(CalcValue(caster, basePoints, target, variance, castItemId, itemLevel));
@@ -609,7 +624,11 @@ SpellEffectValue SpellEffectInfo::CalcValue(WorldObject const* caster /*= nullpt
     {
         float delta = fabs(scalingVariance * 0.5f);
         float valueVariance = frand(-delta, delta);
-        value += basePoints * valueVariance;
+        // Classic 1.60 (WoW Forever): a spell-school hit or heal rolls its whole amount, power included, once by +-Variance/2; the effect
+        // handler applies that roll after the bonuses (Spell::EffectSchoolDMG, EffectHeal, ...), so the base is not rolled here as well.
+        // A physical effect rolls its base only (wowsims/forever, MIT, docs/evidence EV-0106 and EV-0045, docs/rulings R-0033).
+        if (!variance || !ClassicRollsWholeAmount())
+            value += basePoints * valueVariance;
 
         if (variance)
             *variance = valueVariance;

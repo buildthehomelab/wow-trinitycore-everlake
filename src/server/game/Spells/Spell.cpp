@@ -5966,6 +5966,9 @@ void Spell::HandleEffects(Unit* pUnitTarget, Item* pItemTarget, GameObject* pGoT
     effectInfo = &spellEffectInfo;
 
     effectValue = CalculateDamage(spellEffectInfo, unitTarget, &variance);
+    // Classic 1.60: a physical effect already rolled its base points (SpellEffectInfo::CalcValue); the handler must not roll it again
+    if (!spellEffectInfo.ClassicRollsWholeAmount())
+        variance = 0.0f;
 
     bool preventDefault = CallScriptEffectHandlers(spellEffectInfo.EffectIndex, mode);
 
