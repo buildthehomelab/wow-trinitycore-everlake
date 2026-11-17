@@ -1578,13 +1578,28 @@ class classic_spell_pal_consecration : public AuraScript
 // 15286 - Vampiric Embrace (vanilla, VMaNGOS UnitAuraProcHandler): a debuff on the enemy. Shadow damage the priest deals to it
 // heals the priest's party (15290, the priest included) for 20% of the damage. The retail script treated it as a self buff and
 // made the debuffed enemy cast the heal.
+// WoW Forever: Spirit Tap 15270 "Gives you a $m1% chance ... after killing a non-trivial target or when an enemy afflicted by your Vampiric
+// Embrace dies": the second part has no proc flag, so when the debuffed enemy dies, a priest with the talent gets 15271 without a roll,
+// whoever made the kill (tooltip; wowsims/forever, MIT, sim/priest/talents_shadow.go; no log reading).
 class classic_spell_pri_vampiric_embrace : public AuraScript
 {
     static constexpr uint32 SPELL_VAMPIRIC_EMBRACE_HEAL = 15290;
+    static constexpr uint32 SPELL_SPIRIT_TAP = 15270;
+    static constexpr uint32 SPELL_SPIRIT_TAP_BUFF = 15271;
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_VAMPIRIC_EMBRACE_HEAL });
+        return ValidateSpellInfo({ SPELL_VAMPIRIC_EMBRACE_HEAL, SPELL_SPIRIT_TAP_BUFF });
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (GetTargetApplication()->GetRemoveMode() != AURA_REMOVE_BY_DEATH || GetTarget()->IsCritter())
+            return;
+
+        Unit* priest = GetCaster();
+        if (priest && priest->IsAlive() && priest->HasAura(SPELL_SPIRIT_TAP))
+            priest->CastSpell(priest, SPELL_SPIRIT_TAP_BUFF, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
     }
 
     bool CheckProc(ProcEventInfo& eventInfo)
@@ -1608,6 +1623,7 @@ class classic_spell_pri_vampiric_embrace : public AuraScript
     {
         DoCheckProc += AuraCheckProcFn(classic_spell_pri_vampiric_embrace::CheckProc);
         OnEffectProc += AuraEffectProcFn(classic_spell_pri_vampiric_embrace::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_pri_vampiric_embrace::HandleRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
