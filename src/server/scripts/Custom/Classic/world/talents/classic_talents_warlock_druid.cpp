@@ -2149,6 +2149,31 @@ class classic_spell_dru_enrage_armor : public AuraScript
     }
 };
 
+// 770, 778, 9749, 9907 - Faerie Fire: the row's threat effect (3) states 0. In game a landed cast in Bear or Dire Bear Form threatens for
+// twice the caster's level, raised by the form's threat multiplier (258 at level 60), and in Cat Form or caster form for none, the level 60
+// rank included (wowsims/forever, MIT, docs/evidence EV-0034, EV-0037). The vanilla flat spell_threat rows are set to 0.
+class classic_spell_dru_faerie_fire_threat : public SpellScript
+{
+    void HandleThreat(SpellEffIndex /*effIndex*/)
+    {
+        Unit* druid = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!druid || !target || !target->CanHaveThreatList())
+            return;
+
+        ShapeshiftForm const form = druid->GetShapeshiftForm();
+        if (form != FORM_BEAR_FORM && form != FORM_DIRE_BEAR_FORM)
+            return;
+
+        target->GetThreatManager().AddThreat(druid, 2.0f * float(druid->GetLevel()), GetSpellInfo());
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_dru_faerie_fire_threat::HandleThreat, EFFECT_3, SPELL_EFFECT_THREAT);
+    }
+};
+
 /*######
 ## Damage hooks without a client aura effect
 ######*/
@@ -2311,6 +2336,7 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScriptWithArgs(classic_spell_dru_feral_attack_power_hit, "classic_spell_dru_swipe_attack_power", 0.03f);
     RegisterSpellScriptWithArgs(classic_spell_dru_feral_attack_power_tick, "classic_spell_dru_pounce_bleed_attack_power", 0.025f);
     RegisterSpellScript(classic_spell_dru_enrage_armor);
+    RegisterSpellScript(classic_spell_dru_faerie_fire_threat);
 
     new classic_unit_talent_warlock_druid();
 }
