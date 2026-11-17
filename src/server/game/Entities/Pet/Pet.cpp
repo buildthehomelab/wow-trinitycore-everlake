@@ -434,9 +434,9 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
             CastPetAuras(current);
 
             // The saved health was capped to the maximum without the auras (passives are not saved), and an aura that raises maximum
-            // health (Hunter Pet Scaling, Great Stamina) heals its whole amount when applied: put back what the pet had when it was saved,
-            // moved by what happened to it while loading.
-            if (getPetType() == HUNTER_PET && IsAlive() && savedHealth)
+            // health (Hunter Pet Scaling, Warlock Pet Scaling, Great Stamina) heals its whole amount when applied: put back what the pet had
+            // when it was saved, moved by what happened to it while loading. A demon summoned anew (not current) comes at full health.
+            if ((getPetType() == HUNTER_PET || (getPetType() == SUMMON_PET && current)) && IsAlive() && savedHealth)
                 SetHealth(uint64(std::clamp<int64>(int64(savedHealth) + healthChangeWhileLoading, 1, int64(GetMaxHealth()))));
         }
 
@@ -1428,7 +1428,7 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
     {
         case SUMMON_PET:
         {
-            // Classic 1.60 (vanilla): no bonus damage from the warlock's fire or shadow damage (The Burning Crusade)
+            // No bonus damage here: the warlock's share reaches a demon through 416189 Warlock Pet Scaling (classic_warlock_pet_scaling.cpp)
             SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, float(petlevel - (petlevel / 4)));
             SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, float(petlevel + (petlevel / 4)));
 

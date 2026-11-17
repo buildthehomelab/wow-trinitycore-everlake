@@ -1554,7 +1554,8 @@ void Guardian::UpdateAttackPowerAndDamage(bool ranged)
             bonusAP = owner->GetTotalAttackPowerValue(BASE_ATTACK) * dmg_multiplier;
             SetBonusDamage(int32(owner->GetTotalAttackPowerValue(BASE_ATTACK) * dmg_multiplier));
         }
-        // Classic 1.60 (vanilla): demons get nothing from their warlock's fire or shadow damage
+        // Classic 1.60 (WoW Forever): demons take their share of the warlock's spell damage as attack power and spell damage through
+        // 416189 Warlock Pet Scaling (classic_warlock_pet_scaling.cpp), not here
         else if (IsPet())
         {
         }
