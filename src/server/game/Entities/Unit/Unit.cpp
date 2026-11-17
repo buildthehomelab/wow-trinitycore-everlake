@@ -10988,6 +10988,9 @@ void Unit::ProcSkillsAndReactives(bool isVictim, Unit* procTarget, ProcFlagsInit
         // If exist crit/parry/dodge/block need update aura state (for victim and attacker)
         if (hitMask & (PROC_HIT_CRITICAL | PROC_HIT_PARRY | PROC_HIT_DODGE | PROC_HIT_BLOCK))
         {
+            // Classic 1.60: the Riposte and Revenge window lasts as long as the client's Defensive State 5302 (5000 ms), not the stock 4 s
+            static constexpr uint32 CLASSIC_DEFENSIVE_STATE_MS = 5000;
+
             // for victim
             if (isVictim)
             {
@@ -10998,7 +11001,7 @@ void Unit::ProcSkillsAndReactives(bool isVictim, Unit* procTarget, ProcFlagsInit
                     if (GetClass() != CLASS_ROGUE) // skip Rogue Riposte
                     {
                         ModifyAuraState(AURA_STATE_DEFENSIVE, true);
-                        StartReactiveTimer(REACTIVE_DEFENSE);
+                        StartReactiveTimer(REACTIVE_DEFENSE, CLASSIC_DEFENSIVE_STATE_MS);
                     }
                 }
                 // if victim and parry attack
@@ -11012,14 +11015,14 @@ void Unit::ProcSkillsAndReactives(bool isVictim, Unit* procTarget, ProcFlagsInit
                     else
                     {
                         ModifyAuraState(AURA_STATE_DEFENSIVE, true);
-                        StartReactiveTimer(REACTIVE_DEFENSE);
+                        StartReactiveTimer(REACTIVE_DEFENSE, CLASSIC_DEFENSIVE_STATE_MS);
                     }
                 }
                 // if and victim block attack
                 if (hitMask & PROC_HIT_BLOCK)
                 {
                     ModifyAuraState(AURA_STATE_DEFENSIVE, true);
-                    StartReactiveTimer(REACTIVE_DEFENSE);
+                    StartReactiveTimer(REACTIVE_DEFENSE, CLASSIC_DEFENSIVE_STATE_MS);
                 }
             }
             // for attacker: a warrior whose target dodges gets the combo point Overpower costs from the client's own proc aura 1282735
