@@ -1451,12 +1451,12 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
         case HUNTER_PET:
         {
             ToPet()->SetPetNextLevelExperience(Pet::GetHunterPetNextLevelExperience(petlevel));
-            //these formula may not be correct; however, it is designed to be close to what it should be
-            //this makes dps 0.5 of pets level
-            SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, float(petlevel - (petlevel / 4)));
-            //damage range is then petlevel / 2
-            SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, float(petlevel + (petlevel / 4)));
-            //damage is increased afterwards as strength and pet scaling modify attack power
+            // Classic 1.60 (WoW Forever): the swing is the creature auto attack dps of the pet's level less the pet's own attack power,
+            // over 2.0 s, 20% either side (HunterPetForever::SwingAverage, EV-0071); attack power adds on top. Retail TrinityCore used
+            // level -/+ level / 4.
+            float const creatureDps = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::CreatureAutoAttackDps, petlevel, -2, 0, CLASS_NONE, 0);
+            SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, HunterPetForever::SwingMin(creatureDps));
+            SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, HunterPetForever::SwingMax(creatureDps));
             break;
         }
         default:

@@ -20,6 +20,7 @@
 
 #include "Define.h"
 #include <algorithm>
+#include <cmath>
 #include <array>
 
 // Classic 1.60 (WoW Forever) hunter pet rules that differ from vanilla. Sources: the Classic Hunter Lodge wiki
@@ -171,6 +172,23 @@ namespace HunterPetForever
     {
         return foodType >= 1 && foodType <= 32 && (familyPetFoodMask & (uint32(1) << (foodType - 1))) != 0;
     }
+
+    // A tamed pet's own attack power is 30% of the creature auto attack dps of its level as attack power (14 a point of dps), the dps x 4.2
+    // rounded down, with nothing from Strength (wowsims/forever, MIT, sim/hunter/pets.go, docs/evidence EV-0070); the owner's 10% adds to it.
+    inline float OwnAttackPower(float creatureDps)
+    {
+        return std::floor(0.3f * 14.0f * creatureDps);
+    }
+
+    // The creature dps already holds that attack power, so the swing before attack power is what is left of it over the 2.0 s, 70% of the
+    // creature dps, 20% either side. A level 30 Cat's 152 logged swings all land inside this range at the attack power the log gives it;
+    // with the whole creature dps as the weapon 131 fell outside, about 32% high (EV-0071). One log, one pet: medium-low confidence.
+    inline float SwingAverage(float creatureDps)
+    {
+        return (creatureDps - OwnAttackPower(creatureDps) / 14.0f) * (BaseAttackTimeMs / 1000.0f);
+    }
+    inline float SwingMin(float creatureDps) { return SwingAverage(creatureDps) * 0.8f; }
+    inline float SwingMax(float creatureDps) { return SwingAverage(creatureDps) * 1.2f; }
 }
 
 #endif

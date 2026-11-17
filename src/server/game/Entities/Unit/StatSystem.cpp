@@ -1590,6 +1590,10 @@ void Guardian::UpdateAttackPowerAndDamage(bool ranged)
     // WoW Forever: the Voidwalker's and Sayaad's own attack power is 3 x level + 6, nothing from Strength (wowsims/forever EV-0075, EV-0076)
     else if (IsPet() && (GetEntry() == ENTRY_VOIDWALKER || GetEntry() == ENTRY_SUCCUBUS))
         val = WarlockPetForever::DemonAttackPower(GetLevel());
+    // WoW Forever: a hunter pet's own attack power is 30% of its level's creature dps as attack power, nothing from Strength
+    // (HunterPetForever::OwnAttackPower, EV-0070); the hunter's 10% comes on top (415429, classic_hunter_pet_scaling.cpp)
+    else if (IsHunterPet())
+        val = HunterPetForever::OwnAttackPower(sDB2Manager.EvaluateExpectedStat(ExpectedStatType::CreatureAutoAttackDps, GetLevel(), -2, 0, CLASS_NONE, 0));
     else
         val = 2 * GetStat(STAT_STRENGTH) - 20.0f;
 
