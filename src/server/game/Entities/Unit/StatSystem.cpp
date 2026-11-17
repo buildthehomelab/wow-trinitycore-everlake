@@ -1083,8 +1083,14 @@ void Player::UpdatePowerRegen(Powers power)
     if (powerType->GetFlags().HasFlag(PowerTypeFlags::RegenAffectedByHaste))
         pct_modifier /= m_unitData->ModHasteRegen;
 
-    pct_modifier                *= GetTotalAuraMultiplierByMiscValue(SPELL_AURA_MOD_POWER_REGEN_PERCENT, AsUnderlyingType(power));
+    float const regenPercentAuras = GetTotalAuraMultiplierByMiscValue(SPELL_AURA_MOD_POWER_REGEN_PERCENT, AsUnderlyingType(power));
+    pct_modifier                *= regenPercentAuras;
     flat_modifier               += GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_POWER_REGEN, AsUnderlyingType(power)) / 5.f;
+    // Classic 1.60 (WoW Forever): Innervate's +400% (SPELL_AURA_MOD_POWER_REGEN_PERCENT) multiplies MP5 as well as the Spirit regen: the
+    // regen under it reads 5 x (Spirit regen + MP5) on 31 of 31 ledger lines, 10 of 10 with MP5 up. Periodic energize auras (Blessing of
+    // Wisdom, Mana Spring) are not regen and tick the same under it (wowsims/forever, MIT, docs/evidence EV-0114).
+    if (power == POWER_MANA)
+        flat_modifier           *= regenPercentAuras;
 
     result_regen                *= pct_modifier;
     result_regen_interrupted    *= pct_modifier;
