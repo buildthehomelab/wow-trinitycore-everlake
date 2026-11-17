@@ -289,6 +289,29 @@ float ItemTemplate::GetClassicBonusArmor() const
     return std::floor(GetQualityModifier());
 }
 
+// Classic 1.60 (WoW Forever): the equipped damage range, the table DPS (with a reduced caster weapon's share) spread by the item's damage
+// variance plus the item's QualityModifier per second (a negative one on Benediction and three AQ20 weapons), the low end rounded down,
+// the high end to nearest, a negative end made 1 (wowsims/forever, MIT, tools/database/dbc/item_damage.go WeaponDamage, EV-0097).
+// Retail left QualityModifier out.
+void ItemTemplate::GetClassicDamage(uint32 itemLevel, bool reducedCasterDps, float& minDamage, float& maxDamage) const
+{
+    minDamage = maxDamage = 0.0f;
+    float const dps = GetClassicDPS(itemLevel, reducedCasterDps);
+    if (dps <= 0.0f)
+        return;
+
+    float const speed = GetDelay() * 0.001f;
+    float const qualityModifier = GetQualityModifier() * speed;
+    float low = dps * speed * (1.0f - GetDmgVariance() * 0.5f) + qualityModifier;
+    float high = dps * speed * (1.0f + GetDmgVariance() * 0.5f) + qualityModifier;
+    if (low < 0.0f)
+        low = 1.0f;
+    if (high < 0.0f)
+        high = 1.0f;
+    minDamage = std::floor(low);
+    maxDamage = std::floor(high + 0.5f);
+}
+
 void ItemTemplate::GetDamage(uint32 itemLevel, float& minDamage, float& maxDamage) const
 {
     minDamage = maxDamage = 0.0f;

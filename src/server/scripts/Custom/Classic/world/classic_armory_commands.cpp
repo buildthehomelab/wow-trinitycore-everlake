@@ -165,6 +165,11 @@ public:
                     stats += Trinity::StringFormat("{}{}:{}", stats.empty() ? "" : ",", type, rounded);
             }
 
+            // Classic 1.60 (WoW Forever): an armor item's green bonus armor (its QualityModifier) as the game shows it, "+60 Armor" under the
+            // base armor; the site prints stat 50 (ITEM_MOD_EXTRA_ARMOR) that way
+            if (int32 bonusArmor = int32(proto.GetClassicBonusArmor()))
+                stats += Trinity::StringFormat("{}{}:{}", stats.empty() ? "" : ",", int32(ITEM_MOD_EXTRA_ARMOR), bonusArmor);
+
             std::string effects;
             for (ItemEffectEntry const* effect : proto.Effects)
             {
@@ -179,7 +184,7 @@ public:
             if (proto.GetClass() == ITEM_CLASS_WEAPON && sItemDamageOneHandStore.LookupEntry(itemLevel) && sItemDamageOneHandCasterStore.LookupEntry(itemLevel)
                 && sItemDamageTwoHandStore.LookupEntry(itemLevel) && sItemDamageTwoHandCasterStore.LookupEntry(itemLevel)
                 && sItemDamageAmmoStore.LookupEntry(itemLevel))
-                proto.GetDamage(itemLevel, dmgMin, dmgMax);
+                proto.GetClassicDamage(itemLevel, proto.HasFlag(ITEM_FLAG4_REGULATED_COMMODITY), dmgMin, dmgMax);   // Classic 1.60: caster share, QualityModifier (EV-0097)
 
             auto icon = icons.find(itemId);
             int32 iconFileDataId = icon != icons.end() && icon->second ? icon->second : proto.BasicData->IconFileDataID;

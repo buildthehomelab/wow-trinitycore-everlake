@@ -2357,22 +2357,7 @@ float Item::GetClassicWeaponDPS(Player const* owner) const
 // a negative end made 1 (wowsims/forever, MIT, tools/database/dbc/item_damage.go WeaponDamage, EV-0097). Retail left QualityModifier out.
 void Item::GetClassicWeaponDamage(Player const* owner, float& minDamage, float& maxDamage) const
 {
-    minDamage = maxDamage = 0.0f;
-    ItemTemplate const* proto = GetTemplate();
-    float const dps = GetClassicWeaponDPS(owner);
-    if (dps <= 0.0f)
-        return;
-
-    float const speed = proto->GetDelay() * 0.001f;
-    float const qualityModifier = proto->GetQualityModifier() * speed;
-    float low = dps * speed * (1.0f - proto->GetDmgVariance() * 0.5f) + qualityModifier;
-    float high = dps * speed * (1.0f + proto->GetDmgVariance() * 0.5f) + qualityModifier;
-    if (low < 0.0f)
-        low = 1.0f;
-    if (high < 0.0f)
-        high = 1.0f;
-    minDamage = std::floor(low);
-    maxDamage = std::floor(high + 0.5f);
+    GetTemplate()->GetClassicDamage(GetItemLevel(owner), _bonusData.ClassicReducedCasterDps, minDamage, maxDamage);
 }
 
 uint32 Item::GetItemLevel(Player const* owner) const
