@@ -468,19 +468,8 @@ class classic_spell_pri_divine_aegis : public AuraScript
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
         int32 absorb = CalculatePct(int32(eventInfo.GetHealInfo()->GetHeal()), aurEff->GetAmount());
-        if (absorb <= 0)
-            return;
-
-        // The shield stacks up: what is left of this priest's shield on the target is added, up to $s2 x the priest's level ("Shields up
-        // to ${$s2*$pl} damage"; Blizzard on forever-bugs #286: "meant to stack up and has a cap"). The new cast replaces the old aura.
-        Unit* target = eventInfo.GetActionTarget();
-        if (AuraEffect const* existing = target->GetAuraEffect(SPELL_PRI_DIVINE_AEGIS_ABSORB, EFFECT_0, GetTarget()->GetGUID()))
-            absorb += existing->GetAmountAsInt();
-        if (AuraEffect const* capEff = GetEffect(EFFECT_1))
-            absorb = std::min<int32>(absorb, capEff->GetAmountAsInt() * int32(GetTarget()->GetLevel()));
-
         if (absorb > 0)
-            GetTarget()->CastSpell(target, SPELL_PRI_DIVINE_AEGIS_ABSORB, CastSpellExtraArgs(aurEff).AddSpellBP0(absorb));
+            GetTarget()->CastSpell(eventInfo.GetActionTarget(), SPELL_PRI_DIVINE_AEGIS_ABSORB, CastSpellExtraArgs(aurEff).AddSpellBP0(absorb));
     }
 
     void Register() override
