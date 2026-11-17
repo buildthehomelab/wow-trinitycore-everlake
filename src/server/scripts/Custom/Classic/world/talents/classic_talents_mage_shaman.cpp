@@ -533,38 +533,14 @@ class classic_spell_mage_ice_lance : public SpellScript
     bool _fingersOfFrost = false;
 };
 
-// Flamestrike's ground ticks proc as spell hits without a Spell (classic_spell_ground_area_damage, EV-0028). wowsims/forever keeps them
-// out of Combustion's stacks and charges (sim/mage/combustion.go; not verified in game), and the core follows it.
-static bool IsFlamestrikeGroundTick(ProcEventInfo const& eventInfo)
-{
-    if (eventInfo.GetProcSpell())
-        return false;
-
-    SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
-    if (!spellInfo)
-        return false;
-
-    switch (spellInfo->Id)
-    {
-        case 2120: case 2121: case 8422: case 8423: case 10215: case 10216:
-            return true;
-        default:
-            return false;
-    }
-}
-
 // 11129 - Combustion: "Each of your Fire damage spell hits increases your critical strike chance with Fire damage spells by 10%. This
 // effect lasts until you have caused 3 critical strikes with Fire spells." The cast puts one stack of 28682 on the mage (trigger effect)
 // and the client data gives 11129 three proc charges and 28682 an endless duration, with no handler for either: the first stack stayed
 // for ever and no more were added. 11129 now procs on fire critical hits only (spell_proc), so each critical spends a charge, and
-// ends 28682 with it; 28682 procs on every fire damage hit and adds a stack.
+// ends 28682 with it; 28682 procs on every fire damage hit and adds a stack. Flamestrike's ground ticks count (client 70707: the tick
+// spell 1279990 is non-periodic Fire damage with SPELL_ATTR3_NOT_A_PROC, so it may trigger procs, and 28682's class mask holds its 0x4).
 class classic_spell_mage_combustion : public AuraScript
 {
-    bool CheckProc(ProcEventInfo& eventInfo)
-    {
-        return !IsFlamestrikeGroundTick(eventInfo);
-    }
-
     void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
     {
         PreventDefaultAction();
@@ -577,7 +553,6 @@ class classic_spell_mage_combustion : public AuraScript
 
     void Register() override
     {
-        DoCheckProc += AuraCheckProcFn(classic_spell_mage_combustion::CheckProc);
         OnEffectProc += AuraEffectProcFn(classic_spell_mage_combustion::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
         AfterEffectRemove += AuraEffectRemoveFn(classic_spell_mage_combustion::HandleRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
     }
@@ -588,11 +563,6 @@ class classic_spell_mage_combustion : public AuraScript
 // dispelling it ends the Combustion proc aura 11129 too, which starts its cooldown.
 class classic_spell_mage_combustion_stacks : public AuraScript
 {
-    bool CheckProc(ProcEventInfo& eventInfo)
-    {
-        return !IsFlamestrikeGroundTick(eventInfo);
-    }
-
     void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
         GetTarget()->RemoveAurasDueToSpell(SPELL_MAGE_COMBUSTION);
@@ -606,7 +576,6 @@ class classic_spell_mage_combustion_stacks : public AuraScript
 
     void Register() override
     {
-        DoCheckProc += AuraCheckProcFn(classic_spell_mage_combustion_stacks::CheckProc);
         OnEffectProc += AuraEffectProcFn(classic_spell_mage_combustion_stacks::HandleProc, EFFECT_0, SPELL_AURA_ADD_FLAT_MODIFIER);
         AfterEffectRemove += AuraEffectRemoveFn(classic_spell_mage_combustion_stacks::HandleRemove, EFFECT_0, SPELL_AURA_ADD_FLAT_MODIFIER, AURA_EFFECT_HANDLE_REAL);
     }

@@ -77,7 +77,8 @@ static std::unordered_map<uint32, ClassicGroundAreaDamage> const ClassicGroundAr
     { 10185, {  90, 0.0417f } }, { 10186, { 117, 0.0417f } }, { 10187, { 149, 0.0417f } },
     // Flamestrike burning ground (fire, 2 s, 8 s; the direct hit is effect 0): ~12% spell power over 4 ticks. Live, each tick is a hit
     // of the tick spell 1279990 on every enemy in the area (wowsims/forever evidence EV-0028, level 60 combat log): ticks crit at the
-    // sheet chance, Ignite follows 67 of 68 tick crits, Arcane Concentration and Revelation roll per enemy hit.
+    // sheet chance, Ignite follows 67 of 68 tick crits, Arcane Concentration and Revelation roll per enemy hit. The tick spell has
+    // SPELL_ATTR3_NOT_A_PROC (client 70707), so it triggers procs; Combustion counts its hits and critical hits.
     { 2120,  {  12, 0.0305f, true } }, { 2121,  {  22, 0.0305f, true } }, { 8422,  {  35, 0.0305f, true } },
     { 8423,  {  49, 0.0305f, true } }, { 10215, {  66, 0.0305f, true } }, { 10216, {  85, 0.0305f, true } },
     // Rain of Fire (fire, 2 s, 8 s channel): 33% spell power over 4 ticks
