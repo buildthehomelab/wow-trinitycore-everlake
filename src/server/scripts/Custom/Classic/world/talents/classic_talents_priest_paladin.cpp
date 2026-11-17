@@ -73,6 +73,8 @@ enum ClassicPriestTalents
     SPELL_PRI_EARLY_DEMISE              = 1310076,
     SPELL_PRI_LITANY_OF_LIGHT_ENERGIZE  = 1317007,
     SPELL_PRI_IMPROVED_MIND_FLAY        = 1225139,
+    SPELL_PRI_DARK_INSPIRATION          = 1326159,
+    SPELL_PRI_DARK_INSPIRATION_BUFF     = 1326168,
     SPELL_PRI_DEVOURING_CONTAGION       = 1309950
 };
 
@@ -657,6 +659,41 @@ class classic_spell_pri_mind_flay : public AuraScript
     void Register() override
     {
         DoEffectCalcDamageAndHealing += AuraEffectCalcDamageFn(classic_spell_pri_mind_flay::CalculateDamage, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_pri_mind_flay::HandleDarkInspiration, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE, AURA_EFFECT_HANDLE_REAL);
+    }
+
+    // 1326159 Dark Inspiration: "Your Mind Blast and fully channeled Mind Flay causes Dark Inspiration" (1326168). Fully channeled = every
+    // tick went out; counting ticks, not the remove mode, also covers the target dying on the last tick or the channel ending first.
+    void HandleDarkInspiration(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* priest = GetCaster();
+        if (!priest || !aurEff->GetTotalTicks() || aurEff->GetTickNumber() < aurEff->GetTotalTicks())
+            return;
+
+        if (priest->HasAura(SPELL_PRI_DARK_INSPIRATION))
+            priest->CastSpell(priest, SPELL_PRI_DARK_INSPIRATION_BUFF, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+    }
+};
+
+// 1326159 - Dark Inspiration: "Your Mind Blast and fully channeled Mind Flay causes Dark Inspiration, increasing yours and your party's
+// Spirit by $m1% for $1326168d." The talent is a dummy aura with no trigger; spell_proc sends it Mind Blast hits (priest 0x2000), Mind Flay
+// is in classic_spell_pri_mind_flay. The buff 1326168 (aura 137, misc B 16) raises total Spirit (forever-bugs #372, fixed on live: it
+// went by base Spirit there).
+class classic_spell_pri_dark_inspiration : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_PRI_DARK_INSPIRATION_BUFF });
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        GetTarget()->CastSpell(GetTarget(), SPELL_PRI_DARK_INSPIRATION_BUFF, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_pri_dark_inspiration::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
     }
 };
 
@@ -1521,6 +1558,7 @@ void AddSC_classic_talents_priest_paladin()
     RegisterSpellScript(classic_spell_pri_litany_of_light);
     RegisterSpellScript(classic_spell_pri_contingency_plan);
     RegisterSpellScript(classic_spell_pri_mind_flay);
+    RegisterSpellScript(classic_spell_pri_dark_inspiration);
     new classic_unit_pri_devouring_contagion();
 
     // Paladin
