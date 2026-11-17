@@ -20,6 +20,7 @@
 #include "Item.h"
 #include "Player.h"
 #include "ClassicManaRegen.h"
+#include "Spell.h"
 #include "ClassicSpellValue.h"
 #include "Pet.h"
 #include "GameTables.h"
@@ -1121,7 +1122,14 @@ float Player::GetPowerRegen(Powers power) const
         // interrupted rate is the share of SPELL_AURA_MOD_MANA_REGEN_INTERRUPT (not zero), and combat does not interrupt the regeneration.
         // Leaving combat does not start the window, so it has a timestamp of its own.
         int64 const msSinceManaSpent = std::chrono::duration_cast<Milliseconds>(GameTime::Now() - m_manaSpentTimestamp).count();
-        bool const manaInterrupted = ClassicManaRegen::IsInterrupted(msSinceManaSpent, HasAuraType(SPELL_AURA_INTERRUPT_REGEN));
+        // Classic 1.60 (WoW Forever): a channel that paid mana holds the window until it ends, so the regeneration comes back at the later of
+        // 5 s after the payment and the channel's end (Blizzard, Hurricane, Tranquility, Drain Mana); a free channel holds nothing
+        // (wowsims/forever, MIT, docs/rulings R-0036, docs/evidence EV-0107).
+        bool paidChannel = false;
+        if (Spell const* channel = GetCurrentSpell(CURRENT_CHANNELED_SPELL))
+            if (channel->getState() == SPELL_STATE_CHANNELING)
+                paidChannel = channel->GetPowerTypeCostAmount(POWER_MANA).value_or(0) > 0;
+        bool const manaInterrupted = ClassicManaRegen::IsInterrupted(msSinceManaSpent, HasAuraType(SPELL_AURA_INTERRUPT_REGEN), paidChannel);
         return manaInterrupted ? powerType->RegenCombat + m_unitData->PowerRegenInterruptedFlatModifier[powerIndex]
                                : powerType->RegenPeace + m_unitData->PowerRegenFlatModifier[powerIndex];
     }
