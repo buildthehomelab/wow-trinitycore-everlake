@@ -362,6 +362,37 @@ class classic_spell_warr_flurry : public AuraScript
     }
 };
 
+// 20253, 20614, 20615 - Intercept Stun: a creature 3 or more levels above the warrior is immune to the stun and its damage, whatever its
+// own immunities (wowsims/forever, MIT, docs/rulings R-0004, sim/warrior/intercept.go; evidence pending)
+class classic_spell_warr_intercept_stun : public SpellScript
+{
+    bool IsImmune(Unit const* target) const
+    {
+        Unit const* warrior = GetCaster();
+        return target && warrior && !target->IsPlayer()
+            && int32(target->GetLevelForTarget(warrior)) >= int32(warrior->GetLevelForTarget(target)) + 3;
+    }
+
+    void HandleHit(SpellEffIndex effIndex)
+    {
+        Unit* target = GetHitUnit();
+        if (!IsImmune(target))
+            return;
+
+        PreventHitDefaultEffect(effIndex);
+        if (GetEffectInfo().IsEffect(SPELL_EFFECT_SCHOOL_DAMAGE))
+        {
+            PreventHitDamage();
+            GetCaster()->SendSpellDamageImmune(target, GetSpellInfo()->Id, false);
+        }
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_warr_intercept_stun::HandleHit, EFFECT_ALL, SPELL_EFFECT_ANY);
+    }
+};
+
 // 12966 - Flurry (the buff): which swings spend a charge beyond its spell_proc row (2026_11_16_40). Windfury Totem's strike spends none,
 // and a crit always leaves 3 charges: the talent 12319 recasts the buff on the same event, and the charge drop ran after that recast in
 // part of the cases (wowsims/forever, MIT, docs/evidence EV-0140: 60 of 60 crits end at 3; EV-0138).
@@ -2092,6 +2123,7 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScript(classic_spell_warr_deep_wound_bleed);
     RegisterSpellScript(classic_spell_warr_flurry);
     RegisterSpellScript(classic_spell_warr_flurry_buff);
+    RegisterSpellScript(classic_spell_warr_intercept_stun);
     RegisterSpellScript(classic_spell_warr_bloodthirst);
     RegisterSpellScript(classic_spell_warr_unbridled_wrath);
     RegisterSpellScript(classic_spell_warr_sweeping_strikes);
