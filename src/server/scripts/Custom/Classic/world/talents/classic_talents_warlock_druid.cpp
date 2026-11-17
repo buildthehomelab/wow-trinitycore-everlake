@@ -1872,6 +1872,7 @@ class classic_talent_dru_king_of_the_jungle : public SpellScript
 class classic_spell_dru_ferocious_bite : public SpellScript
 {
     static constexpr float ATTACK_POWER_PER_COMBO_POINT = 0.037f;   // Forever: 3.7% of attack power per combo point (vMaNGOS 1.12: 3%)
+    static constexpr uint32 SPELL_DRUID_PREDATORY_DISCIPLINE = 1328613;
 
     bool Validate(SpellInfo const* spellInfo) override
     {
@@ -1890,7 +1891,11 @@ class classic_spell_dru_ferocious_bite : public SpellScript
             GetSpellInfo()->Id, comboPoints, energy, GetEffectInfo(EFFECT_1).CalcValue(druid), druid->GetTotalAttackPowerValue(BASE_ATTACK),
             GetEffectValue(), bonus);
         SetEffectValue(GetEffectValue() + bonus);
-        druid->SetPower(POWER_ENERGY, 0);
+        // 1328613 - Predatory Discipline: "Your Ferocious Bite ability no longer converts extra Energy into damage, but still deals extra
+        // damage based on your excess Energy": the energy stays and the damage is dealt (client tooltip; wowsims/forever, MIT,
+        // sim/druid/ferocious_bite.go)
+        if (!druid->HasAura(SPELL_DRUID_PREDATORY_DISCIPLINE))
+            druid->SetPower(POWER_ENERGY, 0);
     }
 
     void Register() override
