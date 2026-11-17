@@ -2495,6 +2495,30 @@ class classic_spell_dru_form_keeps_health_pct : public AuraScript
     float _healthPct = 0.0f;
 };
 
+// 688, 691, 697, 712, 713 - Summon Imp / Felhunter / Voidwalker / Succubus / Incubus: the demon already out is stunned by Summoning
+// Disorientation (1249755, "The forces of the nether bind the target, stunning it", 6 sec) from the start of the warlock's summon until it
+// runs out or the summon dismisses that demon. No summon row triggers it, so the core never applied it (wowsims/forever, MIT,
+// sim/warlock/summon.go, pets.go; no log reading).
+class classic_spell_warl_summoning_disorientation : public SpellScript
+{
+    static constexpr uint32 SPELL_SUMMONING_DISORIENTATION = 1249755;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_SUMMONING_DISORIENTATION });
+    }
+
+    void OnPrecast() override
+    {
+        Player* warlock = GetCaster()->ToPlayer();
+        Pet* demon = warlock ? warlock->GetPet() : nullptr;
+        if (demon && demon->IsAlive())
+            demon->CastSpell(demon, SPELL_SUMMONING_DISORIENTATION, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+    }
+
+    void Register() override { }
+};
+
 // 1322605 - Shifting Power: "can no longer be used while already at Full Energy" (Blizzard's 8 October 2026 hotfixes; the rows state no
 // such rule; wowsims/forever, MIT, sim/druid/shifting_power.go)
 class classic_spell_dru_shifting_power : public SpellScript
@@ -2575,6 +2599,7 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_spell_dru_omen_of_clarity);
     RegisterSpellScriptWithArgs(classic_spell_dru_poised, "classic_spell_dru_poised", 1328827u);
     RegisterSpellScript(classic_spell_dru_shifting_power);
+    RegisterSpellScript(classic_spell_warl_summoning_disorientation);
     RegisterSpellScript(classic_spell_dru_form_keeps_health_pct);
     RegisterSpellScriptWithArgs(classic_spell_dru_poised, "classic_spell_rog_poised", 1328826u);
 
