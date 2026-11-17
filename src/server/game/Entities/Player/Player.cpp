@@ -8578,6 +8578,8 @@ void Player::_ApplyItemMods(Item* item, uint8 slot, bool apply, bool updateItemA
     TC_LOG_DEBUG("entities.player.items", "Player::_ApplyItemMods: completed");
 }
 
+static bool ClassicEquipSpellGivesItemModSkill(Item const* item, int32 statType);
+
 void Player::_ApplyItemBonuses(Item* item, uint8 slot, bool apply)
 {
     ItemTemplate const* proto = item->GetTemplate();
@@ -8860,7 +8862,8 @@ void Player::_ApplyItemBonuses(Item* item, uint8 slot, bool apply)
                 _ApplyClassicSpellHealingOrDamageMod(statType, int32(val), apply);
                 break;
             default:
-                if (statType >= ITEM_MOD_CLASSIC_PHYSICAL_DAMAGE_DONE && statType < ITEM_MOD_CLASSIC_END)
+                if (statType >= ITEM_MOD_CLASSIC_PHYSICAL_DAMAGE_DONE && statType < ITEM_MOD_CLASSIC_END
+                    && !ClassicEquipSpellGivesItemModSkill(item, statType))
                     _ApplyClassicItemMod(statType, int32(val), apply);
                 break;
         }
@@ -8888,6 +8891,31 @@ static constexpr uint32 ClassicItemModSkills[] =
     SKILL_MINING, SKILL_SKINNING, SKILL_COOKING, 129 /*First Aid*/, SKILL_FISHING, SKILL_TAILORING
 };
 static_assert(std::size(ClassicItemModSkills) == ITEM_MOD_CLASSIC_TAILORING - ITEM_MOD_CLASSIC_TWOHANDED_AXES + 1);
+
+// Classic 1.60 (WoW Forever): an item that states a skill bonus both as an item stat and as an equip spell (Bloody Claws of Attack 280068:
+// stat 98 +1 Fist Weapons and equip spell 1297442 +1 Fist Weapons) gives it once; the in-game tooltip shows one +1 (wowsims/forever,
+// MIT, docs/evidence EV-0104). The equip spell's aura stays and the item stat is left out.
+static bool ClassicEquipSpellGivesItemModSkill(Item const* item, int32 statType)
+{
+    if (statType < ITEM_MOD_CLASSIC_TWOHANDED_AXES || statType > ITEM_MOD_CLASSIC_TAILORING)
+        return false;
+
+    uint32 const skill = ClassicItemModSkills[statType - ITEM_MOD_CLASSIC_TWOHANDED_AXES];
+    for (ItemEffectEntry const* effectData : item->GetEffects())
+    {
+        if (effectData->TriggerType != ITEM_SPELLTRIGGER_ON_EQUIP)
+            continue;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(effectData->SpellID, DIFFICULTY_NONE);
+        if (!spellInfo)
+            continue;
+
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+            if ((effect.IsAura(SPELL_AURA_MOD_SKILL) || effect.IsAura(SPELL_AURA_MOD_SKILL_2)) && uint32(effect.MiscValue) == skill)
+                return true;
+    }
+    return false;
+}
 
 // Classic 1.60: schools of ITEM_MOD_CLASSIC_FIRE_PENETRATION .. ITEM_MOD_CLASSIC_ARCANE_PENETRATION
 static constexpr SpellSchools ClassicItemModPenetrationSchools[] =
