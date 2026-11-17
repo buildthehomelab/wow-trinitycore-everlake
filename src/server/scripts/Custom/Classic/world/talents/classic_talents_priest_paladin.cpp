@@ -1640,11 +1640,33 @@ class classic_spell_pri_holy_binding : public SpellScript
     }
 };
 
+// 14751 - Inner Focus: WoW Forever restarts the 3 min cooldown when the buff is spent or runs out, not when it is cast, though the row
+// has no cooldown-on-event bit; a buff held for a minute no longer takes that minute off the next cooldown (wowsims/forever, MIT,
+// sim/priest/talents_discipline.go, docs/rulings R-0015; evidence pending)
+class classic_spell_pri_inner_focus : public AuraScript
+{
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Player* priest = GetTarget()->ToPlayer();
+        if (!priest)
+            return;
+
+        priest->GetSpellHistory()->ResetCooldown(GetId(), false);
+        priest->GetSpellHistory()->StartCooldown(GetSpellInfo(), 0, nullptr, false);
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_pri_inner_focus::HandleRemove, EFFECT_0, SPELL_AURA_ADD_PCT_MODIFIER, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 void AddSC_classic_spells_priest();
 
 void AddSC_classic_talents_priest_paladin()
 {
     AddSC_classic_spells_priest();
+    RegisterSpellScript(classic_spell_pri_inner_focus);
     RegisterSpellScript(classic_spell_pri_holy_binding);
     // Priest
     RegisterSpellScript(classic_spell_pri_inspiration);
