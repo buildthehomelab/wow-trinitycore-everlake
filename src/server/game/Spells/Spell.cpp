@@ -5677,7 +5677,11 @@ void Spell::TakePower()
         {
             ObjectGuid targetGUID = m_targets.GetUnitTargetGUID();
             if (!targetGUID.IsEmpty())
-                hit = std::ranges::any_of(m_UniqueTargetInfo, [&](TargetInfo const& targetInfo) { return targetInfo.TargetGUID == targetGUID && targetInfo.MissCondition == SPELL_MISS_NONE; });
+                hit = std::ranges::any_of(m_UniqueTargetInfo, [&](TargetInfo const& targetInfo)
+                {
+                    // Classic 1.60: a blocked hit landed (partly blocked damage), it is no miss
+                    return targetInfo.TargetGUID == targetGUID && (targetInfo.MissCondition == SPELL_MISS_NONE || targetInfo.MissCondition == SPELL_MISS_BLOCK);
+                });
         }
     }
 
@@ -5693,6 +5697,16 @@ void Spell::TakePower()
             //lower spell cost on fail (by talent aura)
             if (Player* modOwner = unitCaster->GetSpellModOwner())
                 modOwner->ApplySpellMod(m_spellInfo, SpellModOp::PowerCostOnMiss, cost.Amount);
+
+            // Classic 1.60 (WoW Forever): an ability flagged Discount Power On Miss whose target misses, dodges, parries or is immune
+            // pays a fifth of its rage, energy or focus (80% back) and keeps the combo points it would spend. A failed Ferocious Bite
+            // spent 6.1 to 6.7 of its 35 energy on 5 avoided bites and kept its combo points (wowsims/forever, MIT,
+            // sim/core/spelldata/attributes.go MissRefund, docs/evidence EV-0031). The flag is on nearly every warrior, rogue and feral
+            // ability.
+            if (cost.Power == POWER_COMBO_POINTS)
+                continue;
+            if (cost.Power == POWER_RAGE || cost.Power == POWER_ENERGY || cost.Power == POWER_FOCUS)
+                cost.Amount -= CalculatePct(cost.Amount, 80);
         }
 
         if (cost.Power == POWER_RUNES)
