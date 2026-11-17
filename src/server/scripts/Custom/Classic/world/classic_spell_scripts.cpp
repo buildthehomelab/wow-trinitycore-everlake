@@ -2477,6 +2477,42 @@ class classic_spell_item_revelation : public AuraScript
     }
 };
 
+// 450608 - "S03 - Druid Energize Trigger - Wildheart Raiment", the Feralheart Raiment 4-piece bonus (item set 1667, also set 1666 6-piece and
+// 185 5-piece): "Chance on spellcast to restore $27782s1 Mana, on melee attack to regenerate $27784o1 Energy over $27784d, and when struck by
+// a melee attack to generate ${$27783s1/10} Rage." The aura is a dummy with proc flags and no trigger, so it did nothing (forever-bugs #523).
+// spell_proc rolls the chance (the effect's 5); this picks the part that fits the event. 27784's energize gives energy (SpellMgr fix).
+class classic_spell_item_feralheart_4p : public AuraScript
+{
+    static constexpr uint32 SPELL_NATURES_BOUNTY_MANA = 27782;
+    static constexpr uint32 SPELL_NATURES_BOUNTY_RAGE = 27783;
+    static constexpr uint32 SPELL_NATURES_BOUNTY_ENERGY = 27784;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_NATURES_BOUNTY_MANA, SPELL_NATURES_BOUNTY_RAGE, SPELL_NATURES_BOUNTY_ENERGY });
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        uint32 spellId = 0;
+        if (eventInfo.GetTypeMask() & (PROC_FLAG_TAKE_MELEE_SWING | PROC_FLAG_TAKE_MELEE_ABILITY))
+            spellId = SPELL_NATURES_BOUNTY_RAGE;
+        else if (eventInfo.GetTypeMask() & PROC_FLAG_DEAL_MELEE_SWING)
+            spellId = SPELL_NATURES_BOUNTY_ENERGY;
+        else if (eventInfo.GetTypeMask() & (PROC_FLAG_DEAL_HARMFUL_SPELL | PROC_FLAG_DEAL_HELPFUL_SPELL))
+            spellId = SPELL_NATURES_BOUNTY_MANA;
+
+        if (spellId)
+            GetTarget()->CastSpell(GetTarget(), spellId, CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_item_feralheart_4p::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 void AddSC_classic_spell_scripts()
 {
     RegisterSpellScript(classic_spell_warr_gore_drinker);
@@ -2539,4 +2575,5 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_proc_chance_from_effect_dummy);
     RegisterSpellScript(classic_spell_quest_testing_the_wells);
     RegisterSpellScript(classic_spell_item_revelation);
+    RegisterSpellScript(classic_spell_item_feralheart_4p);
 }

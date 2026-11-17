@@ -3995,6 +3995,16 @@ void SpellMgr::LoadSpellInfoCorrections()
         });
     });
 
+    // Nature's Bounty 27784 (Feralheart Raiment 4-piece, Wildheart Raiment): "Restores $o1 energy over $d", but its periodic energize names
+    // mana (misc 0), which live players report as the bonus restoring mana in Cat Form (forever-bugs #523). It restores energy.
+    ApplySpellFix({ 27784 }, [](SpellInfo* spellInfo)
+    {
+        ApplySpellEffectFix(spellInfo, EFFECT_0, [](SpellEffectInfo* spellEffectInfo)
+        {
+            spellEffectInfo->MiscValue = POWER_ENERGY;
+        });
+    });
+
     // Classic 1.60 druid Thorns: each hit adds 6% of the druid's spell power (forever-bugs #117: the scaling is intended on live; wowsims
     // EV-0067, the ratio Blizzard states for Retribution Aura). Every rank's damage shield effect states coefficient 0 and there is no
     // vanilla value row, so it took none. The druid's current spell power is read per hit (damage shields in Unit::DealMeleeDamage),
