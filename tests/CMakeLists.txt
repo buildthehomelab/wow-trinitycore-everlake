@@ -16,6 +16,17 @@ CollectAndAddSourceFiles(
   tests
   ${CMAKE_CURRENT_SOURCE_DIR})
 
+# Tests of code that lives in the Playerbot V2 module's own sources (they call functions defined in the module's .cpp files, or include
+# headers that exist only under src/modules/PlayerbotV2). A build without the module has neither, so they are not compiled there.
+if(NOT BUILD_PLAYERBOT_V2)
+  set(TESTS_MODULE_ONLY_SOURCES
+    ClassicTalentCode.cpp
+    ClassicDrinkSay.cpp)
+  foreach(_test_source ${TESTS_MODULE_ONLY_SOURCES})
+    set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/game/${_test_source} PROPERTIES HEADER_FILE_ONLY TRUE)
+  endforeach()
+endif()
+
 target_link_libraries(tests
   PRIVATE
     trinity-core-interface

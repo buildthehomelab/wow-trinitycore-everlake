@@ -2861,14 +2861,8 @@ bool Creature::CanCreatureAttack(Unit const* victim, bool /*force*/) const
         return false;
 
     if (!GetCharmerOrOwnerGUID().IsPlayer())
-    {
         if (GetMap()->IsDungeon())
             return true;
-
-        // don't check distance to home position if recently damaged, this should include taunt auras
-        if (!isWorldBoss() && (GetLastDamagedTime() > GameTime::GetGameTime() || HasAuraType(SPELL_AURA_MOD_TAUNT)))
-            return true;
-    }
 
     // Map visibility range, but no more than 2*cell size
     float dist = std::min<float>(GetMap()->GetVisibilityRange(), SIZE_OF_GRID_CELL * 2);
@@ -2877,6 +2871,14 @@ bool Creature::CanCreatureAttack(Unit const* victim, bool /*force*/) const
         return victim->IsWithinDist(unit, dist);
     else
     {
+        // Everlake: leash at ThreatRadius from home (never below this mob's aggro radius).
+        // A mob hit or taunted in the last few seconds keeps chasing out to the old
+        // visibility-range leash instead of chasing without any limit. World bosses keep
+        // the visibility-range leash as before.
+        bool longLeash = isWorldBoss() || GetLastDamagedTime() > GameTime::GetGameTime() || HasAuraType(SPELL_AURA_MOD_TAUNT);
+        if (!longLeash)
+            dist = std::min(dist, std::max(sWorld->getFloatConfig(CONFIG_THREAT_RADIUS), GetAttackDistance(victim)));
+
         // include sizes for huge npcs
         dist += GetCombatReach() + victim->GetCombatReach();
 
