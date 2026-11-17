@@ -1537,18 +1537,13 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
         {
             damageInfo->HitInfo     |= HITINFO_GLANCING;
             damageInfo->TargetState  = VICTIMSTATE_HIT;
-            // Classic 1.60 (vanilla, VMaNGOS): Baeza formula on the defense / weapon skill difference, casters glance harder
+            // Classic 1.60 (vanilla, VMaNGOS): Baeza formula on the defense / weapon skill difference. WoW Forever uses it for every class:
+            // VMaNGOS's harder glancing for mages, priests and warlocks (-0.7 / -0.3, low end capped at 0.6) is gone (wowsims/forever, MIT,
+            // sim/core/target.go; no log measurement of a caster's glancing blows).
             int32 const skillDiff = victim->GetClassicDefenseSkill(this) - GetClassicWeaponSkill(damageInfo->AttackType, victim);
             float low = 1.3f - 0.05f * skillDiff;
             float high = 1.2f - 0.03f * skillDiff;
-            float lowCap = 0.91f;
-            if (GetClassMask() & CLASSMASK_WAND_USERS)
-            {
-                low -= 0.7f;
-                high -= 0.3f;
-                lowCap = 0.6f;
-            }
-            low = std::clamp(low, 0.01f, lowCap);
+            low = std::clamp(low, 0.01f, 0.91f);
             high = std::clamp(high, 0.2f, 0.99f);
 
             damageInfo->OriginalDamage = damageInfo->Damage;
