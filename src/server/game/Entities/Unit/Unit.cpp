@@ -7592,7 +7592,12 @@ float Unit::SpellCritChanceDone(Spell* spell, AuraEffect const* aurEff, SpellSch
         return 0.0f;
 
     float crit_chance = 0.0f;
-    switch (spellInfo->DmgClass)
+    // Classic 1.60 (WoW Forever): hunter periodic damage (Serpent Sting, Immolation and Explosive Trap ticks) crits with the hunter's
+    // ranged or melee crit, whichever is higher, not spell crit (forever-hunter wiki, Ability Mechanics "Periodic Crits")
+    if (!spell && aurEff && aurEff->GetAuraType() == SPELL_AURA_PERIODIC_DAMAGE && spellInfo->SpellFamilyName == SPELLFAMILY_HUNTER
+        && GetTypeId() == TYPEID_PLAYER)
+        crit_chance = std::max(GetUnitCriticalChanceDone(RANGED_ATTACK), GetUnitCriticalChanceDone(BASE_ATTACK));
+    else switch (spellInfo->DmgClass)
     {
         case SPELL_DAMAGE_CLASS_NONE:
         case SPELL_DAMAGE_CLASS_MAGIC:
