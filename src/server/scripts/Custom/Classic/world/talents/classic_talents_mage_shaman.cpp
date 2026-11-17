@@ -89,7 +89,7 @@ enum ClassicShamanTalentSpells
 
 // Mage "Chill effects": the spells the client's Chill class flag (word 0 0x100000, the mask of Permafrost 11175 and of the Frostbite
 // proc row) names: Frostbolt, Cone of Cold, Frostfire Bolt and the Chilled auras. Blast Wave's daze is a snare but no Chill (0x800000).
-// Triggered chills do not proc (Frost Armor / Ice Armor chill); the Improved Blizzard chill rolls directly.
+// Triggered chills do not proc through the proc system; the Improved Blizzard chill and the Frost / Ice Armor chill roll directly.
 static bool IsMageChillEffect(SpellInfo const* spellInfo)
 {
     return spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_MAGE && (spellInfo->SpellFamilyFlags[0] & 0x100000)
@@ -671,6 +671,36 @@ class classic_spell_mage_arcane_concentration : public AuraScript
     void Register() override
     {
         DoCheckEffectProc += AuraCheckEffectProcFn(classic_spell_mage_arcane_concentration::CheckProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
+// 6136 - Chilled (Frost Armor), 7321 - Chilled (Ice Armor): the armor's chill on a melee attacker is a Chill effect (the client's Chill
+// flag 0x100000 is on both, and Permafrost's mask names them), so it rolls Frostbite and Fingers of Frost like the mage's other chills.
+// Patch 4.1.0 says "The Chilled proc from Frost Armor can no longer proc Fingers of Frost", so it did before; Frostbite's tooltip reads
+// "your Chill effects". The armor casts the chill triggered, which the proc system skips, so the chill rolls here, once for every chill
+// put on or refreshed. An NPC caster has neither talent and rolls nothing.
+class classic_spell_mage_armor_chill : public AuraScript
+{
+    static constexpr uint32 SPELL_MAGE_FROSTBITE_TALENT = 11071;
+    static constexpr uint32 SPELL_MAGE_FROSTBITE_FREEZE = 12494;
+
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* mage = GetCaster();
+        Unit* target = GetTarget();
+        if (!mage || !mage->IsPlayer() || !target->IsAlive())
+            return;
+
+        if (AuraEffect const* frostbite = mage->GetAuraEffect(SPELL_MAGE_FROSTBITE_TALENT, EFFECT_0))
+            if (roll_chance(float(frostbite->GetAmount())))
+                mage->CastSpell(target, SPELL_MAGE_FROSTBITE_FREEZE, CastSpellExtraArgs(frostbite));
+
+        TryGrantFingersOfFrost(mage);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_spell_mage_armor_chill::HandleApply, EFFECT_0, SPELL_AURA_MOD_DECREASE_SPEED, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
     }
 };
 
@@ -1755,6 +1785,7 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_magic_absorption);
     RegisterSpellScript(classic_spell_mage_arcane_concentration);
     RegisterSpellScript(classic_spell_mage_frostbite);
+    RegisterSpellScript(classic_spell_mage_armor_chill);
     RegisterSpellAndAuraScriptPair(classic_spell_mage_fire_power, classic_spell_mage_fire_power_aura);
     RegisterSpellScript(classic_spell_mage_arcane_wrath);
     RegisterSpellScript(classic_spell_mage_frost_ward_absorb);
