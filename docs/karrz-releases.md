@@ -80,3 +80,4 @@ pin; record the move here before porting from that release.
 2026-11-10: v0.1.34 (pin unchanged, `f63ffc12b3`), checked with `verify.sh`.
 2026-11-12: v0.1.35 (pin unchanged, `f63ffc12b3`), tag `karrz-v0.1.35` = `6dae366c19`.
 2026-11-13: v0.1.36 (pin unchanged, `f63ffc12b3`), tag `karrz-v0.1.36` = `441114b453`, checked with `verify.sh`.
+2026-11-14 and 2026-11-16: v0.1.36.1, v0.1.37, v0.1.37.1, v0.1.37.2, v0.1.37.3 (pin unchanged, `f63ffc12b3`), checked with `verify.sh`.
