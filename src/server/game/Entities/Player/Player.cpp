@@ -2483,7 +2483,7 @@ int32 Player::GetClassicLegacyPerkAmount(uint32 spellId, SpellEffIndex effIndex)
     return perk ? perk->GetAmount() : 0;
 }
 
-// Aura 620 (not named in this core): percent change of a gold price, misc value = price type. Bartering 1225459: 0 = vendor items,
+// Aura 620 (not named in this core): percent change of a gold price, misc value = price type. Bartering 1225459: 1 = vendor items,
 // Frequent Flier 1225490: 4 = flight paths.
 uint64 Player::ApplyClassicLegacyPriceMod(uint64 price, int32 priceType) const
 {
@@ -23924,6 +23924,11 @@ int32 Player::IsAffectedBySpellmod(SpellInfo const* spellInfo, SpellModifier con
         case SpellModOp::CritChance: // mod crit to spells that can't crit
             if (!spellInfo->HasAttribute(SPELL_ATTR0_CU_CAN_CRIT))
                 return 0;
+            // Classic 1.60: a crit mod used up by the next spell (Inner Focus) is for that cast, not for periodic ticks, which come
+            // without a spell. An unspent Inner Focus gave every running DoT +25% crit (forever-bugs #137, fixed on live: "if it is a
+            // non-periodic spell").
+            if (!spell && mod->ownerAura->IsUsingCharges())
+                return 0;
             break;
         case SpellModOp::PointsIndex0: // check if spell has any effect at that index
         case SpellModOp::Points:
@@ -25206,7 +25211,7 @@ bool Player::BuyItemFromVendorSlot(ObjectGuid vendorguid, uint32 vendorslot, uin
         if (float priceMod = GetTotalAuraModifier(SPELL_AURA_MOD_VENDOR_ITEMS_PRICES))
             price -= CalculatePct(price, priceMod);
 
-        price = ApplyClassicLegacyPriceMod(price, 0);   // Legacy perk Bartering
+        price = ApplyClassicLegacyPriceMod(price, 1);   // Legacy perk Bartering (aura 620 misc 1, forever-bugs #209)
         price = std::max(uint64(1), price);              // discounts never make a priced item free
 
         if (!HasEnoughMoney(price))

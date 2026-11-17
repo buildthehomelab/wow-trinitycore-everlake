@@ -3868,6 +3868,13 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->AuraInterruptFlags &= ~SpellAuraInterruptFlags::EnteringCombat;
     });
 
+    // Classic 1.60 rogue Sap: landing it does not put the rogue (or the target's pack) in combat (forever-bugs #199, fixed on live).
+    // The client data has no no-threat attribute on it, so SetInCombatWith / AtTargetAttacked engaged the target at once.
+    ApplySpellFix({ 2070, 6770, 11297 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->AttributesEx2 |= SPELL_ATTR2_NO_INITIAL_THREAT;
+    });
+
     // Classic 1.60 warrior Deep Wounds: the bleed tick (412613) never misses, never crits and ignores armor
     ApplySpellFix({ 412613 }, [](SpellInfo* spellInfo)
     {

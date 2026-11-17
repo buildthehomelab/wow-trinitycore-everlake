@@ -591,6 +591,7 @@ class TC_GAME_API SpellInfo
         SpellInfo const* GetAuraRankForLevel(uint8 level) const;
         bool IsRankOf(SpellInfo const* spellInfo) const;
         bool IsDifferentRankOf(SpellInfo const* spellInfo) const;
+        bool IsClassicUnchainedRankOf(SpellInfo const* other) const;
         bool IsHighRankOf(SpellInfo const* spellInfo) const;
 
         uint32 GetSpellXSpellVisualId(WorldObject const* caster = nullptr, WorldObject const* viewer = nullptr) const;

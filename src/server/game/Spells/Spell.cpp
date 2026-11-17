@@ -6599,6 +6599,12 @@ SpellCastResult Spell::CheckCast(bool strict, int32* param1 /*= nullptr*/, int32
                     return SPELL_FAILED_TARGET_UNSKINNABLE;
 
                 Creature* creature = m_targets.GetUnitTarget()->ToCreature();
+
+                // Classic 1.60: a corpse is skinned once, by one player (forever-bugs #171, acknowledged). Retail skinning loot is
+                // personal, so every player could skin the same corpse.
+                if (creature->HasUnitFlag3(UNIT_FLAG3_ALREADY_SKINNED) && !creature->IsSkinnedBy(m_caster->ToPlayer()))
+                    return SPELL_FAILED_TARGET_UNSKINNABLE;
+
                 Loot* loot = creature->GetLootForPlayer(m_caster->ToPlayer());
                 if (loot && (!loot->isLooted() || loot->loot_type == LOOT_SKINNING))
                     return SPELL_FAILED_TARGET_NOT_LOOTED;
@@ -7171,6 +7177,26 @@ SpellCastResult Spell::CheckCast(bool strict, int32* param1 /*= nullptr*/, int32
                     spellEffectInfo.CalcValue(m_caster, &m_spellValue->EffectBasePoints[spellEffectInfo.EffectIndex], nullptr, nullptr, m_castItemEntry, m_castItemLevel),
                     approximateAuraEffectMask, false))
                     return SPELL_FAILED_AURA_BOUNCED;
+    }
+
+    // Classic 1.60 (WoW Forever, fixed on live: forever-bugs #161 Rejuvenation, #241 Power Word: Shield): a lower rank cast on a target that
+    // holds the caster's own higher rank fails with "A more powerful spell is already active" (no mana, no Weakened Soul) instead of
+    // replacing it. Most class ranks are not chained in the client data, so the rank-like test of Aura::CanStackWith decides.
+    if (!IsTriggered() && m_spellInfo->SpellLevel && !m_spellInfo->IsTargetingArea())
+    {
+        if (Unit const* target = m_targets.GetUnitTarget())
+        {
+            ObjectGuid const casterGuid = m_originalCasterGUID.IsEmpty() ? m_caster->GetGUID() : m_originalCasterGUID;
+            for (auto const& [auraId, aurApp] : target->GetAppliedAuras())
+            {
+                Aura const* aura = aurApp->GetBase();
+                if (aura->GetCasterGUID() != casterGuid || aura->GetSpellInfo()->SpellLevel <= m_spellInfo->SpellLevel)
+                    continue;
+                if (aura->GetSpellInfo()->IsClassicUnchainedRankOf(m_spellInfo)
+                    || (aura->GetSpellInfo()->ChainEntry && m_spellInfo->IsPositive() && aura->GetSpellInfo()->IsDifferentRankOf(m_spellInfo)))
+                    return SPELL_FAILED_AURA_BOUNCED;
+            }
+        }
     }
 
     // check trade slot case (last, for allow catch any another cast problems)
@@ -9583,7 +9609,14 @@ void Spell::TriggerGlobalCooldown()
             gcd = Milliseconds(intGcd);
         }
 
-        // Classic 1.60 (vanilla): the global cooldown is not shortened by spell haste or haste regen (retail scaled it down to 0.75 s)
+        // Classic 1.60 (WoW Forever, Blizzard on forever-bugs #389, not a bug): spell haste lowers the global cooldown, floor 1.0 s,
+        // ceiling 1.5 s. Only haste counts: a cast speed slow (Curse of Tongues) does not lengthen it (#284, fixed on live).
+        if (Unit const* unitCaster = m_caster->ToUnit(); unitCaster && m_caster->GetTypeId() == TYPEID_PLAYER)
+        {
+            float const castSpeed = unitCaster->m_unitData->ModCastingSpeed;
+            if (castSpeed > 0.0f && castSpeed < 1.0f && gcd > 1000ms)
+                gcd = std::max(Milliseconds(int64(gcd.count() * castSpeed)), Milliseconds(1000));
+        }
 
         // PlayerbotV2 pacing multiplier (bots only): scales the GCD, floor 750 ms.
         if (m_caster->GetTypeId() == TYPEID_PLAYER)

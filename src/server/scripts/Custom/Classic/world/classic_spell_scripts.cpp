@@ -1751,8 +1751,10 @@ class classic_spell_tauren_cultivation : public SpellScript
 
     void HandleAfterCast()
     {
+        // Since the 70888 hotfixes Cultivation and Cultivate share category 2578 (15 min), which Cultivation has just started: the
+        // triggered Cultivate must ignore it or it fails "not ready" and no herb grows (forever-bugs #456)
         if (GameObject* herb = ClassicCultivation::FindHerb(GetCaster()))
-            GetCaster()->CastSpell(herb, ClassicCultivation::SPELL_CULTIVATE_HERB, CastSpellExtraArgs(TRIGGERED_IGNORE_GCD));
+            GetCaster()->CastSpell(herb, ClassicCultivation::SPELL_CULTIVATE_HERB, CastSpellExtraArgs(TRIGGERED_IGNORE_GCD | TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD));
     }
 
     void Register() override
