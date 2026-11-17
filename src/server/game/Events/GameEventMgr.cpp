@@ -1702,11 +1702,13 @@ void GameEventMgr::SetHolidayEventTime(GameEventData& event)
     }
 
     uint8 stageIndex = event.holidayStage - 1;
-    // a holiday with dates but no duration (WoW: Forever's Noblegarden) keeps the length its game_event row gives
+    // The client's duration for this stage wins. Some holidays have dates but no durations at all (the Forever client's
+    // Noblegarden, 181): those keep the length of their game_event row instead of dropping the client's dates.
     event.length = Trinity::Holiday::StageLengthMinutes(holiday->Duration, stageIndex, event.length);
     if (!event.length)
     {
-        TC_LOG_ERROR("sql.sql", "Missing duration for holiday {} and no length in game_event {}.", event.holiday_id, event.description);
+        TC_LOG_ERROR("sql.sql", "Holiday {} has no duration for stage {} and game_event {} has no length.", event.holiday_id,
+            event.holidayStage, event.description);
         return;
     }
 
