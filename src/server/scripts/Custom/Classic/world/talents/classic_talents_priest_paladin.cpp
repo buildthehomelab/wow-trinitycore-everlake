@@ -415,6 +415,21 @@ class classic_spell_pri_renewed_hope : public AuraScript
         if (!target || !reduction)
             return;
 
+        // WoW Forever: once per cast. Penance's heal bolts are fired by its channel aura while that channel is the priest's current
+        // channeled spell, so the bolts of one Penance count as that channel's cast and only the first shortens Weakened Soul: 5 s a
+        // Penance, not up to 15 (wowsims/forever, MIT, sim/priest/renewed_hope.go, penance.go)
+        if (Spell const* procSpell = eventInfo.GetProcSpell())
+        {
+            ObjectGuid castId = procSpell->m_castId;
+            if (procSpell->GetTriggeredByAuraSpell())
+                if (Spell const* channel = eventInfo.GetActor()->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
+                    if (channel->GetSpellInfo() == procSpell->GetTriggeredByAuraSpell())
+                        castId = channel->m_castId;
+            if (castId == _lastCastId)
+                return;
+            _lastCastId = castId;
+        }
+
         if (Aura* weakenedSoul = target->GetAura(SPELL_PRI_WEAKENED_SOUL))
         {
             int32 duration = weakenedSoul->GetDuration() + reduction->GetAmountAsInt();
@@ -429,6 +444,8 @@ class classic_spell_pri_renewed_hope : public AuraScript
     {
         OnEffectProc += AuraEffectProcFn(classic_spell_pri_renewed_hope::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
     }
+
+    ObjectGuid _lastCastId;
 };
 
 // ... and the heals themselves get the crit bonus (effect 0) on targets with Weakened Soul: Flash Heal, Binding Heal, Lesser Heal, Heal,
