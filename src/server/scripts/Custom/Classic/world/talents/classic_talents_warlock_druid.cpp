@@ -309,8 +309,13 @@ namespace ClassicTalentsWarlockDruid
         }
 
         int32 const level = int32(druid->GetLevel());
-        // the client data value is per level (3, the Wowhead tooltip shows the level 60 total 180); a curve value above 10 is already a total
+        // WoW Forever: the level part is the level times the rank (the talent's points: 1, 2, 3), so 30 / 60 / 90 at level 30 and 60 / 120 /
+        // 180 at level 60. Effect 1's per-level growth on top of the rank's points gave ranks 1 and 2 about 178 at level 60 (wowsims/forever,
+        // MIT, docs/evidence EV-0039). Without a talent rank the old reading stays: the client value per level (3), or a total above 10.
         SpellEffectValue armor = perLevel->GetAmount() <= 10.0 ? perLevel->GetAmount() * level : perLevel->GetAmount();
+        if (Player const* player = druid->ToPlayer())
+            if (Optional<PlayerSpellTrait> trait = player->GetTraitInfoForSpell(SPELL_CWD_THICK_HIDE); trait && trait->Rank > 0)
+                armor = SpellEffectValue(trait->Rank) * level;
         if (Player* player = druid->ToPlayer())
         {
             int32 const extraDefense = int32(player->GetSkillValue(SKILL_DEFENSE)) - level * 5;

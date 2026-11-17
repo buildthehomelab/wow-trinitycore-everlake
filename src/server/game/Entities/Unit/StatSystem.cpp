@@ -273,6 +273,7 @@ void Player::UpdateResistances(uint32 school)
 }
 
 static constexpr uint32 CLASSIC_SPELL_DRUID_ENRAGE = 5229;
+static constexpr uint32 CLASSIC_SPELL_DRUID_THICK_HIDE_ARMOR = 9970701;    // serverside: Thick Hide's armor (classic_talents_warlock_druid.cpp)
 
 void Player::UpdateArmor()
 {
@@ -295,10 +296,14 @@ void Player::UpdateArmor()
     // Classic 1.60 (WoW Forever): SPELL_AURA_MOD_BONUS_ARMOR_PCT (Bear Form 180%, Dire Bear Form and Moonkin Form 360%) multiplies the
     // armor of the equipped items only; the armor from Agility and from buffs (Mark of the Wild, Devotion Aura) stays whole. Druid logs read
     // 1.8 and 3.6 times the items' armor added and nothing more (wowsims/forever, MIT, docs/evidence EV-0037).
+    // Thick Hide's armor is scaled by the form as well: 30 in Cat Form, 84 in Bear Form at rank 1, level 30 (EV-0039).
     float itemArmor = std::max(m_classicItemArmor, 0.0f);
+    float thickHideArmor = 0.0f;
+    if (AuraEffect const* thickHide = GetAuraEffect(CLASSIC_SPELL_DRUID_THICK_HIDE_ARMOR, EFFECT_0))
+        thickHideArmor = std::max(float(thickHide->GetAmount()), 0.0f);
     float const formArmorMultiplier = GetTotalAuraMultiplier(SPELL_AURA_MOD_BONUS_ARMOR_PCT);
     value += GetFlatModifierValue(unitMod, TOTAL_VALUE);        // bonus armor from auras and items
-    value += itemArmor * (formArmorMultiplier - 1.0f);
+    value += (itemArmor + thickHideArmor) * (formArmorMultiplier - 1.0f);
 
     // Classic 1.60 (WoW Forever): Enrage 5229 "reduces base armor by 27% in Bear Form and 16% in Dire Bear Form" (effect 3, a dummy). The
     // game takes the share of the items' armor after the form's multiplier and of the 2 armor per Agility; buff armor, Thick Hide and
