@@ -1,7 +1,8 @@
 -- WoW Forever Revelation (weapon enchant 8217): proc aura 1248806 and the class buffs, checked against the live client data (build
 -- 70707) and wowsims/forever (MIT, https://github.com/wowsims/forever) evidence EV-0028 and EV-0129. Script classic_spell_enchant_revelation
 -- in src/server/scripts/Custom/Classic/world/classic_spell_scripts.cpp.
---  * 1248806: direct damage or heal hits that do not crit (helpful and harmful spells), 8% (EV-0129). Flamestrike's ground ticks count.
+--  * 1248806: direct damage or heal hits that do not crit (helpful and harmful spells). Flamestrike's ground ticks count. The chance
+--    falls with the wearer's spell crit (12.1% x (1 - crit)^4, fitted to EV-0129) and is rolled in the script, so the row says 100.
 --  * Class buffs (+100% crit chance to the next spell their class flags name, one charge, 15 sec): only a spell the crit mod changed
 --    spends the charge. The mage's goes as the cast completes (EV-0028: 81 of 84 in the millisecond of the cast's success, no ground
 --    tick spends it); the other classes' with the spell's hit.
@@ -20,7 +21,7 @@ INSERT INTO `spell_script_names` (`spell_id`, `ScriptName`) VALUES
 
 DELETE FROM `spell_proc` WHERE `SpellId` IN (1248806, 1248808, 1323377, 1323392, 1323400, 1323410, 1323418, 1323419);
 INSERT INTO `spell_proc` (`SpellId`, `SchoolMask`, `SpellFamilyName`, `SpellFamilyMask0`, `SpellFamilyMask1`, `SpellFamilyMask2`, `SpellFamilyMask3`, `ProcFlags`, `ProcFlags2`, `SpellTypeMask`, `SpellPhaseMask`, `HitMask`, `AttributesMask`, `DisableEffectsMask`, `ProcsPerMinute`, `Chance`, `Cooldown`, `Charges`) VALUES
-(1248806, 0, 0, 0, 0, 0, 0, 0x14000, 0, 3, 2, 0x1, 0, 0, 0, 8, 0, 0), -- Revelation (enchant): non-crit direct damage and heal hits, 8%
+(1248806, 0, 0, 0, 0, 0, 0, 0x14000, 0, 3, 2, 0x1, 0, 0, 0, 100, 0, 0), -- Revelation (enchant): non-crit direct damage and heal hits (chance in the script)
 (1248808, 0, 0, 0, 0, 0, 0, 0x14000, 0, 7, 1, 0, 8, 0, 0, 100, 0, 1), -- Revelation (mage): spent as the cast completes
 (1323377, 0, 0, 0, 0, 0, 0, 0x14000, 0, 7, 2, 0, 8, 0, 0, 100, 0, 1), -- Revelation (priest)
 (1323392, 0, 0, 0, 0, 0, 0, 0x14000, 0, 7, 2, 0, 8, 0, 0, 100, 0, 1), -- Revelation (warlock)

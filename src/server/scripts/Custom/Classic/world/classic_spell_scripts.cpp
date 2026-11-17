@@ -52,6 +52,8 @@
 #include "Unit.h"
 #include "World.h"
 #include "WorldSession.h"
+#include <algorithm>
+#include <cmath>
 #include <mutex>
 #include <unordered_map>
 
@@ -193,10 +195,14 @@ class classic_spell_ground_area_damage : public AuraScript
 // 1248806 - Revelation (weapon enchant 8217, Enchant Weapon - Revelation 1248805): "a chance to trigger Revelation when a non-periodic
 // spell fails to critically strike. Revelation grants 100% increased critical strike chance to the next non-periodic spell cast." The
 // client proc aura (helpful and harmful spells, 100%) names no trigger spell: the buff is the wearer's class one, and the core had no
-// handler, so the enchant did nothing. spell_proc: direct damage or heal hits that do not crit, 8% (wowsims/forever evidence EV-0129:
-// 8.5% over 2,233 druid hits, 7.4% over 1,277 mage hits; crits and aura-only hits never roll, a hit while the buff is up rolls and
-// refreshes it). Flamestrike's ground ticks roll once per enemy hit (EV-0028). The falloff with higher crit that the tooltip names is
-// not modelled (no measured curve). Warriors and rogues have no Revelation buff in the client data.
+// handler, so the enchant did nothing. spell_proc: direct damage or heal hits that do not crit (crits and aura-only hits never roll, a
+// hit while the buff is up rolls and refreshes it; wowsims/forever evidence EV-0129). Flamestrike's ground ticks roll once per enemy
+// hit (EV-0028). Warriors and rogues have no Revelation buff in the client data.
+// The chance: the tooltip says it "is diminished as your critical strike chance increases" and gives no numbers. ProcChance(crit) is
+// the maximum likelihood fit of 12.1% x (1 - sheet spell crit)^4 to EV-0129's eleven logs (druid 8.5-10.1% crit: 189 of 2,233 hits;
+// druid 13.42%: 138 of 2,043; mage 10%: 94 of 1,277): 8.1% at 9.5% crit, 6.9% at 13.4%, 5.0% at 20%, 2.9% at 30%. A linear fit is as
+// good inside the data but reaches 0 at 32% crit; the fit beats a flat rate only weakly (likelihood ratio 3.2, one parameter), and
+// the 13.42% logs are also a higher level, so the curve is the best reading of thin data, to be refit when more logs come.
 class classic_spell_enchant_revelation : public AuraScript
 {
     static uint32 BuffFor(uint8 playerClass)
@@ -219,9 +225,19 @@ class classic_spell_enchant_revelation : public AuraScript
         return ValidateSpellInfo({ 1248808, 1323377, 1323392, 1323400, 1323410, 1323418, 1323419 });
     }
 
+    static float ProcChance(float critPct)
+    {
+        float const crit = std::clamp(critPct / 100.0f, 0.0f, 1.0f);
+        return 12.1f * std::pow(1.0f - crit, 4.0f);
+    }
+
     bool CheckProc(ProcEventInfo& eventInfo)
     {
-        if (!BuffFor(GetTarget()->GetClass()))
+        Player const* wearer = GetTarget()->ToPlayer();
+        if (!wearer || !BuffFor(wearer->GetClass()))
+            return false;
+
+        if (!roll_chance(ProcChance(*wearer->m_activePlayerData->SpellCritPercentage)))
             return false;
 
         if (DamageInfo const* damage = eventInfo.GetDamageInfo(); damage && damage->GetDamage())
