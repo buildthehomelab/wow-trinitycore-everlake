@@ -2370,6 +2370,25 @@ class classic_spell_dru_bloom : public AuraScript
     }
 };
 
+// 1322605 - Shifting Power: "can no longer be used while already at Full Energy" (Blizzard's 8 October 2026 hotfixes; the rows state no
+// such rule; wowsims/forever, MIT, sim/druid/shifting_power.go)
+class classic_spell_dru_shifting_power : public SpellScript
+{
+    SpellCastResult CheckEnergy()
+    {
+        Unit* caster = GetCaster();
+        int32 const maxEnergy = caster->GetMaxPower(POWER_ENERGY);
+        if (maxEnergy > 0 && caster->GetPower(POWER_ENERGY) >= maxEnergy)
+            return SPELL_FAILED_ALREADY_AT_FULL_POWER;
+        return SPELL_CAST_OK;
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(classic_spell_dru_shifting_power::CheckEnergy);
+    }
+};
+
 void AddSC_classic_talents_warlock_druid()
 {
     RegisterSpellScript(classic_spell_dru_bloom);
@@ -2422,6 +2441,7 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_spell_dru_faerie_fire_threat);
     RegisterSpellScript(classic_spell_dru_omen_of_clarity);
     RegisterSpellScriptWithArgs(classic_spell_dru_poised, "classic_spell_dru_poised", 1328827u);
+    RegisterSpellScript(classic_spell_dru_shifting_power);
     RegisterSpellScriptWithArgs(classic_spell_dru_poised, "classic_spell_rog_poised", 1328826u);
 
     new classic_unit_talent_warlock_druid();
