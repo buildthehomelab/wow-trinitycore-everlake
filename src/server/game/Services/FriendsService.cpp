@@ -24,6 +24,7 @@
 #include "Log.h"
 #include "MapUtils.h"
 #include "ObjectAccessor.h"
+#include "ObjectMgr.h"
 #include "Player.h"
 #include "RealmList.h"
 #include "Util.h"
