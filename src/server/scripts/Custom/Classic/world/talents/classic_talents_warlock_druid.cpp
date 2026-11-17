@@ -378,7 +378,7 @@ class classic_talent_warl_life_tap : public SpellScript
         Unit* caster = GetCaster();
         SpellInfo const* spellInfo = GetSpellInfo();
 
-        // no sub-level-20 penalty in WoW Forever (ClassicSpellValue::BonusCoefficient)
+        // no sub-level-20 penalty in WoW Forever (ClassicSpellValue::BonusCoefficientOr)
         float const coefficient = LIFE_TAP_SPELL_POWER_COEFFICIENT;
 
         double cost = GetEffectInfo(EFFECT_0).CalcValue(caster);

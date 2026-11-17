@@ -95,22 +95,27 @@ namespace ClassicSpellValue
         return MatchesEffect(v, effect, applyAura) && (!AuraNeedsMiscValue(v.ApplyAura) || v.MiscValue == miscValue);
     }
 
-    // The spell power factor of an effect: VMaNGOS table value when it has one (>= 0), else the client's.
+    // The spell power factor of an effect: VMaNGOS table value when it has one (>= 0), else the client's. No level penalty: vanilla's
+    // "learned below level 20" cut (1 - (20 - spell level) x 3.75%) is gone in WoW Forever, which raised the low ranks' client
+    // coefficients instead and penalises lower ranks by the caster's level (DownrankFactor). Held rows whose vanilla factor was that
+    // cut on the client's value give their factor back to the client (2026_11_17_00_world_classic_no_level_penalty.sql).
     inline float BonusCoefficientOr(Value const* v, float clientCoefficient)
     {
         return v && v->BonusCoefficient >= 0.0f ? v->BonusCoefficient : clientCoefficient;
     }
 
-    // The spell power factor of an effect: the vanilla table's (VMaNGOS effectBonusCoefficient) when the hold has one, else the
-    // client's. No level penalty: vanilla's "learned below level 20" cut (1 - (20 - spell level) x 3.75%) is gone in WoW Forever,
-    // which raised the low ranks' client coefficients instead and penalises lower ranks by the caster's level (DownrankFactor).
-    // Held rows whose vanilla factor was that cut on the client's value (2026_11_17_00_world_classic_no_level_penalty.sql) give
-    // their factor back to the client.
-    inline float BonusCoefficient(Value const* v, float clientCoefficient)
+    // WoW Forever's downranking penalty (Blizzard beta notes 2026-10-01: "spells cast using spell ranks vastly below your current level
+    // receive less benefit from your Spell Damage and Spell Healing and have a reduced chance to activate your Class abilities and
+    // Talents ... a Rank 1 Frostbolt at level 60 will result in a 0% chance to get a Frostbite activation"). Blizzard published no
+    // formula; this is the community one (Ozgar's Forever downranking calculator: max(0, min(1, 1 - 0.05 x (character level - spell's
+    // required level - 16)))), which fits the beta measurement of about 5% less per level from ~17-18 levels past the rank and gives
+    // Blizzard's example 0 (Frostbolt rank 1, level 4, at 60). The share of the spell power bonus and of the class proc chance kept.
+    inline float DownrankFactor(int32_t casterLevel, int32_t spellLevel)
     {
-        if (v && v->BonusCoefficient >= 0.0f)
-            return v->BonusCoefficient;
-        return clientCoefficient;
+        if (spellLevel <= 0 || casterLevel <= 0)
+            return 1.0f;
+        float const factor = 1.0f - 0.05f * float(casterLevel - spellLevel - 16);
+        return factor < 0.0f ? 0.0f : (factor > 1.0f ? 1.0f : factor);
     }
 
     // The base points of a finisher with the caster's combo points: vanilla points per combo point on top of the base.

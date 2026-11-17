@@ -7130,12 +7130,12 @@ static ClassicSpellValue::Value const* ClassicCoefficientRow(SpellInfo const* sp
     return sSpellMgr->GetClassicSpellValue(spellInfo->Id, uint32(effectInfo.EffectIndex));
 }
 
-// Classic 1.60: the spell power / healing power factor of an effect (ClassicSpellValue::BonusCoefficient: the vanilla hold's or the
+// Classic 1.60: the spell power / healing power factor of an effect (ClassicSpellValue::BonusCoefficientOr: the vanilla hold's or the
 // client's, with no sub-level-20 penalty as in WoW Forever). A player's lower rank cast far below the caster's level keeps only part of
 // it (WoW Forever downranking, ClassicSpellValue::DownrankFactor).
 static float ClassicBonusCoefficient(Unit const* caster, SpellInfo const* spellProto, SpellEffectInfo const& spellEffectInfo)
 {
-    return ClassicSpellValue::BonusCoefficient(ClassicCoefficientRow(spellProto, spellEffectInfo), spellEffectInfo.BonusCoefficient)
+    return ClassicSpellValue::BonusCoefficientOr(ClassicCoefficientRow(spellProto, spellEffectInfo), spellEffectInfo.BonusCoefficient)
         * sSpellMgr->GetClassicDownrankFactor(spellProto, caster);
 }
 

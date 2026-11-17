@@ -1,6 +1,6 @@
 -- WoW Forever has no sub-level-20 spell power penalty (vanilla: 1 - (20 - spell level) x 3.75% for spells learned below level 20); it
 -- raised the low ranks' client coefficients and penalises lower ranks by the caster's level instead (ClassicSpellValue::DownrankFactor).
--- The core no longer applies the cut to client coefficients (ClassicSpellValue::BonusCoefficient). These vanilla holds carry it baked in:
+-- The core no longer applies the cut to client coefficients (ClassicSpellValue::BonusCoefficientOr). These vanilla holds carry it baked in:
 -- their bonus_coeff is the live 70938 client coefficient times that cut (within 0.006), e.g. Lightning Bolt rank 1 0.123 = 0.429 x 0.2875.
 -- bonus_coeff -1 hands the factor back to the client; base points, dice and costs stay held. Holds whose factor is not that product
 -- (weapon percents, Holy Light, coefficients Forever changed) are left alone. Generated from the live spell data wowsims/forever (MIT)
