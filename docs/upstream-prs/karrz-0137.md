@@ -84,4 +84,5 @@ files and the `Respawn.DynamicMode` / rate overrides in the pin PR (see below).
   above); no duplicate script registrations.
 - SQL read, not run: nothing touches `creature_classic_melee` / `classic_spell_info` or rebinds Windfury / Flametongue; the two
   `sql/base` additions (`character_day_cycle`, RBAC 1000) have matching custom update files.
-- **Build and tests: this PR's CI only.** No local build, no scratch database run, no worldserver start, nothing in game.
+- Local `clang++ -fsyntax-only` on all 127 changed `src` C++ files and the 12 changed tests (stub Catch2): clean after b55843fe18 (Warchief's Blessing used Karrz's `SPELL_AURA_MELEE_SLOW`; checked every added line for aura names whose value differs between his tree and ours: only the three handled).
+- **Build, link and tests: this PR's CI.** No scratch database run, no worldserver start, nothing in game.
