@@ -1433,13 +1433,13 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
             float minDamage = float(petlevel - (petlevel / 4));
             float maxDamage = float(petlevel + (petlevel / 4));
 
-            // WoW Forever: the Sayaad's weapon is a share of the creature dps for its level (wowsims/forever EV-0075). Never below the
-            // range above, which it passes from level 2.
-            if (GetEntry() == WarlockPetForever::SayaadEntry)
+            // WoW Forever: the Sayaad's and Voidwalker's weapons are shares of the creature dps for their level (wowsims/forever EV-0075,
+            // EV-0076). The Voidwalker's melee is then halved in Guardian::UpdateDamagePhysical.
+            if (WarlockPetForever::SwingModel const* swing = WarlockPetForever::DemonSwing(GetEntry()))
             {
                 float const creatureDps = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::CreatureAutoAttackDps, petlevel, -2, 0, CLASS_NONE, 0);
-                minDamage = std::max(minDamage, WarlockPetForever::SayaadMinDamage(creatureDps));
-                maxDamage = std::max(maxDamage, WarlockPetForever::SayaadMaxDamage(creatureDps));
+                minDamage = WarlockPetForever::MinDamage(*swing, creatureDps);
+                maxDamage = WarlockPetForever::MaxDamage(*swing, creatureDps);
             }
 
             SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, minDamage);

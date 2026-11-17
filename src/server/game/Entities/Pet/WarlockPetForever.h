@@ -95,25 +95,53 @@ namespace WarlockPetForever
 
     // The demons' own stats as shares of the client's ExpectedStat creature values for their level (wowsims/forever pets.go, EV-0075,
     // EV-0076, EV-0078; read at levels 20 and 30, level 60 extrapolated). Armor already matches the vanilla pet_levelstats within 3%;
-    // health is in 2026_11_17_10_world_forever_demon_base_health.sql, the Sayaad's weapon in Pet::InitStatsForLevel.
+    // health is in 2026_11_17_10_world_forever_demon_base_health.sql, the weapons in Pet::InitStatsForLevel, attack power and the
+    // Voidwalker's halved melee in Guardian::UpdateAttackPowerAndDamage and Guardian::UpdateDamagePhysical.
     constexpr float ImpHealthShare = 0.359f;
     constexpr float VoidwalkerHealthShare = 1.400f;
     constexpr float SayaadHealthShare = 0.699f;
 
-    // The Sayaad's average swing before attack power is 0.698 of the creature dps at its 2.0 s swing, spanning 21.5% either side.
+    constexpr uint32 VoidwalkerEntry = 1860;
     constexpr uint32 SayaadEntry = 1863;
-    constexpr float SayaadSwingShare = 0.698f;
-    constexpr float SayaadSwingSpread = 0.215f;
-    constexpr float SayaadSwingSeconds = 2.0f;
 
-    inline float SayaadMinDamage(float creatureDps)
+    // A demon's average swing before attack power, as a share of the creature dps at its 2.0 s swing, and how far either side of it
+    // the damage range spans.
+    struct SwingModel
     {
-        return creatureDps * SayaadSwingSeconds * SayaadSwingShare * (1.0f - SayaadSwingSpread);
+        float Share;
+        float Spread;
+    };
+    constexpr float DemonSwingSeconds = 2.0f;
+    constexpr SwingModel SayaadSwing = { 0.698f, 0.215f };
+    constexpr SwingModel VoidwalkerSwing = { 0.494f, 0.264f };
+
+    // The Voidwalker's melee is halved, attack power included (EV-0076).
+    constexpr float VoidwalkerMeleeShare = 0.5f;
+
+    inline SwingModel const* DemonSwing(uint32 entry)
+    {
+        switch (entry)
+        {
+            case SayaadEntry:     return &SayaadSwing;
+            case VoidwalkerEntry: return &VoidwalkerSwing;
+            default:              return nullptr;
+        }
     }
 
-    inline float SayaadMaxDamage(float creatureDps)
+    inline float MinDamage(SwingModel const& swing, float creatureDps)
     {
-        return creatureDps * SayaadSwingSeconds * SayaadSwingShare * (1.0f + SayaadSwingSpread);
+        return creatureDps * DemonSwingSeconds * swing.Share * (1.0f - swing.Spread);
+    }
+
+    inline float MaxDamage(SwingModel const& swing, float creatureDps)
+    {
+        return creatureDps * DemonSwingSeconds * swing.Share * (1.0f + swing.Spread);
+    }
+
+    // The Voidwalker's and Sayaad's own attack power: 3 x level + 6, nothing from Strength (a line through 66 at level 20 and 96 at 30).
+    inline float DemonAttackPower(uint8 level)
+    {
+        return 3.0f * level + 6.0f;
     }
 }
 

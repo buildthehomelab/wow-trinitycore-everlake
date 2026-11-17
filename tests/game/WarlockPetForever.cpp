@@ -54,9 +54,20 @@ TEST_CASE("Demon health, armor, regen and hit from the warlock", "[WarlockPetFor
     CHECK(WarlockPetForever::Armor(warlock) == Catch::Approx(0.0f));
 }
 
-TEST_CASE("The Sayaad's weapon is a share of the creature dps", "[WarlockPetForever]")
+TEST_CASE("Demon weapons and attack power follow the creature values", "[WarlockPetForever]")
 {
-    // EV-0075: at level 30 (creature dps 24.69) the sheet reads about 27 to 42 before attack power
-    CHECK(WarlockPetForever::SayaadMinDamage(24.69f) == Catch::Approx(27.06f).margin(0.05f));
-    CHECK(WarlockPetForever::SayaadMaxDamage(24.69f) == Catch::Approx(41.88f).margin(0.05f));
+    // EV-0075: a level 30 Sayaad (creature dps 24.69) swings about 27 to 42 before attack power
+    CHECK(WarlockPetForever::MinDamage(WarlockPetForever::SayaadSwing, 24.69f) == Catch::Approx(27.06f).margin(0.05f));
+    CHECK(WarlockPetForever::MaxDamage(WarlockPetForever::SayaadSwing, 24.69f) == Catch::Approx(41.88f).margin(0.05f));
+
+    // EV-0076: a level 30 Voidwalker averages about 24.4 a swing before attack power and the halving
+    float const average = (WarlockPetForever::MinDamage(WarlockPetForever::VoidwalkerSwing, 24.69f)
+        + WarlockPetForever::MaxDamage(WarlockPetForever::VoidwalkerSwing, 24.69f)) / 2.0f;
+    CHECK(average == Catch::Approx(24.39f).margin(0.05f));
+
+    CHECK(WarlockPetForever::DemonSwing(WarlockPetForever::SayaadEntry) == &WarlockPetForever::SayaadSwing);
+    CHECK(WarlockPetForever::DemonSwing(416) == nullptr);                 // the Imp keeps the old range
+
+    CHECK(WarlockPetForever::DemonAttackPower(20) == Catch::Approx(66.0f));
+    CHECK(WarlockPetForever::DemonAttackPower(30) == Catch::Approx(96.0f));
 }
