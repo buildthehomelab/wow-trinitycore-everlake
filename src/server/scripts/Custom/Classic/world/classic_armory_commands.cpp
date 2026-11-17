@@ -33,6 +33,7 @@
 #include "StringFormat.h"
 #include "Timer.h"
 #include "World.h"
+#include <map>
 #include <unordered_map>
 
 using namespace Trinity::ChatCommands;
@@ -89,7 +90,8 @@ public:
         uint32 oldMSTime = getMSTime();
         uint32 items = ExportItems();
         uint32 names = ExportNames();
-        handler->PSendSysMessage("Armory: exported %u items and %u names in %u ms.", items, names, GetMSTimeDiffToNow(oldMSTime));
+        uint32 suffixes = ExportSuffixes();
+        handler->PSendSysMessage("Armory: exported %u items, %u names and %u suffixes in %u ms.", items, names, suffixes, GetMSTimeDiffToNow(oldMSTime));
         return true;
     }
 
@@ -127,6 +129,56 @@ public:
         return rows;
     }
 
+    // Classic 1.60: every item bonus list with a suffix name (the random suffixes, "of the Owl"): its name, its stat allocations
+    // ("statType:allocation,...", the item's value being allocation x the item's random property points / 10000, Item::GetItemStatValue)
+    // and whether it gives a weapon WoW Forever's reduced caster damage (ItemBonus type 54, EV-0110)
+    static uint32 ExportSuffixes()
+    {
+        struct Suffix { uint32 NameId = 0; bool Reduced = false; std::string Stats; };
+        std::map<uint32, Suffix> suffixes;
+        for (ItemBonusEntry const* bonus : sItemBonusStore)
+        {
+            Suffix& suffix = suffixes[bonus->ParentItemBonusListID];
+            switch (bonus->Type)
+            {
+                case ITEM_BONUS_SUFFIX:
+                    suffix.NameId = uint32(bonus->Value[0]);
+                    break;
+                case ITEM_BONUS_STAT:
+                    suffix.Stats += Trinity::StringFormat("{}{}:{}", suffix.Stats.empty() ? "" : ",", bonus->Value[0], bonus->Value[1]);
+                    break;
+                case ITEM_BONUS_CLASSIC_REDUCED_CASTER_DPS:
+                    suffix.Reduced = true;
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        WorldDatabaseTransaction trans = WorldDatabase.BeginTransaction();
+        trans->Append("DELETE FROM armory_suffix");
+        std::string values;
+        uint32 rows = 0;
+        for (auto const& [listId, suffix] : suffixes)
+        {
+            ItemNameDescriptionEntry const* name = suffix.NameId ? sItemNameDescriptionStore.LookupEntry(suffix.NameId) : nullptr;
+            if (!name || !*name->Description[sWorld->GetDefaultDbcLocale()])
+                continue;
+            values += Trinity::StringFormat("{}({},{},{},{})", values.empty() ? "" : ",", listId, Quote(name->Description[sWorld->GetDefaultDbcLocale()]),
+                suffix.Reduced ? 1 : 0, Quote(suffix.Stats));
+            ++rows;
+            if (values.size() > 60000)
+            {
+                trans->Append(("INSERT INTO armory_suffix (id, name, reducedCasterDps, stats) VALUES " + values).c_str());
+                values.clear();
+            }
+        }
+        if (!values.empty())
+            trans->Append(("INSERT INTO armory_suffix (id, name, reducedCasterDps, stats) VALUES " + values).c_str());
+        WorldDatabase.DirectCommitTransaction(trans);
+        return rows;
+    }
+
     static uint32 ExportItems()
     {
         std::unordered_map<uint32, int32> icons = BuildIconMap();
@@ -142,7 +194,7 @@ public:
                 return;
             trans->Append(("INSERT INTO armory_item (id, name, quality, itemLevel, requiredLevel, class, subclass, inventoryType, bonding, "
                 "armor, dmgMin, dmgMax, delay, stats, effects, description, iconFileDataId, sellPrice, allowableClass, itemSet, requiredSkill, "
-                "requiredSkillRank, flags) VALUES " + values).c_str());
+                "requiredSkillRank, flags, randPropPoints, casterDmgMin, casterDmgMax) VALUES " + values).c_str());
             values.clear();
             inBatch = 0;
         };
@@ -180,21 +232,24 @@ public:
             }
 
             // ItemTemplate::GetDPS asserts when the damage tables have no row for the item level (some weapons in the data do)
-            float dmgMin = 0.0f, dmgMax = 0.0f;
+            float dmgMin = 0.0f, dmgMax = 0.0f, casterDmgMin = 0.0f, casterDmgMax = 0.0f;
             if (proto.GetClass() == ITEM_CLASS_WEAPON && sItemDamageOneHandStore.LookupEntry(itemLevel) && sItemDamageOneHandCasterStore.LookupEntry(itemLevel)
                 && sItemDamageTwoHandStore.LookupEntry(itemLevel) && sItemDamageTwoHandCasterStore.LookupEntry(itemLevel)
                 && sItemDamageAmmoStore.LookupEntry(itemLevel))
+            {
                 proto.GetClassicDamage(itemLevel, proto.HasFlag(ITEM_FLAG4_REGULATED_COMMODITY), dmgMin, dmgMax);   // Classic 1.60: caster share, QualityModifier (EV-0097)
+                proto.GetClassicDamage(itemLevel, true, casterDmgMin, casterDmgMax);                                 // with a caster-reducing suffix (EV-0110)
+            }
 
             auto icon = icons.find(itemId);
             int32 iconFileDataId = icon != icons.end() && icon->second ? icon->second : proto.BasicData->IconFileDataID;
 
-            values += Trinity::StringFormat("{}({},{},{},{},{},{},{},{},{},{},{:.1f},{:.1f},{},{},{},{},{},{},{},{},{},{},{})",
+            values += Trinity::StringFormat("{}({},{},{},{},{},{},{},{},{},{},{:.1f},{:.1f},{},{},{},{},{},{},{},{},{},{},{},{:.2f},{:.1f},{:.1f})",
                 values.empty() ? "" : ",", itemId, Quote(proto.GetName(sWorld->GetDefaultDbcLocale())), proto.GetQuality(), itemLevel, proto.GetBaseRequiredLevel(),
                 proto.GetClass(), proto.GetSubClass(), uint32(proto.GetInventoryType()), uint32(proto.GetBonding()), proto.GetArmor(itemLevel),
                 dmgMin, dmgMax, proto.GetDelay(), Quote(stats), Quote(effects), Quote(proto.ExtendedData->Description[sWorld->GetDefaultDbcLocale()]), iconFileDataId,
                 proto.GetSellPrice(), proto.GetAllowableClass(), proto.GetItemSet(), proto.GetRequiredSkill(), proto.GetRequiredSkillRank(),
-                proto.ExtendedData->Flags[0]);
+                proto.ExtendedData->Flags[0], points, casterDmgMin, casterDmgMax);
             ++rows;
             if (++inBatch == 500)
                 flush();
