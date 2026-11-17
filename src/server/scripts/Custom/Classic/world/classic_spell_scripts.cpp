@@ -1727,6 +1727,25 @@ class classic_spell_item_natures_bounty : public classic_spell_item_set_proc_man
     }
 };
 
+// 17350 - Argent Defender: "Has a chance when struck in combat", about twice as likely when an Undead strikes (its second effect, a dummy
+// of 2). The spell_proc row prices 1 a minute on the attacker's swing interval, the Undead rate; any other attacker passes half the time,
+// 0.5 a minute, both behind the client's 20 s cooldown (wowsims/forever, MIT, docs/evidence EV-0126).
+class classic_spell_item_argent_defender : public AuraScript
+{
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Unit* attacker = eventInfo.GetActor();
+        if (attacker && attacker->GetCreatureType() == CREATURE_TYPE_UNDEAD)
+            return true;
+        return roll_chance_i(50);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_item_argent_defender::CheckProc);
+    }
+};
+
 class classic_spell_item_moonshadow_stave : public AuraScript
 {
     static constexpr uint32 SPELL_MOONSHADOW_SHADOW = 1300437;
@@ -2575,6 +2594,7 @@ void AddSC_classic_spell_scripts()
     new classic_unit_tigers_fury();
     RegisterSpellScript(classic_spell_pri_vampiric_embrace);
     RegisterSpellScript(classic_spell_item_moonshadow_stave);
+    RegisterSpellScript(classic_spell_item_argent_defender);
     RegisterSpellScript(classic_spell_item_set_proc_mana_cast);
     RegisterSpellScript(classic_spell_item_natures_bounty);
     RegisterSpellScript(classic_spell_pal_consecration);

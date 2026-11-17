@@ -2121,7 +2121,13 @@ float Aura::CalcProcChance(SpellProcEntry const& procEntry, ProcEventInfo& event
         // calculate ppm chance if present and we're using weapon
         else if (eventInfo.GetDamageInfo() && procEntry.ProcsPerMinute != 0)
         {
-            uint32 WeaponSpeed = caster->GetBaseAttackTime(eventInfo.GetDamageInfo()->GetAttackType());
+            // Classic 1.60 (WoW Forever): a hit taken prices the rate on the attacker's swing interval, not the wearer's weapon (Argent
+            // Defender, 0.5 a minute on the attacker's speed; wowsims/forever, MIT, docs/evidence EV-0126)
+            Unit const* speedUnit = caster;
+            if (Unit* actor = eventInfo.GetActor())
+                if (actor != caster && eventInfo.GetActionTarget() == caster)
+                    speedUnit = actor;
+            uint32 WeaponSpeed = speedUnit->GetBaseAttackTime(eventInfo.GetDamageInfo()->GetAttackType());
             chance = caster->GetPPMProcChance(WeaponSpeed, procEntry.ProcsPerMinute, GetSpellInfo());
         }
         // Classic 1.60 (WoW Forever): a procs-per-minute row that hears damage-free spells (PROC_SPELL_TYPE_NO_DMG_HEAL) rolls on them too,

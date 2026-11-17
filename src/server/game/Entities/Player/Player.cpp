@@ -9584,6 +9584,12 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
                 if (effectData->TriggerType != ITEM_SPELLTRIGGER_ON_PROC)
                     continue;
 
+                // Classic 1.60 (WoW Forever): in Cat or Bear Form only the paw's white swings roll the weapon's chance-on-hit spell; Cat Form
+                // specials rolled Rot-Covered Harpoon's Rot 0 times in 196 where 4.7 were expected (wowsims/forever, MIT, docs/evidence
+                // EV-0122)
+                if (damageInfo.GetSpellInfo() && IsInFeralForm())
+                    continue;
+
                 SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(effectData->SpellID, DIFFICULTY_NONE);
                 if (!spellInfo)
                 {
@@ -9690,8 +9696,17 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
             if (FindCurrentSpellBySpellId(5938) && e_slot == TEMP_ENCHANTMENT_SLOT)
                 chance = 100.0f;
 
+            // Classic 1.60 (WoW Forever): Shadow Oil (enchant 25, Shadow Bolt 350026) procs at its 15% at most once every 10 s, a cooldown
+            // the client states nowhere (wowsims/forever, MIT, docs/evidence EV-0016)
+            Milliseconds const classicEnchantCooldown = pEnchant->ID == 25 ? 10s : 0ms;
+            if (classicEnchantCooldown > 0ms && GetSpellHistory()->HasCooldown(spellInfo->Id))
+                continue;
+
             CombatEnchantProc::Dispatch(chance, [](float procChance) { return roll_chance(procChance); }, [&]
             {
+                if (classicEnchantCooldown > 0ms)
+                    GetSpellHistory()->AddCooldown(spellInfo->Id, 0, classicEnchantCooldown);
+
                 Unit* target = spellInfo->IsPositive() ? this : damageInfo.GetVictim();
 
                 CastSpellExtraArgs args(item);
