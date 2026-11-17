@@ -44,13 +44,3 @@ TEST_CASE("Aura crit loses 1.8% against creatures three or more levels up", "[Cl
     REQUIRE(ClassicAttackTable::AuraCritSuppressionFor(5.0f, 2, false) == Approx(0.0f));
     REQUIRE(ClassicAttackTable::AuraCritSuppressionFor(5.0f, 3, true) == Approx(0.0f));         // not against players
 }
-
-TEST_CASE("Hit suppression grows 0.2% per point of defense gap past 10", "[ClassicAttackTable]")
-{
-    REQUIRE(ClassicAttackTable::HitSuppression(9.0f, 15) == Approx(1.0f));   // 300 skill against a +3 boss
-    REQUIRE(ClassicAttackTable::HitSuppression(9.0f, 14) == Approx(0.8f));
-    REQUIRE(ClassicAttackTable::HitSuppression(9.0f, 11) == Approx(0.2f));
-    REQUIRE(ClassicAttackTable::HitSuppression(9.0f, 10) == Approx(0.0f));   // 305 skill
-    REQUIRE(ClassicAttackTable::HitSuppression(0.5f, 15) == Approx(0.5f));   // never more than the +hit there is
-    REQUIRE(ClassicAttackTable::HitSuppression(0.0f, 15) == Approx(0.0f));
-}

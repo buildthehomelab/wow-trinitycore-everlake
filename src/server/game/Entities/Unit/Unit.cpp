@@ -13154,10 +13154,10 @@ float Unit::MeleeSpellMissChance(Unit const* victim, WeaponAttackType attType, S
     // miss chance from auras after calculating skill based miss
     hitChance += GetTotalAuraModifier(SPELL_AURA_MOD_HIT_CHANCE);
 
-    // Classic 1.60 (vanilla): hit suppression, (defense gap - 10) * 0.2% of the +hit from talents and gear is ignored against a victim
-    // whose maximum defense is more than 10 above the attacker's weapon skill: 1% for a boss three levels above a 300 skill player,
-    // 0.2% at 304 skill (Magey's Attack table page; VMaNGOS took a flat 1%)
-    hitChance -= ClassicAttackTable::HitSuppression(hitChance, int32(victim->GetMaxSkillValueForLevel(this)) - GetClassicWeaponSkill(attType, victim));
+    // Classic 1.60 (vanilla, VMaNGOS GetMeleeMissChance): the first 1% of +hit from talents and gear is ignored against a victim whose
+    // maximum defense is more than 10 above the attacker's weapon skill (a boss three levels above a 300 skill player)
+    if (hitChance > 0.0f && GetClassicWeaponSkill(attType, victim) - int32(victim->GetMaxSkillValueForLevel(this)) < -10)
+        hitChance -= 1.0f;
 
     missChance -= hitChance;
     if (attType == RANGED_ATTACK)

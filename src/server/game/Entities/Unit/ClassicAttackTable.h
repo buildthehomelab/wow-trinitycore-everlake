@@ -37,7 +37,8 @@ namespace ClassicAttackTable
     }
 
     // Against creatures three or more levels above the attacker, crit that comes from auras (talents, Equip: crit, buffs,
-    // consumables; not base crit or agility) loses a flat 1.8%, never more than the aura crit there is.
+    // consumables; not base crit or agility) loses a flat 1.8%, never more than the aura crit there is. Still true on WoW Forever
+    // (magey/forever-warrior issue 1: 3,644 attacks). Hit suppression is gone on Forever (same issue), so it has no rule here.
     constexpr float AuraCritSuppression = 1.8f;
     constexpr int32_t AuraCritSuppressionLevelGap = 3;
 
@@ -46,16 +47,6 @@ namespace ClassicAttackTable
         if (victimIsPlayer || levelGap < AuraCritSuppressionLevelGap || !(auraCrit > 0.0f))
             return 0.0f;
         return std::min(auraCrit, AuraCritSuppression);
-    }
-
-    // Hit suppression: when the victim's defense is more than 10 above the attacker's weapon skill, (gap - 10) * 0.2% of the +hit
-    // from gear and talents is ignored: 1% at 300 skill against a +3 creature, 0.2% at 304, none at 305. Never more than the
-    // +hit there is.
-    inline float HitSuppression(float hitChance, int32_t defenseGap)
-    {
-        if (!(hitChance > 0.0f) || defenseGap <= 10)
-            return 0.0f;
-        return std::min(hitChance, float(defenseGap - 10) * 0.2f);
     }
 }
 
