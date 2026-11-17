@@ -301,14 +301,22 @@ public:
         Item* weapon = player->GetWeaponForAttack(BASE_ATTACK, true);
         float const speed = (weapon ? weapon->GetTemplate()->GetDelay() : BASE_ATTACK_TIME) / 1000.0f;
 
+        bool const twoHanded = weapon && weapon->GetTemplate()->GetInventoryType() == INVTYPE_2HWEAPON;
         float damage;
-        if (weapon && weapon->GetTemplate()->GetInventoryType() == INVTYPE_2HWEAPON)
+        if (twoHanded)
             damage = 1.2f * points * 1.2f * 1.03f * speed / 100.0f + 1.0f;
         else
             damage = 0.85f * std::ceil(points * 1.2f * 1.03f * speed / 100.0f) - 1.0f;
         damage += 0.03f * (player->GetWeaponDamageRange(BASE_ATTACK, MINDAMAGE) + player->GetWeaponDamageRange(BASE_ATTACK, MAXDAMAGE)) / 2.0f;
 
-        // spell power is added by the damage spell itself (its bonus coefficient)
+        // WoW Forever: a hit takes 0.1 of the paladin's Holy spell power with a one-hander and 0.12 with a two-hander, the tooltip's
+        // coefficients, though the damage rows state 0 (their classic_spell_value coefficient is 0, sql 2026_11_18_02); Judgement of the
+        // Crusader at the same coefficient (wowsims/forever, MIT, docs/rulings R-0009, docs/evidence EV-0060 and EV-0143). The top rank
+        // had no spell power at all.
+        float const coefficient = twoHanded ? 0.12f : 0.1f;
+        damage += coefficient * float(std::max(0, player->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_HOLY))
+            + target->GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_DAMAGE_TAKEN, SPELL_SCHOOL_MASK_HOLY));
+
         player->CastSpell(target, damageSpell, args.AddSpellMod(SPELLVALUE_BASE_POINT0, std::max(int32(damage) + 1, 1)));
     }
 
