@@ -3984,6 +3984,18 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->AttributesEx2 |= SPELL_ATTR2_NO_INITIAL_THREAT;
     });
 
+    // Classic 1.60 druid Thorns: each hit adds 6% of the druid's spell power (forever-bugs #117: the scaling is intended on live; wowsims
+    // EV-0067, the ratio Blizzard states for Retribution Aura). Every rank's damage shield effect states coefficient 0 and there is no
+    // vanilla value row, so it took none. The druid's current spell power is read per hit (damage shields in Unit::DealMeleeDamage),
+    // with the usual below-level-20 penalty for ranks 1 and 2 (ClassicSpellValue::BonusCoefficientWithLevelPenalty).
+    ApplySpellFix({ 467, 782, 1075, 8914, 9756, 9910 }, [](SpellInfo* spellInfo)
+    {
+        ApplySpellEffectFix(spellInfo, EFFECT_0, [](SpellEffectInfo* spellEffectInfo)
+        {
+            spellEffectInfo->BonusCoefficient = 0.06f;
+        });
+    });
+
     // Classic 1.60 world buffs: the client's spells are dummy auras that only carry the numbers; live puts the effect on a hidden copy
     // (Rallying Cry 1304452, Warchief's Blessing 1304594, Slip'kik's Savvy 1304751). Each dummy effect becomes the aura the copy has.
     // Rallying Cry of the Dragonslayer: crit chance of all spells and attacks, attack power, ranged attack power, spell damage, healing
