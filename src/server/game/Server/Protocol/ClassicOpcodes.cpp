@@ -64,7 +64,16 @@ std::unordered_set<uint32> const BlockedServerOpcodes =
 {
     SMSG_HEALTH_UPDATE,     // does not exist in Classic (health is sent through UnitData)
     SMSG_GUILD_CHALLENGE_COMPLETED, // does not exist in Classic (guild switch has one case less, see TranslateServerOpcode)
+    // Classic has no guild challenges, but the client still asks for them (CMSG_GUILD_CHALLENGE_UPDATE_REQUEST) when the guild
+    // window refreshes. Our answer goes out on Classic index 0x1A, which the 70938 client reads as "challenge completed": Karrz
+    // 2026-11-16 got "Guild Dungeon Challenge complete! Guild has earned 0 gold." right after a guild invite, with the guild window
+    // open (the 96-byte answer starts with zero counts). Classic has nothing to answer with, so the answer is not sent.
+    SMSG_GUILD_CHALLENGE_UPDATE,
     SMSG_CHANNEL_LIST,      // Classic chat index 0x1D (reader rva 0xA10E70), layout not verified yet
+    // Our number for it on 70790+ clients (0x47020D) was worked out, never seen in a sniff. A 1.60.1.70938 client reads it as
+    // another message and crashes entering the world (ERROR #132, a packed GUID read from an empty buffer), on every
+    // character. Without the answer the mail window's To box offers no own characters, as before core PR #57.
+    SMSG_GET_ACCOUNT_CHARACTER_LIST_RESULT,
 };
 
 // Classic layout differs; the client waits for the message, so send a placeholder of the expected size

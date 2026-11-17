@@ -16,6 +16,7 @@
  */
 
 #include "SpellAuraEffects.h"
+#include "ClassicFeignDeath.h"
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"
 #include "Battleground.h"
@@ -886,6 +887,8 @@ Optional<SpellEffectValue> AuraEffect::CalculateEstimatedAmount(Unit const* cast
     switch (spellEffectInfo.ApplyAuraName)
     {
         case SPELL_AURA_PERIODIC_DAMAGE:
+            // with its fraction: the client shows a 5.97 tick as 6, and the ticks deal that on average (_periodicDamageRemainder)
+            return caster->SpellDamageBonusDoneExact(target, spellInfo, float(amount), DOT, spellEffectInfo, stackAmountForBonuses, nullptr, aurEff);
         case SPELL_AURA_PERIODIC_LEECH:
             return caster->SpellDamageBonusDone(target, spellInfo, amount, DOT, spellEffectInfo, stackAmountForBonuses, nullptr, aurEff);
         case SPELL_AURA_PERIODIC_HEAL:
@@ -2377,6 +2380,12 @@ void AuraEffect::HandleAuraCloneCaster(AuraApplication const* aurApp, uint8 mode
 /***      FIGHT       ***/
 /************************/
 
+namespace
+{
+    // the enemies that resisted the Feign Death being applied right now (AuraEffect::HandleFeignDeath)
+    thread_local GuidUnorderedSet const* FeignDeathResisters = nullptr;
+}
+
 void AuraEffect::HandleFeignDeath(AuraApplication const* aurApp, uint8 mode, bool apply) const
 {
     if (!(mode & AURA_EFFECT_HANDLE_REAL))
@@ -2386,8 +2395,38 @@ void AuraEffect::HandleFeignDeath(AuraApplication const* aurApp, uint8 mode, boo
 
     if (apply)
     {
+        // Classic 1.60: every enemy within 40 yd of a player rolls to resist Feign Death (ClassicFeignDeath.h); one that resists keeps
+        // its threat and its fight with the player
+        GuidUnorderedSet resisters;
+        if (target->GetTypeId() == TYPEID_PLAYER)
+        {
+            std::vector<Unit*> enemies;
+            for (auto const& [guid, ref] : target->GetThreatManager().GetThreatenedByMeList())
+                enemies.push_back(ref->GetOwner());
+            for (Unit* attacker : target->getAttackers())
+                enemies.push_back(attacker);
+
+            float const hitBonus = std::max(target->m_modSpellHitChance, target->m_modRangedHitChance);
+            GuidUnorderedSet rolled;   // an enemy can be in both lists: one roll each
+            for (Unit* enemy : enemies)
+            {
+                if (!rolled.insert(enemy->GetGUID()).second || !enemy->IsWithinDist(target, ClassicFeignDeath::CheckRange))
+                    continue;
+                int32 const levelGap = int32(enemy->GetLevelForTarget(target)) - int32(target->GetLevelForTarget(enemy));
+                if (roll_chance(ClassicFeignDeath::ResistChance(levelGap, hitBonus, enemy->GetTypeId() == TYPEID_PLAYER)))
+                {
+                    resisters.insert(enemy->GetGUID());
+                    target->SendSpellMiss(enemy, GetId(), SPELL_MISS_RESIST);
+                }
+            }
+        }
+        // CombatStop takes a plain function as its filter, so the filter reads the resisters through this pointer
+        FeignDeathResisters = &resisters;
+
         auto isAffectedByFeignDeath = [](Unit const* attacker)
         {
+            if (FeignDeathResisters && FeignDeathResisters->count(attacker->GetGUID()))
+                return false;
             Creature const* attackerCreature = attacker->ToCreature();
             return !attackerCreature || !attackerCreature->IsIgnoringFeignDeath();
         };
@@ -2422,6 +2461,7 @@ void AuraEffect::HandleFeignDeath(AuraApplication const* aurApp, uint8 mode, boo
         }
         else
             target->CombatStop(false, false, isAffectedByFeignDeath);
+        FeignDeathResisters = nullptr;
 
         // prevent interrupt message
         if (GetCasterGUID() == target->GetGUID() && target->GetCurrentSpell(CURRENT_GENERIC_SPELL))
@@ -5894,14 +5934,21 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
     uint32 damage = std::max(GetAmountAsInt(), 0);
 
     // Script Hook For HandlePeriodicDamageAurasTick -- Allow scripts to change the Damage pre class mitigation calculations
+    uint32 const damageBeforeHook = damage;
     sScriptMgr->ModifyPeriodicDamageAurasTick(target, caster, damage);
 
     switch (GetAuraType())
     {
         case SPELL_AURA_PERIODIC_DAMAGE:
         {
+            // The amount keeps its fraction (unless a script set a value) and so does the caster's bonus; the whole points are dealt
+            // now and the rest is carried to the next tick.
+            float exact = damage == damageBeforeHook ? float(std::max(GetAmount(), SpellEffectValue(0))) : float(damage);
             if (caster)
-                damage = caster->SpellDamageBonusDone(target, GetSpellInfo(), damage, DOT, GetSpellEffectInfo(), stackAmountForBonuses, nullptr, this);
+                exact = caster->SpellDamageBonusDoneExact(target, GetSpellInfo(), exact, DOT, GetSpellEffectInfo(), stackAmountForBonuses, nullptr, this);
+            exact += _periodicDamageRemainder;
+            damage = uint32(std::max(exact, 0.0f));
+            _periodicDamageRemainder = std::max(exact, 0.0f) - float(damage);
             damage = target->SpellDamageBonusTaken(caster, GetSpellInfo(), damage, DOT);
 
             if (GetSpellInfo()->SpellFamilyName == SPELLFAMILY_GENERIC)

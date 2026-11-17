@@ -18,7 +18,9 @@
 #include "Unit.h"
 #include "ClassicRage.h"
 #include "ClassicArmor.h"
+#include "ClassicAttackTable.h"
 #include "ClassicAutoShot.h"
+#include "ClassicHunterApShare.h"
 #include "ClassicLegacyPerks.h"
 #include "DeathRecap.h"
 #include "AbstractFollower.h"
@@ -964,12 +966,29 @@ TC_GAME_API std::atomic<uint64> g_classicRageHitGained(0);
         }
     }
 
+    // WoW Forever: rage from damage taken (ClassicRage.h), absorbed damage included
+    if (attacker && attacker != victim && damagetype != NODAMAGE && victim->GetTypeId() == TYPEID_PLAYER && victim->GetPowerType() == POWER_RAGE)
+    {
+        float const absorbed = cleanDamage ? float(cleanDamage->absorbed_damage) : 0.0f;
+        float rageDamage = float(damageTaken) + absorbed;
+        float multiplier = 1.0f;
+        bool const meleeSwing = damagetype == DIRECT_DAMAGE && !spellProto;
+        if (meleeSwing && cleanDamage && cleanDamage->rageDamage >= 0.0f)
+            rageDamage = cleanDamage->rageDamage;
+        else if (meleeSwing && cleanDamage)
+            rageDamage += float(cleanDamage->mitigated_damage);   // a swing from elsewhere (no pre-armor amount): landed + mitigated
+        // non-physical damage, periodic ticks and physical specials: twice the swing rule (on the landed damage for specials and spells)
+        if (!meleeSwing || (damageSchoolMask & ~SPELL_SCHOOL_MASK_NORMAL))
+            multiplier *= ClassicRage::NonSwingTakenMultiplier;
+        Powers const attackerPower = attacker->GetPowerType();
+        if (attackerPower == POWER_MANA || attackerPower == POWER_ENERGY)
+            multiplier *= ClassicRage::NonRageAttackerMultiplier;
+        if (rageDamage > 0.0f)
+            victim->RewardClassicRage(ClassicRage::RageFromDamageTaken(rageDamage, float(attacker->GetLevelForTarget(victim)), multiplier), false);
+    }
+
     if (!damageDone)
         return 0;
-
-    // Classic 1.60 (vanilla): rage from damage taken
-    if (attacker && attacker != victim && damagetype != NODAMAGE && damageTaken && victim->GetTypeId() == TYPEID_PLAYER && victim->GetPowerType() == POWER_RAGE)
-        victim->RewardClassicRage(float(damageTaken), false);
 
     uint32 health = victim->GetHealth();
 
@@ -1407,6 +1426,7 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
     damageInfo->ProcAttacker     = PROC_FLAG_NONE;
     damageInfo->ProcVictim       = PROC_FLAG_NONE;
     damageInfo->CleanDamage      = 0;
+    damageInfo->RageDamage       = 0.0f;
     damageInfo->HitOutCome       = MELEE_HIT_EVADE;
 
     if (!victim)
@@ -1461,6 +1481,13 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
         damageInfo->Damage = damage;
 
     damageInfo->HitOutCome = RollMeleeOutcomeAgainst(damageInfo->Target, damageInfo->AttackType);
+
+    // WoW Forever: the victim's rage taken counts the swing's damage before armor and the block, x2 on a crit, x1.5 on a crushing blow
+    damageInfo->RageDamage = float(damage);
+    if (damageInfo->HitOutCome == MELEE_HIT_CRIT)
+        damageInfo->RageDamage *= 2.0f;
+    else if (damageInfo->HitOutCome == MELEE_HIT_CRUSHING)
+        damageInfo->RageDamage *= 1.5f;
 
     switch (damageInfo->HitOutCome)
     {
@@ -1643,6 +1670,12 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
 
     // Call default DealDamage
     CleanDamage cleanDamage(damageInfo->CleanDamage, damageInfo->Absorb, damageInfo->AttackType, damageInfo->HitOutCome);
+    // WoW Forever: a hit blocked in full gives no rage taken (wowsims/forever sim/core/rage.go)
+    if (damageInfo->HitOutCome == MELEE_HIT_CRIT || damageInfo->HitOutCome == MELEE_HIT_CRUSHING || damageInfo->HitOutCome == MELEE_HIT_NORMAL
+        || damageInfo->HitOutCome == MELEE_HIT_GLANCING || (damageInfo->HitOutCome == MELEE_HIT_BLOCK && damageInfo->Damage + damageInfo->Absorb > 0))
+        cleanDamage.rageDamage = damageInfo->RageDamage;
+    else
+        cleanDamage.rageDamage = 0.0f;
     Unit::DealDamage(this, victim, damageInfo->Damage, &cleanDamage, DIRECT_DAMAGE, SpellSchoolMask(damageInfo->DamageSchoolMask), nullptr, durabilityLoss);
 
     // If this is a creature and it attacks from behind it has a probability to daze it's victim
@@ -2408,24 +2441,17 @@ void Unit::AttackerStateUpdate(Unit* victim, WeaponAttackType attType, bool extr
                     damageInfo.HitInfo |= HITINFO_FAKE_DAMAGE;
             }
 
-            // Classic 1.60 (vanilla): rage from the damage dealt, 75% of the damage on a dodge / parry (retail: per weapon speed)
-            if (this != victim && damageInfo.HitOutCome != MELEE_HIT_MISS && GetPowerType() == POWER_RAGE)
+            // WoW Forever: a landed white swing gives rage by the weapon's base speed (ClassicRage.h); a miss, dodge or parry gives none
+            // (vanilla: rage from the damage dealt, 75% of it on a dodge / parry)
+            if (this != victim && GetPowerType() == POWER_RAGE && damageInfo.HitOutCome != MELEE_HIT_MISS && damageInfo.HitOutCome != MELEE_HIT_DODGE
+                && damageInfo.HitOutCome != MELEE_HIT_PARRY && damageInfo.HitOutCome != MELEE_HIT_EVADE)
             {
-                // Classic 1.60 (client 70374): Dual Wield Specialization 23584 "Increases the damage done by your off-hand weapon by $m1%
-                // and the Rage generated by your off-hand attacks by $m2%" (effect 1: server-side dummy, 10-50% by talent rank)
-                float offHandRageBonusPct = 0.0f;
-                if (damageInfo.AttackType == OFF_ATTACK)
-                    if (AuraEffect const* dualWieldSpec = GetAuraEffect(23584, EFFECT_1))
-                        if (dualWieldSpec->GetAuraType() == SPELL_AURA_DUMMY)
-                            offHandRageBonusPct = float(dualWieldSpec->GetAmount());
-                // kept fractional until the rage is worked out, so the talent's bonus is not rounded away on small hits
-                float const rageDamage = ClassicRage::SwingRageDamage(damageInfo.HitOutCome == MELEE_HIT_DODGE || damageInfo.HitOutCome == MELEE_HIT_PARRY,
-                    damageInfo.CleanDamage, damageInfo.Damage + damageInfo.Absorb, offHandRageBonusPct);
-                if (rageDamage > 0.0f)
+                float const rage = GetClassicSwingRage(damageInfo.AttackType, damageInfo.HitOutCome == MELEE_HIT_CRIT);
+                if (rage > 0.0f)
                 {
                     damageInfo.HitInfo |= HITINFO_RAGE_GAIN;
-                    damageInfo.RageGained = RewardClassicRage(rageDamage, true);
-                    g_classicRageHitDamage.fetch_add(uint64(rageDamage + 0.5f), std::memory_order_relaxed);
+                    damageInfo.RageGained = RewardClassicRage(rage, true);
+                    g_classicRageHitDamage.fetch_add(uint64(damageInfo.Damage + damageInfo.Absorb), std::memory_order_relaxed);
                     g_classicRageHitGained.fetch_add(uint64(std::max<int64>(int64(damageInfo.RageGained), 0)), std::memory_order_relaxed);
                 }
             }
@@ -2917,7 +2943,9 @@ float Unit::GetUnitParryChance(WeaponAttackType attType, Unit const* victim) con
     }
 
     // Classic 1.60 (vanilla): players 0.04% per point of weapon skill difference; creatures 0.2% per point of the capped skill
-    // difference, 0.6% when more than 10 below; creatures below level 10 parry less
+    // difference, 0.6% when more than 10 below; creatures below level 10 parry less. WoW Forever: 0.1% per point when 1-10 below,
+    // like dodge (6% against a level +2 creature, 5.5% at +1; 14% at +3 is unchanged). Forever's beta measures 10.8% at +2, an open
+    // Blizzard bug (ClassicWoWCommunity/forever-bugs#192, magey/forever-warrior#1); the intended 6% is used.
     if (chance > 0.0f)
     {
         int32 const weaponSkill = GetClassicWeaponSkill(attType, victim);
@@ -2927,7 +2955,7 @@ float Unit::GetUnitParryChance(WeaponAttackType attType, Unit const* victim) con
         else
         {
             int32 const cappedDiff = std::min(int32(GetMaxSkillValueForLevel(victim)), weaponSkill) - victimMaxSkill;
-            chance -= cappedDiff * (cappedDiff < -10 ? 0.6f : 0.2f);
+            chance -= cappedDiff * (cappedDiff < -10 ? 0.6f : cappedDiff < 0 ? 0.1f : 0.2f);
             if (victim->GetLevel() < 10)
                 chance *= victim->GetLevel() / 10.0f;
         }
@@ -3054,18 +3082,30 @@ float Unit::GetUnitCriticalChanceTaken(Unit const* attacker, WeaponAttackType at
 
 float Unit::GetUnitCriticalChanceAgainst(WeaponAttackType attackType, Unit const* victim) const
 {
-    float chance = GetUnitCriticalChanceDone(attackType);
+    float const chance = GetClassicCritAgainst(attackType, victim, GetUnitCriticalChanceDone(attackType));
+    return victim->GetUnitCriticalChanceTaken(this, attackType, chance);
+}
 
-    // Classic 1.60 (vanilla): 0.04% crit per point of weapon skill above / below the victim's defense; against creatures with
-    // more defense than the attacker's (capped) skill 0.2% per point
+// Classic 1.60 (vanilla) attack table, crit side, for white and yellow physical attacks alike: 0.04% crit per point of weapon skill
+// above / below the victim's defense, 0.2% per point against creatures with more defense than the attacker's (capped) skill; then,
+// against creatures 3+ levels up, the 1.8% aura crit suppression (ClassicAttackTable.h)
+float Unit::GetClassicCritAgainst(WeaponAttackType attackType, Unit const* victim, float critChance) const
+{
+    bool const victimIsPlayer = victim->GetTypeId() == TYPEID_PLAYER;
     int32 const weaponSkill = GetClassicWeaponSkill(attackType, victim);
     int32 const defense = victim->GetClassicDefenseSkill(this);
-    int32 const skillDiff = weaponSkill - defense;
-    int32 const cappedDiff = std::min(int32(GetMaxSkillValueForLevel(victim)), weaponSkill) - defense;
-    chance += (victim->GetTypeId() == TYPEID_PLAYER || skillDiff > 0) ? skillDiff * 0.04f : cappedDiff * 0.2f;
-    chance = std::max(chance, 0.0f);
+    float chance = critChance + ClassicAttackTable::CritSkillAdjustment(weaponSkill, std::min(int32(GetMaxSkillValueForLevel(victim)), weaponSkill),
+        defense, victimIsPlayer);
 
-    return victim->GetUnitCriticalChanceTaken(this, attackType, chance);
+    // crit from auras: what is left of the chance after the class base and agility (players only; creatures have no agility crit)
+    if (Player const* player = ToPlayer())
+    {
+        float const auraCrit = critChance - (player->GetClassicBaseCritAndDodge() + player->GetMeleeCritFromAgility());
+        int32 const levelGap = int32(victim->GetLevelForTarget(this)) - int32(GetLevelForTarget(victim));
+        chance -= ClassicAttackTable::AuraCritSuppressionFor(auraCrit, levelGap, victimIsPlayer);
+    }
+
+    return std::max(chance, 0.0f);
 }
 
 void Unit::_DeleteRemovedAuras()
@@ -3407,7 +3447,8 @@ bool Unit::IsClassicAutoShotWindupDone() const
     if (!current || current->GetSpellInfo()->Id != ClassicAutoShot::SpellId)
         return false;
 
-    return ClassicAutoShot::IsWindupDone(GameTime::GetGameTimeMS(), m_classicAutoShotStillSince);
+    return ClassicAutoShot::IsWindupDone(GameTime::GetGameTimeMS(), m_classicAutoShotStillSince,
+        ClassicAutoShot::WindupFor(m_modAttackSpeedPct[RANGED_ATTACK]));
 }
 
 void Unit::CancelAutoRepeatSpell()
@@ -7141,31 +7182,49 @@ static float ClassicBonusCoefficient(Unit const* caster, SpellInfo const* spellP
 
 int32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, int32 pdamage, DamageEffectType damagetype, SpellEffectInfo const& spellEffectInfo, uint32 stack /*= 1*/, Spell* spell /*= nullptr*/, AuraEffect const* aurEff /*= nullptr*/) const
 {
+    return int32(SpellDamageBonusDoneExact(victim, spellProto, float(pdamage), damagetype, spellEffectInfo, stack, spell, aurEff));
+}
+
+float Unit::SpellDamageBonusDoneExact(Unit* victim, SpellInfo const* spellProto, float pdamage, DamageEffectType damagetype, SpellEffectInfo const& spellEffectInfo, uint32 stack /*= 1*/, Spell* spell /*= nullptr*/, AuraEffect const* aurEff /*= nullptr*/) const
+{
     if (!spellProto || !victim)
         return pdamage;
 
-    int32 DoneTotal = 0;
+    // The fractions are kept to the end: a periodic tick carries what it could not deal to its next tick (AuraEffect), so a
+    // 5.33 bleed with +12% from a talent deals 18 over three ticks instead of 15 (Rend, Improved Rend, arrathem 2026-11-15).
+    float DoneTotal = 0.0f;
     float DoneTotalMod = 1.0f;
 
-    auto callDamageScript = [&](int32& dmg, int32& flatMod, float& pctMod)
+    // Damage scripts work on whole numbers; a value a script leaves alone keeps its fraction.
+    auto callDamageScript = [&](float& dmg, float& flatMod, float& pctMod)
     {
+        if (!spell && !aurEff)
+            return;
+        int32 dmgInt = int32(dmg);
+        int32 flatInt = int32(flatMod);
+        int32 const dmgBefore = dmgInt;
+        int32 const flatBefore = flatInt;
         if (spell)
-            spell->CallScriptCalcDamageHandlers(spellEffectInfo, victim, dmg, flatMod, pctMod);
-        else if (aurEff)
-            aurEff->GetBase()->CallScriptCalcDamageAndHealingHandlers(aurEff, aurEff->GetBase()->GetApplicationOfTarget(victim->GetGUID()), victim, dmg, flatMod, pctMod);
+            spell->CallScriptCalcDamageHandlers(spellEffectInfo, victim, dmgInt, flatInt, pctMod);
+        else
+            aurEff->GetBase()->CallScriptCalcDamageAndHealingHandlers(aurEff, aurEff->GetBase()->GetApplicationOfTarget(victim->GetGUID()), victim, dmgInt, flatInt, pctMod);
+        if (dmgInt != dmgBefore)
+            dmg = float(dmgInt);
+        if (flatInt != flatBefore)
+            flatMod = float(flatInt);
     };
 
     // Some spells don't benefit from done mods
     if (damagetype == DIRECT_DAMAGE || spellProto->HasAttribute(SPELL_ATTR3_IGNORE_CASTER_MODIFIERS))
     {
         callDamageScript(pdamage, DoneTotal, DoneTotalMod);
-        return int32(std::max(float(pdamage + DoneTotal) * DoneTotalMod, 0.0f));
+        return std::max((pdamage + DoneTotal) * DoneTotalMod, 0.0f);
     }
 
     // For totems get damage bonus from owner
     if (GetTypeId() == TYPEID_UNIT && IsTotem())
         if (Unit* owner = GetOwner())
-            return owner->SpellDamageBonusDone(victim, spellProto, pdamage, damagetype, spellEffectInfo, stack, spell, aurEff);
+            return owner->SpellDamageBonusDoneExact(victim, spellProto, pdamage, damagetype, spellEffectInfo, stack, spell, aurEff);
 
     DoneTotalMod = SpellDamagePctDone(victim, spellProto, damagetype, spellEffectInfo);
 
@@ -7182,10 +7241,11 @@ int32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, int3
     if (HasUnitTypeMask(UNIT_MASK_GUARDIAN))
         DoneAdvertisedBenefit += static_cast<Guardian const*>(this)->GetBonusDamage();
 
-    // Check for table values
-    if (spellEffectInfo.BonusCoefficientFromAP > 0.0f)
+    // Check for table values; WoW Forever: hunter spells whose ranged attack power share the client rows leave out
+    float const foreverHunterApShare = spellEffectInfo.BonusCoefficientFromAP > 0.0f ? 0.0f : ClassicHunterApShare::For(spellProto->Id, damagetype == DOT);
+    if (spellEffectInfo.BonusCoefficientFromAP > 0.0f || foreverHunterApShare > 0.0f)
     {
-        float attackPowerCoeff = spellEffectInfo.BonusCoefficientFromAP;
+        float attackPowerCoeff = foreverHunterApShare > 0.0f ? foreverHunterApShare : spellEffectInfo.BonusCoefficientFromAP;
         if (Player* modOwner = GetSpellModOwner())
         {
             attackPowerCoeff *= 100.0f;
@@ -7195,7 +7255,7 @@ int32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, int3
 
         WeaponAttackType const attType = [&]()
         {
-            if ((spellProto->IsRangedWeaponSpell() && spellProto->DmgClass != SPELL_DAMAGE_CLASS_MELEE))
+            if (foreverHunterApShare > 0.0f || (spellProto->IsRangedWeaponSpell() && spellProto->DmgClass != SPELL_DAMAGE_CLASS_MELEE))
                 return RANGED_ATTACK;
 
             if (spellProto->HasAttribute(SPELL_ATTR3_REQUIRES_OFF_HAND_WEAPON) && !spellProto->HasAttribute(SPELL_ATTR3_REQUIRES_MAIN_HAND_WEAPON))
@@ -7205,7 +7265,7 @@ int32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, int3
         }();
         float attackPowerBonus = float(victim->GetTotalAuraModifier(attType != RANGED_ATTACK ? SPELL_AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS : SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS));
         attackPowerBonus += GetTotalAttackPowerValue(attType);
-        DoneTotal += int32(stack * attackPowerCoeff * attackPowerBonus);
+        DoneTotal += float(stack) * attackPowerCoeff * attackPowerBonus;
     }
 
     // Default calculation
@@ -7219,18 +7279,18 @@ int32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, int3
             coeff /= 100.0f;
         }
 
-        DoneTotal += int32(DoneAdvertisedBenefit * coeff * stack);
+        DoneTotal += float(DoneAdvertisedBenefit) * coeff * float(stack);
     }
 
     callDamageScript(pdamage, DoneTotal, DoneTotalMod);
 
-    float tmpDamage = float(pdamage + DoneTotal) * DoneTotalMod;
+    float tmpDamage = (pdamage + DoneTotal) * DoneTotalMod;
 
     // apply spellmod to Done damage (flat and pct)
     if (Player* modOwner = GetSpellModOwner())
         modOwner->ApplySpellMod(spellProto, damagetype == DOT ? SpellModOp::PeriodicHealingAndDamage : SpellModOp::HealingAndDamage, tmpDamage);
 
-    return int32(std::max(tmpDamage, 0.0f));
+    return std::max(tmpDamage, 0.0f);
 }
 
 float Unit::SpellDamagePctDone(Unit* victim, SpellInfo const* spellProto, DamageEffectType damagetype, SpellEffectInfo const& spellEffectInfo) const
@@ -7577,7 +7637,12 @@ float Unit::SpellCritChanceTaken(Unit const* caster, Spell* spell, AuraEffect co
 
         case SPELL_DAMAGE_CLASS_RANGED:
             if (caster)
+            {
+                // Classic 1.60: yellow attacks (Auto Shot, Aimed Shot, Heroic Strike...) use the same weapon skill / level crit
+                // table as white swings; only the miss side was applied to them before
+                crit_chance = caster->GetClassicCritAgainst(attackType, this, crit_chance);
                 crit_chance = GetUnitCriticalChanceTaken(caster, attackType, crit_chance);
+            }
             break;
         case SPELL_DAMAGE_CLASS_NONE:
         default:
@@ -13101,8 +13166,9 @@ float Unit::MeleeSpellMissChance(Unit const* victim, WeaponAttackType attType, S
     int32 const classicSkillDiff = GetClassicWeaponSkill(attType, victim) - victim->GetClassicDefenseSkill(this);
 
     // melee attacks while dual wielding have +19% chance to miss; Classic 1.60 (vanilla, VMaNGOS): not while a spell of the physical
-    // school is being cast
-    if (!spellInfo && haveOffhandWeapon() && attType != RANGED_ATTACK && !m_currentSpells[CURRENT_MELEE_SPELL]
+    // school is being cast. WoW Forever: a queued Heroic Strike / Cleave no longer lifts the penalty from the off-hand (beta development
+    // notes, 1 October 2026: "Queueing Heroic Strike will no longer increase off-hand hit chance"; magey/forever-warrior#2)
+    if (!spellInfo && haveOffhandWeapon() && attType != RANGED_ATTACK
         && !IsInFeralForm() && !HasAuraType(SPELL_AURA_IGNORE_DUAL_WIELD_HIT_PENALTY))
     {
         bool physicalSpellCast = false;
@@ -13134,10 +13200,8 @@ float Unit::MeleeSpellMissChance(Unit const* victim, WeaponAttackType attType, S
     // miss chance from auras after calculating skill based miss
     hitChance += GetTotalAuraModifier(SPELL_AURA_MOD_HIT_CHANCE);
 
-    // Classic 1.60 (vanilla, VMaNGOS GetMeleeMissChance): the first 1% of +hit from talents and gear is ignored against a victim whose
-    // maximum defense is more than 10 above the attacker's weapon skill (a boss three levels above a 300 skill player)
-    if (hitChance > 0.0f && GetClassicWeaponSkill(attType, victim) - int32(victim->GetMaxSkillValueForLevel(this)) < -10)
-        hitChance -= 1.0f;
+    // WoW Forever: no hit suppression. Vanilla ignored the first 1% of +hit against a victim whose defense was more than 10 above the
+    // weapon skill; Forever logs at +1% hit against +3 level mobs miss 7.04% (n 4,259), the unsuppressed 7% (magey/forever-warrior#1)
 
     missChance -= hitChance;
     if (attType == RANGED_ATTACK)
@@ -13190,7 +13254,10 @@ void Unit::KnockbackFrom(Position const& origin, float speedXY, float speedZ, fl
         }
     }
 
-    if (!player)
+    // A bot has no client to answer SMSG_MOVE_KNOCK_BACK, so a knockback or a pull never moved it: the server flies it as it flies a creature.
+    // naxx_thaddius 1116: Magnetic Pull left both tanks where they stood while Stalagg and Feugen swapped victims, and each add walked off its
+    // platform across the room to the other tank.
+    if (!player || (player == this && player->GetSession()->IsBot()))
         GetMotionMaster()->MoveKnockbackFrom(origin, speedXY, speedZ, angle, spellEffectExtraData);
     else
     {
@@ -13816,14 +13883,47 @@ void Unit::UpdateHeight(float newZ)
         GetVehicleKit()->RelocatePassengers();
 }
 
-// Classic 1.60 (vanilla, VMaNGOS): rage = damage / conversion(level) * 7.5 when dealing, * 2.5 when taking damage
-int32 Unit::RewardClassicRage(float damage, bool attacker)
+// WoW Forever: rage points (ClassicRage.h) to the rage bar, in tenths; rage auras on dealt rage, then the server rate
+int32 Unit::RewardClassicRage(float ragePoints, bool attacker)
 {
-    float addRage = ClassicRage::RageFromDamage(damage, float(GetLevel()), attacker);
+    float addRage = ragePoints;
     if (attacker)
         AddPct(addRage, GetTotalAuraModifier(SPELL_AURA_MOD_RAGE_FROM_DAMAGE_DEALT));
     addRage *= sWorld->getRate(RATE_POWER_RAGE_INCOME);
-    return ModifyPower(POWER_RAGE, int32(addRage * 10), false);
+    return ModifyPower(POWER_RAGE, int32(addRage * 10.0f + 0.5f), false);
+}
+
+// WoW Forever: rage points of a landed white swing with this hand (ClassicRage::SwingRage). The weapon's base speed (haste does not
+// change the rage), fists at 2.0, bear forms at a normalized 2.5 with the two-hand factor.
+float Unit::GetClassicSwingRage(WeaponAttackType attType, bool crit) const
+{
+    float speed = ClassicRage::UnarmedSpeed;
+    bool twoHand = false;
+    if (Player const* player = ToPlayer())
+    {
+        if (player->IsInFeralForm())
+        {
+            speed = ClassicRage::BearNormalizedSpeed;
+            twoHand = true;
+        }
+        else if (Item const* weapon = player->GetWeaponForAttack(attType, true))
+        {
+            speed = float(weapon->GetTemplate()->GetDelay()) / 1000.0f;
+            twoHand = weapon->GetTemplate()->GetInventoryType() == INVTYPE_2HWEAPON;
+        }
+    }
+    else
+        speed = float(m_baseAttackSpeed[attType]) / 1000.0f;
+
+    // Dual Wield Specialization 23584 "Increases the damage done by your off-hand weapon by $m1% and the Rage generated by your off-hand
+    // attacks by $m2%" (effect 1: server-side dummy, 10-50% by talent rank)
+    float offHandBonusPct = 0.0f;
+    if (attType == OFF_ATTACK)
+        if (AuraEffect const* dualWieldSpec = GetAuraEffect(23584, EFFECT_1))
+            if (dualWieldSpec->GetAuraType() == SPELL_AURA_DUMMY)
+                offHandBonusPct = float(dualWieldSpec->GetAmount());
+
+    return ClassicRage::SwingRage(speed, attType == OFF_ATTACK, twoHand, crit, offHandBonusPct);
 }
 
 // Classic 1.60 (vanilla) combat table: weapon skill of an attack. Players: skill of the weapon (with bonuses), feral forms and
@@ -15342,31 +15442,30 @@ bool Unit::VisibleAuraSlotCompare::operator()(AuraApplication* left, AuraApplica
     return left->GetSlot() < right->GetSlot();
 }
 
-// Returns collisionheight of the unit. If it is 0, it returns DEFAULT_COLLISION_HEIGHT.
 float Unit::GetCollisionHeight() const
 {
-    float scaleMod = GetObjectScale(); // 99% sure about this
+    CreatureDisplayInfoEntry const* displayInfo = sCreatureDisplayInfoStore.AssertEntry(GetNativeDisplayId());
+    CreatureModelDataEntry const* modelData = sCreatureModelDataStore.AssertEntry(displayInfo->ModelID);
 
+    // Client models can store a negative sentinel for an unset collision height.
+    if (!std::isfinite(modelData->CollisionHeight) || modelData->CollisionHeight <= 0.0f)
+        return DEFAULT_COLLISION_HEIGHT;
+
+    float const scaleMod = GetObjectScale();
+    float collisionHeight = scaleMod * modelData->CollisionHeight * modelData->ModelScale * displayInfo->CreatureModelScale;
     if (IsMounted())
     {
         if (CreatureDisplayInfoEntry const* mountDisplayInfo = sCreatureDisplayInfoStore.LookupEntry(GetMountDisplayId()))
         {
             if (CreatureModelDataEntry const* mountModelData = sCreatureModelDataStore.LookupEntry(mountDisplayInfo->ModelID))
             {
-                CreatureDisplayInfoEntry const* displayInfo = sCreatureDisplayInfoStore.AssertEntry(GetNativeDisplayId());
-                CreatureModelDataEntry const* modelData = sCreatureModelDataStore.AssertEntry(displayInfo->ModelID);
-                float const collisionHeight = scaleMod * ((mountModelData->MountHeight * mountDisplayInfo->CreatureModelScale) + (modelData->GetCollisionHeight() * modelData->ModelScale * displayInfo->CreatureModelScale * 0.5f));
-                return collisionHeight == 0.0f ? DEFAULT_COLLISION_HEIGHT : collisionHeight;
+                if (std::isfinite(mountModelData->MountHeight) && mountModelData->MountHeight >= 0.0f)
+                    collisionHeight = scaleMod * ((mountModelData->MountHeight * mountDisplayInfo->CreatureModelScale) + (modelData->CollisionHeight * modelData->ModelScale * displayInfo->CreatureModelScale * 0.5f));
             }
         }
     }
 
-    //! Dismounting case - use basic default model data
-    CreatureDisplayInfoEntry const* displayInfo = sCreatureDisplayInfoStore.AssertEntry(GetNativeDisplayId());
-    CreatureModelDataEntry const* modelData = sCreatureModelDataStore.AssertEntry(displayInfo->ModelID);
-
-    float const collisionHeight = scaleMod * modelData->GetCollisionHeight() * modelData->ModelScale * displayInfo->CreatureModelScale;
-    return collisionHeight == 0.0f ? DEFAULT_COLLISION_HEIGHT : collisionHeight;
+    return std::isfinite(collisionHeight) && collisionHeight > 0.0f ? collisionHeight : DEFAULT_COLLISION_HEIGHT;
 }
 
 void Unit::AddWorldEffect(int32 worldEffectId)

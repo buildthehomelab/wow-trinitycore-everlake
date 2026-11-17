@@ -138,13 +138,10 @@ float GetRandomPropertyPoints(uint32 itemLevel, uint32 quality, uint32 inventory
         case INVTYPE_HOLDABLE:
             propIndex = 2;
             break;
-        // WoW: Forever differs from stock TrinityCore here. Stock gives bows, guns, crossbows and thrown weapons the
-        // column of two-handers and chest pieces (0) and wands the one-hand column (3). Forever keeps the original
-        // game's rule: every ranged weapon, wands included, takes the ranged column (4). Checked against the ranged
-        // weapons Forever left unchanged from the original game (37 with primary stats: column 4 gives the original
-        // amounts for all of them, columns 0 to 3 for none) and against live Forever tooltips (Ragefire Wand, item
-        // 7513: +3 Intellect, column 3 would give +4; Mithril Blunderbuss, item 10508: +5 Agility, column 0 would
-        // give +17).
+        // Classic 1.60: every ranged weapon (bow, gun, crossbow, thrown, wand) takes the fifth column, as the client's tooltip does;
+        // retail gives bows, guns and thrown the two-hand column and wands the one-hand one. With the client's RandPropPoints and
+        // ItemSparse: Ragefire Wand 7513 (item level 40, rare) +3 Intellect (one-hand column: +4), Mithril Blunderbuss 10508 (41,
+        // uncommon) +5 Agility (two-hand column: +17). Found by the Everlake core (GPL); our own code.
         case INVTYPE_RANGED:
         case INVTYPE_THROWN:
         case INVTYPE_RANGEDRIGHT:

@@ -41,6 +41,7 @@
 #include "SpellPackets.h"
 #include "Unit.h"
 #include "Util.h"
+#include "WarlockPetForever.h"
 #include "World.h"
 #include "WorldSession.h"
 #include <algorithm>
@@ -434,9 +435,9 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
             CastPetAuras(current);
 
             // The saved health was capped to the maximum without the auras (passives are not saved), and an aura that raises maximum
-            // health (Hunter Pet Scaling, Great Stamina) heals its whole amount when applied: put back what the pet had when it was saved,
-            // moved by what happened to it while loading.
-            if (getPetType() == HUNTER_PET && IsAlive() && savedHealth)
+            // health (Hunter Pet Scaling, Warlock Pet Scaling, Great Stamina) heals its whole amount when applied: put back what the pet had
+            // when it was saved, moved by what happened to it while loading. A demon summoned anew (not current) comes at full health.
+            if ((getPetType() == HUNTER_PET || (getPetType() == SUMMON_PET && current)) && IsAlive() && savedHealth)
                 SetHealth(uint64(std::clamp<int64>(int64(savedHealth) + healthChangeWhileLoading, 1, int64(GetMaxHealth()))));
         }
 
@@ -1428,9 +1429,21 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
     {
         case SUMMON_PET:
         {
-            // Classic 1.60 (vanilla): no bonus damage from the warlock's fire or shadow damage (The Burning Crusade)
-            SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, float(petlevel - (petlevel / 4)));
-            SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, float(petlevel + (petlevel / 4)));
+            // No bonus damage here: the warlock's share reaches a demon through 416189 Warlock Pet Scaling (classic_warlock_pet_scaling.cpp)
+            float minDamage = float(petlevel - (petlevel / 4));
+            float maxDamage = float(petlevel + (petlevel / 4));
+
+            // WoW Forever: the Sayaad's and Voidwalker's weapons are shares of the creature dps for their level (wowsims/forever EV-0075,
+            // EV-0076). The Voidwalker's melee is then halved in Guardian::UpdateDamagePhysical.
+            if (WarlockPetForever::SwingModel const* swing = WarlockPetForever::DemonSwing(GetEntry()))
+            {
+                float const creatureDps = sDB2Manager.EvaluateExpectedStat(ExpectedStatType::CreatureAutoAttackDps, petlevel, -2, 0, CLASS_NONE, 0);
+                minDamage = WarlockPetForever::MinDamage(*swing, creatureDps);
+                maxDamage = WarlockPetForever::MaxDamage(*swing, creatureDps);
+            }
+
+            SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, minDamage);
+            SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, maxDamage);
 
             //SetStatFlatModifier(UNIT_MOD_ATTACK_POWER, BASE_VALUE, float(cinfo->attackpower));
             break;
@@ -1603,7 +1616,7 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
 
 bool Pet::HaveInDiet(ItemTemplate const* item) const
 {
-    if (!item->FoodType)
+    if (!item->FoodType || item->FoodType > 32)   // one bit of CreatureFamily.PetFoodMask per type
         return false;
 
     CreatureTemplate const* cInfo = GetCreatureTemplate();
