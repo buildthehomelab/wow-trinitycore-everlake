@@ -482,7 +482,9 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
             switch (GetClass())
             {
                 case CLASS_HUNTER:
-                    val2 = level * 2.0f + agility - 10.0f;
+                    // vanilla and Forever: 2 ranged attack power per point of agility (wowsims/forever hunter.go, the
+                    // forever-hunter wiki's Stat Mechanics page); 1 per point was the TBC+ rate
+                    val2 = level * 2.0f + agility * 2.0f - 10.0f;
                     break;
                 case CLASS_ROGUE:
                 case CLASS_WARRIOR:

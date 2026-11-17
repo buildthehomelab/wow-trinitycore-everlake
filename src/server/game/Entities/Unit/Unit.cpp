@@ -18,7 +18,9 @@
 #include "Unit.h"
 #include "ClassicRage.h"
 #include "ClassicArmor.h"
+#include "ClassicAttackTable.h"
 #include "ClassicAutoShot.h"
+#include "ClassicHunterApShare.h"
 #include "ClassicLegacyPerks.h"
 #include "DeathRecap.h"
 #include "AbstractFollower.h"
@@ -3080,18 +3082,30 @@ float Unit::GetUnitCriticalChanceTaken(Unit const* attacker, WeaponAttackType at
 
 float Unit::GetUnitCriticalChanceAgainst(WeaponAttackType attackType, Unit const* victim) const
 {
-    float chance = GetUnitCriticalChanceDone(attackType);
+    float const chance = GetClassicCritAgainst(attackType, victim, GetUnitCriticalChanceDone(attackType));
+    return victim->GetUnitCriticalChanceTaken(this, attackType, chance);
+}
 
-    // Classic 1.60 (vanilla): 0.04% crit per point of weapon skill above / below the victim's defense; against creatures with
-    // more defense than the attacker's (capped) skill 0.2% per point
+// Classic 1.60 (vanilla) attack table, crit side, for white and yellow physical attacks alike: 0.04% crit per point of weapon skill
+// above / below the victim's defense, 0.2% per point against creatures with more defense than the attacker's (capped) skill; then,
+// against creatures 3+ levels up, the 1.8% aura crit suppression (ClassicAttackTable.h)
+float Unit::GetClassicCritAgainst(WeaponAttackType attackType, Unit const* victim, float critChance) const
+{
+    bool const victimIsPlayer = victim->GetTypeId() == TYPEID_PLAYER;
     int32 const weaponSkill = GetClassicWeaponSkill(attackType, victim);
     int32 const defense = victim->GetClassicDefenseSkill(this);
-    int32 const skillDiff = weaponSkill - defense;
-    int32 const cappedDiff = std::min(int32(GetMaxSkillValueForLevel(victim)), weaponSkill) - defense;
-    chance += (victim->GetTypeId() == TYPEID_PLAYER || skillDiff > 0) ? skillDiff * 0.04f : cappedDiff * 0.2f;
-    chance = std::max(chance, 0.0f);
+    float chance = critChance + ClassicAttackTable::CritSkillAdjustment(weaponSkill, std::min(int32(GetMaxSkillValueForLevel(victim)), weaponSkill),
+        defense, victimIsPlayer);
 
-    return victim->GetUnitCriticalChanceTaken(this, attackType, chance);
+    // crit from auras: what is left of the chance after the class base and agility (players only; creatures have no agility crit)
+    if (Player const* player = ToPlayer())
+    {
+        float const auraCrit = critChance - (player->GetClassicBaseCritAndDodge() + player->GetMeleeCritFromAgility());
+        int32 const levelGap = int32(victim->GetLevelForTarget(this)) - int32(GetLevelForTarget(victim));
+        chance -= ClassicAttackTable::AuraCritSuppressionFor(auraCrit, levelGap, victimIsPlayer);
+    }
+
+    return std::max(chance, 0.0f);
 }
 
 void Unit::_DeleteRemovedAuras()
@@ -3433,7 +3447,8 @@ bool Unit::IsClassicAutoShotWindupDone() const
     if (!current || current->GetSpellInfo()->Id != ClassicAutoShot::SpellId)
         return false;
 
-    return ClassicAutoShot::IsWindupDone(GameTime::GetGameTimeMS(), m_classicAutoShotStillSince);
+    return ClassicAutoShot::IsWindupDone(GameTime::GetGameTimeMS(), m_classicAutoShotStillSince,
+        ClassicAutoShot::WindupFor(m_modAttackSpeedPct[RANGED_ATTACK]));
 }
 
 void Unit::CancelAutoRepeatSpell()
@@ -7225,10 +7240,11 @@ float Unit::SpellDamageBonusDoneExact(Unit* victim, SpellInfo const* spellProto,
     if (HasUnitTypeMask(UNIT_MASK_GUARDIAN))
         DoneAdvertisedBenefit += static_cast<Guardian const*>(this)->GetBonusDamage();
 
-    // Check for table values
-    if (spellEffectInfo.BonusCoefficientFromAP > 0.0f)
+    // Check for table values; WoW Forever: hunter spells whose ranged attack power share the client rows leave out
+    float const foreverHunterApShare = spellEffectInfo.BonusCoefficientFromAP > 0.0f ? 0.0f : ClassicHunterApShare::For(spellProto->Id, damagetype == DOT);
+    if (spellEffectInfo.BonusCoefficientFromAP > 0.0f || foreverHunterApShare > 0.0f)
     {
-        float attackPowerCoeff = spellEffectInfo.BonusCoefficientFromAP;
+        float attackPowerCoeff = foreverHunterApShare > 0.0f ? foreverHunterApShare : spellEffectInfo.BonusCoefficientFromAP;
         if (Player* modOwner = GetSpellModOwner())
         {
             attackPowerCoeff *= 100.0f;
@@ -7238,7 +7254,7 @@ float Unit::SpellDamageBonusDoneExact(Unit* victim, SpellInfo const* spellProto,
 
         WeaponAttackType const attType = [&]()
         {
-            if ((spellProto->IsRangedWeaponSpell() && spellProto->DmgClass != SPELL_DAMAGE_CLASS_MELEE))
+            if (foreverHunterApShare > 0.0f || (spellProto->IsRangedWeaponSpell() && spellProto->DmgClass != SPELL_DAMAGE_CLASS_MELEE))
                 return RANGED_ATTACK;
 
             if (spellProto->HasAttribute(SPELL_ATTR3_REQUIRES_OFF_HAND_WEAPON) && !spellProto->HasAttribute(SPELL_ATTR3_REQUIRES_MAIN_HAND_WEAPON))
@@ -7620,7 +7636,12 @@ float Unit::SpellCritChanceTaken(Unit const* caster, Spell* spell, AuraEffect co
 
         case SPELL_DAMAGE_CLASS_RANGED:
             if (caster)
+            {
+                // Classic 1.60: yellow attacks (Auto Shot, Aimed Shot, Heroic Strike...) use the same weapon skill / level crit
+                // table as white swings; only the miss side was applied to them before
+                crit_chance = caster->GetClassicCritAgainst(attackType, this, crit_chance);
                 crit_chance = GetUnitCriticalChanceTaken(caster, attackType, crit_chance);
+            }
             break;
         case SPELL_DAMAGE_CLASS_NONE:
         default:
