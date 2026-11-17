@@ -4033,9 +4033,11 @@ void SpellMgr::LoadSpellInfoCorrections()
         });
     });
 
-    // Classic 1.60 warrior Deep Wounds: the bleed tick (412613) never misses, never crits and ignores armor
+    // Classic 1.60 warrior Deep Wounds: the bleed tick (412613) never misses, never crits and ignores armor; WoW Forever: the warrior's
+    // damage bonuses (Death Wish, Enrage) do not scale it either (wowsims/forever, MIT, docs/evidence EV-0139)
     ApplySpellFix({ 412613 }, [](SpellInfo* spellInfo)
     {
+        spellInfo->AttributesEx3 |= SPELL_ATTR3_IGNORE_CASTER_MODIFIERS;
         spellInfo->AttributesEx2 |= SPELL_ATTR2_CANT_CRIT;
         spellInfo->AttributesEx3 |= SPELL_ATTR3_ALWAYS_HIT;
         spellInfo->AttributesCu |= SPELL_ATTR0_CU_IGNORE_ARMOR;

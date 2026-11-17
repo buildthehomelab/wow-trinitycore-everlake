@@ -284,11 +284,18 @@ class classic_spell_warr_deep_wounds : public AuraScript
         if (period <= 0 || bleed->GetMaxDuration() <= 0)
             return;
 
-        float minDamage = 0.0f;
-        float maxDamage = 0.0f;
-        warrior->CalculateMinMaxDamage(BASE_ATTACK, false, true, minDamage, maxDamage);
-        float const total = (minDamage + maxDamage) * 0.5f * float(aurEff->GetAmountAsInt()) / 100.0f;
+        // WoW Forever: the bleed is the talent's share of the average damage of the weapon that crit, the off hand's own range without
+        // its damage penalty, with no attack power and none of the warrior's damage bonuses (Death Wish, Enrage: SPELL_ATTR3_IGNORE_
+        // CASTER_MODIFIERS on 412613); a crit on a running bleed adds the damage it has not ticked yet, so two crits in one batch add up
+        // (wowsims/forever, MIT, docs/evidence EV-0139: off-hand crits tick 15.7 against the main hand's 17.2, both together 32).
+        // Vanilla (VMaNGOS) used the main hand with attack power.
+        DamageInfo const* damageInfo = eventInfo.GetDamageInfo();
+        WeaponAttackType const attType = damageInfo && damageInfo->GetAttackType() == OFF_ATTACK ? OFF_ATTACK : BASE_ATTACK;
+        float const averageWeaponDamage = (warrior->GetWeaponDamageRange(attType, MINDAMAGE) + warrior->GetWeaponDamageRange(attType, MAXDAMAGE)) * 0.5f;
+        float total = averageWeaponDamage * float(aurEff->GetAmountAsInt()) / 100.0f;
         int32 const ticks = bleed->GetMaxDuration() / period;
+        if (AuraEffect const* running = victim->GetAuraEffect(SPELL_WARRIOR_DEEP_WOUND, EFFECT_0, warrior->GetGUID()))
+            total += float(running->GetAmount()) * float(running->GetRemainingTicks());
         int32 const perTick = std::max(1, int32(total / float(ticks)));
 
         victim->RemoveAurasDueToSpell(SPELL_WARRIOR_DEEP_WOUND, warrior->GetGUID());
