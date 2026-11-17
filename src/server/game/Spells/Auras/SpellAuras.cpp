@@ -2100,8 +2100,22 @@ float Aura::CalcProcChance(SpellProcEntry const& procEntry, ProcEventInfo& event
     // so talents modifying chances and judgements will have properly calculated proc chance
     if (Unit* caster = GetCaster())
     {
+        // Classic 1.60 (WoW Forever): a procs-per-minute row heard on a spell that is not a melee or ranged attack prices the chance on that
+        // spell's cast time, at least 1.5 s, in place of a weapon speed or the client's retail real-PPM (time since the last proc). Moonshadow
+        // Stave 1300435 at 1.5 a minute: 3.8% on an instant or a 1.5 s Wrath, 6 to 9% on Starfire (359 procs from 10 druids; wowsims/forever,
+        // MIT, docs/evidence EV-0115).
+        SpellInfo const* procSpellInfo = eventInfo.GetSpellInfo();
+        bool const castTimePriced = procEntry.ProcsPerMinute != 0 && procSpellInfo
+            && procSpellInfo->DmgClass != SPELL_DAMAGE_CLASS_MELEE && procSpellInfo->DmgClass != SPELL_DAMAGE_CLASS_RANGED;
+        if (castTimePriced)
+        {
+            int32 castTime = procSpellInfo->CalcCastTime();
+            if (Spell const* procSpell = eventInfo.GetProcSpell())
+                castTime = procSpell->GetCastTime();
+            chance = caster->GetPPMProcChance(std::max<int32>(castTime, 1500), procEntry.ProcsPerMinute, GetSpellInfo());
+        }
         // calculate ppm chance if present and we're using weapon
-        if (eventInfo.GetDamageInfo() && procEntry.ProcsPerMinute != 0)
+        else if (eventInfo.GetDamageInfo() && procEntry.ProcsPerMinute != 0)
         {
             uint32 WeaponSpeed = caster->GetBaseAttackTime(eventInfo.GetDamageInfo()->GetAttackType());
             chance = caster->GetPPMProcChance(WeaponSpeed, procEntry.ProcsPerMinute, GetSpellInfo());
@@ -2123,7 +2137,7 @@ float Aura::CalcProcChance(SpellProcEntry const& procEntry, ProcEventInfo& event
             }
         }
 
-        if (GetSpellInfo()->ProcBasePPM > 0.0f)
+        if (GetSpellInfo()->ProcBasePPM > 0.0f && !castTimePriced)
             chance = CalcPPMProcChance(caster);
 
         // apply chance modifer aura, applies also to ppm chance (see improved judgement of light spell)

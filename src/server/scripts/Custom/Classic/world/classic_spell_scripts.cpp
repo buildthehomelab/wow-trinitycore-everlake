@@ -43,6 +43,7 @@
 #include "QuestDef.h"
 #include "RestMgr.h"
 #include "Random.h"
+#include "Spell.h"
 #include "SpellAuraEffects.h"
 #include "SpellHistory.h"
 #include "SpellInfo.h"
@@ -1627,6 +1628,43 @@ class classic_spell_pri_vampiric_embrace : public AuraScript
     }
 };
 
+// WoW Forever: Moonshadow Stave 22458, "Harmful spell casts have a chance to deal 91 Arcane or Shadow damage". The aura 1300435 is a dummy
+// with no spell to fire, so it did nothing. It rolls once for each enemy a harmful spell lands on (a damage-free debuff or Hurricane's
+// cast included); damage over time ticks, misses, helpful casts, melee and spells fired as a proc (Hurricane's waves) never roll it, and
+// its 10 ms cooldown lets one cast proc it once. Aura::CalcProcChance prices the row's 1.5 a minute on the cast time. Each proc fires
+// Shadow 1300437 or Arcane 1300438, one in two each, at the target (165 Shadow, 194 Arcane of 359; wowsims/forever, MIT, docs/evidence
+// EV-0115).
+class classic_spell_item_moonshadow_stave : public AuraScript
+{
+    static constexpr uint32 SPELL_MOONSHADOW_SHADOW = 1300437;
+    static constexpr uint32 SPELL_MOONSHADOW_ARCANE = 1300438;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_MOONSHADOW_SHADOW, SPELL_MOONSHADOW_ARCANE });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Spell const* procSpell = eventInfo.GetProcSpell();
+        Unit* target = eventInfo.GetActionTarget();
+        return procSpell && !procSpell->IsTriggered() && target && target != eventInfo.GetActor();
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        eventInfo.GetActor()->CastSpell(eventInfo.GetActionTarget(), urand(0, 1) ? SPELL_MOONSHADOW_SHADOW : SPELL_MOONSHADOW_ARCANE,
+            CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_item_moonshadow_stave::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_item_moonshadow_stave::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 // High Alert follows the map: recalculated when entering or leaving a battleground
 class classic_player_high_alert_map : public PlayerScript
 {
@@ -2443,6 +2481,7 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_tauren_cultivate_herb);
     new classic_unit_tigers_fury();
     RegisterSpellScript(classic_spell_pri_vampiric_embrace);
+    RegisterSpellScript(classic_spell_item_moonshadow_stave);
     RegisterSpellScript(classic_spell_pal_consecration);
     RegisterSpellScript(classic_spell_pal_seal_of_fury);
     RegisterSpellScript(classic_spell_pal_seal_of_fury_damage);
