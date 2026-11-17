@@ -1698,6 +1698,18 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
             uint32 damage = aurEff->GetAmountAsInt();
             if (Unit* caster = aurEff->GetCaster())
             {
+                // Classic 1.60 (WoW Forever): Thorns and Retribution Aura add 6% of their caster's spell power to each hit, though every rank
+                // states a coefficient of 0 (1.5 / 3.5 cast floor, / 3 for hitting every attacker, x 0.42 for an aura effect; the ratio
+                // Blizzard states for Retribution Aura and measured for Thorns; wowsims/forever, MIT, sim/core/buffs/meta.go, EV-0067)
+                switch (spellInfo->Id)
+                {
+                    case 467: case 782: case 1075: case 8914: case 9756: case 9910:   // Thorns
+                    case 7294: case 10298: case 10299: case 10300: case 10301:        // Retribution Aura
+                        damage += uint32(std::max(0, caster->SpellBaseDamageBonusDone(spellInfo->GetSchoolMask())) * (1.5f / 3.5f / 3.0f * 0.42f));
+                        break;
+                    default:
+                        break;
+                }
                 damage = caster->SpellDamageBonusDone(this, spellInfo, damage, SPELL_DIRECT_DAMAGE, aurEff->GetSpellEffectInfo());
                 damage = SpellDamageBonusTaken(caster, spellInfo, damage, SPELL_DIRECT_DAMAGE);
             }
