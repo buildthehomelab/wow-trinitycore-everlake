@@ -201,6 +201,41 @@ class classic_spell_rog_ruthlessness : public AuraScript
     }
 };
 
+// 5171, 6774 - Slice and Dice with 14156 Ruthlessness: Slice and Dice is a finisher but no melee ability (it deals no damage), so the
+// Ruthlessness row (melee abilities, finish phase) never heard it and it never rolled for the combo point. After the cast (its combo points
+// are spent in the finish phase before this), the talent's chance adds the point to the rogue's target (wowsims/forever, MIT,
+// sim/rogue/slice_and_dice.go calls the finisher rolls for it; no log reading).
+class classic_spell_rog_slice_and_dice_ruthlessness : public SpellScript
+{
+    static constexpr uint32 SPELL_ROGUE_RUTHLESSNESS = 14156;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_ROGUE_RUTHLESSNESS_COMBO_POINT });
+    }
+
+    void HandleAfterCast()
+    {
+        Unit* rogue = GetCaster();
+        AuraEffect const* talent = rogue->GetAuraEffect(SPELL_ROGUE_RUTHLESSNESS, EFFECT_0);
+        if (!talent || !roll_chance(talent->GetAmountAsInt()))
+            return;
+
+        Unit* target = GetExplTargetUnit();
+        if (!target || target == rogue)
+            target = rogue->GetVictim();
+        if (!target || target == rogue || !target->IsAlive())
+            return;
+
+        rogue->CastSpell(target, SPELL_ROGUE_RUTHLESSNESS_COMBO_POINT, CastSpellExtraArgs(talent));
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(classic_spell_rog_slice_and_dice_ruthlessness::HandleAfterCast);
+    }
+};
+
 // 28814 - Revealed Flaw (Bonescythe Armor, 8 pieces): "Your Eviscerate has a chance per combo point to reveal a flaw in your opponent's armor, granting a 100%
 // critical hit chance for your next Backstab, Sinister Strike, or Hemorrhage." The client aura is an add-target-trigger effect without a class mask or a
 // chance, so every spell the rogue cast put 28815 (+100 crit, one charge) back on it and Sinister Strike and Backstab crit every time (damage_parity 149).
@@ -549,6 +584,7 @@ void AddSC_classic_rogue_abilities()
     RegisterSpellScript(classic_spell_rog_bleed_attack_power);
     RegisterSpellScript(classic_spell_rog_relentless_strikes);
     RegisterSpellScript(classic_spell_rog_ruthlessness);
+    RegisterSpellScript(classic_spell_rog_slice_and_dice_ruthlessness);
     RegisterSpellScript(classic_spell_rog_revealed_flaw);
     RegisterSpellScriptWithArgs(classic_spell_rog_ability_chance, "classic_spell_rog_initiative", 0x00000700u);
     RegisterSpellScriptWithArgs(classic_spell_rog_ability_chance, "classic_spell_rog_improved_kick", 0x00000010u);
