@@ -5,6 +5,7 @@
 --    Blast hits (a Fire Blast gives one stack, two when it crits).
 --  * Missile Barrage 400589: the Arcane Missiles channels get classic_spell_mage_arcane_missiles_barrage, which makes a Missile Barrage
 --    channel last half as long with a missile every 0.5 sec (5 missiles, as live).
+--  * Heating Up buff 400625: classic_spell_mage_heating_up_buff keeps the stacks when Presence of Mind makes the Pyroblast instant.
 -- Safe to run again.
 
 DELETE FROM `spell_proc` WHERE `SpellId` = 400624;
@@ -21,3 +22,7 @@ INSERT INTO `spell_script_names` (`spell_id`, `ScriptName`) VALUES
 (10211, 'classic_spell_mage_arcane_missiles_barrage'),
 (10212, 'classic_spell_mage_arcane_missiles_barrage'),
 (25345, 'classic_spell_mage_arcane_missiles_barrage');
+
+DELETE FROM `spell_script_names` WHERE `ScriptName` = 'classic_spell_mage_heating_up_buff';
+INSERT INTO `spell_script_names` (`spell_id`, `ScriptName`) VALUES
+(400625, 'classic_spell_mage_heating_up_buff');

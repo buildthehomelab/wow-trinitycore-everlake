@@ -49,6 +49,7 @@ enum ClassicMageTalentSpells
     SPELL_MAGE_IMPROVED_COUNTERSPELL        = 11255,
     SPELL_MAGE_COUNTERSPELL_SILENCED        = 18469,
     SPELL_MAGE_HEATING_UP_BUFF              = 400625,   // -25% Pyroblast cast time per stack, 3 stacks, 20 s, 1 charge
+    SPELL_MAGE_PRESENCE_OF_MIND             = 12043,    // next mage spell with a cast time is instant, 1 charge
     SPELL_MAGE_FINGERS_OF_FROST_TALENT      = 400647,   // effect 0: charges, effect 1: proc chance
     SPELL_MAGE_FINGERS_OF_FROST_IGNORE      = 400669,   // ability ignore aura state (frozen) for the spells that need it
     SPELL_MAGE_FINGERS_OF_FROST_STACKS      = 400670,   // 2 stacks, one used per spell cast
@@ -435,6 +436,31 @@ class classic_spell_mage_heating_up : public AuraScript
     {
         DoCheckProc += AuraCheckProcFn(classic_spell_mage_heating_up::CheckProc);
         OnEffectProc += AuraEffectProcFn(classic_spell_mage_heating_up::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 400625 - Heating Up (buff): a Pyroblast made instant by Presence of Mind keeps the Heating Up stacks for the next Pyroblast. Both spell mods
+// apply to the instant Pyroblast, so the cast-phase proc row (requires its spell mod) took the stacks as well, and Presence of Mind wasted
+// them. wowsims/forever evidence EV-0005 (checked in game): Presence of Mind + Pyroblast leaves Heating Up up. CheckProc runs while the
+// procs are gathered, before either aura is used up, so the Presence of Mind aura is still in the cast's applied mods.
+class classic_spell_mage_heating_up_buff : public AuraScript
+{
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Spell const* spell = eventInfo.GetProcSpell();
+        if (!spell)
+            return true;
+
+        for (Aura const* mod : spell->m_appliedMods)
+            if (mod->GetId() == SPELL_MAGE_PRESENCE_OF_MIND)
+                return false;
+
+        return true;
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_mage_heating_up_buff::CheckProc);
     }
 };
 
@@ -1712,6 +1738,7 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_improved_blizzard);
     RegisterSpellScript(classic_spell_mage_counterspell);
     RegisterSpellScript(classic_spell_mage_heating_up);
+    RegisterSpellScript(classic_spell_mage_heating_up_buff);
     RegisterSpellScript(classic_spell_mage_cold_snap);
     RegisterSpellScript(classic_spell_mage_ice_lance);
     RegisterSpellScript(classic_spell_mage_combustion);
