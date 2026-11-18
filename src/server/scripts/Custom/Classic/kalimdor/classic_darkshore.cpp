@@ -477,8 +477,13 @@ struct classic_npc_threshwackonator : public FollowerAI
     {
         me->SetFaction(FACTION_HOSTILE);
 
+        // FollowerAI::UpdateAI despawns a completed follower that is not engaged. AttackStart only sets a victim
+        // (combat starts with the first hit), so without this the robot vanished before its first swing.
         if (Player* holder = GetLeaderForFollower())
+        {
+            me->EngageWithTarget(holder);
             AttackStart(holder);
+        }
 
         SetFollowComplete();
     }
