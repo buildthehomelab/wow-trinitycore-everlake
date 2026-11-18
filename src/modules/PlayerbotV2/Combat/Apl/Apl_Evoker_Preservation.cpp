@@ -277,8 +277,7 @@ bool ShouldHover(ApPredicateContext const& ctx)
 void DoHover(ApPredicateContext const&, BotIntentEmitter& e) { e.cast(HOVER); }
 
 // ---- Group utility ----
-// Not in this spec's rule list yet (Devastation and Augmentation have it).
-[[maybe_unused]] bool ShouldSourceOfMagic(ApPredicateContext const& ctx)
+bool ShouldSourceOfMagic(ApPredicateContext const& ctx)
 {
     if (!ctx.bot.knows_spell(SOURCE_OF_MAGIC)) return false;
     if (!ctx.bot.is_ready(SOURCE_OF_MAGIC)) return false;
@@ -287,7 +286,7 @@ void DoHover(ApPredicateContext const&, BotIntentEmitter& e) { e.cast(HOVER); }
     if (m->guid == ctx.bot.raw().guid) return false;
     return !ctx.bot.has_aura(SOURCE_OF_MAGIC, m->guid);
 }
-[[maybe_unused]] void DoSourceOfMagic(ApPredicateContext const& ctx, BotIntentEmitter& e)
+void DoSourceOfMagic(ApPredicateContext const& ctx, BotIntentEmitter& e)
 {
     if (auto const* m = ctx.group.lowest_mana_caster())
         e.cast(SOURCE_OF_MAGIC, m->guid);
@@ -579,6 +578,7 @@ ApRule const kRules[] = {
     { ShouldRescueLowestAlly,     DoRescueLowestAlly,     "Rescue (peel ally <=25%)"       },
     { ShouldBlessingOfTheBronze,  DoBlessingOfTheBronze,  "Blessing of the Bronze (buff)"  },
     { ShouldZephyr,               DoZephyr,               "Zephyr (group AoE DR)"          },
+    { ShouldSourceOfMagic,        DoSourceOfMagic,        "Source of Magic (caster)"       },
 
     // 6) Lust.
     { ShouldFuryOfTheAspects,     DoFuryOfTheAspects,     "Fury of the Aspects (boss)"     },
