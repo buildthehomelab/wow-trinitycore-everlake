@@ -277,7 +277,8 @@ bool ShouldHover(ApPredicateContext const& ctx)
 void DoHover(ApPredicateContext const&, BotIntentEmitter& e) { e.cast(HOVER); }
 
 // ---- Group utility ----
-bool ShouldSourceOfMagic(ApPredicateContext const& ctx)
+// Not in this spec's rule list yet (Devastation and Augmentation have it).
+[[maybe_unused]] bool ShouldSourceOfMagic(ApPredicateContext const& ctx)
 {
     if (!ctx.bot.knows_spell(SOURCE_OF_MAGIC)) return false;
     if (!ctx.bot.is_ready(SOURCE_OF_MAGIC)) return false;
@@ -286,7 +287,7 @@ bool ShouldSourceOfMagic(ApPredicateContext const& ctx)
     if (m->guid == ctx.bot.raw().guid) return false;
     return !ctx.bot.has_aura(SOURCE_OF_MAGIC, m->guid);
 }
-void DoSourceOfMagic(ApPredicateContext const& ctx, BotIntentEmitter& e)
+[[maybe_unused]] void DoSourceOfMagic(ApPredicateContext const& ctx, BotIntentEmitter& e)
 {
     if (auto const* m = ctx.group.lowest_mana_caster())
         e.cast(SOURCE_OF_MAGIC, m->guid);

@@ -523,7 +523,6 @@ std::string WorldBotSpawner::PopulationLine() const
 void WorldBotSpawner::DriveDrain(uint32 now_ms, std::vector<Anchor> const& anchors)
 {
     uint32 left = 0;
-    uint32 sent = 0;
     uint32 const limit = cfg_.despawn_per_tick * kSwapBurstFactor;
     std::vector<ObjectGuid> go;
     Services::Registry().for_each([&](BotId id, BotRegistryEntry const&)
@@ -544,7 +543,6 @@ void WorldBotSpawner::DriveDrain(uint32 now_ms, std::vector<Anchor> const& ancho
         if (Player* p = ObjectAccessor::FindConnectedPlayer(g))
             if (RetireBot(p, now_ms, anchors))
             {
-                ++sent;
                 ++n_despawned_;
                 placed_.erase(g.GetCounter());
             }
