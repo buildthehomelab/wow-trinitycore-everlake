@@ -7,6 +7,12 @@ on:
     branches: [everlake]
   workflow_dispatch:
 
+# Everlake: a newer push to the same pull request (or to everlake) cancels the older build still queued or running, so a burst of
+# pushes leaves one build per branch instead of a backlog of full matrices for commits nobody needs anymore
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-24.04
