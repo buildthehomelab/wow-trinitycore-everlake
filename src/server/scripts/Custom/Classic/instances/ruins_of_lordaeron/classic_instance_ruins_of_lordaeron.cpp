@@ -17,8 +17,10 @@
 
 // Classic 1.60 (Forever): Ruins of Lordaeron (map 2999). The bosses run SmartAI, so the boss states come from
 // ClassicDungeonEncounterTracker. Encounter to creature from the official dungeon sniff (ENCOUNTER_START / END next to the
-// boss threat and kill packets): The Butcher encounter (3355) is The Baron. Lordaeron Captain (3408) and Viktor the Vile
-// (3411) are not sniffed yet and have no boss id here.
+// boss threat and kill packets): The Butcher encounter (3355) is The Baron. Viktor the Vile (3411) and the rare Lordaeron
+// Captain (3408) were not in the sniff: their ids are from Wowhead (Forever) and the client's encounter list, and their
+// spawns (the fireplace waves, the Captain's pooled patrol) are in 2026_11_17_00_world_forever_ruins_of_lordaeron_captain_viktor.sql.
+// Viktor's SmartAI already used boss id 5 for his encounter.
 
 #include "ScriptMgr.h"
 #include "Creature.h"
@@ -37,16 +39,20 @@ enum ClassicRuinsOfLordaeronEncounterBosses : uint32
     CROL_ENC_THE_BUTCHER = 2,
     CROL_ENC_THE_ABANDONED = 3,
     CROL_ENC_BJORK = 4,
+    CROL_ENC_VIKTOR_THE_VILE = 5,
+    CROL_ENC_LORDAERON_CAPTAIN = 6,
     CROL_ENC_MAX
 };
 
 constexpr ClassicDungeonBossEntry ClassicRuinsOfLordaeronEncounterBossEntries[] =
 {
-    { CROL_ENC_WITHERFANG, 250483 },    // Witherfang
-    { CROL_ENC_RATHMAEL, 250657 },      // Rath'mael
-    { CROL_ENC_THE_BUTCHER, 250660 },   // The Baron
-    { CROL_ENC_THE_ABANDONED, 250631 }, // The Abandoned (comes out of the statue)
-    { CROL_ENC_BJORK, 256097 }          // Bjork
+    { CROL_ENC_WITHERFANG, 250483 },       // Witherfang
+    { CROL_ENC_RATHMAEL, 250657 },         // Rath'mael
+    { CROL_ENC_THE_BUTCHER, 250660 },      // The Baron
+    { CROL_ENC_THE_ABANDONED, 250631 },    // The Abandoned (comes out of the statue)
+    { CROL_ENC_BJORK, 256097 },            // Bjork
+    { CROL_ENC_VIKTOR_THE_VILE, 256035 },  // Viktor the Vile (comes out of the fireplace after the waves)
+    { CROL_ENC_LORDAERON_CAPTAIN, 255699 } // Lordaeron Captain (rare)
 };
 }
 
@@ -67,7 +73,9 @@ public:
                 { CROL_ENC_RATHMAEL, {{ 3354 }} },
                 { CROL_ENC_THE_BUTCHER, {{ 3355 }} },
                 { CROL_ENC_THE_ABANDONED, {{ 3357 }} },
-                { CROL_ENC_BJORK, {{ 3412 }} }
+                { CROL_ENC_BJORK, {{ 3412 }} },
+                { CROL_ENC_VIKTOR_THE_VILE, {{ 3411 }} },
+                { CROL_ENC_LORDAERON_CAPTAIN, {{ 3408 }} }
             };
             LoadDungeonEncounterData(encounters);
         }
