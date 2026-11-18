@@ -898,8 +898,8 @@ std::vector<GearItem> GenerateGearFor(GearGenerationContext const& ctx)
     {
         // Pick from pool slot.
         // For FINGER2/TRINKET2, reuse FINGER1/TRINKET1 pool (same items wearable in both).
-        uint8 lookup_slot = (slot == EQUIPMENT_SLOT_FINGER2)  ? EQUIPMENT_SLOT_FINGER1
-                          : (slot == EQUIPMENT_SLOT_TRINKET2) ? EQUIPMENT_SLOT_TRINKET1
+        uint8 lookup_slot = (slot == EQUIPMENT_SLOT_FINGER2)  ? uint8(EQUIPMENT_SLOT_FINGER1)
+                          : (slot == EQUIPMENT_SLOT_TRINKET2) ? uint8(EQUIPMENT_SLOT_TRINKET1)
                           : slot;
         auto const& candidates = pool.slots[lookup_slot];
         if (candidates.empty()) continue;
