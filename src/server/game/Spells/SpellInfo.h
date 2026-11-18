@@ -265,12 +265,16 @@ public:
 
     uint32 GetPeriodicTickCount() const;
 
+    // Classic 1.60: true when the effect handler rolls the whole amount (a spell-school hit or heal) instead of the base points
+    bool ClassicRollsWholeAmount() const;
+
     static constexpr SpellEffectValue MinValue = -2000000000.0;
     static constexpr SpellEffectValue MaxValue = 2000000000.0;
 
     int32 CalcValueAsInt(WorldObject const* caster = nullptr, SpellEffectValue const* basePoints = nullptr, Unit const* target = nullptr, float* variance = nullptr, uint32 castItemId = 0, int32 itemLevel = -1) const;
     SpellEffectValue CalcValue(WorldObject const* caster = nullptr, SpellEffectValue const* basePoints = nullptr, Unit const* target = nullptr, float* variance = nullptr, uint32 castItemId = 0, int32 itemLevel = -1) const;
     SpellEffectValue CalcBaseValue(WorldObject const* caster, Unit const* target, uint32 itemId, int32 itemLevel) const;
+    float GetClassicVariance(WorldObject const* caster) const;
     bool UsesClassicFlatBasePoints(WorldObject const* caster) const;
     float ClassicCreatureLevelSpellScale(uint8 casterLevel) const;
     float CalcValueMultiplier(WorldObject* caster, Spell* spell = nullptr) const;

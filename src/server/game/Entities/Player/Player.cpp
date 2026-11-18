@@ -5505,19 +5505,24 @@ float Player::GetTotalBaseModValue(BaseModGroup modGroup) const
     return m_auraBaseFlatMod[modGroup] * m_auraBasePctMod[modGroup];
 }
 
-// Classic 1.60 (vanilla, VMaNGOS / TrinityCoreClassic): agility per 1% of crit and dodge, between the class rates of level 1 and 60
+// Classic 1.60 (vanilla, VMaNGOS / TrinityCoreClassic): agility per 1% of crit and dodge, between the class rates of level 1 and 60.
+// WoW Forever: the level 60 rates are the client's PlayerExpectedStat CritPerAgility (rogue 0.000345, hunter 0.000189,
+// paladin 0.000506, shaman 0.000508, mage 0.000514, others 0.0005 per point), dodge per agility equal to crit, rogue and hunter twice
+// (wowsims/forever, MIT, sim/core/base_stats_auto_gen.go). The level 1 rates stay vanilla's; the table's lower levels are not checked.
 static float ClassicAgilityRate(Player const* player, bool dodge)
 {
     float level1, level60;
     switch (player->GetClass())
     {
-        case CLASS_ROGUE:   level1 = dodge ? 1.1f : 2.2f;  level60 = dodge ? 14.5f : 29.0f; break;
-        case CLASS_HUNTER:  level1 = dodge ? 1.8f : 3.5f;  level60 = dodge ? 26.5f : 53.0f; break;
-        case CLASS_MAGE:    level1 = 12.9f; level60 = 20.0f; break;
+        case CLASS_ROGUE:   level1 = dodge ? 1.1f : 2.2f;  level60 = (dodge ? 0.5f : 1.0f) / 0.0345f; break;
+        case CLASS_HUNTER:  level1 = dodge ? 1.8f : 3.5f;  level60 = (dodge ? 0.5f : 1.0f) / 0.0189f; break;
+        case CLASS_MAGE:    level1 = 12.9f; level60 = 1.0f / 0.0514f; break;
         case CLASS_PRIEST:  level1 = 11.0f; level60 = 20.0f; break;
         case CLASS_WARLOCK: level1 = 8.4f;  level60 = 20.0f; break;
         case CLASS_WARRIOR: level1 = 3.9f;  level60 = 20.0f; break;
-        default:            level1 = 4.6f;  level60 = 20.0f; break;  // paladin, shaman, druid
+        case CLASS_PALADIN: level1 = 4.6f;  level60 = 1.0f / 0.0506f; break;
+        case CLASS_SHAMAN:  level1 = 4.6f;  level60 = 1.0f / 0.0508f; break;
+        default:            level1 = 4.6f;  level60 = 20.0f; break;  // druid
     }
     float level = float(std::min<uint8>(player->GetLevel(), 60));
     return level1 * (60.0f - level) / 59.0f + level60 * (level - 1.0f) / 59.0f;
@@ -5534,19 +5539,22 @@ void Player::GetDodgeFromAgility(float& diminishing, float& nondiminishing) cons
     nondiminishing = std::max(0.0f, GetStat(STAT_AGILITY)) / ClassicAgilityRate(this, true);
 }
 
-// Classic 1.60 (vanilla): base spell crit and intellect per 1% of spell crit at level 60 per class; lower levels need less
+// Classic 1.60 (vanilla): base spell crit and intellect per 1% of spell crit at level 60 per class; lower levels need less.
+// WoW Forever: the level 60 rates are the client's PlayerExpectedStat SpellCritPerIntellect (mage and priest 0.000168,
+// shaman 0.000169, paladin and druid 0.000167, warlock and hunter 0.000165 per point; wowsims/forever, MIT,
+// sim/core/base_stats_auto_gen.go). Paladins needed 54 (vanilla), now 59.9. The base crit already matched.
 float Player::GetSpellCritFromIntellect() const
 {
     float base, rate60;
     switch (GetClass())
     {
-        case CLASS_MAGE:    base = 0.2f; rate60 = 59.5f; break;
-        case CLASS_PRIEST:  base = 0.8f; rate60 = 59.2f; break;
-        case CLASS_WARLOCK: base = 1.7f; rate60 = 60.6f; break;
-        case CLASS_DRUID:   base = 1.8f; rate60 = 60.0f; break;
-        case CLASS_SHAMAN:  base = 2.3f; rate60 = 59.5f; break;
-        case CLASS_PALADIN: base = 3.5f; rate60 = 54.0f; break;
-        case CLASS_HUNTER:  base = 3.6f; rate60 = 60.0f; break;
+        case CLASS_MAGE:    base = 0.2f; rate60 = 1.0f / 0.0168f; break;
+        case CLASS_PRIEST:  base = 0.8f; rate60 = 1.0f / 0.0168f; break;
+        case CLASS_WARLOCK: base = 1.7f; rate60 = 1.0f / 0.0165f; break;
+        case CLASS_DRUID:   base = 1.8f; rate60 = 1.0f / 0.0167f; break;
+        case CLASS_SHAMAN:  base = 2.3f; rate60 = 1.0f / 0.0169f; break;
+        case CLASS_PALADIN: base = 3.5f; rate60 = 1.0f / 0.0167f; break;
+        case CLASS_HUNTER:  base = 3.6f; rate60 = 1.0f / 0.0165f; break;
         default:            return 0.0f;                    // warrior, rogue
     }
     float level = float(std::min<uint8>(GetLevel(), 60));
@@ -8578,6 +8586,8 @@ void Player::_ApplyItemMods(Item* item, uint8 slot, bool apply, bool updateItemA
     TC_LOG_DEBUG("entities.player.items", "Player::_ApplyItemMods: completed");
 }
 
+static bool ClassicEquipSpellGivesItemModSkill(Item const* item, int32 statType);
+
 void Player::_ApplyItemBonuses(Item* item, uint8 slot, bool apply)
 {
     ItemTemplate const* proto = item->GetTemplate();
@@ -8785,6 +8795,7 @@ void Player::_ApplyItemBonuses(Item* item, uint8 slot, bool apply)
                 break;
             case ITEM_MOD_EXTRA_ARMOR:
                 HandleStatFlatModifier(UNIT_MOD_ARMOR, TOTAL_VALUE, float(val), apply);
+                m_classicItemArmor += apply ? float(val) : -float(val);
                 break;
             case ITEM_MOD_FIRE_RESISTANCE:
                 HandleStatFlatModifier(UNIT_MOD_RESISTANCE_FIRE, BASE_VALUE, float(val), apply);
@@ -8859,7 +8870,8 @@ void Player::_ApplyItemBonuses(Item* item, uint8 slot, bool apply)
                 _ApplyClassicSpellHealingOrDamageMod(statType, int32(val), apply);
                 break;
             default:
-                if (statType >= ITEM_MOD_CLASSIC_PHYSICAL_DAMAGE_DONE && statType < ITEM_MOD_CLASSIC_END)
+                if (statType >= ITEM_MOD_CLASSIC_PHYSICAL_DAMAGE_DONE && statType < ITEM_MOD_CLASSIC_END
+                    && !ClassicEquipSpellGivesItemModSkill(item, statType))
                     _ApplyClassicItemMod(statType, int32(val), apply);
                 break;
         }
@@ -8868,8 +8880,32 @@ void Player::_ApplyItemBonuses(Item* item, uint8 slot, bool apply)
     if (uint32 armor = proto->GetArmor(itemLevel))
     {
         HandleStatFlatModifier(UNIT_MOD_ARMOR, TOTAL_VALUE, float(armor), apply);
+        m_classicItemArmor += apply ? float(armor) : -float(armor);
         if (proto->GetClass() == ITEM_CLASS_ARMOR && proto->GetSubClass() == ITEM_SUBCLASS_ARMOR_SHIELD)
             SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::ShieldBlock), apply ? int32(GetClassicShieldBlockValue()) : 0);
+    }
+
+    // Classic 1.60 (WoW Forever): an armor item's ItemSparse QualityModifier is its green bonus armor, the "+60 Armor" line under Tree Bark
+    // Jacket's "44 Armor" (44 + 60 = its vanilla 104). The core read only the table armor, so 491 items in wowsims' item list lost it
+    // (Heavy Mithril Breastplate +90, Green Iron Hauberk +120). It counts as item armor, as ITEM_MOD_EXTRA_ARMOR does (wowsims/forever, MIT,
+    // tools/database/dbc/item.go GetStats; Wowhead Forever tooltip of item 1486)
+    // Classic 1.60 (WoW Forever): a caster weapon's implicit spell power, or healing and damage (ItemTemplate::GetClassicCasterPower,
+    // EV-0112); the client's tooltip shows it, the core never gave it
+    {
+        int32 spellPower = 0, healing = 0, damage = 0;
+        proto->GetClassicCasterPower(itemLevel, spellPower, healing, damage);
+        if (spellPower)
+            ApplySpellPowerBonus(spellPower, apply);
+        if (healing)
+            _ApplyClassicSpellHealingOrDamageMod(ITEM_MOD_SPELL_HEALING_DONE, healing, apply);
+        if (damage)
+            _ApplyClassicSpellHealingOrDamageMod(ITEM_MOD_SPELL_DAMAGE_DONE, damage, apply);
+    }
+
+    if (float const bonusArmor = proto->GetClassicBonusArmor())
+    {
+        HandleStatFlatModifier(UNIT_MOD_ARMOR, TOTAL_VALUE, bonusArmor, apply);
+        m_classicItemArmor += apply ? bonusArmor : -bonusArmor;
     }
 
     WeaponAttackType attType = Player::GetAttackBySlot(slot, proto->GetInventoryType());
@@ -8886,6 +8922,31 @@ static constexpr uint32 ClassicItemModSkills[] =
     SKILL_MINING, SKILL_SKINNING, SKILL_COOKING, 129 /*First Aid*/, SKILL_FISHING, SKILL_TAILORING
 };
 static_assert(std::size(ClassicItemModSkills) == ITEM_MOD_CLASSIC_TAILORING - ITEM_MOD_CLASSIC_TWOHANDED_AXES + 1);
+
+// Classic 1.60 (WoW Forever): an item that states a skill bonus both as an item stat and as an equip spell (Bloody Claws of Attack 280068:
+// stat 98 +1 Fist Weapons and equip spell 1297442 +1 Fist Weapons) gives it once; the in-game tooltip shows one +1 (wowsims/forever,
+// MIT, docs/evidence EV-0104). The equip spell's aura stays and the item stat is left out.
+static bool ClassicEquipSpellGivesItemModSkill(Item const* item, int32 statType)
+{
+    if (statType < ITEM_MOD_CLASSIC_TWOHANDED_AXES || statType > ITEM_MOD_CLASSIC_TAILORING)
+        return false;
+
+    uint32 const skill = ClassicItemModSkills[statType - ITEM_MOD_CLASSIC_TWOHANDED_AXES];
+    for (ItemEffectEntry const* effectData : item->GetEffects())
+    {
+        if (effectData->TriggerType != ITEM_SPELLTRIGGER_ON_EQUIP)
+            continue;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(effectData->SpellID, DIFFICULTY_NONE);
+        if (!spellInfo)
+            continue;
+
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+            if ((effect.IsAura(SPELL_AURA_MOD_SKILL) || effect.IsAura(SPELL_AURA_MOD_SKILL_2)) && uint32(effect.MiscValue) == skill)
+                return true;
+    }
+    return false;
+}
 
 // Classic 1.60: schools of ITEM_MOD_CLASSIC_FIRE_PENETRATION .. ITEM_MOD_CLASSIC_ARCANE_PENETRATION
 static constexpr SpellSchools ClassicItemModPenetrationSchools[] =
@@ -8986,9 +9047,8 @@ void Player::_ApplyWeaponDamage(uint8 slot, Item* item, bool apply)
         return;
 
     float damage = 0.0f;
-    uint32 itemLevel = item->GetItemLevel(this);
     float minDamage, maxDamage;
-    proto->GetDamage(itemLevel, minDamage, maxDamage);
+    item->GetClassicWeaponDamage(this, minDamage, maxDamage);   // Classic 1.60: caster share and QualityModifier (EV-0097)
 
     if (minDamage > 0)
     {
@@ -9537,6 +9597,12 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
                 if (effectData->TriggerType != ITEM_SPELLTRIGGER_ON_PROC)
                     continue;
 
+                // Classic 1.60 (WoW Forever): in Cat or Bear Form only the paw's white swings roll the weapon's chance-on-hit spell; Cat Form
+                // specials rolled Rot-Covered Harpoon's Rot 0 times in 196 where 4.7 were expected (wowsims/forever, MIT, docs/evidence
+                // EV-0122)
+                if (damageInfo.GetSpellInfo() && IsInFeralForm())
+                    continue;
+
                 SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(effectData->SpellID, DIFFICULTY_NONE);
                 if (!spellInfo)
                 {
@@ -9648,8 +9714,17 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
             if (FindCurrentSpellBySpellId(5938) && e_slot == TEMP_ENCHANTMENT_SLOT)
                 chance = 100.0f;
 
+            // Classic 1.60 (WoW Forever): Shadow Oil (enchant 25, Shadow Bolt 350026) procs at its 15% at most once every 10 s, a cooldown
+            // the client states nowhere (wowsims/forever, MIT, docs/evidence EV-0016)
+            Milliseconds const classicEnchantCooldown = pEnchant->ID == 25 ? 10s : 0ms;
+            if (classicEnchantCooldown > 0ms && GetSpellHistory()->HasCooldown(spellInfo->Id))
+                continue;
+
             CombatEnchantProc::Dispatch(chance, [](float procChance) { return roll_chance(procChance); }, [&]
             {
+                if (classicEnchantCooldown > 0ms)
+                    GetSpellHistory()->AddCooldown(spellInfo->Id, 0, classicEnchantCooldown);
+
                 Unit* target = spellInfo->IsPositive() ? this : damageInfo.GetVictim();
 
                 CastSpellExtraArgs args(item);

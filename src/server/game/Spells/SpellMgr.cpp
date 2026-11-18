@@ -1501,6 +1501,11 @@ void SpellMgr::LoadSpellGroupStackRules()
                 TC_LOG_ERROR("sql.sql", "SpellId {} listed in `spell_group` with stack rule 3 does not share aura assigned for group {}", spellId, group_id);
         }
 
+        // Classic 1.60 (WoW Forever): the elixir crit group (sql 2026_11_18_03, R-0025) shares only the crit chance; its elixirs also
+        // carry a stat, which must keep stacking whatever the aura count picks
+        if (group_id == 1400910)
+            auraTypes = { SPELL_AURA_MOD_CRIT_PCT };
+
         mSpellSameEffectStack[SpellGroup(group_id)] = auraTypes;
         ++count;
     }
@@ -3336,6 +3341,79 @@ void SpellMgr::LoadSpellInfoCustomAttributes()
             }
         }
 
+        // Classic 1.60 (WoW Forever): a spell resists all or nothing when its row is magic, on the magic hit table, deals damage and, beside
+        // the damage, applies an aura other than a dummy to an enemy, interrupts, or carries a dummy, script, energize or area trigger effect
+        // on any target. Its hit roll resists it in full (WorldObject::MagicSpellHitResult), and a hit or tick that lands takes no partial
+        // resist and no Spell Piercing bonus (Unit::CalcSpellResistedDamage). Frostbolt, Ice Lance, Immolate, Shadow Word: Death, Arcane
+        // Wrath, Earth Shock, Flamestrike's cast, Mind Flay, Hurricane and Insect Swarm are binary; Flame Shock (a dummy aura on the target),
+        // Arcane Missiles and the plain nukes are not (wowsims/forever, MIT, sim/core/spelldata/spell.go IsBinary, docs/evidence EV-0142:
+        // 0 partial resists on 2,158 held-out casters' binary hits against hundreds expected, full resists at the target's share). This
+        // replaces TrinityCore's rule above (any non-damage effect with a value, with Frostbolt and Haunt excepted) for every spell that
+        // deals damage; a spell that deals none (Polymorph, Fear) keeps it.
+        {
+            bool dealsDamage = false;
+            bool besideDamage = false;
+            for (SpellEffectInfo const& spellEffectInfo : spellInfoMutable->GetEffects())
+            {
+                bool const appliesAura = spellEffectInfo.IsEffect(SPELL_EFFECT_APPLY_AURA) || spellEffectInfo.IsEffect(SPELL_EFFECT_APPLY_AREA_AURA_PARTY)
+                    || spellEffectInfo.IsEffect(SPELL_EFFECT_APPLY_AREA_AURA_RAID) || spellEffectInfo.IsEffect(SPELL_EFFECT_APPLY_AREA_AURA_ENEMY);
+                switch (spellEffectInfo.Effect)
+                {
+                    case SPELL_EFFECT_SCHOOL_DAMAGE:
+                    case SPELL_EFFECT_WEAPON_DAMAGE:
+                    case SPELL_EFFECT_WEAPON_PERCENT_DAMAGE:
+                    case SPELL_EFFECT_NORMALIZED_WEAPON_DMG:
+                    case SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL:
+                    case SPELL_EFFECT_HEALTH_LEECH:
+                    case SPELL_EFFECT_POWER_BURN:
+                        dealsDamage = true;
+                        continue;
+                    case SPELL_EFFECT_INTERRUPT_CAST:
+                    case SPELL_EFFECT_DUMMY:
+                    case SPELL_EFFECT_SCRIPT_EFFECT:
+                    case SPELL_EFFECT_ENERGIZE:
+                    case SPELL_EFFECT_CREATE_AREATRIGGER:
+                        besideDamage = true;
+                        continue;
+                    default:
+                        break;
+                }
+
+                if (!appliesAura)
+                    continue;
+
+                switch (spellEffectInfo.ApplyAuraName)
+                {
+                    case SPELL_AURA_PERIODIC_DAMAGE:
+                    case SPELL_AURA_PERIODIC_LEECH:
+                    case SPELL_AURA_PERIODIC_DAMAGE_PERCENT:
+                    case SPELL_AURA_DAMAGE_SHIELD:
+                    case SPELL_AURA_PROC_TRIGGER_DAMAGE:
+                    case SPELL_AURA_PERIODIC_MANA_LEECH:
+                    case SPELL_AURA_POWER_BURN:
+                        dealsDamage = true;
+                        break;
+                    case SPELL_AURA_DUMMY:
+                    case SPELL_AURA_PERIODIC_DUMMY:
+                        break;
+                    default:
+                        if (spellEffectInfo.TargetA.GetCheckType() == TARGET_CHECK_ENEMY || spellEffectInfo.TargetB.GetCheckType() == TARGET_CHECK_ENEMY)
+                            besideDamage = true;
+                        break;
+                }
+            }
+
+            if (dealsDamage)
+            {
+                bool const magicRow = !(spellInfoMutable->SchoolMask & SPELL_SCHOOL_MASK_NORMAL) && (spellInfoMutable->SchoolMask & SPELL_SCHOOL_MASK_MAGIC)
+                    && spellInfoMutable->DmgClass == SPELL_DAMAGE_CLASS_MAGIC;
+                if (magicRow && besideDamage)
+                    spellInfoMutable->AttributesCu |= SPELL_ATTR0_CU_BINARY_SPELL;
+                else
+                    spellInfoMutable->AttributesCu &= ~SPELL_ATTR0_CU_BINARY_SPELL;
+            }
+        }
+
         // Remove normal school mask to properly calculate damage
         if ((spellInfoMutable->SchoolMask & SPELL_SCHOOL_MASK_NORMAL) && (spellInfoMutable->SchoolMask & SPELL_SCHOOL_MASK_MAGIC))
         {
@@ -4087,9 +4165,22 @@ void SpellMgr::LoadSpellInfoCorrections()
         });
     });
 
-    // Classic 1.60 warrior Deep Wounds: the bleed tick (412613) never misses, never crits and ignores armor
+    // Classic 1.60 (WoW Forever): Ice Lance's damage effect states no spell power coefficient, though the spell scales with spell power in
+    // game; TBC's 1/7 until measured (wowsims/forever, MIT,
+    // tools/database/overrides/spell_overrides.go, a TBC carry-over). All six ranks; no vanilla row exists for this Forever spell.
+    ApplySpellFix({ 400640, 1240044, 1240045, 1240046, 1240047, 1312002 }, [](SpellInfo* spellInfo)
+    {
+        ApplySpellEffectFix(spellInfo, EFFECT_0, [](SpellEffectInfo* spellEffectInfo)
+        {
+            spellEffectInfo->BonusCoefficient = 1.0f / 7.0f;
+        });
+    });
+
+    // Classic 1.60 warrior Deep Wounds: the bleed tick (412613) never misses, never crits and ignores armor; WoW Forever: the warrior's
+    // damage bonuses (Death Wish, Enrage) do not scale it either (wowsims/forever, MIT, docs/evidence EV-0139)
     ApplySpellFix({ 412613 }, [](SpellInfo* spellInfo)
     {
+        spellInfo->AttributesEx3 |= SPELL_ATTR3_IGNORE_CASTER_MODIFIERS;
         spellInfo->AttributesEx2 |= SPELL_ATTR2_CANT_CRIT;
         spellInfo->AttributesEx3 |= SPELL_ATTR3_ALWAYS_HIT;
         spellInfo->AttributesCu |= SPELL_ATTR0_CU_IGNORE_ARMOR;

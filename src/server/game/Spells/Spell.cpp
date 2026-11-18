@@ -2954,6 +2954,17 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
             {
                 caster->SetLastDamagedTargetGuid(spell->unitTarget->GetGUID());
 
+                // Classic 1.60 (WoW Forever): a weapon-damage special (effects 17, 31, 58, 121) takes the white-hit table, where a block
+                // stops the crit; a school-damage special (effect 2) rolls block and crit apart and can do both (wowsims/forever, MIT,
+                // sim/core/spell_outcome.go; no log measurement). The crit chance among unblocked hits is unchanged.
+                if (IsCrit && MissCondition == SPELL_MISS_BLOCK)
+                {
+                    SpellInfo const* info = spell->m_spellInfo;
+                    if (info->HasEffect(SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL) || info->HasEffect(SPELL_EFFECT_WEAPON_PERCENT_DAMAGE)
+                        || info->HasEffect(SPELL_EFFECT_WEAPON_DAMAGE) || info->HasEffect(SPELL_EFFECT_NORMALIZED_WEAPON_DMG))
+                        IsCrit = false;
+                }
+
                 // Add bonuses and fill damageInfo struct
                 caster->CalculateSpellDamageTaken(&damageInfo, spell->m_damage, spell->m_spellInfo, spell->m_attackType, IsCrit, MissCondition == SPELL_MISS_BLOCK, spell);
                 Unit::DealDamageMods(damageInfo.attacker, damageInfo.target, damageInfo.damage, &damageInfo.absorb);
@@ -3023,8 +3034,14 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
             // item spells (spell hit of non-damage spell may also activate items, for example seal of corruption hidden hit)
             if (caster->GetTypeId() == TYPEID_PLAYER && (procSpellType & (PROC_SPELL_TYPE_DAMAGE | PROC_SPELL_TYPE_NO_DMG_HEAL)))
             {
+                // Classic 1.60 (WoW Forever): an ability that requires a shield (Shield Slam, Shield Bash) strikes with the shield, so a weapon's
+                // chance-on-hit spell and its combat enchant never hear it; equip auras still do. Fiery Blaze 0 of 617 Shield Slams and 0 of
+                // 78 Shield Bashes against 212 of 1,517 white hits; Rock on Stick 0 of 157 Shield Slams (wowsims/forever, MIT, docs/evidence
+                // EV-0021, docs/rulings R-0041).
+                bool const requiresShield = spell->m_spellInfo->EquippedItemClass == ITEM_CLASS_ARMOR
+                    && (spell->m_spellInfo->EquippedItemSubClassMask & (1 << ITEM_SUBCLASS_ARMOR_SHIELD));
                 if (spell->m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MELEE || spell->m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_RANGED)
-                    if (!spell->m_spellInfo->HasAttribute(SPELL_ATTR0_CANCELS_AUTO_ATTACK_COMBAT) && !spell->m_spellInfo->HasAttribute(SPELL_ATTR4_SUPPRESS_WEAPON_PROCS))
+                    if (!spell->m_spellInfo->HasAttribute(SPELL_ATTR0_CANCELS_AUTO_ATTACK_COMBAT) && !spell->m_spellInfo->HasAttribute(SPELL_ATTR4_SUPPRESS_WEAPON_PROCS) && !requiresShield)
                         caster->ToPlayer()->CastItemCombatSpell(*spellDamageInfo);
             }
         }
@@ -4444,6 +4461,7 @@ void Spell::finish(SpellCastResult result)
     m_spellState = SPELL_STATE_FINISHED;
 
     SpendPendingComboPoints();                              // a finisher that never reached its finish phase still pays
+    ClassicSpendReservedCharges();                          // Classic 1.60: a channel spends the charges it held (R-0048)
 
     if (m_scriptResult && (m_scriptWaitsForSpellHit || result != SPELL_CAST_OK))
         m_scriptResult.SetResult(result);
@@ -5660,7 +5678,11 @@ void Spell::TakePower()
         {
             ObjectGuid targetGUID = m_targets.GetUnitTargetGUID();
             if (!targetGUID.IsEmpty())
-                hit = std::ranges::any_of(m_UniqueTargetInfo, [&](TargetInfo const& targetInfo) { return targetInfo.TargetGUID == targetGUID && targetInfo.MissCondition == SPELL_MISS_NONE; });
+                hit = std::ranges::any_of(m_UniqueTargetInfo, [&](TargetInfo const& targetInfo)
+                {
+                    // Classic 1.60: a blocked hit landed (partly blocked damage), it is no miss
+                    return targetInfo.TargetGUID == targetGUID && (targetInfo.MissCondition == SPELL_MISS_NONE || targetInfo.MissCondition == SPELL_MISS_BLOCK);
+                });
         }
     }
 
@@ -5676,6 +5698,16 @@ void Spell::TakePower()
             //lower spell cost on fail (by talent aura)
             if (Player* modOwner = unitCaster->GetSpellModOwner())
                 modOwner->ApplySpellMod(m_spellInfo, SpellModOp::PowerCostOnMiss, cost.Amount);
+
+            // Classic 1.60 (WoW Forever): an ability flagged Discount Power On Miss whose target misses, dodges, parries or is immune
+            // pays a fifth of its rage, energy or focus (80% back) and keeps the combo points it would spend. A failed Ferocious Bite
+            // spent 6.1 to 6.7 of its 35 energy on 5 avoided bites and kept its combo points (wowsims/forever, MIT,
+            // sim/core/spelldata/attributes.go MissRefund, docs/evidence EV-0031). The flag is on nearly every warrior, rogue and feral
+            // ability.
+            if (cost.Power == POWER_COMBO_POINTS)
+                continue;
+            if (cost.Power == POWER_RAGE || cost.Power == POWER_ENERGY || cost.Power == POWER_FOCUS)
+                cost.Amount -= CalculatePct(cost.Amount, 80);
         }
 
         if (cost.Power == POWER_RUNES)
@@ -5708,6 +5740,37 @@ void Spell::TakePower()
         if (cost.Power == POWER_MANA && cost.Amount > 0)
             if (Player* manaPlayer = unitCaster->ToPlayer())
                 manaPlayer->InterruptPowerRegen(POWER_MANA);
+    }
+}
+
+void Spell::ClassicReserveCharge(ObjectGuid const& auraCaster, uint32 auraSpellId)
+{
+    std::pair<ObjectGuid, uint32> const key{ auraCaster, auraSpellId };
+    if (std::ranges::find(m_classicReservedCharges, key) == m_classicReservedCharges.end())
+        m_classicReservedCharges.push_back(key);
+}
+
+void Spell::ClassicSpendReservedCharges()
+{
+    if (m_classicReservedCharges.empty())
+        return;
+
+    std::vector<std::pair<ObjectGuid, uint32>> const reserved = std::move(m_classicReservedCharges);
+    m_classicReservedCharges.clear();
+    Unit* wearer = m_caster->ToUnit();
+    if (!wearer)
+        return;
+
+    for (auto const& [auraCaster, auraSpellId] : reserved)
+    {
+        Aura* aura = wearer->GetAura(auraSpellId, auraCaster);
+        if (!aura)
+            continue;
+        SpellProcEntry const* procEntry = sSpellMgr->GetSpellProcEntry(aura->GetSpellInfo());
+        if (procEntry && (procEntry->AttributesMask & PROC_ATTR_USE_STACKS_FOR_CHARGES))
+            aura->ModStackAmount(-1);
+        else if (aura->IsUsingCharges())
+            aura->ModCharges(-1);
     }
 }
 
@@ -5975,6 +6038,9 @@ void Spell::HandleEffects(Unit* pUnitTarget, Item* pItemTarget, GameObject* pGoT
     effectInfo = &spellEffectInfo;
 
     effectValue = CalculateDamage(spellEffectInfo, unitTarget, &variance);
+    // Classic 1.60: a physical effect already rolled its base points (SpellEffectInfo::CalcValue); the handler must not roll it again
+    if (!spellEffectInfo.ClassicRollsWholeAmount())
+        variance = 0.0f;
 
     bool preventDefault = CallScriptEffectHandlers(spellEffectInfo.EffectIndex, mode);
 

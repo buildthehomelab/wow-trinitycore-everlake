@@ -318,6 +318,7 @@ class TC_GAME_API Aura
         void SetUsingCharges(bool val) { m_isUsingCharges = val; }
         void PrepareProcToTrigger(AuraApplication* aurApp, ProcEventInfo& eventInfo, TimePoint now);
         void PrepareProcChargeDrop(SpellProcEntry const* procEntry, ProcEventInfo const& eventInfo);
+        bool ClassicReserveChannelCharge(ProcEventInfo const& eventInfo);
         void ConsumeProcCharges(SpellProcEntry const* procEntry);
         uint32 GetProcEffectMask(AuraApplication* aurApp, ProcEventInfo& eventInfo, TimePoint now) const;
         float CalcProcChance(SpellProcEntry const& procEntry, ProcEventInfo& eventInfo) const;
@@ -435,6 +436,7 @@ class TC_GAME_API Aura
         bool m_isRemoved;
         bool m_isSingleTarget;                              // true if it's a single target spell and registered at caster - can change at spell steal for example
         bool m_isUsingCharges;
+        bool m_classicChargeReserved = false;               // Classic 1.60: this proc's charge is held by the wearer's channel (R-0048)
 
         ChargeDropEvent* m_dropEvent;
 

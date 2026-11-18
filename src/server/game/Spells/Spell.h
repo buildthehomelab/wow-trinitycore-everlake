@@ -767,6 +767,13 @@ class TC_GAME_API Spell
         WeaponAttackType m_attackType;                      // For weapon based attack
 
         std::vector<SpellPowerCost> m_powerCost;            // Calculated spell cost initialized only in Spell::prepare
+        // Classic 1.60 (WoW Forever, R-0048): charge buffs this channel used, (aura caster, aura spell); one charge each is spent when the
+        // channel finishes, interrupted or not
+        std::vector<std::pair<ObjectGuid, uint32>> m_classicReservedCharges;
+    public:
+        void ClassicReserveCharge(ObjectGuid const& auraCaster, uint32 auraSpellId);
+    protected:
+        void ClassicSpendReservedCharges();
         int32 m_comboPointsPending = 0;                     // combo points a finisher spends once its effects are done (they read the points)
         void SpendPendingComboPoints();
         int32 m_casttime;                                   // Calculated spell cast time initialized only in Spell::prepare

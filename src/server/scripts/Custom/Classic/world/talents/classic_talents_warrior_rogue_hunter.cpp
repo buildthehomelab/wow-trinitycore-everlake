@@ -284,11 +284,18 @@ class classic_spell_warr_deep_wounds : public AuraScript
         if (period <= 0 || bleed->GetMaxDuration() <= 0)
             return;
 
-        float minDamage = 0.0f;
-        float maxDamage = 0.0f;
-        warrior->CalculateMinMaxDamage(BASE_ATTACK, false, true, minDamage, maxDamage);
-        float const total = (minDamage + maxDamage) * 0.5f * float(aurEff->GetAmountAsInt()) / 100.0f;
+        // WoW Forever: the bleed is the talent's share of the average damage of the weapon that crit, the off hand's own range without
+        // its damage penalty, with no attack power and none of the warrior's damage bonuses (Death Wish, Enrage: SPELL_ATTR3_IGNORE_
+        // CASTER_MODIFIERS on 412613); a crit on a running bleed adds the damage it has not ticked yet, so two crits in one batch add up
+        // (wowsims/forever, MIT, docs/evidence EV-0139: off-hand crits tick 15.7 against the main hand's 17.2, both together 32).
+        // Vanilla (VMaNGOS) used the main hand with attack power.
+        DamageInfo const* damageInfo = eventInfo.GetDamageInfo();
+        WeaponAttackType const attType = damageInfo && damageInfo->GetAttackType() == OFF_ATTACK ? OFF_ATTACK : BASE_ATTACK;
+        float const averageWeaponDamage = (warrior->GetWeaponDamageRange(attType, MINDAMAGE) + warrior->GetWeaponDamageRange(attType, MAXDAMAGE)) * 0.5f;
+        float total = averageWeaponDamage * float(aurEff->GetAmountAsInt()) / 100.0f;
         int32 const ticks = bleed->GetMaxDuration() / period;
+        if (AuraEffect const* running = victim->GetAuraEffect(SPELL_WARRIOR_DEEP_WOUND, EFFECT_0, warrior->GetGUID()))
+            total += float(running->GetAmount()) * float(running->GetRemainingTicks());
         int32 const perTick = std::max(1, int32(total / float(ticks)));
 
         victim->RemoveAurasDueToSpell(SPELL_WARRIOR_DEEP_WOUND, warrior->GetGUID());
@@ -352,6 +359,64 @@ class classic_spell_warr_flurry : public AuraScript
     void Register() override
     {
         OnEffectProc += AuraEffectProcFn(classic_spell_warr_flurry::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 20253, 20614, 20615 - Intercept Stun: a creature 3 or more levels above the warrior is immune to the stun and its damage, whatever its
+// own immunities (wowsims/forever, MIT, docs/rulings R-0004, sim/warrior/intercept.go; evidence pending)
+class classic_spell_warr_intercept_stun : public SpellScript
+{
+    bool IsImmune(Unit const* target) const
+    {
+        Unit const* warrior = GetCaster();
+        return target && warrior && !target->IsPlayer()
+            && int32(target->GetLevelForTarget(warrior)) >= int32(warrior->GetLevelForTarget(target)) + 3;
+    }
+
+    void HandleHit(SpellEffIndex effIndex)
+    {
+        Unit* target = GetHitUnit();
+        if (!IsImmune(target))
+            return;
+
+        PreventHitDefaultEffect(effIndex);
+        PreventHitAura();   // the aura object is built before the hit; without this an empty stun icon still lands
+        if (GetEffectInfo().IsEffect(SPELL_EFFECT_SCHOOL_DAMAGE))
+        {
+            PreventHitDamage();
+            GetCaster()->SendSpellDamageImmune(target, GetSpellInfo()->Id, false);
+        }
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_warr_intercept_stun::HandleHit, EFFECT_ALL, SPELL_EFFECT_ANY);
+    }
+};
+
+// 12966 - Flurry (the buff): which swings spend a charge beyond its spell_proc row (2026_11_16_40). Windfury Totem's strike spends none,
+// and a crit always leaves 3 charges: the talent 12319 recasts the buff on the same event, and the charge drop ran after that recast in
+// part of the cases (wowsims/forever, MIT, docs/evidence EV-0140: 60 of 60 crits end at 3; EV-0138).
+class classic_spell_warr_flurry_buff : public AuraScript
+{
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Unit* warrior = GetTarget();
+        switch (warrior->GetLastExtraAttackSpell())
+        {
+            case 8516: case 10608: case 10610:          // Windfury Totem's strike
+                return false;
+            default:
+                break;
+        }
+        if ((eventInfo.GetHitMask() & PROC_HIT_CRITICAL) && warrior->HasAura(12319))
+            return false;
+        return true;
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_warr_flurry_buff::CheckProc);
     }
 };
 
@@ -2058,6 +2123,8 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScript(classic_spell_warr_deep_wounds);
     RegisterSpellScript(classic_spell_warr_deep_wound_bleed);
     RegisterSpellScript(classic_spell_warr_flurry);
+    RegisterSpellScript(classic_spell_warr_flurry_buff);
+    RegisterSpellScript(classic_spell_warr_intercept_stun);
     RegisterSpellScript(classic_spell_warr_bloodthirst);
     RegisterSpellScript(classic_spell_warr_unbridled_wrath);
     RegisterSpellScript(classic_spell_warr_sweeping_strikes);

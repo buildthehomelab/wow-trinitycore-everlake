@@ -606,6 +606,28 @@ void Aura::_ApplyForTarget(Unit* target, Unit* caster, AuraApplication* auraApp)
 
     m_applications[target->GetGUID()] = auraApp;
 
+    // Classic 1.60 (WoW Forever): a charge buff gained while its wearer channels a spell its modifiers name is spent at that channel's end
+    // (R-0048; Clearcasting during Arcane Missiles)
+    if (IsUsingCharges() && target == GetUnitOwner())
+    {
+        if (Spell* channel = target->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
+        {
+            if (channel->GetSpellInfo()->IsChanneled())
+            {
+                for (AuraEffect const* aurEff : GetAuraEffects())
+                {
+                    if (!aurEff || (aurEff->GetAuraType() != SPELL_AURA_ADD_FLAT_MODIFIER && aurEff->GetAuraType() != SPELL_AURA_ADD_PCT_MODIFIER))
+                        continue;
+                    if (channel->GetSpellInfo()->IsAffected(m_spellInfo->SpellFamilyName, aurEff->GetSpellEffectInfo().SpellClassMask))
+                    {
+                        channel->ClassicReserveCharge(GetCasterGUID(), GetId());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     // set infinity cooldown state for spells
     if (caster && caster->GetTypeId() == TYPEID_PLAYER)
     {
@@ -1890,11 +1912,46 @@ void Aura::PrepareProcToTrigger(AuraApplication* aurApp, ProcEventInfo& eventInf
     SetLastProcSuccessTime(now);
 }
 
+// Classic 1.60 (WoW Forever): a charge buff hit by its wearer's channel (the channel's cast or one of its ticks) is spent when that channel
+// ends, interrupted or not, not at its first hit: the channel holds one charge (Spell::ClassicReserveCharge) and its later ticks use the
+// buff for free (wowsims/forever, MIT, docs/rulings R-0048, sim/core/spelldata/charges.go; evidence pending).
+bool Aura::ClassicReserveChannelCharge(ProcEventInfo const& eventInfo)
+{
+    Unit* owner = GetUnitOwner();
+    if (!owner || eventInfo.GetActor() != owner)
+        return false;
+
+    Spell* channel = owner->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
+    if (!channel || !channel->GetSpellInfo()->IsChanneled())
+        return false;
+
+    if (Spell const* procSpell = eventInfo.GetProcSpell())
+    {
+        if (procSpell != channel && procSpell->GetTriggeredByAuraSpell() != channel->GetSpellInfo())
+            return false;
+    }
+    else if (eventInfo.GetSpellInfo() != channel->GetSpellInfo())     // a periodic tick of the channel's own aura
+        return false;
+
+    channel->ClassicReserveCharge(GetCasterGUID(), GetId());
+    return true;
+}
+
 void Aura::PrepareProcChargeDrop(SpellProcEntry const* procEntry, ProcEventInfo const& eventInfo)
 {
+    m_classicChargeReserved = false;
+
     // Failed attempts may burn a charge; unrelated event types must not.
     if (GetSpellInfo()->HasAttribute(SPELL_ATTR15_UNK13) && !(eventInfo.GetTypeMask() & procEntry->ProcFlags))
         return;
+
+    bool const consumes = (procEntry->AttributesMask & PROC_ATTR_USE_STACKS_FOR_CHARGES)
+        || (IsUsingCharges() && (!eventInfo.GetSpellInfo() || !eventInfo.GetSpellInfo()->HasAttribute(SPELL_ATTR6_DO_NOT_CONSUME_RESOURCES)));
+    if (consumes && ClassicReserveChannelCharge(eventInfo))
+    {
+        m_classicChargeReserved = true;
+        return;
+    }
 
     // take one charge, aura expiration will be handled in Aura::TriggerProcOnEvent (if needed)
     if (!(procEntry->AttributesMask & PROC_ATTR_USE_STACKS_FOR_CHARGES) && IsUsingCharges() && (!eventInfo.GetSpellInfo() || !eventInfo.GetSpellInfo()->HasAttribute(SPELL_ATTR6_DO_NOT_CONSUME_RESOURCES)))
@@ -1906,6 +1963,13 @@ void Aura::PrepareProcChargeDrop(SpellProcEntry const* procEntry, ProcEventInfo 
 
 void Aura::ConsumeProcCharges(SpellProcEntry const* procEntry)
 {
+    // Classic 1.60: the wearer's channel holds this charge and spends it at its end (ClassicReserveChannelCharge)
+    if (m_classicChargeReserved)
+    {
+        m_classicChargeReserved = false;
+        return;
+    }
+
     // Remove aura if we've used last charge to proc
     if (procEntry->AttributesMask & PROC_ATTR_USE_STACKS_FOR_CHARGES)
     {
@@ -2072,14 +2136,54 @@ float Aura::CalcProcChance(SpellProcEntry const& procEntry, ProcEventInfo& event
     // so talents modifying chances and judgements will have properly calculated proc chance
     if (Unit* caster = GetCaster())
     {
-        // calculate ppm chance if present and we're using weapon
-        if (eventInfo.GetDamageInfo() && procEntry.ProcsPerMinute != 0)
+        // Classic 1.60 (WoW Forever): a procs-per-minute row heard on a spell that is not a melee or ranged attack prices the chance on that
+        // spell's cast time, at least 1.5 s, in place of a weapon speed or the client's retail real-PPM (time since the last proc). Moonshadow
+        // Stave 1300435 at 1.5 a minute: 3.8% on an instant or a 1.5 s Wrath, 6 to 9% on Starfire (359 procs from 10 druids; wowsims/forever,
+        // MIT, docs/evidence EV-0115).
+        SpellInfo const* procSpellInfo = eventInfo.GetSpellInfo();
+        bool const castTimePriced = procEntry.ProcsPerMinute != 0 && procSpellInfo
+            && procSpellInfo->DmgClass != SPELL_DAMAGE_CLASS_MELEE && procSpellInfo->DmgClass != SPELL_DAMAGE_CLASS_RANGED;
+        if (castTimePriced)
         {
-            uint32 WeaponSpeed = caster->GetBaseAttackTime(eventInfo.GetDamageInfo()->GetAttackType());
+            int32 castTime = procSpellInfo->CalcCastTime();
+            if (Spell const* procSpell = eventInfo.GetProcSpell())
+                castTime = procSpell->GetCastTime();
+            chance = caster->GetPPMProcChance(std::max<int32>(castTime, 1500), procEntry.ProcsPerMinute, GetSpellInfo());
+            // Highborne Research Tablet: weapon hits on procs per minute, spell hits a flat chance whatever the cast time (about 7% on
+            // instants and 3 s casts alike; wowsims/forever, MIT, docs/evidence EV-0131)
+            if (procEntry.AttributesMask & PROC_ATTR_CLASSIC_SPELL_FLAT_CHANCE)
+                chance = procEntry.Chance;
+        }
+        // calculate ppm chance if present and we're using weapon
+        else if (eventInfo.GetDamageInfo() && procEntry.ProcsPerMinute != 0)
+        {
+            // Classic 1.60 (WoW Forever): a hit taken prices the rate on the attacker's swing interval, not the wearer's weapon (Argent
+            // Defender, 0.5 a minute on the attacker's speed; wowsims/forever, MIT, docs/evidence EV-0126)
+            Unit const* speedUnit = caster;
+            if (Unit* actor = eventInfo.GetActor())
+                if (actor != caster && eventInfo.GetActionTarget() == caster)
+                    speedUnit = actor;
+            uint32 WeaponSpeed = speedUnit->GetBaseAttackTime(eventInfo.GetDamageInfo()->GetAttackType());
             chance = caster->GetPPMProcChance(WeaponSpeed, procEntry.ProcsPerMinute, GetSpellInfo());
         }
+        // Classic 1.60 (WoW Forever): a procs-per-minute row that hears damage-free spells (PROC_SPELL_TYPE_NO_DMG_HEAL) rolls on them too,
+        // which had no damage to read a weapon from and so a chance of 0. A melee ability (Bash) rolls on the main-hand (paw) speed, a spell
+        // (Faerie Fire) on its cast time, an instant at 1.5 s. Omen of Clarity: Faerie Fire 23 of 365, Bash 2 of 22 (wowsims/forever, MIT,
+        // docs/evidence EV-0020).
+        else if (procEntry.ProcsPerMinute != 0 && (procEntry.SpellTypeMask & PROC_SPELL_TYPE_NO_DMG_HEAL))
+        {
+            if (SpellInfo const* procSpell = eventInfo.GetSpellInfo())
+            {
+                uint32 speed = 0;
+                if (procSpell->DmgClass == SPELL_DAMAGE_CLASS_MELEE)
+                    speed = caster->GetBaseAttackTime(BASE_ATTACK);
+                else
+                    speed = std::max<uint32>(procSpell->CalcCastTime(), 1500);
+                chance = caster->GetPPMProcChance(speed, procEntry.ProcsPerMinute, GetSpellInfo());
+            }
+        }
 
-        if (GetSpellInfo()->ProcBasePPM > 0.0f)
+        if (GetSpellInfo()->ProcBasePPM > 0.0f && !castTimePriced)
             chance = CalcPPMProcChance(caster);
 
         // apply chance modifer aura, applies also to ppm chance (see improved judgement of light spell)

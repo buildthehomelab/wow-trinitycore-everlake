@@ -688,8 +688,7 @@ void PopulateItemStatBlock(Player const* p, Item const* item, ItemStatBlock& out
     // in compact uint16 (caps DPS at 6553.5 — well above any TWW weapon).
     if (tmpl->GetClass() == ITEM_CLASS_WEAPON)
     {
-        const uint32 effective_ilvl = item->GetItemLevel(p);
-        const float dps = tmpl->GetDPS(effective_ilvl);
+        const float dps = item->GetClassicWeaponDPS(p);   // Classic 1.60: a reduced caster weapon's share, suffix included (EV-0097)
         if (dps > 0.f)
             out.weapon_dps_x10 = static_cast<uint16>(std::clamp<float>(dps * 10.f, 0.f, 65535.f));
     }
@@ -8096,7 +8095,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                     }
                     if (tmpl->GetClass() == ITEM_CLASS_WEAPON)
                     {
-                        const float dps = tmpl->GetDPS(base_ilvl);
+                        const float dps = tmpl->GetClassicDPS(base_ilvl, tmpl->HasFlag(ITEM_FLAG4_REGULATED_COMMODITY));   // Classic 1.60 (EV-0097)
                         if (dps > 0.f)
                             approx.weapon_dps_x10 =
                                 static_cast<uint16>(std::clamp<float>(dps * 10.f, 0.f, 65535.f));

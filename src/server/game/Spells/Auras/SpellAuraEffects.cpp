@@ -17,6 +17,7 @@
 
 #include "SpellAuraEffects.h"
 #include "ClassicFeignDeath.h"
+#include "ClassicRounding.h"
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"
 #include "Battleground.h"
@@ -779,12 +780,41 @@ void AuraEffect::GetApplicationList(Container& applicationContainer) const
     }
 }
 
+uint32 AuraEffect::ClassicRollTickAmount() const
+{
+    SpellEffectValue amount = GetAmount();
+    if (_classicTickSpread > 0.0)
+    {
+        // the amount holds every stack's share (CalculateAmount multiplies by the stacks), the roll one stack's
+        SpellEffectValue const stacks = GetSpellEffectInfo().EffectAttributes.HasFlag(SpellEffectAttributes::SuppressPointsStacking) ? 1.0 : double(GetBase()->GetStackAmount());
+        amount = std::max(0.0, amount + stacks * (frand(-float(_classicTickSpread), float(_classicTickSpread)) - _classicTickRolled));
+    }
+    return ClassicRounding::RoundByFraction(amount, rand_norm());
+}
+
 SpellEffectValue AuraEffect::CalculateAmount(Unit* caster)
 {
     Unit* unitOwner = GetBase()->GetOwner()->ToUnit();
 
     // default amount calculation
-    SpellEffectValue amount = GetSpellEffectInfo().CalcValue(caster, &m_baseAmount, unitOwner, nullptr, GetBase()->GetCastItemId(), GetBase()->GetCastItemLevel());
+    float rolledVariance = 0.0f;
+    SpellEffectValue amount = GetSpellEffectInfo().CalcValue(caster, &m_baseAmount, unitOwner, &rolledVariance, GetBase()->GetCastItemId(), GetBase()->GetCastItemLevel());
+
+    // Classic 1.60 (WoW Forever): every DoT tick rolls its effect's amount, where the amount was rolled once when the aura went on. Keep
+    // the share this roll added and the widest swing so each tick can roll afresh (ClassicRollTickAmount). In the client data only Devious
+    // Strike, Caustic Smog Potion, Circle of Flame and Flee have a periodic damage variance (wowsims/forever, MIT, docs/rulings R-0034,
+    // sim/core/spelldata/resolve_aura.go; evidence pending).
+    _classicTickRolled = 0.0;
+    _classicTickSpread = 0.0;
+    if (GetAuraType() == SPELL_AURA_PERIODIC_DAMAGE || GetAuraType() == SPELL_AURA_PERIODIC_LEECH)
+    {
+        if (float const variance = GetSpellEffectInfo().GetClassicVariance(caster))
+        {
+            SpellEffectValue const basePoints = GetSpellEffectInfo().CalcBaseValue(caster, unitOwner, GetBase()->GetCastItemId(), GetBase()->GetCastItemLevel());
+            _classicTickRolled = basePoints * rolledVariance;
+            _classicTickSpread = basePoints * std::fabs(variance * 0.5f);
+        }
+    }
 
     // custom amount calculations go here
     switch (GetAuraType())
@@ -5931,7 +5961,7 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
     uint32 stackAmountForBonuses = !GetSpellEffectInfo().EffectAttributes.HasFlag(SpellEffectAttributes::SuppressPointsStacking) ? GetBase()->GetStackAmount() : 1;
 
     // ignore negative values (can be result apply spellmods to aura damage
-    uint32 damage = std::max(GetAmountAsInt(), 0);
+    uint32 damage = ClassicRollTickAmount();   // Classic 1.60: each tick rolls its variance and rounds by its fraction (R-0034, EV-0095)
 
     // Script Hook For HandlePeriodicDamageAurasTick -- Allow scripts to change the Damage pre class mitigation calculations
     uint32 const damageBeforeHook = damage;
@@ -6075,7 +6105,7 @@ void AuraEffect::HandlePeriodicHealthLeechAuraTick(Unit* target, Unit* caster) c
     uint32 stackAmountForBonuses = !GetSpellEffectInfo().EffectAttributes.HasFlag(SpellEffectAttributes::SuppressPointsStacking) ? GetBase()->GetStackAmount() : 1;
 
     // ignore negative values (can be result apply spellmods to aura damage
-    uint32 damage = std::max(GetAmountAsInt(), 0);
+    uint32 damage = ClassicRollTickAmount();   // Classic 1.60: each tick rolls its variance and rounds by its fraction (R-0034, EV-0095)
 
     if (caster)
         damage = caster->SpellDamageBonusDone(target, GetSpellInfo(), damage, DOT, GetSpellEffectInfo(), stackAmountForBonuses, nullptr, this);
@@ -6203,7 +6233,7 @@ void AuraEffect::HandlePeriodicHealAurasTick(Unit* target, Unit* caster) const
     uint32 stackAmountForBonuses = !GetSpellEffectInfo().EffectAttributes.HasFlag(SpellEffectAttributes::SuppressPointsStacking) ? GetBase()->GetStackAmount() : 1;
 
     // ignore negative values (can be result apply spellmods to aura damage
-    uint32 damage = std::max(GetAmountAsInt(), 0);
+    uint32 damage = ClassicRounding::RoundByFraction(GetAmount(), rand_norm());   // Classic 1.60: each tick rounds by its fraction (EV-0095)
 
     if (GetAuraType() == SPELL_AURA_OBS_MOD_HEALTH)
         damage = uint32(target->CountPctFromMaxHealth(damage));
@@ -6369,7 +6399,7 @@ void AuraEffect::HandlePeriodicEnergizeAuraTick(Unit* target, Unit* caster) cons
     target->SendPeriodicAuraLog(&pInfo);
 
     if (caster)
-        target->GetThreatManager().ForwardThreatForAssistingMe(caster, float(gain)*0.5f, GetSpellInfo(), true);
+        target->GetThreatManager().ForwardThreatForAssistingMe(caster, float(gain)*0.5f, GetSpellInfo(), !Unit::ClassicRageThreatTakesModifiers(GetSpellInfo()));
 }
 
 void AuraEffect::HandlePeriodicPowerBurnAuraTick(Unit* target, Unit* caster) const

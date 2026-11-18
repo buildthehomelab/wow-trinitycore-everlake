@@ -2342,6 +2342,24 @@ uint32 Item::GetRetailSellPrice(ItemTemplate const* proto, uint32 quality, uint3
     return 0;
 }
 
+// Classic 1.60 (WoW Forever): a weapon flagged REDUCED_CASTER_DPS (ItemSparse Flags[3] 0x100, 165 caster weapons) or carrying a random
+// suffix with an ItemBonus type 54 row (of the Sorcerer, Physician, Healing...) deals 2/3 (one-hand) or 29/39 (two-hand) of its damage
+// table cell; the game files' caster tables equal the regular ones. These shares reproduce the in-game range of all 165 flagged weapons
+// and of Brutal War Axe of the Physician, 43 - 66 (wowsims/forever, MIT, tools/database/dbc/item_damage.go, docs/evidence EV-0097,
+// EV-0110). Without them Death Speaker Scepter hit for 42 - 78 where the game shows 28 - 52.
+float Item::GetClassicWeaponDPS(Player const* owner) const
+{
+    return GetTemplate()->GetClassicDPS(GetItemLevel(owner), _bonusData.ClassicReducedCasterDps);
+}
+
+// Classic 1.60 (WoW Forever): the equipped damage range, the table DPS spread by the item's damage variance plus the item's
+// QualityModifier per second (a negative one on Benediction and three AQ20 weapons), the low end rounded down, the high end to nearest,
+// a negative end made 1 (wowsims/forever, MIT, tools/database/dbc/item_damage.go WeaponDamage, EV-0097). Retail left QualityModifier out.
+void Item::GetClassicWeaponDamage(Player const* owner, float& minDamage, float& maxDamage) const
+{
+    GetTemplate()->GetClassicDamage(GetItemLevel(owner), _bonusData.ClassicReducedCasterDps, minDamage, maxDamage);
+}
+
 uint32 Item::GetItemLevel(Player const* owner) const
 {
     ItemTemplate const* itemTemplate = GetTemplate();
@@ -3067,6 +3085,7 @@ void BonusData::Initialize(ItemTemplate const* proto)
     CanDisenchant = !proto->HasFlag(ITEM_FLAG_NO_DISENCHANT);
     CanScrap = proto->HasFlag(ITEM_FLAG4_SCRAPABLE);
     CanSalvage = !proto->HasFlag(ITEM_FLAG4_NO_SALVAGE);
+    ClassicReducedCasterDps = proto->HasFlag(ITEM_FLAG4_REGULATED_COMMODITY);   // Forever reuses bit 0x100 as REDUCED_CASTER_DPS
     CanRecraft = proto->HasFlag(ITEM_FLAG4_RECRAFTABLE);
     CannotTradeBindOnPickup = proto->HasFlag(ITEM_FLAG2_NO_TRADE_BIND_ON_ACQUIRE);
     IgnoreSquish = false;
@@ -3128,6 +3147,9 @@ void BonusData::AddBonus(uint32 type, std::array<int32, 4> const& values)
             }
             break;
         }
+        case ITEM_BONUS_CLASSIC_REDUCED_CASTER_DPS:
+            ClassicReducedCasterDps = true;
+            break;
         case ITEM_BONUS_QUALITY:
             if (!_state.HasQualityBonus)
             {

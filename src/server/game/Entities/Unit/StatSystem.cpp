@@ -20,6 +20,7 @@
 #include "Item.h"
 #include "Player.h"
 #include "ClassicManaRegen.h"
+#include "Spell.h"
 #include "ClassicSpellValue.h"
 #include "Pet.h"
 #include "GameTables.h"
@@ -273,6 +274,9 @@ void Player::UpdateResistances(uint32 school)
         UpdateArmor();
 }
 
+static constexpr uint32 CLASSIC_SPELL_DRUID_ENRAGE = 5229;
+static constexpr uint32 CLASSIC_SPELL_DRUID_THICK_HIDE_ARMOR = 9970701;    // serverside: Thick Hide's armor (classic_talents_warlock_druid.cpp)
+
 void Player::UpdateArmor()
 {
     UnitMods unitMod = UNIT_MOD_ARMOR;
@@ -291,9 +295,33 @@ void Player::UpdateArmor()
 
     float baseValue = value;
 
+    // Classic 1.60 (WoW Forever): SPELL_AURA_MOD_BONUS_ARMOR_PCT (Bear Form 180%, Dire Bear Form and Moonkin Form 360%) multiplies the
+    // armor of the equipped items only; the armor from Agility and from buffs (Mark of the Wild, Devotion Aura) stays whole. Druid logs read
+    // 1.8 and 3.6 times the items' armor added and nothing more (wowsims/forever, MIT, docs/evidence EV-0037).
+    // Thick Hide's armor is scaled by the form as well: 30 in Cat Form, 84 in Bear Form at rank 1, level 30 (EV-0039).
+    float itemArmor = std::max(m_classicItemArmor, 0.0f);
+    float thickHideArmor = 0.0f;
+    if (AuraEffect const* thickHide = GetAuraEffect(CLASSIC_SPELL_DRUID_THICK_HIDE_ARMOR, EFFECT_0))
+        thickHideArmor = std::max(float(thickHide->GetAmount()), 0.0f);
+    float const formArmorMultiplier = GetTotalAuraMultiplier(SPELL_AURA_MOD_BONUS_ARMOR_PCT);
     value += GetFlatModifierValue(unitMod, TOTAL_VALUE);        // bonus armor from auras and items
+    value += (itemArmor + thickHideArmor) * (formArmorMultiplier - 1.0f);
+
+    // Classic 1.60 (WoW Forever): Enrage 5229 "reduces base armor by 27% in Bear Form and 16% in Dire Bear Form" (effect 3, a dummy). The
+    // game takes the share of the items' armor after the form's multiplier and of the 2 armor per Agility; buff armor, Thick Hide and
+    // the level stay whole (wowsims/forever, MIT, docs/evidence EV-0032, EV-0109: 1206 -> 962 = 0.27 x 904; EV-0034 for Dire Bear Form).
+    if (HasAura(CLASSIC_SPELL_DRUID_ENRAGE))
+    {
+        float enragePenalty = 0.0f;
+        if (GetShapeshiftForm() == FORM_BEAR_FORM)
+            enragePenalty = 0.27f;
+        else if (GetShapeshiftForm() == FORM_DIRE_BEAR_FORM)
+            enragePenalty = 0.16f;
+        value -= enragePenalty * (itemArmor * formArmorMultiplier + GetStat(STAT_AGILITY) * 2.0f);
+    }
+
     value *= GetPctModifierValue(unitMod, TOTAL_PCT);
-    value *= GetTotalAuraMultiplier(SPELL_AURA_MOD_BONUS_ARMOR_PCT);
+    value = std::max(value, 0.0f);
 
     SetArmor(int32(value), int32(value - baseValue));
 
@@ -400,23 +428,22 @@ float Player::GetClassicDefenseSkillBonus() const
     return (int32(GetSkillValue(SKILL_DEFENSE)) - int32(GetMaxSkillValueForLevel())) * 0.04f;
 }
 
-// Classic 1.60 (vanilla, VMaNGOS / TrinityCoreClassic): mana per second from spirit (the values are per 2 second tick)
+// Classic 1.60 (WoW Forever): mana per second from spirit, 6.25 + Spirit / 8 for every mana class (12.5 + Spirit / 4 per 2 second tick,
+// vanilla's mage and priest rate). Vanilla gave shamans 17 + Spirit / 5 and druids, hunters, paladins and warlocks 15 + Spirit / 5 per
+// tick. Source: wowsims/forever (MIT), sim/core/mana.go and mana_regen_test.go; no log measurement is published, so low confidence.
 float Player::OCTRegenMPPerSpirit() const
 {
-    float spirit = GetStat(STAT_SPIRIT);
-    float perTick;
     switch (GetClass())
     {
         case CLASS_MAGE:
-        case CLASS_PRIEST:  perTick = spirit / 4.0f + 12.5f; break;
-        case CLASS_SHAMAN:  perTick = spirit / 5.0f + 17.0f; break;
+        case CLASS_PRIEST:
+        case CLASS_SHAMAN:
         case CLASS_DRUID:
         case CLASS_HUNTER:
         case CLASS_PALADIN:
-        case CLASS_WARLOCK: perTick = spirit / 5.0f + 15.0f; break;
+        case CLASS_WARLOCK: return 6.25f + GetStat(STAT_SPIRIT) / 8.0f;
         default:            return 0.0f;
     }
-    return perTick / 2.0f;
 }
 
 // Classic 1.60 (vanilla, VMaNGOS / TrinityCoreClassic): health per 2 second tick from spirit, out of combat
@@ -620,12 +647,22 @@ void Player::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, bo
     SpellShapeshiftFormEntry const* shapeshift = sSpellShapeshiftFormStore.LookupEntry(GetShapeshiftForm());
     if (shapeshift && shapeshift->CombatRoundTime)
     {
-        // Classic 1.60 (vanilla, VMaNGOS Player::CalculateMinMaxDamage): in cat and bear form the equipped weapon's damage is ignored; the
-        // range is level * 0.85 .. level * 1.25 (level capped at 60) times the form's speed. Rescaling the weapon kept a Forever staff's
-        // full swing damage in every cat hit (druid 156: about 350 per white swing against 91 from attack power).
-        float const formLevel = float(std::min<uint32>(GetLevel(), 60));
-        weaponMinDamage = formLevel * 0.85f * attackPowerMod;
-        weaponMaxDamage = formLevel * 1.25f * attackPowerMod;
+        // Classic 1.60 (WoW Forever): the paw takes the main-hand weapon's damage table DPS (the item's own damage range and speed left out)
+        // times the form's swing time (1 s Cat, 2.5 s Bear and Dire Bear), spread by the form's DamageVariance (0.4: +-20%), the low end
+        // rounded down and the high end to nearest, at least 1; with no weapon it is 1 - 1 (wowsims/forever, MIT, sim/druid/forms.go,
+        // docs/evidence EV-0041). A 60 DPS staff gives a cat 48 - 72 before attack power. Vanilla (VMaNGOS) ignored the weapon and used
+        // level * 0.85 .. level * 1.25 times the form's speed. Scaling the weapon's own range kept a staff's full swing damage in every
+        // cat hit (druid 156: about 350 per white swing against 91 from attack power).
+        float const formSpeed = shapeshift->CombatRoundTime / 1000.0f;
+        float const halfVariance = shapeshift->DamageVariance * 0.5f;
+        weaponMinDamage = 1.0f;
+        weaponMaxDamage = 1.0f;
+        if (Item const* weapon = GetUseableItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND))
+        {
+            float const mean = weapon->GetClassicWeaponDPS(this) * formSpeed;   // a reduced caster weapon's share included (EV-0097)
+            weaponMinDamage = std::max(1.0f, std::floor(mean * (1.0f - halfVariance)));
+            weaponMaxDamage = std::max(1.0f, std::round(mean * (1.0f + halfVariance)));
+        }
     }
     else if (!CanUseAttackType(attType)) // check if player not in form but still can't use (disarm case)
     {
@@ -1059,8 +1096,14 @@ void Player::UpdatePowerRegen(Powers power)
     if (powerType->GetFlags().HasFlag(PowerTypeFlags::RegenAffectedByHaste))
         pct_modifier /= m_unitData->ModHasteRegen;
 
-    pct_modifier                *= GetTotalAuraMultiplierByMiscValue(SPELL_AURA_MOD_POWER_REGEN_PERCENT, AsUnderlyingType(power));
+    float const regenPercentAuras = GetTotalAuraMultiplierByMiscValue(SPELL_AURA_MOD_POWER_REGEN_PERCENT, AsUnderlyingType(power));
+    pct_modifier                *= regenPercentAuras;
     flat_modifier               += GetTotalAuraModifierByMiscValue(SPELL_AURA_MOD_POWER_REGEN, AsUnderlyingType(power)) / 5.f;
+    // Classic 1.60 (WoW Forever): Innervate's +400% (SPELL_AURA_MOD_POWER_REGEN_PERCENT) multiplies MP5 as well as the Spirit regen: the
+    // regen under it reads 5 x (Spirit regen + MP5) on 31 of 31 ledger lines, 10 of 10 with MP5 up. Periodic energize auras (Blessing of
+    // Wisdom, Mana Spring) are not regen and tick the same under it (wowsims/forever, MIT, docs/evidence EV-0114).
+    if (power == POWER_MANA)
+        flat_modifier           *= regenPercentAuras;
 
     // Classic 1.60: "mana per 5 sec." on items (ITEM_MOD_MANA_REGENERATION, ApplyManaRegenBonus) is mana every five seconds, cast or not,
     // like the mp5 aura above (forever-bugs #54). It was summed into m_baseManaRegen and never read, so the item stat gave nothing.
@@ -1097,7 +1140,14 @@ float Player::GetPowerRegen(Powers power) const
         // interrupted rate is the share of SPELL_AURA_MOD_MANA_REGEN_INTERRUPT (not zero), and combat does not interrupt the regeneration.
         // Leaving combat does not start the window, so it has a timestamp of its own.
         int64 const msSinceManaSpent = std::chrono::duration_cast<Milliseconds>(GameTime::Now() - m_manaSpentTimestamp).count();
-        bool const manaInterrupted = ClassicManaRegen::IsInterrupted(msSinceManaSpent, HasAuraType(SPELL_AURA_INTERRUPT_REGEN));
+        // Classic 1.60 (WoW Forever): a channel that paid mana holds the window until it ends, so the regeneration comes back at the later of
+        // 5 s after the payment and the channel's end (Blizzard, Hurricane, Tranquility, Drain Mana); a free channel holds nothing
+        // (wowsims/forever, MIT, docs/rulings R-0036, docs/evidence EV-0107).
+        bool paidChannel = false;
+        if (Spell const* channel = GetCurrentSpell(CURRENT_CHANNELED_SPELL))
+            if (channel->getState() == SPELL_STATE_CHANNELING)
+                paidChannel = channel->GetPowerTypeCostAmount(POWER_MANA).value_or(0) > 0;
+        bool const manaInterrupted = ClassicManaRegen::IsInterrupted(msSinceManaSpent, HasAuraType(SPELL_AURA_INTERRUPT_REGEN), paidChannel);
         return manaInterrupted ? powerType->RegenCombat + m_unitData->PowerRegenInterruptedFlatModifier[powerIndex]
                                : powerType->RegenPeace + m_unitData->PowerRegenFlatModifier[powerIndex];
     }
@@ -1545,6 +1595,10 @@ void Guardian::UpdateAttackPowerAndDamage(bool ranged)
     // WoW Forever: the Voidwalker's and Sayaad's own attack power is 3 x level + 6, nothing from Strength (wowsims/forever EV-0075, EV-0076)
     else if (IsPet() && (GetEntry() == ENTRY_VOIDWALKER || GetEntry() == ENTRY_SUCCUBUS))
         val = WarlockPetForever::DemonAttackPower(GetLevel());
+    // WoW Forever: a hunter pet's own attack power is 30% of its level's creature dps as attack power, nothing from Strength
+    // (HunterPetForever::OwnAttackPower, EV-0070); the hunter's 10% comes on top (415429, classic_hunter_pet_scaling.cpp)
+    else if (IsHunterPet())
+        val = HunterPetForever::OwnAttackPower(sDB2Manager.EvaluateExpectedStat(ExpectedStatType::CreatureAutoAttackDps, GetLevel(), -2, 0, CLASS_NONE, 0));
     else
         val = 2 * GetStat(STAT_STRENGTH) - 20.0f;
 

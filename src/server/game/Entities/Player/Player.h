@@ -3393,6 +3393,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         uint64 _classicLegacyResetCost = 0;                          // last Legacy perk reset price (character_legacy_reset)
         time_t _classicLegacyResetTime = 0;                          // when it was paid
         int32 m_classicBlockValueBonus = 0;                    // ITEM_MOD_BLOCK_VALUE of equipped items
+        float m_classicItemArmor = 0.0f;                        // armor of equipped items (base and ITEM_MOD_EXTRA_ARMOR), part of UNIT_MOD_ARMOR TOTAL_VALUE
         int32 m_classicSpellHealingDone = 0;                   // ITEM_MOD_SPELL_HEALING_DONE of equipped items and enchantments
         int32 m_classicSpellDamageDone = 0;                    // ITEM_MOD_SPELL_DAMAGE_DONE of equipped items and enchantments
         mutable TimePoint _classicFreeHelpfulSpellsUntil;            // Legacy perk The Quick and the Dead: free helpful spells after resurrection

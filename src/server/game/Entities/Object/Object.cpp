@@ -1929,6 +1929,12 @@ SpellMissInfo WorldObject::MagicSpellHitResult(Unit* victim, SpellInfo const* sp
         if (modHitChance < 22.0f)
             modHitChance = 22.0f;
 
+        // Classic 1.60 (WoW Forever): a binary spell takes its full resist from the level-based hit only, and every spell hit bonus (talents,
+        // gear, the target's auras) is added after it: hit = level hit x (1 - average resist) + spell hit. So spell hit past the level-based
+        // miss still counteracts the resist (wowsims/forever, MIT, sim/core/spell_result.go; no log measurement). Vanilla (VMaNGOS)
+        // multiplied the whole hit, bonus included, by (1 - average resist).
+        float const levelHitChance = modHitChance;
+
         // Spellmod from SpellModOp::HitChance
         if (Player* modOwner = GetSpellModOwner())
             modOwner->ApplySpellMod(spellInfo, SpellModOp::HitChance, modHitChance);
@@ -1940,19 +1946,21 @@ SpellMissInfo WorldObject::MagicSpellHitResult(Unit* victim, SpellInfo const* sp
             modHitChance += victim->GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_ATTACKER_SPELL_HIT_CHANCE, schoolMask);
         }
 
-        float HitChance = modHitChance;
         // Increase hit chance from attacker SPELL_AURA_MOD_SPELL_HIT_CHANCE and attacker ratings
         if (Unit const* unit = ToUnit())
-            HitChance += unit->m_modSpellHitChance;
+            modHitChance += unit->m_modSpellHitChance;
+        float const hitBonus = modHitChance - levelHitChance;
 
-        // Classic 1.60 (vanilla, VMaNGOS MagicSpellHitChance): binary spells are fully resisted with the target's average resist
-        // chance for their school (no partial resists for them, Unit::CalcSpellResistedDamage)
+        float binaryHitChance = levelHitChance;
         if (spellInfo->HasAttribute(SPELL_ATTR0_CU_BINARY_SPELL) && (schoolMask & SPELL_SCHOOL_MASK_MAGIC)
             && !((schoolMask & SPELL_SCHOOL_MASK_HOLY) && victim->GetTypeId() != TYPEID_UNIT))
-            HitChance *= 1.0f - Unit::CalculateAverageResistReduction(this, schoolMask, victim, spellInfo);
+            binaryHitChance *= 1.0f - Unit::CalculateAverageResistReduction(this, schoolMask, victim, spellInfo);
+        float HitChance = binaryHitChance + hitBonus;
 
-        // vanilla: always at least 1% hit and at least 1% miss
-        RoundToInterval(HitChance, 1.0f, 99.0f);
+        // Classic 1.60 (WoW Forever): no 1% minimum miss and no 99% hit cap. Spell hit past the level-based miss keeps counting (against a
+        // binary spell's resist, Unit::CalculateAverageResistReduction above), and a target 4 or more levels below is never missed
+        // (wowsims/forever, MIT, sim/core/spell_result.go; no log measurement). Vanilla kept 1% hit and 1% miss.
+        RoundToInterval(HitChance, 0.0f, 100.0f);
 
         return 100.0f - HitChance;
     }();

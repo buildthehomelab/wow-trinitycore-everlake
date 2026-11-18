@@ -484,8 +484,10 @@ class classic_spell_pri_renewed_hope_crit : public SpellScript
     }
 };
 
-// 431622 - Divine Aegis: "Your critical heals create a protective shield on the target, absorbing 15% of the amount healed. Lasts 12 sec."
-// (431624, crit only + triggered heals via spell_proc)
+// 431622 - Divine Aegis: "Your non-periodic critical heals create a protective shield on the target, absorbing $s1% of the amount healed.
+// Shields up to ${$s2*$pl} damage and lasts $431624d." (431624, crit only + triggered heals via spell_proc). A new crit adds to what is
+// left of this priest's shield on the target, up to effect 1 (20) times the priest's level (the tooltip; wowsims/forever, MIT,
+// sim/priest/talents_discipline.go reads it the same way).
 class classic_spell_pri_divine_aegis : public AuraScript
 {
     bool Validate(SpellInfo const* /*spellInfo*/) override
@@ -501,9 +503,20 @@ class classic_spell_pri_divine_aegis : public AuraScript
 
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
+        Unit* priest = GetTarget();
+        Unit* target = eventInfo.GetActionTarget();
         int32 absorb = CalculatePct(int32(eventInfo.GetHealInfo()->GetHeal()), aurEff->GetAmount());
-        if (absorb > 0)
-            GetTarget()->CastSpell(eventInfo.GetActionTarget(), SPELL_PRI_DIVINE_AEGIS_ABSORB, CastSpellExtraArgs(aurEff).AddSpellBP0(absorb));
+        if (absorb <= 0)
+            return;
+
+        if (AuraEffect const* shield = target->GetAuraEffect(SPELL_PRI_DIVINE_AEGIS_ABSORB, EFFECT_0, priest->GetGUID()))
+            absorb += std::max(shield->GetAmountAsInt(), 0);
+
+        if (AuraEffect const* capPerLevel = GetEffect(EFFECT_1))
+            if (int32 cap = capPerLevel->GetAmountAsInt() * int32(priest->GetLevel()); cap > 0)
+                absorb = std::min(absorb, cap);
+
+        priest->CastSpell(target, SPELL_PRI_DIVINE_AEGIS_ABSORB, CastSpellExtraArgs(aurEff).AddSpellBP0(absorb));
     }
 
     void Register() override
@@ -513,8 +526,8 @@ class classic_spell_pri_divine_aegis : public AuraScript
     }
 };
 
-// 1309969 - Power in Light: "Your Smite and Penance spells deal 15% increased damage to targets afflicted with your Holy Fire." Bound to
-// Smite (all ranks) and the Penance damage spells.
+// 1309969 - Power in Light: "Your Smite and Penance spells deal $m1% increased damage to targets afflicted with your Holy Fire or Shadow
+// Word: Pain." Bound to Smite (all ranks) and the Penance damage spells.
 class classic_spell_pri_power_in_light : public SpellScript
 {
     void HandleCalcDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod)
@@ -524,14 +537,79 @@ class classic_spell_pri_power_in_light : public SpellScript
         if (!talent || !victim)
             return;
 
-        // Holy Fire (all ranks): family flag 0x100000
-        if (victim->GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_PRIEST, flag128(0x00100000, 0, 0, 0), caster->GetGUID()))
+        // Holy Fire (all ranks): family flag 0x100000; Shadow Word: Pain (all ranks): 0x8000
+        if (victim->GetAuraEffect(SPELL_AURA_PERIODIC_DAMAGE, SPELLFAMILY_PRIEST, flag128(0x00108000, 0, 0, 0), caster->GetGUID()))
             AddPct(pctMod, talent->GetAmount());
     }
 
     void Register() override
     {
         CalcDamage += SpellCalcDamageFn(classic_spell_pri_power_in_light::HandleCalcDamage);
+    }
+};
+
+// 1309595, 1309633, 1309635, 1309636 - Shadow Word: Death: "If your target is not killed by Shadow Word: Death, you take backlash damage
+// equal to $s3% of your maximum health." Effect 2 holds the percent (30) as a dummy, so the priest never took the backlash. After the hit,
+// a target still alive deals the priest that share of maximum health as Shadow damage from the priest (tooltip; wowsims/forever, MIT,
+// sim/priest/shadow_word_death.go deals it on every cast; no log reading).
+class classic_spell_pri_shadow_word_death_backlash : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_2 } });
+    }
+
+    void HandleAfterHit()
+    {
+        Unit* priest = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!priest || !priest->IsAlive() || (target && !target->IsAlive()))
+            return;
+
+        int32 const percent = GetEffectInfo(EFFECT_2).CalcValueAsInt(priest);
+        uint32 const damage = uint32(priest->CountPctFromMaxHealth(percent));
+        if (!damage)
+            return;
+
+        SpellNonMeleeDamage damageInfo(priest, priest, GetSpellInfo(), GetSpell()->m_SpellVisual, SPELL_SCHOOL_MASK_SHADOW, GetSpell()->m_castId);
+        damageInfo.damage = damage;
+        priest->DealSpellDamage(&damageInfo, false);
+        priest->SendSpellNonMeleeDamageLog(&damageInfo);
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(classic_spell_pri_shadow_word_death_backlash::HandleAfterHit);
+    }
+};
+
+// 1277324-1277328 - Dark Sacrifice: "Cannibalize $o1 of your own Health over $d to gain ${$o2+$SPI} Mana." Effect 0 (the health) is a
+// periodic dummy, so nothing was taken, and effect 1 (mana) gave the row's amount without the Spirit. Each tick now takes effect 0's health
+// from the priest (never the last point) and the mana ticks share the priest's Spirit evenly (tooltip; wowsims/forever, MIT,
+// sim/priest/dark_sacrifice.go; no log reading).
+class classic_spell_pri_dark_sacrifice : public AuraScript
+{
+    void CalcManaAmount(AuraEffect const* aurEff, SpellEffectValue& amount, bool& canBeRecalculated)
+    {
+        canBeRecalculated = false;
+        Unit* priest = GetCaster();
+        uint32 const ticks = aurEff->GetTotalTicks();
+        if (priest && ticks)
+            amount += priest->GetStat(STAT_SPIRIT) / float(ticks);
+    }
+
+    void HandleHealthTick(AuraEffect const* aurEff)
+    {
+        Unit* priest = GetTarget();
+        int64 const take = std::min<int64>(aurEff->GetAmountAsInt(), int64(priest->GetHealth()) - 1);
+        if (take > 0)
+            priest->ModifyHealth(-take);
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(classic_spell_pri_dark_sacrifice::CalcManaAmount, EFFECT_1, SPELL_AURA_PERIODIC_ENERGIZE);
+        OnEffectPeriodic += AuraEffectPeriodicFn(classic_spell_pri_dark_sacrifice::HandleHealthTick, EFFECT_0, SPELL_AURA_PERIODIC_DUMMY);
     }
 };
 
@@ -1615,14 +1693,38 @@ class classic_spell_pri_holy_binding : public SpellScript
     }
 };
 
+// 14751 - Inner Focus: WoW Forever restarts the 3 min cooldown when the buff is spent or runs out, not when it is cast, though the row
+// has no cooldown-on-event bit; a buff held for a minute no longer takes that minute off the next cooldown (wowsims/forever, MIT,
+// sim/priest/talents_discipline.go, docs/rulings R-0015; evidence pending)
+class classic_spell_pri_inner_focus : public AuraScript
+{
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Player* priest = GetTarget()->ToPlayer();
+        if (!priest)
+            return;
+
+        priest->GetSpellHistory()->ResetCooldown(GetId(), false);
+        priest->GetSpellHistory()->StartCooldown(GetSpellInfo(), 0, nullptr, false);
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_pri_inner_focus::HandleRemove, EFFECT_0, SPELL_AURA_ADD_PCT_MODIFIER, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 void AddSC_classic_spells_priest();
 
 void AddSC_classic_talents_priest_paladin()
 {
     AddSC_classic_spells_priest();
+    RegisterSpellScript(classic_spell_pri_inner_focus);
     RegisterSpellScript(classic_spell_pri_holy_binding);
     // Priest
     RegisterSpellScript(classic_spell_pri_inspiration);
+    RegisterSpellScript(classic_spell_pri_shadow_word_death_backlash);
+    RegisterSpellScript(classic_spell_pri_dark_sacrifice);
     RegisterSpellScript(classic_spell_pri_blessed_recovery);
     RegisterSpellScript(classic_spell_pri_blessed_recovery_hot);
     RegisterSpellScript(classic_spell_pri_prayer_of_mending);
