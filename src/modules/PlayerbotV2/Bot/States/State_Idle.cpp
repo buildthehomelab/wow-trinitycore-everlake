@@ -178,26 +178,6 @@ static bool LeadHoldsBossPull(BotSnapshotView const& s, BotAI& ai, BotIntentEmit
     return true;
 }
 
-// Score an item against the bot's spec stat weights. Used by the
-// equip-upgrade rule (Phase 1 of ITEM_VENDOR_SYSTEM_PLAN.md). Decision
-// flow:
-//   - item_level alone contributes 1.0× (so a vastly higher ilvl wins
-//     even on stat mismatch — see V1's 20-ilvl override).
-//   - Each weighted stat contributes (value × spec_weight).
-//   - Weapons add weapon_dps_x10 × spec_weapon_dps_weight.
-// Returns a single comparable scalar; caller decides "swap if new > old + margin".
-static inline float ScoreItem(ItemStatBlock const& stats,
-                       uint16 item_level,
-                       std::array<float, 12> const& weights,
-                       float dps_weight)
-{
-    float score = static_cast<float>(item_level);
-    for (size_t i = 0; i < weights.size(); ++i)
-        score += static_cast<float>(stats.stats[i]) * weights[i];
-    score += static_cast<float>(stats.weapon_dps_x10) * dps_weight;
-    return score;
-}
-
 // (ClassSelfBuff lives in Bot/ClassTables.cpp — shared with whisper helpers.)
 
 // Max distance for picking a group-buff target. A shared continent map_id
@@ -1583,7 +1563,7 @@ static void DungeonStepHoldDiag(BotSnapshotView const& s, char const* rule_tag,
 // destination and must NOT claim the tick for it — fall through so the
 // next rule/candidate gets tried instead. Gated on the same kill switch as
 // the step-hold family (one concept: spline/emit protection, no new key).
-static bool DungeonStepRefused(BotSnapshotView const& s, BotAI& ai,
+static bool DungeonStepRefused(BotSnapshotView const& /*s*/, BotAI& ai,
                                float tx, float ty, float tz, uint32 now_ms)
 {
     if (!Services::Config().move_step_hold_enabled())
@@ -4582,7 +4562,7 @@ bool DungeonCombatPositioning(BotSnapshotView const& s, BotAI& ai,
         const uint32 fc_ms = ai.false_combat_ms(!any_seedable, now_ms);
         if (!any_seedable && fc_ms > kFalseCombatEscapeMs)
         {
-            if (Player* self_fc = ObjectAccessor::FindConnectedPlayer(s.raw().guid))
+            if (ObjectAccessor::FindConnectedPlayer(s.raw().guid))
             {
                 // Relocate toward the NEXT UN-KILLED boss's waypoint. The
                 // progression_waypoints are authored 1:1 at the boss locations
@@ -6854,7 +6834,7 @@ bool BgTryUseObjectiveGo(BotSnapshotView const& s, BotAI& ai,
 bool BgPushThroughNodes(BotSnapshotView const& s, BotAI& ai,
                         BotIntentEmitter& emit,
                         BattlegroundAdvice const& bg_advice,
-                        float tx, float ty, float tz, uint32 now_ms)
+                        float tx, float ty, float tz, uint32 /*now_ms*/)
 {
     float bx = 0.f, by = 0.f, bz = 0.f; s.position(bx, by, bz);
     const float gdx = tx - bx, gdy = ty - by;
@@ -6898,45 +6878,6 @@ bool BgBossStagingPoint(uint32 entry, float& sx, float& sy, float& sz)
         case 11948: sx = 712.0f; sy = -20.0f; sz = 51.0f; return true; // Vanndar general (Dun Baldar)
         default: return false;
     }
-}
-
-// Navmesh reachability test for the dungeon tank-advance target selection.
-// This is the ROOT constraint the game itself enforces — the tank can only
-// advance to (and ultimately pull) a target it can actually WALK to — so the
-// advance must consult Detour, not a heuristic. It replaces an earlier
-// `|z-delta| > 80y` band-aid that faked reachability with a magic number and
-// was wrong: it permanently excluded the Deadmines ship-deck boss, which is
-// reachable by walking UP the scaffold/ramp even though it sits ~240y above
-// the ground path. With a real path test the behaviour is correct at both
-// ends: from the entrance the deck boss is whole-dungeon away so Detour
-// returns INCOMPLETE (296y A* cap) -> "not yet reachable", and waypoint/trash
-// progression carries the group toward it; from the scaffold base the ramp-up
-// path is short and NORMAL -> reachable -> the tank advances/pulls it.
-//
-// Cost: one Detour query per *candidate* on the OOC advance tick for the TANK
-// only (the advance branch is gated on no-close-target + post-kill pacing, and
-// we break on the first reachable boss) — nowhere near the per-bot hot path, so
-// it can't recreate the fleet pathfinding storm. SEH-guarded like every other
-// playerbot Detour call. World-thread only (the advance branch already does
-// live-object Cell scans, so it runs there).
-static bool DungeonTargetReachable(Player* self, float tx, float ty, float tz)
-{
-    if (!self) return false;
-    PathGenerator pg(self);
-    BotMovement::SehSafeCalculatePath(pg, tx, ty, tz);
-    PathType const t = pg.GetPathType();
-    // Reject anything that is not a complete walkable path: NOPATH, a partial
-    // INCOMPLETE (target beyond the A* cap / behind a gap), an air SHORTCUT, or
-    // an off-mesh end. Require the NORMAL flag AND that the path actually
-    // arrives at the target (guards the rare NORMAL|partial combination).
-    if (t & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE | PATHFIND_SHORTCUT |
-             PATHFIND_FARFROMPOLY))
-        return false;
-    if (!(t & PATHFIND_NORMAL))
-        return false;
-    G3D::Vector3 const& e = pg.GetActualEndPosition();
-    const float dx = e.x - tx, dy = e.y - ty, dz = e.z - tz;
-    return (dx * dx + dy * dy + dz * dz) <= 13.0f * 13.0f;
 }
 
 // Combined reachability check + navmesh-aware intermediate step extraction.
@@ -7066,7 +7007,8 @@ static bool DungeonTargetReachableAndStep(Player* self, float tx, float ty, floa
     {
         if (!gapDbg) return;
         static uint32 s_gms = 0; const uint32 gn = GameTime::GetGameTimeMS();
-        if (gn - s_gms < 1000u) return; s_gms = gn;
+        if (gn - s_gms < 1000u) return;
+        s_gms = gn;
         TC_LOG_INFO("playerbot.v2",
             "[gap_step] {} ret={} t=0x{:X} step=({:.1f},{:.1f},{:.1f}) off={} "
             "self=({:.1f},{:.1f},{:.1f}) tgt=({:.1f},{:.1f},{:.1f})",
@@ -10591,7 +10533,6 @@ bool DungeonDispatch(BotSnapshotView const& s, BotAI& ai,
                                 // advance, so a self-looping corridor cannot ping-pong us.
                                 if (!wp_found && advice.route_waypoints.size() >= 2)
                                 {
-                                    const int n = static_cast<int>(advice.route_waypoints.size());
                                     auto crumb_d = [&](int i) -> float {
                                         auto const& rw = advice.route_waypoints[i];
                                         const float dx = rw.x - bx_adv, dy = rw.y - by_adv,
@@ -16207,8 +16148,6 @@ bool BgDispatch(BotSnapshotView const& s, BotAI& ai,
             uint8 my_team_id = s.team();  // 1 = alliance, 2 = horde
             BotSnapshot::BgNodeState const* target = nullptr;
             float best_dsq = std::numeric_limits<float>::max();
-            int   best_priority = 99;  // lower = better
-            uint8 best_weight = 0;     // higher = better (tie-breaker)
             // Helper: look up the script-side priority weight by matching
             // the live node's (x, y) to the script's nodes[] entries
             // within a 5y tolerance. Returns 0 when no match (default).
@@ -16277,8 +16216,6 @@ bool BgDispatch(BotSnapshotView const& s, BotAI& ai,
                        atk_cands[tier_end].prio == atk_cands[0].prio)
                     ++tier_end;
                 AtkCand const& pick = atk_cands[bg_team_rank % tier_end];
-                best_priority = pick.prio;
-                best_weight   = pick.weight;
                 best_dsq      = pick.dsq;
                 target        = pick.node;
             }
@@ -16960,7 +16897,7 @@ bool DriveRecommendedTaxi(BotSnapshotView const& s, BotAI& ai, BotIntentEmitter&
 // (depth >= 1 inside nested `[&](...)` bodies) are preserved.
 // Falls through to `return false;` when no sub-rule fired.
 bool AutoactDispatch(BotSnapshotView const& s, BotAI& ai,
-                    GroupSnapshotView const& g,
+                    GroupSnapshotView const& /*g*/,
                     BotIntentEmitter& emit)
 {
     // can_autoact gate, replicating the original inline guard — with one
@@ -20277,7 +20214,6 @@ bool AutoactDispatch(BotSnapshotView const& s, BotAI& ai,
         if (!s.in_combat() && !s.is_casting() && !s.raw().movement.is_mounted &&
             s.best_mount_spell() != 0)
         {
-            float far_target_x = 0.f, far_target_y = 0.f;
             bool  has_far_target = false;
             constexpr float kMountThreshold   = 80.0f;
             constexpr float kMountThresholdSq = kMountThreshold * kMountThreshold;
@@ -20287,7 +20223,7 @@ bool AutoactDispatch(BotSnapshotView const& s, BotAI& ai,
                 const auto& poi = s.current_objective_poi();
                 const float dx = poi.x - bx, dy = poi.y - by;
                 if (dx*dx + dy*dy > kMountThresholdSq)
-                { far_target_x = poi.x; far_target_y = poi.y; has_far_target = true; }
+                { has_far_target = true; }
             }
             if (!has_far_target)
             {
@@ -20299,7 +20235,6 @@ bool AutoactDispatch(BotSnapshotView const& s, BotAI& ai,
                         const float dx = u.x - bx, dy = u.y - by;
                         if (dx*dx + dy*dy > kMountThresholdSq)
                         {
-                            far_target_x = u.x; far_target_y = u.y;
                             has_far_target = true;
                         }
                         break;
@@ -20317,7 +20252,6 @@ bool AutoactDispatch(BotSnapshotView const& s, BotAI& ai,
                         const float dx = u.x - bx, dy = u.y - by;
                         if (dx*dx + dy*dy > kMountThresholdSq)
                         {
-                            far_target_x = u.x; far_target_y = u.y;
                             has_far_target = true;
                         }
                         break;

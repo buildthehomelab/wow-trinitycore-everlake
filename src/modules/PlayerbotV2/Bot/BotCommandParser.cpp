@@ -1431,12 +1431,6 @@ bool OwnerWordOrder(Player* sender, Player* bot, std::string const& n)
     std::string const me = bot->GetName();
     uint64 const bid = bot->GetGUID().GetCounter();
     auto say = [&](std::string text) { Push(bot, WhisperIntent{sender->GetName(), std::move(text)}); };
-    auto tail_after = [&](std::string_view prefix) -> std::string
-    {
-        std::string r = n.size() > prefix.size() ? n.substr(prefix.size()) : std::string();
-        size_t const b = r.find_first_not_of(' ');
-        return b == std::string::npos ? std::string() : r.substr(b);
-    };
 
     // ---- quests (QuestOrders, the questing worker) ------------------------------------------------------------------
 #ifdef PBV2_HAVE_QUEST_ORDERS

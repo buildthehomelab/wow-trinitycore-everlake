@@ -819,7 +819,6 @@ void CopyAuras(Unit const* u, std::vector<AuraEntry>& out)
 // uint16 cat = 0xFFFF sentinel = "uncached"; 0 = no category; otherwise
 // the actual ChargeCategoryId.
 using ChargeKey = uint64;            // (uint64(spell_id) << 8) | difficulty
-constexpr uint16 kChargeCatUncached = 0xFFFF;
 // Sentinel: GetSpellInfo returned NULL for this (spell, difficulty) — a
 // "ghost" spell the character knows (stale character_spell / spellbook row)
 // whose data no longer exists after a hotfix-DB change. Cached so the probe
@@ -4412,7 +4411,6 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                 //       optional bosses are skipped (ICC gunship→Saurfang→
                 //       Lich King without the wing detours, etc.).
                 bool any_boss_known = false;
-                bool all_done       = true;
                 uint8 done_count    = 0;
                 uint8 decided_count = 0;
                 bool any_special    = false;
@@ -4423,7 +4421,6 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
                     if (st == TO_BE_DECIDED) continue;
                     any_boss_known = true;
                     if (decided_count < 0xFFu) ++decided_count;
-                    if (st != DONE) { all_done = false; }
                     if (st == DONE && done_count < 0xFFu) ++done_count;
                     if (st == SPECIAL) any_special = true;
                 }

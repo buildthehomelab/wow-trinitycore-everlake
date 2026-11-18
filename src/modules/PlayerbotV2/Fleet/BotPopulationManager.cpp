@@ -1159,7 +1159,7 @@ bool BotPopulationManager::HealUnrenderableGear(Player* p)
     return changed;
 }
 
-bool BotPopulationManager::SetOwnerGearMode(uint32 account_id, uint8 requested_mode, std::string& reply, Player const* requester)
+bool BotPopulationManager::SetOwnerGearMode(uint32 account_id, uint8 requested_mode, std::string& reply, Player const* /*requester*/)
 {
     using Gear::Owned::GearMode;
     if (requested_mode >= Gear::Owned::kGearModeCount)

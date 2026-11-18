@@ -83,7 +83,7 @@ bool HasPendingQuestLoot(Player* p, Creature* c)
     return false;
 }
 
-bool LootDrainGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, uint32 now_ms)
+bool LootDrainGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const& g, uint32 /*now_ms*/)
 {
     // A bot a player leads or owns loots only its own quest drops (LootDrainFire): the player takes the rest, so no bot runs off to a
     // corpse for gold or gear, but in vanilla each member with the quest has to loot its own quest items.

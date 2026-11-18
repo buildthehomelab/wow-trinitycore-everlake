@@ -3552,9 +3552,9 @@ public:
     // Mirrors LFGMgr's direct group creation (Group::Create + AddMember,
     // no invite round-trip â headless bot sessions can't click invites
     // from the console anyway).
-    static bool HandleGroup(ChatHandler* handler, char const* args)
+    static bool HandleGroup(ChatHandler* handler, Tail args)
     {
-        if (!args || !*args)
+        if (args.empty())
         {
             handler->SendSysMessage(
                 "Usage: .playerbot group <leader> <member> [member...]");
@@ -7666,6 +7666,7 @@ class playerbot_v2_addon_listener : public PlayerScript
 public:
     playerbot_v2_addon_listener() : PlayerScript("playerbot_v2_addon_listener") {}
 
+    using PlayerScript::OnChat;
     void OnChat(Player* player, uint32 /*type*/, uint32 lang,
                 std::string& msg, Player* receiver) override
     {
