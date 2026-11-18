@@ -1945,7 +1945,7 @@ class classic_spell_item_argent_defender : public AuraScript
         Unit* attacker = eventInfo.GetActor();
         if (attacker && attacker->GetCreatureType() == CREATURE_TYPE_UNDEAD)
             return true;
-        return roll_chance_i(50);
+        return roll_chance(50);
     }
 
     void Register() override
