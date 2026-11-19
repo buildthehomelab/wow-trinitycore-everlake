@@ -19,18 +19,23 @@
 #define TRINITYCORE_BATTLE_TAG_H
 
 #include "Define.h"
+#include "Optional.h"
 #include <string>
 #include <string_view>
+#include <unordered_set>
 
 // A Battle.net account's BattleTag ("Name#1234"). The client names a Battle.net friend by it (the friends list, the
 // whisper target, the own tag in the Social window), so an account without one gets friends it cannot whisper. Nothing
-// else gives accounts a tag here (no Battle.net site), so the worldserver makes one from the character the account
-// first enters the world with.
+// else gives accounts a tag here (no Battle.net site). As on Evermore, the player picks the name (.battletag <name>) and
+// the server draws the number. Until then the account gets one from the first name of the character it first enters
+// the world with, when that name is a valid tag name.
 namespace Trinity::BattleTag
 {
-    constexpr std::size_t MaxNameLength = 12;           // UTF-8 characters, as Battle.net
-    constexpr uint32 MinNumber = 1000;                  // four digits, five once the four-digit tries all collide
+    constexpr std::size_t MinPickedNameLength = 2;
+    constexpr std::size_t MaxNameLength = 12;
+    constexpr uint32 MinNumber = 1000;                  // four digits, drawn at random among the free ones
     constexpr uint32 MaxNumber = 9999;
+    constexpr std::size_t MaxUsedPerName = 8000;        // of 9000: past this, drawing a free number gets slow
 
     // The name part: the character's first name (no surname, no spaces), cut to MaxNameLength characters on a
     // character boundary. Empty when nothing usable is left.
@@ -65,12 +70,61 @@ namespace Trinity::BattleTag
         return name;
     }
 
+    // A tag name a player may pick (.battletag): 2-12 ASCII letters and digits, starting with a letter. The same rule as
+    // Evermore's friend tags. It keeps the name safe in SQL and in LIKE patterns without escaping.
+    inline bool IsValidName(std::string_view name)
+    {
+        auto letter = [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); };
+        auto digit = [](char c) { return c >= '0' && c <= '9'; };
+        if (name.size() < MinPickedNameLength || name.size() > MaxNameLength || !letter(name.front()))
+            return false;
+        for (char c : name)
+            if (!letter(c) && !digit(c))
+                return false;
+        return true;
+    }
+
     inline std::string Make(std::string_view name, uint32 number)
     {
         std::string tag(name);
         tag += '#';
         tag += std::to_string(number);
         return tag;
+    }
+
+    // The number after the '#' of a stored tag, if it is one.
+    inline Optional<uint32> NumberOf(std::string_view tag)
+    {
+        std::size_t const hash = tag.rfind('#');
+        if (hash == std::string_view::npos || hash + 1 >= tag.size() || tag.size() - hash - 1 > 9)
+            return {};
+        uint32 number = 0;
+        for (char c : tag.substr(hash + 1))
+        {
+            if (c < '0' || c > '9')
+                return {};
+            number = number * 10 + uint32(c - '0');
+        }
+        return number;
+    }
+
+    // A free four-digit number for a name whose tags already use `used`. None once the name is crowded (more than
+    // MaxUsedPerName taken): the player picks another name.
+    template<class Random>
+    Optional<uint32> DrawNumber(std::unordered_set<uint32> const& used, Random random)
+    {
+        std::size_t taken = 0;
+        for (uint32 number : used)
+            if (number >= MinNumber && number <= MaxNumber)
+                ++taken;
+        if (taken > MaxUsedPerName)
+            return {};
+        for (;;)
+        {
+            uint32 const number = random(MinNumber, MaxNumber);
+            if (!used.contains(number))
+                return number;
+        }
     }
 }
 

@@ -19,6 +19,7 @@
 #include "BattleTag.h"
 #include "BattlenetRpcErrorCodes.h"
 #include "CharacterCache.h"
+#include "Chat.h"
 #include "DatabaseEnv.h"
 #include "FullName.h"
 #include "GameTime.h"
@@ -34,6 +35,7 @@
 #include "Client/api/client/v2/presence_listener.pb.h"
 #include "Client/api/client/v2/whisper_listener.pb.h"
 #include <mutex>
+#include <unordered_set>
 
 // Presence v2 field keys of the official server (sniff 70235, 2026-10-06). Program "BN" group 1 = the Battle.net account, group 2 = the
 // online game account (with program "WoW" group 2 fields for the character).
@@ -161,38 +163,51 @@ namespace
         return {};
     }
 
-    // An account without a BattleTag gets "<first name>#<number>" from the character it enters the world with. Without a
-    // tag the client has no name for the account: its friends see an empty whisper target ("Tell :") and the Social
-    // window shows a bare "#". The unique key on battle_tag (case-insensitive) settles a race with another login.
-    void EnsureBattleTag(uint32 accountId, std::string const& characterName)
+    std::string ReadBattleTag(uint32 accountId)
     {
         if (QueryResult result = LoginDatabase.PQuery("SELECT battle_tag FROM battlenet_accounts WHERE id = {}", accountId))
-            if (!(*result)[0].IsNull() && !(*result)[0].GetStringView().empty())
-                return;
+            if (!(*result)[0].IsNull())
+                return (*result)[0].GetString();
+        return {};
+    }
 
-        std::string name = Trinity::BattleTag::NameFromCharacter(characterName);
-        if (name.empty())
-            return;
-        LoginDatabase.EscapeString(name);
+    // Gives the account "<name>#<free number>" (as Evermore's friend tags: the player picks the name, the number is
+    // drawn). onlyIfEmpty: leave an account that has a tag alone (the automatic tag at login). The unique key on
+    // battle_tag (case-insensitive) settles a race with another account taking the same tag: that try fails and the
+    // next number is drawn. Returns the new tag, or empty when the name has no free number left or the account was
+    // tagged meanwhile.
+    std::string AssignBattleTag(uint32 accountId, std::string const& name, bool onlyIfEmpty)
+    {
+        if (!Trinity::BattleTag::IsValidName(name))     // letters and digits only: nothing to escape
+            return {};
 
-        constexpr uint32 Tries = 40;
-        for (uint32 attempt = 0; attempt < Tries; ++attempt)
+        for (uint32 attempt = 0; attempt < 5; ++attempt)
         {
-            uint32 const number = attempt < Tries / 2 ? urand(Trinity::BattleTag::MinNumber, Trinity::BattleTag::MaxNumber) : urand(10000, 99999);
-            std::string const tag = Trinity::BattleTag::Make(name, number);
-            if (LoginDatabase.PQuery("SELECT 1 FROM battlenet_accounts WHERE battle_tag = '{}'", tag))
-                continue;
-            LoginDatabase.DirectPExecute("UPDATE battlenet_accounts SET battle_tag = '{}' WHERE id = {} AND (battle_tag IS NULL OR battle_tag = '')", tag, accountId);
-            if (QueryResult result = LoginDatabase.PQuery("SELECT battle_tag FROM battlenet_accounts WHERE id = {}", accountId))
+            std::unordered_set<uint32> used;
+            if (QueryResult result = LoginDatabase.PQuery("SELECT battle_tag FROM battlenet_accounts WHERE battle_tag LIKE '{}#%'", name))
             {
-                if (!(*result)[0].IsNull() && !(*result)[0].GetStringView().empty())
-                {
-                    TC_LOG_INFO("network.rpc", "Battle.net account {}: BattleTag set to '{}'", accountId, (*result)[0].GetString());
-                    return;
-                }
+                do
+                    if (Optional<uint32> number = Trinity::BattleTag::NumberOf((*result)[0].GetStringView()))
+                        used.insert(*number);
+                while (result->NextRow());
             }
+            Optional<uint32> number = Trinity::BattleTag::DrawNumber(used, [](uint32 min, uint32 max) { return urand(min, max); });
+            if (!number)
+                return {};
+
+            std::string const tag = Trinity::BattleTag::Make(name, *number);
+            LoginDatabase.DirectPExecute("UPDATE battlenet_accounts SET battle_tag = '{}' WHERE id = {}{}", tag, accountId,
+                onlyIfEmpty ? " AND (battle_tag IS NULL OR battle_tag = '')" : "");
+            std::string const now = ReadBattleTag(accountId);
+            if (now == tag)
+            {
+                TC_LOG_INFO("network.rpc", "Battle.net account {}: BattleTag set to '{}'", accountId, tag);
+                return tag;
+            }
+            if (onlyIfEmpty && !now.empty())
+                return {};
         }
-        TC_LOG_ERROR("network.rpc", "Battle.net account {}: no free BattleTag for '{}' after {} tries", accountId, name, Tries);
+        return {};
     }
 
     // "Name#1234" (any case) or an e-mail address
@@ -942,8 +957,11 @@ void BattlenetPresence::OnLogin(WorldSession* session)
     if (!player)
         return;
 
-    if (accountId && !session->IsBot())
-        EnsureBattleTag(accountId, player->GetName());
+    // An account without a BattleTag has no name in its friends' lists: Whisper opened "Tell :" with no target. Until the
+    // player picks one (.battletag <name>), it takes the first name of the character it enters the world with.
+    bool untagged = false;
+    if (accountId && !session->IsBot() && ReadBattleTag(accountId).empty())
+        untagged = AssignBattleTag(accountId, Trinity::BattleTag::NameFromCharacter(player->GetName()), true).empty() && ReadBattleTag(accountId).empty();
 
     {
         std::vector<uint32> ids = LoadFriendIds(accountId);
@@ -967,6 +985,42 @@ void BattlenetPresence::OnLogin(WorldSession* session)
         FillAccountState(notification.add_states(), account, player, false, now);
         FillGameAccountState(notification.add_states(), account, session, player, now);
     });
+
+    if (untagged)
+        ChatHandler(session).SendSysMessage("You have no BattleTag yet, so Battle.net friends can't whisper you. Pick one with .battletag <name>.");
+}
+
+std::string BattlenetPresence::GetBattleTag(WorldSession const* session)
+{
+    return session->GetBattlenetAccountId() ? ReadBattleTag(session->GetBattlenetAccountId()) : std::string();
+}
+
+BattlenetPresence::BattleTagResult BattlenetPresence::SetBattleTag(WorldSession* session, std::string const& name, std::string& tag)
+{
+    uint32 const accountId = session->GetBattlenetAccountId();
+    if (!accountId)
+        return BattleTagResult::NoAccount;
+    if (!Trinity::BattleTag::IsValidName(name))
+        return BattleTagResult::InvalidName;
+
+    tag = AssignBattleTag(accountId, name, false);
+    if (tag.empty())
+        return BattleTagResult::NoFreeNumber;
+
+    // the new tag to ourselves (Social window) and to online friends (their list, whisper target)
+    if (Player const* player = session->GetPlayer())
+    {
+        AccountInfo const account{ accountId, tag };
+        uint64 const now = NowUs();
+        bgs::protocol::presence::v2::PresenceStateUpdatedNotification own;
+        FillAccountState(own.add_states(), account, player, false, now);
+        FillGameAccountState(own.add_states(), account, session, player, now);
+        SendPresence(session, own);
+        for (uint32 friendId : CachedFriendIds(accountId))
+            if (Player* friendPlayer = FindOnlinePlayer(friendId))
+                SendAccountPresence(friendPlayer->GetSession(), account);
+    }
+    return BattleTagResult::Ok;
 }
 
 void BattlenetPresence::OnLogout(WorldSession* session)

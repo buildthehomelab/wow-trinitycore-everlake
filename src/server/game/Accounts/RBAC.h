@@ -758,6 +758,8 @@ enum RBACPermissions
     //
     // custom permissions 1000+
     RBAC_PERM_COMMAND_TIME                                   = 1000, // .time day / night / auto (players too)
+    // 1001 = Command: module on Trixx34's branches
+    RBAC_PERM_COMMAND_BATTLETAG                              = 1002, // .battletag [name] (players too)
     RBAC_PERM_MAX
 };
 

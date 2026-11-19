@@ -19,7 +19,8 @@
 #include "BattleTag.h"
 
 // Everlake: an account with no BattleTag gets one from its character's first name, so Battle.net friends have a name
-// to whisper (an empty tag gave "Tell :" with no target).
+// to whisper (an empty tag gave "Tell :" with no target). As Evermore, a player picks the name with
+// .battletag and the number is drawn.
 using namespace Trinity::BattleTag;
 
 TEST_CASE("BattleTag name part is the character's first name", "[BattleTag]")
@@ -53,4 +54,57 @@ TEST_CASE("BattleTag is name#number", "[BattleTag]")
 {
     REQUIRE(Make("Jean", 4821) == "Jean#4821");
     REQUIRE(Make("Jean", 10000) == "Jean#10000");
+}
+
+TEST_CASE("A picked BattleTag name is 2-12 ASCII letters and digits starting with a letter (as Evermore)", "[BattleTag]")
+{
+    REQUIRE(IsValidName("Jo"));
+    REQUIRE(IsValidName("Jean"));
+    REQUIRE(IsValidName("Red2Panda"));
+    REQUIRE(IsValidName("Abcdefghijkl"));
+    REQUIRE_FALSE(IsValidName("J"));
+    REQUIRE_FALSE(IsValidName("Abcdefghijklm"));
+    REQUIRE_FALSE(IsValidName("2Jean"));
+    REQUIRE_FALSE(IsValidName("Jean Jumpspring"));
+    REQUIRE_FALSE(IsValidName("Je_an"));                // a LIKE wildcard
+    REQUIRE_FALSE(IsValidName("Je%an"));
+    REQUIRE_FALSE(IsValidName("Je'an"));
+    REQUIRE_FALSE(IsValidName("Jean#1234"));
+    REQUIRE_FALSE(IsValidName("Z\xC3\xB3ra"));          // accented: the automatic tag skips it, the player picks one
+    REQUIRE_FALSE(IsValidName(""));
+}
+
+TEST_CASE("BattleTag number is read back from a stored tag", "[BattleTag]")
+{
+    REQUIRE(NumberOf("Jean#4821") == 4821u);
+    REQUIRE(NumberOf("jean#0042") == 42u);
+    REQUIRE_FALSE(NumberOf("Jean"));
+    REQUIRE_FALSE(NumberOf("Jean#"));
+    REQUIRE_FALSE(NumberOf("Jean#12a4"));
+}
+
+TEST_CASE("BattleTag number is drawn among the free ones", "[BattleTag]")
+{
+    std::unordered_set<uint32> used;
+    for (uint32 n = MinNumber; n <= MaxNumber; ++n)
+        if (n != 5555)
+            used.insert(n);
+    // only 5555 free, but more than MaxUsedPerName taken: the name is full
+    REQUIRE_FALSE(DrawNumber(used, [](uint32 min, uint32) { return min; }));
+
+    used.clear();
+    used.insert(1000);
+    used.insert(1001);
+    uint32 next = MinNumber;
+    auto counting = [&next](uint32, uint32) { return next++; };
+    REQUIRE(DrawNumber(used, counting) == 1002u);       // 1000 and 1001 skipped
+
+    std::unordered_set<uint32> const none;
+    for (int i = 0; i < 200; ++i)
+    {
+        Optional<uint32> drawn = DrawNumber(none, [](uint32 min, uint32 max) { return min + (max - min) / 2; });
+        REQUIRE(drawn);
+        REQUIRE(*drawn >= MinNumber);
+        REQUIRE(*drawn <= MaxNumber);
+    }
 }
