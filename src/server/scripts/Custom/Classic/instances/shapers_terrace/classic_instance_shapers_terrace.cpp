@@ -397,7 +397,12 @@ struct classic_boss_shapers_terrace : public ScriptedAI
             Position pos = me->GetHomePosition();
             pos.Relocate(pos.GetPositionX() + CST_CRYSTAL_DISTANCE * std::cos(angle), pos.GetPositionY() + CST_CRYSTAL_DISTANCE * std::sin(angle), pos.GetPositionZ());
             if (TempSummon* crystal = me->SummonCreature(CST_NPC_CRYSTAL_TRIGGER, pos, TEMPSUMMON_MANUAL_DESPAWN))
+            {
                 _crystals[i] = crystal->GetGUID();
+                crystal->SetReactState(REACT_PASSIVE);
+                crystal->SetUnitFlag(UNIT_FLAG_NON_ATTACKABLE);
+                crystal->SetImmuneToPC(true);   // players' spells must not break her crystals
+            }
         }
     }
 
