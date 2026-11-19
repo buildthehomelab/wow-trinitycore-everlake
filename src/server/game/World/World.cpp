@@ -1609,6 +1609,7 @@ bool World::SetInitialWorldSettings()
     TC_LOG_INFO("server.loading", "Loading Disables");                         // must be before loading quests and items
     DisableMgr::LoadDisables();
 
+    // Everlake-only (docs/everlake-changes.md): keep this call through upstream merges
     TC_LOG_INFO("server.loading", "Loading item stack sizes...");              // ItemSparse edits + client hotfixes, before LoadItemTemplates
     ItemStackSize::Apply();
 

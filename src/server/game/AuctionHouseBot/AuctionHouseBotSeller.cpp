@@ -705,7 +705,8 @@ void AuctionBotSeller::SetPricesOfItem(ItemTemplate const* itemProto, SellerConf
 uint32 AuctionBotSeller::GetStackSizeForItem(ItemTemplate const* itemProto, SellerConfiguration& config) const
 {
     if (config.GetRandomStackRatioPerClass(ItemClass(itemProto->GetClass())) > urand(0, 99))
-        // stock stack size, so StackSize.* (999 trade goods) doesn't turn every bot listing into a huge stack
+        // Everlake-only (docs/everlake-changes.md): stock stack size, so StackSize.* (999 trade goods) doesn't turn every
+        // bot listing into a huge stack
         return urand(1, ItemStackSize::GetStockMaxStackSize(itemProto->GetId(), itemProto->GetMaxStackSize()));
     else
         return 1;
