@@ -5399,6 +5399,16 @@ Forever.VanillaAoE = 0
 
 Classic.AutoEquipNewBags = 0
 
+#    Classic.FirstTagOwnsMob
+#        Description: Mob tagging. As on WoW Forever and Classic, the first player (or bot) to damage a mob owns it with
+#                     their group: it turns grey for everyone else at once, and a player outside that group who helps
+#                     kill it gets no loot, XP or quest credit. The retail rule lets up to 5 separate players tag the
+#                     same mob, and each of them gets full loot, XP and quest credit.
+#        Default:     1 - (Enabled, first tag owns the mob)
+#                     0 - (Disabled, retail shared tagging)
+
+Classic.FirstTagOwnsMob = 1
+
 #    Classic.Shop.Enabled
 #        Description: In-game Store: shop points, products from world.shop_* (.shop reload), the Gold Market, character
 #                     services, realm transfers and the character screen boost. 0 answers like the official server
