@@ -9,6 +9,9 @@ come in by `git cherry-pick -x`, one file per commit: `trinitycore-<first 10 cha
 already in `everlake` under another hash (same `git patch-id`, or the same fix made by advocaite) gets a file too, so
 the daily upstream check counts it as sorted.
 
+Before a merge from upstream goes in, check that Everlake's own changes survived it: `docs/everlake-changes.md` lists
+each one with the lines a conflict could silently drop.
+
 ## 2026-11-08: advocaite `forever-bots` @ 19bdc6af66 (the bot module)
 
 **What:** fast-forward of `forever` to `forever-bots`: 80 commits (35 merges), 919 files, +384,979 / -287 lines.
