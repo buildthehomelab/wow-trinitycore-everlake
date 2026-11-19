@@ -18,6 +18,7 @@
 #include "Creature.h"
 #include "BattlegroundMgr.h"
 #include "BotGroupRules.h"
+#include "CreatureTapRules.h"
 #include "CellImpl.h"
 #include "CharmInfo.h"
 #include "CombatPackets.h"
@@ -1395,14 +1396,17 @@ void Creature::SetTappedBy(Unit const* unit, bool withGroup)
         return;
     }
 
-    if (m_tapList.size() >= CREATURE_TAPPERS_SOFT_CAP)
-        return;
-
     if (unit->GetTypeId() != TYPEID_PLAYER && !unit->IsVehicle())
         return;
 
     Player* player = unit->GetCharmerOrOwnerPlayerOrPlayerItself();
     if (!player)                                             // normal creature, no player involved
+        return;
+
+    // Classic.FirstTagOwnsMob: the first tagger's group owns the mob, a player outside it gets nothing for joining in (bots
+    // tagged first and players still took full loot, XP and quest credit off the same mob under the retail rule)
+    bool const classicTagging = sWorld->getBoolConfig(CONFIG_CLASSIC_FIRST_TAG_OWNS_MOB);
+    if (!CreatureTapRules::AcceptsTag(classicTagging, m_tapList.size(), CREATURE_TAPPERS_SOFT_CAP))
         return;
 
     m_tapList.insert(player->GetGUID());
@@ -1419,7 +1423,7 @@ void Creature::SetTappedBy(Unit const* unit, bool withGroup)
         }
     }
 
-    if (m_tapList.size() >= CREATURE_TAPPERS_SOFT_CAP)
+    if (CreatureTapRules::ShowsTapped(classicTagging, m_tapList.size(), CREATURE_TAPPERS_SOFT_CAP))
         SetDynamicFlag(UNIT_DYNFLAG_TAPPED);
 }
 
