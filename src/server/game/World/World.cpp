@@ -67,6 +67,7 @@
 #include "IPLocation.h"
 #include "InstanceLockMgr.h"
 #include "ItemBonusMgr.h"
+#include "ItemStackSize.h"
 #include "LFGMgr.h"
 #include "Language.h"
 #include "LanguageMgr.h"
@@ -1606,6 +1607,9 @@ bool World::SetInitialWorldSettings()
 
     TC_LOG_INFO("server.loading", "Loading Disables");                         // must be before loading quests and items
     DisableMgr::LoadDisables();
+
+    TC_LOG_INFO("server.loading", "Loading item stack sizes...");              // ItemSparse edits + client hotfixes, before LoadItemTemplates
+    ItemStackSize::Apply();
 
     TC_LOG_INFO("server.loading", "Loading Items...");                         // must be after LoadRandomEnchantmentsTable and LoadPageTexts
     sObjectMgr->LoadItemTemplates();

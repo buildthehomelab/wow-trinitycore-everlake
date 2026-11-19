@@ -2837,6 +2837,74 @@ Rate.XP.Explore = 1
 Rate.Talent = 1
 
 #
+#    StackSize.Enable
+#        Description: Everlake: bigger item stacks (the same rules as Evermore's mod-stack-size). The item data is changed
+#                     in memory at startup and each changed item is sent to the client as a hotfix, so bags, tooltips and
+#                     the split dialog show the new size. Read at startup only. 0 and a restart bring the stock sizes back.
+#                     The group options below only RAISE a stack, and only for items that already stack: an item that
+#                     doesn't stack stays that way, one that already stacks higher is left alone. 0 = leave the group alone.
+#                     The auction house bot keeps posting stacks of the stock size.
+#        Default:     1 - (on)
+
+StackSize.Enable = 1
+
+#
+#    StackSize.TradeGoods
+#        Description: Max stack for trade goods: cloth, leather, ore, bars, herbs, meat, elemental items, enchanting
+#                     materials, parts, vials.
+#        Default:     999
+
+StackSize.TradeGoods = 999
+
+#
+#    StackSize.Reagents
+#        Description: Max stack for spell reagents (Arcane Powder, Symbol of Kings, Rune of Portals, Wild Thornroot,
+#                     Holy Candle, Flash Powder, Ankh, poison reagents...).
+#        Default:     999
+
+StackSize.Reagents = 999
+
+#
+#    StackSize.Consumables
+#        Description: Max stack for consumables: food, drink, potions, elixirs, flasks, scrolls, bandages, oils, stones.
+#        Default:     200
+
+StackSize.Consumables = 200
+
+#
+#    StackSize.Gems
+#    StackSize.Projectiles
+#    StackSize.Glyphs
+#    StackSize.Quest
+#    StackSize.Misc
+#        Description: Max stack for gems, arrows and bullets, glyphs, stacking quest items and other miscellaneous items.
+#        Default:     0 - (unchanged)
+
+StackSize.Gems = 0
+StackSize.Projectiles = 0
+StackSize.Glyphs = 0
+StackSize.Quest = 0
+StackSize.Misc = 0
+
+#
+#    StackSize.Items
+#        Description: Per-item stack sizes as item:size pairs, separated by spaces or commas. These win over the group
+#                     options, can lower a stack and can make an item stack that normally doesn't. An item with a lower
+#                     carry limit ("Unique (N)") can then be carried up to the stack size.
+#        Example:     StackSize.Items = "6265:20 17020:500"
+#        Default:     ""
+
+StackSize.Items = ""
+
+#
+#    StackSize.Exclude
+#        Description: Item ids the group options never touch, separated by spaces or commas.
+#        Example:     StackSize.Exclude = "17030 21177"
+#        Default:     ""
+
+StackSize.Exclude = ""
+
+#
 #    Rate.XP.DungeonKill
 #        Description: Extra experience for killing creatures in 5 player dungeons (raids not included), on top of
 #                     Rate.XP.Kill and the vanilla elite bonus.
