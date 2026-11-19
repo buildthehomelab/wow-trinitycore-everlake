@@ -172,6 +172,7 @@ void AddSC_classic_instance_deadmines();
 void AddSC_classic_instance_ragefire_chasm();
 void AddSC_classic_instance_ruins_of_lordaeron();
 void AddSC_classic_instance_alcaz_prison();
+void AddSC_classic_instance_shapers_terrace();
 void AddSC_classic_instance_hall_of_thanes();
 void AddSC_classic_instance_excavation_site_wetlands();
 void AddSC_classic_instance_city_of_dalaran();
@@ -384,6 +385,7 @@ void AddClassicScripts()
     AddSC_classic_instance_ragefire_chasm();
     AddSC_classic_instance_ruins_of_lordaeron();
     AddSC_classic_instance_alcaz_prison();
+    AddSC_classic_instance_shapers_terrace();
     AddSC_classic_instance_hall_of_thanes();
     AddSC_classic_instance_excavation_site_wetlands();
     AddSC_classic_instance_city_of_dalaran();
