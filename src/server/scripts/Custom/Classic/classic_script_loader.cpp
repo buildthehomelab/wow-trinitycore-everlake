@@ -178,6 +178,7 @@ void AddSC_classic_instance_excavation_site_wetlands();
 void AddSC_classic_instance_city_of_dalaran();
 void AddSC_classic_instance_the_drowned_city();
 void AddSC_classic_instance_kroldok_stronghold();
+void AddSC_classic_instance_blackmaw_hold();
 void AddSC_classic_instance_the_stockade();
 void AddSC_classic_moonglade();
 void AddSC_classic_feralas();
@@ -391,6 +392,7 @@ void AddClassicScripts()
     AddSC_classic_instance_city_of_dalaran();
     AddSC_classic_instance_the_drowned_city();
     AddSC_classic_instance_kroldok_stronghold();
+    AddSC_classic_instance_blackmaw_hold();
     AddSC_classic_instance_the_stockade();
     AddSC_classic_moonglade();
     AddSC_classic_feralas();
