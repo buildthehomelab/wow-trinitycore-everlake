@@ -20,7 +20,7 @@
 
 // TrinityCore 270f1397ac + 34cd48e6f9: the breath and fatigue bars (and feign death) run in MirrorTimer. Player::UpdateMirrorTimers
 // deals drowning or fatigue damage on every ExpiredTicked and sends SMSG_START_MIRROR_TIMER whenever IsChanged(). The numbers
-// are the ones Player::GetMirrorTimerMaxValue uses: breath 3 minutes, fatigue 1 minute; scale -1 = running out, 10 = refilling.
+// are TrinityCore's (breath 3 minutes; Everlake now uses vanilla's 1 minute), fatigue 1 minute; scale -1 = running out, 10 = refilling.
 
 using UpdateResult = MirrorTimer::UpdateResult;
 

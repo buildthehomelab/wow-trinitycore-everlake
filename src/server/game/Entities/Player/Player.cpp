@@ -705,7 +705,9 @@ int32 Player::GetMirrorTimerMaxValue(MirrorTimerType type) const
         case MIRROR_TIMER_FATIGUE:
             return MINUTE * IN_MILLISECONDS;
         case MIRROR_TIMER_BREATH:
-            return std::max(int32(3 * MINUTE * IN_MILLISECONDS * GetTotalAuraMultiplier(SPELL_AURA_MOD_WATER_BREATHING)), 1);
+            // Classic 1.60 (vanilla): 1 minute of breath (3 minutes since 3.0.2); the Forever client's Undead Underwater Breathing
+            // 5227 still reads "300% longer than normal", the vanilla 4 minutes
+            return std::max(int32(MINUTE * IN_MILLISECONDS * GetTotalAuraMultiplier(SPELL_AURA_MOD_WATER_BREATHING)), 1);
         case MIRROR_TIMER_FEIGN_DEATH:
         {
             AuraEffectList const& feignDeathAuras = GetAuraEffectsByType(SPELL_AURA_FEIGN_DEATH);
@@ -1816,18 +1818,15 @@ void Player::RegenerateHealth()
     // normal regen case (maybe partly in combat case)
     else if (!IsInCombat() || HasAuraType(SPELL_AURA_MOD_REGEN_DURING_COMBAT))
     {
-        addValue = HealthIncreaseRate;
+        // Classic 1.60 (vanilla): health per tick from spirit (retail: 1.5% of max health)
+        addValue = OCTRegenHPPerSpirit() * HealthIncreaseRate;
+        addValue *= GetTotalAuraMultiplier(SPELL_AURA_MOD_HEALTH_REGEN_PERCENT);
 
         if (!IsInCombat())
-        {
-            // Classic 1.60 (vanilla): health per tick from spirit (retail: 1.5% of max health)
-            addValue = OCTRegenHPPerSpirit() * HealthIncreaseRate;
-
-            addValue *= GetTotalAuraMultiplier(SPELL_AURA_MOD_HEALTH_REGEN_PERCENT);
-
             addValue += GetTotalAuraModifier(SPELL_AURA_MOD_REGEN) * 0.4f;
-        }
-        else if (HasAuraType(SPELL_AURA_MOD_REGEN_DURING_COMBAT))
+        // a share of that regen keeps going in combat (Troll Regeneration 20555: "20% of total Health regeneration will continue
+        // during combat"); the retail rule took the share of Rate.Health alone, a fraction of 1 health per tick
+        else
             ApplyPct(addValue, GetTotalAuraModifier(SPELL_AURA_MOD_REGEN_DURING_COMBAT));
 
         if (!IsStandState())
@@ -2423,7 +2422,7 @@ void Player::UpdateClassicLegacyUnlock()
     // 2026_09_30_00 hotfix) belong to the other copy of each challenge and are not counted. The first point comes at level 25.
     int32 earnedLegacyPoints = 0;
     for (TraitCurrencySourceEntry const* source : sTraitCurrencySourceStore)
-        if (source->TraitCurrencyID == LegacyPointsTraitCurrencyID && !source->SuperDistrictSetID && source->AchievementID && HasAchieved(source->AchievementID))
+        if (source->TraitCurrencyID == LegacyPointsTraitCurrencyID && !source->SuperDistrictSetID && source->AchievementID && HasAchievedOnAccount(source->AchievementID))
             earnedLegacyPoints += source->Amount;
 
     int32 renown = int32(GetCurrencyQuantity(LegacyRenownCurrencyID));
@@ -19604,6 +19603,8 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
 
     // load achievements before anything else to prevent multiple gains for the same achievement/criteria on every loading (as loading does call UpdateCriteria)
     m_achievementMgr->LoadFromDB(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACHIEVEMENTS), holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_CRITERIA_PROGRESS));
+    // before _LoadTraits: the Legacy trait config is checked against the Legacy Points the whole account earned
+    _LoadAccountLegacyAchievements(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_LEGACY_ACHIEVEMENTS));
     m_questObjectiveCriteriaMgr->LoadFromDB(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_QUEST_STATUS_OBJECTIVES_CRITERIA), holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_QUEST_STATUS_OBJECTIVES_CRITERIA_PROGRESS));
 
     SetMoney(std::min(fields.money, MAX_MONEY_AMOUNT));
@@ -21870,6 +21871,30 @@ void Player::_LoadCharacterBankTabSettings(PreparedQueryResult result)
 void Player::_LoadDayCycle(PreparedQueryResult result)
 {
     m_skyMode = uint8(result ? DayCycle::SkyModeFromDb((*result)[0].GetUInt8()) : DayCycle::SkyMode::Auto);
+}
+
+void Player::_LoadAccountLegacyAchievements(PreparedQueryResult result)
+{
+    // Classic 1.60 (WoW Forever): each Legacy challenge ("Reach level 25 on a Druid" and so on) pays its Legacy Points the first
+    // time any character on the account completes it, and every character can spend them. Keep only the achievements that are
+    // sources of Legacy Points (trait currency 4225); the character's own ones come from its achievement manager as usual.
+    static constexpr uint32 LegacyPointsTraitCurrencyID = 4225;
+
+    m_accountLegacyAchievements.clear();
+    if (!result)
+        return;
+
+    std::unordered_set<uint32> legacySources;
+    for (TraitCurrencySourceEntry const* source : sTraitCurrencySourceStore)
+        if (source->TraitCurrencyID == LegacyPointsTraitCurrencyID && source->AchievementID)
+            legacySources.insert(source->AchievementID);
+
+    do
+    {
+        uint32 achievementId = (*result)[0].GetUInt32();
+        if (legacySources.contains(achievementId))
+            m_accountLegacyAchievements.insert(achievementId);
+    } while (result->NextRow());
 }
 
 /*********************************************************/
@@ -27601,11 +27626,7 @@ float Player::GetReputationPriceDiscount(FactionTemplateEntry const* factionTemp
     if (!factionTemplate || !factionTemplate->Faction)
         return 1.0f;
 
-    ReputationRank rank = GetReputationRank(factionTemplate->Faction);
-    if (rank <= REP_NEUTRAL)
-        return 1.0f;
-
-    return 1.0f - 0.05f* (rank - REP_NEUTRAL);
+    return Trinity::VendorPrice::ReputationDiscount(GetReputationRank(factionTemplate->Faction));
 }
 
 Player* Player::GetTrader() const
@@ -29390,6 +29411,11 @@ std::vector<uint32> Player::GetCompletedAchievementIds() const
 bool Player::HasAchieved(uint32 achievementId) const
 {
     return m_achievementMgr->HasAchieved(achievementId);
+}
+
+bool Player::HasAchievedOnAccount(uint32 achievementId) const
+{
+    return HasAchieved(achievementId) || m_accountLegacyAchievements.contains(achievementId);
 }
 
 void Player::StartCriteria(CriteriaStartEvent startEvent, uint32 entry, Milliseconds timeLost/* = Milliseconds::zero()*/)
@@ -33837,6 +33863,11 @@ bool TraitMgr::PlayerDataAccessor::IsQuestRewarded(int32 questId) const
 bool TraitMgr::PlayerDataAccessor::HasAchieved(int32 achievementId) const
 {
     return _player->HasAchieved(achievementId);
+}
+
+bool TraitMgr::PlayerDataAccessor::HasAchievedOnAccount(int32 achievementId) const
+{
+    return _player->HasAchievedOnAccount(achievementId);
 }
 
 uint32 TraitMgr::PlayerDataAccessor::GetPrimarySpecialization() const

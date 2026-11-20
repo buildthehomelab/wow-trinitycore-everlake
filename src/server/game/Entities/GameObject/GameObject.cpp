@@ -3298,10 +3298,14 @@ void GameObject::Use(Unit* user, bool ignoreCastInProgress /*= false*/)
                 if (targetPlayer->GetLevel() < targetLevels->MaxLevel)
                     return;
 
-            if (info->entry == 194097)
-                spellId = 61994;                            // Ritual of Summoning
-            else
-                spellId = 59782;                            // Summoning Stone Effect
+            if (info->entry != 194097)
+            {
+                // Classic 1.60 (WoW Forever): meeting stones do not summon, Blizzard confirmed it; a warlock's Ritual of Summoning is
+                // the only summon. The Wrath summoning stone spell 59782 is not in the Forever client either.
+                return;
+            }
+
+            spellId = 61994;                                // Ritual of Summoning
 
             break;
         }

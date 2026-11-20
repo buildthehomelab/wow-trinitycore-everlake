@@ -487,7 +487,6 @@ m_spellValue(new SpellValue(m_spellInfo, caster)), _spellEvent(nullptr)
     m_executedCurrently = false;
     m_delayStart = 0;
     m_delayMoment = 0;
-    m_delayAtDamageCount = 0;
 
     m_applyMultiplierMask = 0;
     memset(m_damageMultipliers, 0, sizeof(m_damageMultipliers));
@@ -8480,9 +8479,8 @@ void Spell::Delayed() // only called in DealDamage()
     if (!unitCaster)
         return;
 
-    if (IsDelayableNoMore())                                 // Spells may only be delayed twice
-        return;
-
+    // Classic 1.60 (vanilla, wowsims/forever): every damaging hit pushes the cast back, no cap on the number of hits (the 2-hit cap
+    // is a TBC/Wrath rule); the delay never goes past the time already cast (below)
     //check pushback reduce
     int32 delaytime = 500;                                  // spellcasting delay is normally 500ms
 
@@ -8519,9 +8517,7 @@ void Spell::DelayedChannel()
     if (m_spellState != SPELL_STATE_CHANNELING)
         return;
 
-    if (IsDelayableNoMore())                                    // Spells may only be delayed twice
-        return;
-
+    // Classic 1.60: no cap on the number of hits that shorten a channel (see Spell::Delayed)
     //check pushback reduce
     // should be affected by modifiers, not take the dbc duration.
     int32 duration = ((m_channelDuration > 0) ? m_channelDuration : m_spellInfo->GetDuration());

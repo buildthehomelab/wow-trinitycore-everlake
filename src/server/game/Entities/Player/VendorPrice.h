@@ -20,6 +20,7 @@
 
 #include "Define.h"
 #include "Optional.h"
+#include "SharedDefines.h"
 #include <limits>
 
 // The sums a vendor purchase is checked and paid with, apart from the Player so they can be tested.
@@ -55,6 +56,14 @@ inline Optional<uint32> TurnInCount(uint32 perStack, uint32 stacks)
         return {};
 
     return uint32(needed);
+}
+
+// WoW Forever's reputation discount, as live vendors and trainers show it (EG Link prices, build 70862): the neutral price up
+// to Friendly, 10% off from Honored. Vanilla 1.12 gave the same 10% at Honored, Revered and Exalted. The retail rule was 5% per
+// rank above Neutral (5% at Friendly up to 20% at Exalted).
+inline float ReputationDiscount(ReputationRank rank)
+{
+    return rank >= REP_HONORED ? 0.9f : 1.0f;
 }
 }
 
