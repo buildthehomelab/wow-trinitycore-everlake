@@ -258,7 +258,7 @@ float ItemTemplate::GetDPS(uint32 itemLevel) const
 }
 
 // Classic 1.60 (WoW Forever): the table DPS with a reduced caster weapon's share, 2/3 one-hand, 29/39 two-hand (EV-0097). The flag is
-// ItemSparse Flags[3] 0x100 (retail's REGULATED_COMMODITY bit); a random suffix can set it too (Item::GetClassicWeaponDPS).
+// ItemSparse Flags[4] 0x100 (ITEM_FLAG5_CLASSIC_REDUCED_CASTER_DPS); a random suffix can set it too (Item::GetClassicWeaponDPS).
 float ItemTemplate::GetClassicDPS(uint32 itemLevel, bool reducedCasterDps) const
 {
     float dps = GetDPS(itemLevel);
@@ -281,16 +281,16 @@ float ItemTemplate::GetClassicDPS(uint32 itemLevel, bool reducedCasterDps) const
     return dps;
 }
 
-// Classic 1.60 (WoW Forever): a weapon flagged CASTER_SPELL_POWER (ItemSparse Flags[3] 0x200, retail's CREATE_LOOT_IMMEDIATELY bit) carries
-// 20000 x budget / 10000 spell power, one flagged CASTER_HEALING_POWER (0x400, retail's GENERATE_LOOT_SPEC_ITEM) 37600 x budget / 10000
+// Classic 1.60 (WoW Forever): a weapon flagged CASTER_SPELL_POWER (ItemSparse Flags[4] 0x200) carries
+// 20000 x budget / 10000 spell power, one flagged CASTER_HEALING_POWER (0x400) 37600 x budget / 10000
 // healing and a third of that as spell damage, each rounded down, on top of its own stats; budget = RandPropPoints[item level], the
 // quality's first column. This reproduces the in-game tooltip of all 150 flagged weapons: Simone's Cultivating Hammer "healing done by up
 // to 139 and damage done by up to 46" (wowsims/forever, MIT, tools/database/dbc/item.go addCasterSpellPower, docs/evidence EV-0112).
 void ItemTemplate::GetClassicCasterPower(uint32 itemLevel, int32& spellPower, int32& healing, int32& damage) const
 {
     spellPower = healing = damage = 0;
-    bool const spell = HasFlag(ITEM_FLAG4_CREATE_LOOT_IMMEDIATELY);
-    bool const heal = HasFlag(ITEM_FLAG4_GENERATE_LOOT_SPEC_ITEM);
+    bool const spell = HasFlag(ITEM_FLAG5_CLASSIC_CASTER_SPELL_POWER);
+    bool const heal = HasFlag(ITEM_FLAG5_CLASSIC_CASTER_HEALING_POWER);
     if (GetClass() != ITEM_CLASS_WEAPON || (!spell && !heal))
         return;
 

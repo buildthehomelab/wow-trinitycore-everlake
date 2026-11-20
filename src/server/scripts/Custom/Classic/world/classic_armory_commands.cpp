@@ -245,7 +245,7 @@ public:
                 && sItemDamageTwoHandStore.LookupEntry(itemLevel) && sItemDamageTwoHandCasterStore.LookupEntry(itemLevel)
                 && sItemDamageAmmoStore.LookupEntry(itemLevel))
             {
-                proto.GetClassicDamage(itemLevel, proto.HasFlag(ITEM_FLAG4_REGULATED_COMMODITY), dmgMin, dmgMax);   // Classic 1.60: caster share, QualityModifier (EV-0097)
+                proto.GetClassicDamage(itemLevel, proto.HasFlag(ITEM_FLAG5_CLASSIC_REDUCED_CASTER_DPS), dmgMin, dmgMax); // Classic 1.60: caster share, QualityModifier (EV-0097)
                 proto.GetClassicDamage(itemLevel, true, casterDmgMin, casterDmgMax);                                 // with a caster-reducing suffix (EV-0110)
             }
 
