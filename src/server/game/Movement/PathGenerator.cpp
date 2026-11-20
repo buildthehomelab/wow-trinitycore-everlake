@@ -160,6 +160,7 @@ PathGenerator::~PathGenerator()
 
 PathGenerator::LiquidRouteCheck PathGenerator::_liquidRouteCheck = nullptr;
 PathGenerator::ClosedDoorCheck PathGenerator::_closedDoorCheck = nullptr;
+PathGenerator::WaterRouteAdjust PathGenerator::_waterRouteAdjust = nullptr;
 
 // A source whose paths keep clear of closed doors (the ClosedDoorCheck says so): each leg of the route is tested against the
 // map's closed doors; the corridor polygon under a door is left out and the route searched again. Without a route that misses
@@ -170,7 +171,11 @@ bool PathGenerator::CalculatePath(float srcX, float srcY, float srcZ, float dest
     _filter.ClearExcludedPolys();
     bool ok = CalculateLiquidAwarePath(srcX, srcY, srcZ, destX, destY, destZ, forceDest);
     if (!ok || forceDest || (_type & (PATHFIND_NOPATH | PATHFIND_NOT_USING_PATH)) || !_closedDoorCheck || !_closedDoorCheck(_source))
+    {
+        if (ok)
+            AdjustWaterRoute();
         return ok;
+    }
 
     G3D::Vector3 hit;
     for (uint32 detour = 0; FindClosedDoorOnPath(hit); ++detour)
@@ -198,7 +203,24 @@ bool PathGenerator::CalculatePath(float srcX, float srcY, float srcZ, float dest
             break;
     }
     _filter.ClearExcludedPolys();
+    if (ok)
+        AdjustWaterRoute();
     return ok;
+}
+
+// The module's WaterRouteAdjust, for a route over water polygons. A moved destination is the route's actual end.
+void PathGenerator::AdjustWaterRoute()
+{
+    if (!_waterRouteAdjust || (_type & (PATHFIND_NOPATH | PATHFIND_NOT_USING_PATH)) || _pathPoints.size() < 2 || !CrossesWaterPolys())
+        return;
+    G3D::Vector3 const start = _pathPoints[0];
+    G3D::Vector3 const last = _pathPoints.back();
+    _waterRouteAdjust(_source, _pathPoints);
+    if (_pathPoints.size() < 2)
+        return;
+    _pathPoints[0] = start;
+    if (_pathPoints.back() != last)
+        SetActualEndPosition(_pathPoints.back());
 }
 
 // Each leg is tested a yard above the path, the height the source walks through: the floor under the door frame is not the door.
