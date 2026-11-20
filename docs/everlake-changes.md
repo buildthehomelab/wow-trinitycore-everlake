@@ -59,6 +59,17 @@ Mathias Shaw, then 97883 goes to Major Mattingly, who casts the buff on the alli
 The spell joins Warchief's Blessing's aura fix in `SpellMgr.cpp`, and it counts for the Conquering Hero and Second
 Chance Legacy perks (`ClassicLegacyPerks.h`; the same SQL file binds Second Chance's cleanup script to it).
 
+Town heralds for Rend's head, as on live since 2026-11-12
+(`sql/custom/world/2026_11_19_86_world_everlake_rend_heralds.sql`):
+- Thrall's turn-in summons a Herald of Thrall at the Crossroads (as before) and now also on the Razor Hill guard tower. The
+  herald's own script was lost in the VMaNGOS conversion and is back: two yells, then Warchief's Blessing at 15 seconds.
+- Mattingly's 97883 turn-in summons a Stormwind Crier (269863, a new template) in Goldshire, Lakeshire and Sentinel Hill.
+  Each casts Might of Stormwind after 5 seconds.
+- Places come from live sightings (Icy Veins). The criers don't speak, since no source has their line. Live's criers ride
+  in from the road; ours appear where live's stop.
+- A herald or crier summoned where no player is near does nothing until one comes by (the grid isn't updating), and is
+  cleared without acting if the grid unloads first. Bots usually keep these towns busy.
+
 Live Forever (checked 2026-11-19): the buffs come only from turn-ins. Live has no timer and no Chronoboon for sale.
 Rallying Cry needs Onyxia (live from 2026-12-09) and Zul'Gurub is not on live, so this is an Everlake extra. Buff
 lengths are the client's (2 hours each). Rallying Cry's dummy auras are made real in `SpellMgr.cpp`
@@ -71,6 +82,7 @@ lengths are the client's (2 hours each). Rallying Cry's dummy auras are made rea
 | Script loader | `src/server/scripts/Custom/Classic/classic_script_loader.cpp`, `AddSC_classic_world_buffs()` | **Silent:** no buffs go out |
 | Rallying Cry auras | `src/server/game/Spells/SpellMgr.cpp`, `ApplySpellFix({ 22888 }` | **Silent:** the buff shows but does nothing |
 | Might of Stormwind auras | `src/server/game/Spells/SpellMgr.cpp`, `ApplySpellFix({ 16609, 460939 }` | **Silent:** the Alliance Rend buff shows but does nothing |
+| Town heralds and criers | `sql/custom/world/2026_11_19_86_world_everlake_rend_heralds.sql` | **Silent:** the Rend buff reaches only Orgrimmar / Stormwind |
 | Mattingly's turn-in + perk script | `sql/custom/world/2026_11_19_85_world_everlake_might_of_stormwind.sql` | **Silent:** quest 97883 gives no buff, or Second Chance's mark stays after Might of Stormwind ends |
 | Config block | `src/server/worldserver/worldserver.conf.dist`, `Classic.WorldBuffs.*` after `Classic.CreatureHealth.Raids` | Defaults still apply (they're in the code), but the options are no longer documented |
 | Tests | `tests/game/WorldBuffCycle.cpp` | Timing changes go unnoticed |
