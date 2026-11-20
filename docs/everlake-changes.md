@@ -121,6 +121,7 @@ the retail rule back without a build error.
 | Dungeon kill XP at live's 60% of Classic Era | `Rate.XP.DungeonKill` default 0.6 | Dungeon kills give 1.8x (about 3x live) |
 | Faction auction houses, goblin houses cross-faction | `AllowTwoSide.Interaction.Auction` default 0 | One shared house everywhere at 5% / 5% |
 | Riding 100g / 1,000g at Friendly | `sql/custom/world/2026_11_19_81_world_forever_riding_prices.sql` | Prices back to 90g / 900g (the Honored price) |
+| Raids Forever hasn't released are closed: Molten Core, Blackwing Lair, Zul'Gurub, both Ahn'Qiraj raids, Naxxramas, and Onyxia until 2026-12-09; their dead-end quests are hidden | `sql/custom/world/2026_11_19_83_world_everlake_close_vanilla_raids.sql` (`disables` map and quest rows) | **Silent:** players can enter raids live doesn't have and pick up quests they can't finish |
 
 Check after a merge:
 
@@ -140,5 +141,3 @@ Everlake choices that differ from live Forever or have no Forever source (decide
 - **Rated 2v2 / 3v3 arenas** (Mak'gora Arena in Hyjal Crater, Ring of Law in Blackrock Depths;
   `sql/custom/world/2026_11_02_50_world_arena_makgora.sql`, `2026_11_08_70_world_arena_ring_of_law.sql`). Forever has not
   announced arenas; Everlake keeps them.
-- **Every vanilla raid stays open:** Molten Core, Blackwing Lair, Zul'Gurub, both Ahn'Qiraj raids and Naxxramas, which Forever
-  doesn't have, and Onyxia before Forever's 2026-12-09 release. No `disables` rows for them.
