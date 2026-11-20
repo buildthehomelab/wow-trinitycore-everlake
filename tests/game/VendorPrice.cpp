@@ -82,3 +82,13 @@ TEST_CASE("Turn-in counts that do not fit in 32 bits are refused, not wrapped", 
     CHECK_FALSE(TurnInCount(std::numeric_limits<uint16>::max(), 65538).has_value());
     CHECK_FALSE(TurnInCount(std::numeric_limits<uint32>::max(), 2).has_value());
 }
+
+TEST_CASE("Reputation discount: full price up to Friendly, 10% off from Honored", "[VendorPrice]")
+{
+    CHECK(ReputationDiscount(REP_HATED) == 1.0f);
+    CHECK(ReputationDiscount(REP_NEUTRAL) == 1.0f);
+    CHECK(ReputationDiscount(REP_FRIENDLY) == 1.0f);
+    CHECK(ReputationDiscount(REP_HONORED) == 0.9f);
+    CHECK(ReputationDiscount(REP_REVERED) == 0.9f);
+    CHECK(ReputationDiscount(REP_EXALTED) == 0.9f);
+}

@@ -44,3 +44,13 @@ TEST_CASE("Aura crit loses 1.8% against creatures three or more levels up", "[Cl
     REQUIRE(ClassicAttackTable::AuraCritSuppressionFor(5.0f, 2, false) == Approx(0.0f));
     REQUIRE(ClassicAttackTable::AuraCritSuppressionFor(5.0f, 3, true) == Approx(0.0f));         // not against players
 }
+
+TEST_CASE("Daze from behind: 20% at equal skill, less below level 30 and with more defense", "[ClassicAttackTable]")
+{
+    REQUIRE(ClassicAttackTable::DazeChance(60, 300, 300) == Approx(20.0f));
+    REQUIRE(ClassicAttackTable::DazeChance(10, 50, 50) == Approx(7.0f));      // newbie protection
+    REQUIRE(ClassicAttackTable::DazeChance(60, 315, 300) == Approx(21.0f));   // +3 elite against capped defense
+    REQUIRE(ClassicAttackTable::DazeChance(60, 300, 400) == Approx(15.0f));   // defense gear lowers it
+    REQUIRE(ClassicAttackTable::DazeChance(60, 300, 100) == Approx(40.0f));   // capped at 40%
+    REQUIRE(ClassicAttackTable::DazeChance(60, 300, 0) == Approx(40.0f));     // no divide by zero
+}

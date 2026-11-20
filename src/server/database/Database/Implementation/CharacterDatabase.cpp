@@ -849,6 +849,9 @@ void CharacterDatabaseConnection::DoPrepareStatements()
 
     // .time day / night / auto (DayCycle.h): a row only for a character that keeps its own sky
     PrepareStatement(CHAR_SEL_CHARACTER_DAY_CYCLE, "SELECT mode FROM character_day_cycle WHERE guid = ?", CONNECTION_ASYNC);
+    // Classic 1.60: achievements of every character on the account, deleted ones included (Legacy challenges are earned per account)
+    PrepareStatement(CHAR_SEL_ACCOUNT_ACHIEVEMENTS, "SELECT DISTINCT ca.achievement FROM character_achievement ca JOIN characters c ON c.guid = ca.guid "
+        "WHERE c.account = ? OR c.deleteInfos_Account = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_REP_CHARACTER_DAY_CYCLE, "REPLACE INTO character_day_cycle (guid, mode) VALUES (?, ?)", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_CHARACTER_DAY_CYCLE, "DELETE FROM character_day_cycle WHERE guid = ?", CONNECTION_ASYNC);
 }

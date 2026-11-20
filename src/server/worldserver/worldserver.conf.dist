@@ -1391,11 +1391,13 @@ ResetSchedule.WeekDay = 2
 
 #
 #    ResetSchedule.Hour
-#        Description: Hour of the day when the global daily reset occurs.
+#        Description: Hour of the day when the global daily reset occurs, in the server's local time (the Everlake
+#                     containers run on UTC unless TZ is set).
+#                     The US realms (and WoW Forever's) reset on Tuesday at 15:00 UTC.
 #        Range:       0-23
-#        Default:     8 - (08:00 AM)
+#        Default:     15 - (15:00, the US reset when the server runs on UTC)
 
-ResetSchedule.Hour = 8
+ResetSchedule.Hour = 15
 
 #
 #    Quests.EnableQuestTracker
@@ -1428,10 +1430,10 @@ Quests.HighLevelHideDiff = 2
 #
 #    Quests.LogSize
 #        Description: How many quests a character can have in the quest log at once.
-#        Default:     35 - (The quest log of the Classic client)
-#                     40 - (The most the server can hold)
+#        Default:     40 - (WoW Forever's quest log, forever-bugs #38; also the most the server can hold)
+#                     35 - (The quest log of the Classic client)
 
-Quests.LogSize = 35
+Quests.LogSize = 40
 
 #
 #    Quests.IgnoreRaid
@@ -2011,10 +2013,12 @@ AllowTwoSide.Interaction.Guild = 0
 #                     Warning: changing this in production results in players losing access to their
 #                     already placed auctions in the faction houses - these auctions will expire after
 #                     their regular timings.
-#        Default:     1 - (Enabled)
-#                     0 - (Disabled)
+#                     WoW Forever keeps one house per faction (5% deposit, 5% cut); only the goblin houses in
+#                     Gadgetzan, Booty Bay and Everlook trade across factions (25% deposit, 15% cut).
+#        Default:     0 - (Disabled, WoW Forever: faction auction houses plus the goblin ones)
+#                     1 - (Enabled, one auction house for both factions everywhere)
 
-AllowTwoSide.Interaction.Auction = 1
+AllowTwoSide.Interaction.Auction = 0
 
 #
 #    AllowTwoSide.Trade
@@ -2908,11 +2912,14 @@ StackSize.Exclude = ""
 #    Rate.XP.DungeonKill
 #        Description: Extra experience for killing creatures in 5 player dungeons (raids not included), on top of
 #                     Rate.XP.Kill and the vanilla elite bonus.
-#        Default:     1.8 - (WoW Forever live: +20% from October 8 2026, then +50% from the November 8 2026 hotfix)
-#                     1.2 - (WoW Forever before the November 8 2026 hotfix)
-#                     1   - (Vanilla, no extra dungeon experience)
+#                     Blizzard (Kaivax, November 10 2026): the November 8 hotfix "took dungeon kill XP from 40% of the
+#                     values in Classic Era to 60%". 1 here is Classic Era (with the vanilla 2.5x elite bonus in 5 player
+#                     dungeons), so live Forever is 0.6. If Era's 5 player elite bonus turns out to be 2x, live would be
+#                     0.48 in these terms. The old default 1.8 paid about 3x live.
+#        Default:     0.6 - (WoW Forever live: 60% of Classic Era)
+#                     1   - (Classic Era, the same rate as the open world)
 
-Rate.XP.DungeonKill = 1.8
+Rate.XP.DungeonKill = 0.6
 
 #
 #    Rate.XP.BattlegroundKill
@@ -2924,12 +2931,19 @@ Rate.XP.BattlegroundKill = 1
 
 #
 #    Rate.Quest.Money.Reward
-#    Rate.Quest.Money.Max.Level.Reward
 #        Description: Multiplier for money quest rewards. Can not be below 0.
 #        Default:     1
 
 Rate.Quest.Money.Reward = 1
-Rate.Quest.Money.Max.Level.Reward = 1
+
+#
+#    Rate.Quest.Money.Max.Level.Reward
+#        Description: Multiplier for the gold a quest pays instead of experience at the level cap. Can not be below 0.
+#                     WoW Forever pays none (hotfix notes of November 10 2026), vanilla did.
+#        Default:     0 - (WoW Forever: no gold for experience at level 60)
+#                     1 - (Vanilla)
+
+Rate.Quest.Money.Max.Level.Reward = 0
 
 #
 #    Rate.RepairCost
@@ -5380,6 +5394,15 @@ Classic.ForeverCreatureHealth = 0
 
 Classic.ForeverKillXp = 1
 
+#    Classic.DungeonCarryXpBlock
+#        Description: No party member gets kill XP in a 5 player dungeon when the highest level member in reward range is more
+#                     than 12 levels above the enemy, as on live Forever (hotfixes of November 13 and 14 2026: no dungeon
+#                     carries). Open world and raid kills are not affected.
+#        Default:     1 - (Enabled, live Forever rule)
+#                     0 - (Disabled, vanilla: each member gets XP by their own level)
+
+Classic.DungeonCarryXpBlock = 1
+
 #    Classic.CreatureSpellLevelScaling
 #        Description: Vanilla creature spells flagged "scales with creature level" (Fireball 20793, Lightning Bolt 9532,
 #                     Shadow Bolt 9613...) carry the numbers of their spell level. As in vanilla, a creature's level scales
@@ -5473,6 +5496,16 @@ Classic.ScourgeInvasion.ShardDamageRate = 1.0
 #                     1 - (Enabled)
 
 Classic.Shop.Enabled = 0
+
+#    Classic.Shop.Free
+#        Description: Every In-game Store product costs 0 shop points; the store shows the real price crossed out.
+#                     Products that hand out gold keep their price (free gold could be bought without end), and Gold
+#                     Market listings keep the price their seller set. Read at start-up and on .shop reload (after
+#                     .reload config when the file changed).
+#        Default:     1 - (Free, Everlake for now, decided 2026-11-19)
+#                     0 - (Products cost their price in shop points)
+
+Classic.Shop.Free = 1
 
 #    Classic.Shop.GoldMarketFee
 #        Description: Percent of the price in shop points kept back from the seller when a Gold Market listing sells.

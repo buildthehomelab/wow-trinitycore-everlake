@@ -18,6 +18,7 @@
 #include "KillRewarder.h"
 #include "Creature.h"
 #include "DB2Stores.h"
+#include "DungeonCarryRule.h"
 #include "FlatSet.h"
 #include "Formulas.h"
 #include "Group.h"
@@ -88,6 +89,15 @@ KillRewarder::KillRewarder(Trinity::IteratorPair<Player**> killers, Unit* victim
 
 inline void KillRewarder::_InitGroupData(Player const* killer)
 {
+    // Reward() calls this once per killer: start from scratch, or a second tapper group was measured with the first one's
+    // members (its level 60 then blocked the other party's dungeon XP, see 4.2.1b)
+    _count = 0;
+    _sumLevel = 0;
+    _maxLevel = 0;
+    _maxNotGrayMember = nullptr;
+    _isFullXP = false;
+    _xp = 0;
+
     if (Group const* group = killer->GetGroup())
     {
         // 2. In case when player is in group, initialize variables necessary for group calculations:
@@ -146,6 +156,12 @@ inline void KillRewarder::_RewardXP(Player* player, float rate)
         //        against the victim (it was penalized by the highest level party member); each member gets their own share
         //        of the group rate, nothing for a victim that is gray to them.
         xp = player->IsAlive() ? uint32(Trinity::XP::Gain(player, _victim, _isBattleGround) * rate) : 0;
+
+        // 4.2.1b. WoW Forever (hotfixes of November 13 and 14 2026): nobody in the party gets kill XP in a 5 player dungeon when its
+        //         highest level member in reward range is more than 12 levels above the enemy (no dungeon carries)
+        if (xp && sWorld->getBoolConfig(CONFIG_CLASSIC_DUNGEON_CARRY_XP_BLOCK) && _victim->GetMap()->IsNonRaidDungeon()
+            && Trinity::XP::BlocksDungeonCarry(_maxLevel, _victim->GetLevel()))
+            xp = 0;
     }
     if (xp)
     {
