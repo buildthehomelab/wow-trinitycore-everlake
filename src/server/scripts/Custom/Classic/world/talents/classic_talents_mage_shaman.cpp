@@ -944,10 +944,10 @@ class classic_spell_mage_arcane_blast : public SpellScript
     }
 };
 
-// 400588 - Missile Barrage (client 70707): "Gives your Arcane Blast spell a $m1% chance, and your Arcane Wrath, Fireball, Frostbolt, Frost
-// Blast, and Frostfire Bolt spells a ${$m1/2}% chance to [give 400589]". The client proc data is a flat 50% on any harmful spell. The
-// spell_proc row sets the chance to 100; the chance per spell is rolled here. Arcane Missiles' hits do not roll: the 70532 tooltip gave
-// them ${$m1/4}%, the live one (70707) and wowsims/forever registerMissileBarrage do not.
+// 400588 - Missile Barrage (70707): "Gives your Arcane Blast spell a $m1% chance, and your Arcane Wrath, Fireball, Frostbolt, Frost Blast,
+// and Frostfire Bolt spells a ${$m1/2}% chance to [give 400589]". The client proc data is a flat 50% on any harmful spell. The spell_proc
+// row sets the chance to 100; the chance per spell is rolled here. The 70532 text also gave Arcane Missile hits a ${$m1/4}% chance; live
+// dropped that, so the missiles of a Missile Barrage no longer give the next one (glacier, Discord 17 Nov).
 class classic_spell_mage_missile_barrage : public AuraScript
 {
     static bool IsHalfChanceSpell(SpellInfo const* spellInfo)
@@ -960,7 +960,7 @@ class classic_spell_mage_missile_barrage : public AuraScript
             default:
                 break;
         }
-        // Fireball (word 0 0x1), Frostbolt (0x20)
+        // Fireball (word 0 0x1), Frostbolt and Frost Blast 1326053-1326055 (0x20)
         return spellInfo->SpellFamilyName == SPELLFAMILY_MAGE && (spellInfo->SpellFamilyFlags[0] & (0x1 | 0x20));
     }
 
@@ -984,59 +984,33 @@ class classic_spell_mage_missile_barrage : public AuraScript
     }
 };
 
-// 5143, 5144, 5145, 8416, 8417, 10211, 10212, 25345 - Arcane Missiles with Missile Barrage 400589 (client 70707): "Reduces the channeled
-// duration of your next Arcane Missiles spell by $s1%, reduces the mana cost by $s3%, and missiles fire every ${$400588w2/10}.1 sec."
-// The buff is used up by the cast (spell_proc, cast phase) before the channel takes its duration, so its -50% duration modifier never
-// applied, and its effect 1 (-500 ms on the missile interval) is a dummy nothing handled: the free channel still lasted 5 sec with a
-// missile a second. The spell remembers the buff before the cast uses it; the channel then lasts effect 0's percent less and each missile
-// comes effect 1's milliseconds sooner: the same 5 missiles in half the time (wowsims/forever registerMissileBarrage).
-class classic_spell_mage_arcane_missiles_barrage : public SpellScript
+// 5143, 5144, 5145, 8416, 8417, 10211, 10212, 25345 - Arcane Missiles, with Missile Barrage 400589 up: "missiles fire every
+// ${$400588w2/10}.1 sec". The buff's effect 1 is a dummy holding the change of the missile period (-500 ms), which nothing read, so
+// the missiles came once a second over the halved channel: two or three missiles instead of five (glacier, Discord 17 Nov). The
+// buff is used up when the channel hits (spell_proc 400589, 2026_11_17_17), after its aura took the shorter period here.
+class classic_spell_mage_arcane_missiles_barrage : public AuraScript
 {
+    static constexpr uint32 SPELL_MAGE_MISSILE_BARRAGE_BUFF = 400589;
+
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellEffect({ { SPELL_MAGE_MISSILE_BARRAGE_BUFF, EFFECT_1 } });
     }
 
-    void HandleBeforeCast()
-    {
-        Aura const* barrage = GetCaster()->GetAura(SPELL_MAGE_MISSILE_BARRAGE_BUFF);
-        if (!barrage)
-            return;
-
-        AuraEffect const* duration = barrage->GetEffect(EFFECT_0);
-        AuraEffect const* interval = barrage->GetEffect(EFFECT_1);
-        if (!duration || !interval)
-            return;
-
-        GetSpell()->SetSpellValue({ SPELLVALUE_DURATION_PCT, SpellEffectValue(100.0 + double(duration->GetAmount())) });
-        GetSpell()->m_customArg = interval->GetAmountAsInt();
-    }
-
-    void Register() override
-    {
-        BeforeCast += SpellCastFn(classic_spell_mage_arcane_missiles_barrage::HandleBeforeCast);
-    }
-};
-
-class classic_spell_mage_arcane_missiles_barrage_aura : public AuraScript
-{
-    void CalcPeriodic(AuraEffect const* /*aurEff*/, bool& /*isPeriodic*/, int32& amplitude)
+    void CalcPeriodic(AuraEffect const* /*aurEff*/, bool& isPeriodic, int32& amplitude)
     {
         Unit* caster = GetCaster();
-        if (!caster)
+        if (!isPeriodic || !caster)
             return;
 
-        Spell const* channel = caster->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
-        if (!channel || channel->GetSpellInfo()->Id != GetId())
-            return;
-
-        if (int32 const* intervalChange = std::any_cast<int32>(&channel->m_customArg))
-            amplitude = std::max(100, amplitude + *intervalChange);
+        if (AuraEffect const* barrage = caster->GetAuraEffect(SPELL_MAGE_MISSILE_BARRAGE_BUFF, EFFECT_1))
+            if (amplitude + barrage->GetAmount() > 0)
+                amplitude += barrage->GetAmount();
     }
 
     void Register() override
     {
-        DoEffectCalcPeriodic += AuraEffectCalcPeriodicFn(classic_spell_mage_arcane_missiles_barrage_aura::CalcPeriodic, EFFECT_0, SPELL_AURA_PERIODIC_TRIGGER_SPELL);
+        DoEffectCalcPeriodic += AuraEffectCalcPeriodicFn(classic_spell_mage_arcane_missiles_barrage::CalcPeriodic, EFFECT_0, SPELL_AURA_PERIODIC_TRIGGER_SPELL);
     }
 };
 
@@ -1883,7 +1857,7 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_mage_cone_of_cold_winters_chill);
     RegisterSpellScript(classic_spell_mage_arcane_blast);
     RegisterSpellScript(classic_spell_mage_missile_barrage);
-    RegisterSpellAndAuraScriptPair(classic_spell_mage_arcane_missiles_barrage, classic_spell_mage_arcane_missiles_barrage_aura);
+    RegisterSpellScript(classic_spell_mage_arcane_missiles_barrage);
 
     // Shaman
     RegisterSpellScript(classic_spell_sha_flurry);

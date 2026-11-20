@@ -2342,7 +2342,7 @@ uint32 Item::GetRetailSellPrice(ItemTemplate const* proto, uint32 quality, uint3
     return 0;
 }
 
-// Classic 1.60 (WoW Forever): a weapon flagged REDUCED_CASTER_DPS (ItemSparse Flags[3] 0x100, 165 caster weapons) or carrying a random
+// Classic 1.60 (WoW Forever): a weapon flagged REDUCED_CASTER_DPS (ItemSparse Flags[4] 0x100, 99 caster weapons in client 70959) or carrying a random
 // suffix with an ItemBonus type 54 row (of the Sorcerer, Physician, Healing...) deals 2/3 (one-hand) or 29/39 (two-hand) of its damage
 // table cell; the game files' caster tables equal the regular ones. These shares reproduce the in-game range of all 165 flagged weapons
 // and of Brutal War Axe of the Physician, 43 - 66 (wowsims/forever, MIT, tools/database/dbc/item_damage.go, docs/evidence EV-0097,
@@ -3085,7 +3085,7 @@ void BonusData::Initialize(ItemTemplate const* proto)
     CanDisenchant = !proto->HasFlag(ITEM_FLAG_NO_DISENCHANT);
     CanScrap = proto->HasFlag(ITEM_FLAG4_SCRAPABLE);
     CanSalvage = !proto->HasFlag(ITEM_FLAG4_NO_SALVAGE);
-    ClassicReducedCasterDps = proto->HasFlag(ITEM_FLAG4_REGULATED_COMMODITY);   // Forever reuses bit 0x100 as REDUCED_CASTER_DPS
+    ClassicReducedCasterDps = proto->HasFlag(ITEM_FLAG5_CLASSIC_REDUCED_CASTER_DPS);
     CanRecraft = proto->HasFlag(ITEM_FLAG4_RECRAFTABLE);
     CannotTradeBindOnPickup = proto->HasFlag(ITEM_FLAG2_NO_TRADE_BIND_ON_ACQUIRE);
     IgnoreSquish = false;
