@@ -53,6 +53,12 @@ players of that faction in the zone get the aura added straight on (not cast, si
 bots included. The timer is not saved; a restart rolls a new first
 cycle. Rend's head (Warchief's Blessing, Might of Stormwind) is left to players, since Upper Blackrock Spire stays open.
 
+Might of Stormwind (460939), the Alliance's Rend buff, comes the way live hands it out. End of the Dark Horde 84377 goes to
+Mathias Shaw, then 97883 goes to Major Mattingly, who casts the buff on the allies around him
+(`sql/custom/world/2026_11_19_85_world_everlake_might_of_stormwind.sql`). Both quests come from wow-everlake-world-data.
+The spell joins Warchief's Blessing's aura fix in `SpellMgr.cpp`, and it counts for the Conquering Hero and Second
+Chance Legacy perks (`ClassicLegacyPerks.h`; the same SQL file binds Second Chance's cleanup script to it).
+
 Live Forever (checked 2026-11-19): the buffs come only from turn-ins. Live has no timer and no Chronoboon for sale.
 Rallying Cry needs Onyxia (live from 2026-12-09) and Zul'Gurub is not on live, so this is an Everlake extra. Buff
 lengths are the client's (2 hours each). Rallying Cry's dummy auras are made real in `SpellMgr.cpp`
@@ -64,6 +70,8 @@ lengths are the client's (2 hours each). Rallying Cry's dummy auras are made rea
 | The script | `src/server/scripts/Custom/Classic/world/classic_world_buffs.cpp` | **Silent:** no buffs go out |
 | Script loader | `src/server/scripts/Custom/Classic/classic_script_loader.cpp`, `AddSC_classic_world_buffs()` | **Silent:** no buffs go out |
 | Rallying Cry auras | `src/server/game/Spells/SpellMgr.cpp`, `ApplySpellFix({ 22888 }` | **Silent:** the buff shows but does nothing |
+| Might of Stormwind auras | `src/server/game/Spells/SpellMgr.cpp`, `ApplySpellFix({ 16609, 460939 }` | **Silent:** the Alliance Rend buff shows but does nothing |
+| Mattingly's turn-in + perk script | `sql/custom/world/2026_11_19_85_world_everlake_might_of_stormwind.sql` | **Silent:** quest 97883 gives no buff, or Second Chance's mark stays after Might of Stormwind ends |
 | Config block | `src/server/worldserver/worldserver.conf.dist`, `Classic.WorldBuffs.*` after `Classic.CreatureHealth.Raids` | Defaults still apply (they're in the code), but the options are no longer documented |
 | Tests | `tests/game/WorldBuffCycle.cpp` | Timing changes go unnoticed |
 
@@ -72,6 +80,7 @@ Check after a merge:
 ```bash
 grep -n "AddSC_classic_world_buffs" src/server/scripts/Custom/Classic/classic_script_loader.cpp
 grep -n "ApplySpellFix({ 22888 }" src/server/game/Spells/SpellMgr.cpp
+grep -n "ApplySpellFix({ 16609, 460939 }" src/server/game/Spells/SpellMgr.cpp
 grep -n "^Classic.WorldBuffs.Enable" src/server/worldserver/worldserver.conf.dist
 ```
 
