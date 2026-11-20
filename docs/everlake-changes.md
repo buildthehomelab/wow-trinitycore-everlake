@@ -163,3 +163,25 @@ Check after a merge:
 grep -n "AdjustWaterRoute()" src/server/game/Movement/PathGenerator.cpp
 grep -n "SetWaterRouteAdjust" src/modules/PlayerbotV2/PlayerbotV2Scripts.cpp
 ```
+
+## Safe shutdown on a stop signal (`SignalShutdownDelay`, database queue drain)
+
+A container stop or restart (SIGTERM) used to roll back every character still logged in: the core kicked them and queued
+their saves, then `DatabaseWorkerPool::Close()` called `io_context::stop()`, which drops queued work. TrinityCore
+master has the same `Close()`. Now `Close()` waits for the queue to empty first, and `SignalShutdownDelay` (seconds,
+default 0) turns the first stop signal into the in-game shutdown countdown, as Evermore's core does; a second signal
+stops at once.
+
+| Hook | Where | What breaks if it goes |
+|---|---|---|
+| `WaitForEmptyQueue` before `_ioContext->stop()` | `src/server/database/Database/DatabaseWorkerPool.cpp`, `Close()` | **Silent:** characters roll back on every stop |
+| `SignalShutdownDelay`, `SignalShutdownRequested`, re-armed `onSignal` | `src/server/worldserver/Main.cpp` (`main`, `WorldUpdateLoop`, `SignalHandler`) | **Silent:** a stop has no countdown |
+| `WaitForEmptyQueue` | `src/server/database/Database/QueueDrain.h` | Build fails |
+| Tests | `tests/database/QueueDrain.cpp` | Rule changes go unnoticed |
+
+Check after a merge:
+
+```bash
+grep -n "WaitForEmptyQueue" src/server/database/Database/DatabaseWorkerPool.cpp
+grep -n "SignalShutdownRequested" src/server/worldserver/Main.cpp
+```
