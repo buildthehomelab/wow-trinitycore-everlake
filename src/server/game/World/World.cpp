@@ -627,7 +627,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "AllowTwoSide.Interaction.Channel"sv, .DefaultValue = false, .Index = CONFIG_ALLOW_TWO_SIDE_INTERACTION_CHANNEL },
         { .Name = "AllowTwoSide.Interaction.Group"sv, .DefaultValue = false, .Index = CONFIG_ALLOW_TWO_SIDE_INTERACTION_GROUP },
         { .Name = "AllowTwoSide.Interaction.Guild"sv, .DefaultValue = false, .Index = CONFIG_ALLOW_TWO_SIDE_INTERACTION_GUILD },
-        { .Name = "AllowTwoSide.Interaction.Auction"sv, .DefaultValue = true, .Index = CONFIG_ALLOW_TWO_SIDE_INTERACTION_AUCTION },
+        { .Name = "AllowTwoSide.Interaction.Auction"sv, .DefaultValue = false, .Index = CONFIG_ALLOW_TWO_SIDE_INTERACTION_AUCTION },
         { .Name = "AllowTwoSide.Trade"sv, .DefaultValue = false, .Index = CONFIG_ALLOW_TWO_SIDE_TRADE },
         { .Name = "ExtendedAccountNameLengthLimit"sv, .DefaultValue = false, .Index = CONFIG_EXTENDED_ACCOUNT_NAME_LENGTH_LIMIT },
         { .Name = "CharacterCreating.DisableAlliedRaceAchievementRequirement"sv, .DefaultValue = false, .Index = CONFIG_CHARACTER_CREATING_DISABLE_ALLIED_RACE_ACHIEVEMENT_REQUIREMENT },
@@ -719,6 +719,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "Classic.SecuredBagSlotsForAll"sv, .DefaultValue = true, .Index = CONFIG_CLASSIC_SECURED_BAG_SLOTS_FOR_ALL },
         { .Name = "Classic.ForeverCreatureHealth"sv, .DefaultValue = false, .Index = CONFIG_CLASSIC_FOREVER_CREATURE_HEALTH },
         { .Name = "Classic.ForeverKillXp"sv, .DefaultValue = true, .Index = CONFIG_CLASSIC_FOREVER_KILL_XP },
+        { .Name = "Classic.DungeonCarryXpBlock"sv, .DefaultValue = true, .Index = CONFIG_CLASSIC_DUNGEON_CARRY_XP_BLOCK },
         { .Name = "Classic.AutoEquipNewBags"sv, .DefaultValue = false, .Index = CONFIG_CLASSIC_AUTO_EQUIP_NEW_BAGS },
         { .Name = "Classic.FirstTagOwnsMob"sv, .DefaultValue = true, .Index = CONFIG_CLASSIC_FIRST_TAG_OWNS_MOB },
         { .Name = "Classic.CreatureHealth.Raids"sv, .DefaultValue = false, .Index = CONFIG_CLASSIC_CREATURE_HEALTH_RAIDS },
@@ -794,7 +795,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "RecruitAFriend.MaxLevel"sv, .DefaultValue = GetMaxLevelForExpansion(CURRENT_EXPANSION), .Index = CONFIG_MAX_RECRUIT_A_FRIEND_BONUS_PLAYER_LEVEL, .Min = 1 },
         { .Name = "RecruitAFriend.MaxDifference"sv, .DefaultValue = 4, .Index = CONFIG_MAX_RECRUIT_A_FRIEND_BONUS_PLAYER_LEVEL_DIFFERENCE },
         { .Name = "ResetSchedule.WeekDay"sv, .DefaultValue = 2, .Index = CONFIG_RESET_SCHEDULE_WEEK_DAY, .Min = 0, .Max = 6 },
-        { .Name = "ResetSchedule.Hour"sv, .DefaultValue = 8, .Index = CONFIG_RESET_SCHEDULE_HOUR, .Min = 0, .Max = 23 },
+        { .Name = "ResetSchedule.Hour"sv, .DefaultValue = 15, .Index = CONFIG_RESET_SCHEDULE_HOUR, .Min = 0, .Max = 23 },
         { .Name = "Instance.UnloadDelay"sv, .DefaultValue = 30 * MINUTE * IN_MILLISECONDS, .Index = CONFIG_INSTANCE_UNLOAD_DELAY },
         { .Name = "Quests.DailyResetTime"sv, .DefaultValue = 3, .Index = CONFIG_DAILY_QUEST_RESET_TIME_HOUR, .Min = 0, .Max = 23 },
         { .Name = "Quests.WeeklyResetWDay"sv, .DefaultValue = 3, .Index = CONFIG_WEEKLY_QUEST_RESET_TIME_WDAY, .Min = 0, .Max = 6 },
@@ -837,7 +838,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "WorldBossLevelDiff"sv, .DefaultValue = 3, .Index = CONFIG_WORLD_BOSS_LEVEL_DIFF },
         { .Name = "Quests.LowLevelHideDiff"sv, .DefaultValue = 4, .Index = CONFIG_QUEST_LOW_LEVEL_HIDE_DIFF, .Max = MAX_LEVEL },
         { .Name = "Quests.HighLevelHideDiff"sv, .DefaultValue = 7, .Index = CONFIG_QUEST_HIGH_LEVEL_HIDE_DIFF, .Max = MAX_LEVEL },
-        { .Name = "Quests.LogSize"sv, .DefaultValue = 35, .Index = CONFIG_QUEST_LOG_SIZE, .Min = 1, .Max = 40 }, // MAX_QUEST_LOG_SIZE
+        { .Name = "Quests.LogSize"sv, .DefaultValue = 40, .Index = CONFIG_QUEST_LOG_SIZE, .Min = 1, .Max = 40 }, // MAX_QUEST_LOG_SIZE
         { .Name = "Battleground.Random.ResetHour"sv, .DefaultValue = 6, .Index = CONFIG_RANDOM_BG_RESET_HOUR, .Min = 0, .Max = 23 },
         { .Name = "Calendar.DeleteOldEventsHour"sv, .DefaultValue = 6, .Index = CONFIG_CALENDAR_DELETE_OLD_EVENTS_HOUR, .Min = 0, .Max = 23 },
         { .Name = "Guild.ResetHour"sv, .DefaultValue = 6, .Index = CONFIG_GUILD_RESET_HOUR, .Min = 0, .Max = 23 },
@@ -1019,7 +1020,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "Rate.XP.BattlegroundKill"sv, .DefaultValue = 1.0f, .Index = RATE_XP_BG_KILL },
         { .Name = "Rate.XP.Quest"sv, .DefaultValue = 1.0f, .Index = RATE_XP_QUEST },
         { .Name = "Rate.XP.Explore"sv, .DefaultValue = 1.0f, .Index = RATE_XP_EXPLORE },
-        { .Name = "Rate.XP.DungeonKill"sv, .DefaultValue = 1.8f, .Index = RATE_XP_DUNGEON_KILL, .Min = 0.0f },
+        { .Name = "Rate.XP.DungeonKill"sv, .DefaultValue = 0.6f, .Index = RATE_XP_DUNGEON_KILL, .Min = 0.0f },
         { .Name = "XP.Boost.Rate"sv, .DefaultValue = 2.0f, .Index = RATE_XP_BOOST },
         { .Name = "Rate.RepairCost"sv, .DefaultValue = 1.0f, .Index = RATE_REPAIRCOST, .Min = 0.0f },
         { .Name = "Rate.Reputation.Gain"sv, .DefaultValue = 1.0f, .Index = RATE_REPUTATION_GAIN },
@@ -1067,7 +1068,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "DurabilityLossChance.Parry"sv, .DefaultValue = 0.05f, .Index = RATE_DURABILITY_LOSS_PARRY, .Min = 0.0f },
         { .Name = "DurabilityLossChance.Block"sv, .DefaultValue = 0.05f, .Index = RATE_DURABILITY_LOSS_BLOCK, .Min = 0.0f },
         { .Name = "Rate.Quest.Money.Reward"sv, .DefaultValue = 1.0f, .Index = RATE_MONEY_QUEST, .Min = 0.0f },
-        { .Name = "Rate.Quest.Money.Max.Level.Reward"sv, .DefaultValue = 1.0f, .Index = RATE_MONEY_MAX_LEVEL_QUEST, .Min = 0.0f },
+        { .Name = "Rate.Quest.Money.Max.Level.Reward"sv, .DefaultValue = 0.0f, .Index = RATE_MONEY_MAX_LEVEL_QUEST, .Min = 0.0f },
     } };
 
     for (ConfigOptionLoadDefinition<bool, WorldBoolConfigs> const& definition : bools)

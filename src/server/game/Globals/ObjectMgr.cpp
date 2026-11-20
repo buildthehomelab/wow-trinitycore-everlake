@@ -22,6 +22,7 @@
 #include "AzeriteEmpoweredItem.h"
 #include "AzeriteItem.h"
 #include "Chat.h"
+#include "Config.h"
 #include "Containers.h"
 #include "CreatureAIFactory.h"
 #include "CriteriaHandler.h"
@@ -952,6 +953,21 @@ void ObjectMgr::LoadShop()
                 product->InGameOnly = true;
             product->Actions.push_back(action);
         } while (result->NextRow());
+    }
+
+    // Classic.Shop.Free: products cost 0 points and the store shows the real price crossed out. Products that hand out gold keep
+    // their price (free gold could be bought without end); Gold Market listings, which players sell to each other, are not
+    // loaded here and keep theirs too.
+    if (sConfigMgr->GetBoolDefault("Classic.Shop.Free", true))
+    {
+        for (auto& [id, product] : _shopProductStore)
+        {
+            if (std::ranges::any_of(product.Actions, [](ShopProductAction const& action) { return action.Action == ShopAction::Gold; }))
+                continue;
+
+            product.NormalPrice = std::max(product.NormalPrice, product.Price);
+            product.Price = 0;
+        }
     }
 
     TC_LOG_INFO("server.loading", ">> Loaded {} shop tabs and {} shop products in {} ms", _shopGroupStore.size(), _shopProductStore.size(), GetMSTimeDiffToNow(oldMSTime));
