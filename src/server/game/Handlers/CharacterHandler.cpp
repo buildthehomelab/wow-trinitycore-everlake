@@ -364,6 +364,11 @@ bool LoginQueryHolder::Initialize()
     stmt->setUInt64(0, lowGuid);
     res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_DAY_CYCLE, stmt);
 
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ACCOUNT_ACHIEVEMENTS);
+    stmt->setUInt32(0, m_accountId);
+    stmt->setUInt32(1, m_accountId);
+    res &= SetPreparedQuery(PLAYER_LOGIN_QUERY_LOAD_ACCOUNT_LEGACY_ACHIEVEMENTS, stmt);
+
     return res;
 }
 

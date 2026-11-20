@@ -48,6 +48,18 @@ namespace ClassicAttackTable
             return 0.0f;
         return std::min(auraCrit, AuraCritSuppression);
     }
+
+    // Daze when a creature hits a player from behind (vanilla, VMaNGOS Unit::AttackerStateUpdate): 20% base, less below level 30
+    // (0.65 per level + 0.5, about 7% at level 10), times attacker melee skill / victim defense, at most 40%. Defense on gear
+    // lowers it. TrinityCore's 3.3.5 rule multiplied this by 0.16 (3.2% at level 60) and used the defense cap for the level.
+    constexpr float DazeMaxChance = 40.0f;
+
+    inline float DazeChance(uint8_t victimLevel, int32_t attackerSkill, int32_t victimDefense)
+    {
+        float chance = victimLevel < 30 ? 0.65f * victimLevel + 0.5f : 20.0f;
+        chance *= float(attackerSkill) / float(std::max(victimDefense, int32_t(1)));
+        return std::clamp(chance, 0.0f, DazeMaxChance);
+    }
 }
 
 #endif

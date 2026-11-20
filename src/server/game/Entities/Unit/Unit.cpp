@@ -1688,20 +1688,9 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
         GetTypeId() != TYPEID_PLAYER && !ToCreature()->IsControlledByPlayer() && !victim->HasInArc(float(M_PI), this)
         && (victim->GetTypeId() == TYPEID_PLAYER || !victim->ToCreature()->isWorldBoss())&& !victim->IsVehicle())
     {
-        // 20% base chance
-        float chance = 20.0f;
-
-        // there is a newbie protection, at level 10 just 7% base chance; assuming linear function
-        if (victim->GetLevel() < 30)
-            chance = 0.65f * victim->GetLevelForTarget(this) + 0.5f;
-
-        uint32 const victimDefense = victim->GetMaxSkillValueForLevel(this);
-        uint32 const attackerMeleeSkill = GetMaxSkillValueForLevel();
-
-        chance *= attackerMeleeSkill / float(victimDefense) * 0.16f;
-
-        // -probability is between 0% and 40%
-        RoundToInterval(chance, 0.0f, 40.0f);
+        // vanilla (VMaNGOS): 20% base, less below level 30, times attacker skill / the victim's real defense, at most 40%
+        float const chance = ClassicAttackTable::DazeChance(uint8(victim->GetLevelForTarget(this)), int32(GetMaxSkillValueForLevel(victim)),
+            victim->GetClassicDefenseSkill(this));
         if (roll_chance(chance))
             CastSpell(victim, SPELL_DAZED, true);
     }
@@ -12194,12 +12183,22 @@ void Unit::SetMeleeAnimKitId(uint16 animKitId)
             if (InstanceScript const* instance = creature->GetInstanceScript())
                 dungeonEncounter = instance->GetBossDungeonEncounter(creature);
 
-            // vanilla: a grouped kill in a dungeon leaves one shared corpse under the group's loot method, bosses and trash alike;
-            // trash kept in the round robin looter's personal loot hid the corpse from the master looter and the rest of the raid
+            // vanilla: a grouped kill leaves one shared corpse under the group's loot method, bosses and trash alike, in dungeons
+            // and in the open world. Trash kept in the round robin looter's personal loot hid the corpse from the master looter
+            // and the rest of the raid; outside dungeons every tapper got a full loot table and money roll of their own (about
+            // 5x the drops and gold for a full group). In the open world the corpse is shared only when every tapper is in the
+            // same group: a tapper who left the group before the kill, or a second group or solo player on the tap list, keeps
+            // personal loot instead of getting nothing
             bool sharedCorpse = false;
             if (!tappers.empty() && sWorld->getBoolConfig(CONFIG_LOOT_SHARED_ENCOUNTER_LOOT))
-                sharedCorpse = dungeonEncounter || (creature->GetMap()->IsDungeon() &&
-                    std::ranges::any_of(tappers, [](Player const* tapper) { return tapper->GetGroup() != nullptr; }));
+            {
+                if (dungeonEncounter)
+                    sharedCorpse = true;
+                else if (creature->GetMap()->IsDungeon())
+                    sharedCorpse = std::ranges::any_of(tappers, [](Player const* tapper) { return tapper->GetGroup() != nullptr; });
+                else if (Group const* firstGroup = tappers.front()->GetGroup())
+                    sharedCorpse = std::ranges::all_of(tappers, [firstGroup](Player const* tapper) { return tapper->GetGroup() == firstGroup; });
+            }
 
             if (sharedCorpse)
             {

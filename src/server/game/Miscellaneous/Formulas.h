@@ -202,9 +202,9 @@ namespace Trinity
                             xpMod *= 2.0f;
                     }
 
-                    // Classic 1.60: extra kill experience in 5 player dungeons (Rate.XP.DungeonKill). Forever beta notes of
-                    // October 8 2026 gave +20% (1.2); Blizzard's hotfix of November 8 2026 raised dungeon kill experience by
-                    // another 50% (1.2 * 1.5 = 1.8, the default)
+                    // Classic 1.60: kill experience in 5 player dungeons (Rate.XP.DungeonKill). Blizzard (Kaivax, November 10
+                    // 2026): the November 8 hotfix "took dungeon kill XP from 40% of the values in Classic Era to 60%", so the
+                    // default is 0.6 of the Classic Era value this formula gives
                     if (u->GetMap()->IsNonRaidDungeon())
                         xpMod *= sWorld->getRate(RATE_XP_DUNGEON_KILL);
 
