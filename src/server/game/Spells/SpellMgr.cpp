@@ -4138,8 +4138,9 @@ void SpellMgr::LoadSpellInfoCorrections()
         });
     });
 
-    // Warchief's Blessing: health, 15% haste to all spells and attacks (live's copy: melee and ranged haste plus cast speed), mana per 5 sec
-    ApplySpellFix({ 16609 }, [](SpellInfo* spellInfo)
+    // Warchief's Blessing: health, 15% haste to all spells and attacks (live's copy: melee and ranged haste plus cast speed), mana per 5 sec.
+    // Might of Stormwind (460939), the Alliance's Rend buff, is the same three dummies (live's copy 1304678 has the same auras).
+    ApplySpellFix({ 16609, 460939 }, [](SpellInfo* spellInfo)
     {
         ApplySpellEffectFix(spellInfo, EFFECT_0, [](SpellEffectInfo* spellEffectInfo)
         {

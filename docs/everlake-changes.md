@@ -42,6 +42,63 @@ grep -n "^StackSize.Enable" src/server/worldserver/worldserver.conf.dist
 On the PTR, the worldserver log shows `>> Item stack sizes: changed N items` (about 1,700 with the defaults) and a
 stack of Linen Cloth goes past 20.
 
+## Timed world buffs (`Classic.WorldBuffs.*`)
+
+Everlake does not offer the raid head turn-ins, so their world buffs go out on a timer instead, ported from Evermore's
+mod-world-buff-bots. Every 30 to 150 minutes (rolled each cycle) a made-up player "returns the head of Onyxia":
+Rallying Cry of the Dragonslayer (22888) goes to the Alliance in Stormwind and the Horde in Orgrimmar at the same
+moment. Spirit of Zandalar (24425) follows 10 minutes later in Stranglethorn Vale for both factions. Each faction gets
+a system message 10 minutes before each buff, naming the realm time it drops, and another when it lands. Alive, non-GM
+players of that faction in the zone get the aura added straight on (not cast, since the spells also reach nearby allies),
+bots included. The timer is not saved; a restart rolls a new first
+cycle. Rend's head (Warchief's Blessing, Might of Stormwind) is left to players, since Upper Blackrock Spire stays open.
+
+Might of Stormwind (460939), the Alliance's Rend buff, comes the way live hands it out. End of the Dark Horde 84377 goes to
+Mathias Shaw, then 97883 goes to Major Mattingly, who casts the buff on the allies around him
+(`sql/custom/world/2026_11_19_85_world_everlake_might_of_stormwind.sql`). Both quests come from wow-everlake-world-data.
+The spell joins Warchief's Blessing's aura fix in `SpellMgr.cpp`, and it counts for the Conquering Hero and Second
+Chance Legacy perks (`ClassicLegacyPerks.h`; the same SQL file binds Second Chance's cleanup script to it).
+
+Town heralds for Rend's head, as on live since 2026-11-12
+(`sql/custom/world/2026_11_19_86_world_everlake_rend_heralds.sql`):
+- Thrall's turn-in summons a Herald of Thrall at the Crossroads (as before) and now also on the Razor Hill guard tower. The
+  herald's own script was lost in the VMaNGOS conversion and is back: two yells, then Warchief's Blessing at 15 seconds.
+- Mattingly's 97883 turn-in summons a Stormwind Crier (269863, a new template) in Goldshire, Lakeshire and Sentinel Hill.
+  Each casts Might of Stormwind after 5 seconds.
+- Places come from live sightings (Icy Veins). The criers don't speak, since no source has their line. Live's criers ride
+  in from the road; ours appear where live's stop.
+- A herald or crier summoned where no player is near does nothing until one comes by (the grid isn't updating), and is
+  cleared without acting if the grid unloads first. Bots usually keep these towns busy.
+
+Live Forever (checked 2026-11-19): the buffs come only from turn-ins. Live has no timer and no Chronoboon for sale.
+Rallying Cry needs Onyxia (live from 2026-12-09) and Zul'Gurub is not on live, so this is an Everlake extra. Buff
+lengths are the client's (2 hours each). Rallying Cry's dummy auras are made real in `SpellMgr.cpp`
+(`ApplySpellFix({ 22888 }`); Spirit of Zandalar is already real in the client.
+
+| Hook | Where | What breaks if it goes |
+|---|---|---|
+| The timing | `src/server/game/World/WorldBuffCycle.h` | Build fails (the script below) |
+| The script | `src/server/scripts/Custom/Classic/world/classic_world_buffs.cpp` | **Silent:** no buffs go out |
+| Script loader | `src/server/scripts/Custom/Classic/classic_script_loader.cpp`, `AddSC_classic_world_buffs()` | **Silent:** no buffs go out |
+| Rallying Cry auras | `src/server/game/Spells/SpellMgr.cpp`, `ApplySpellFix({ 22888 }` | **Silent:** the buff shows but does nothing |
+| Might of Stormwind auras | `src/server/game/Spells/SpellMgr.cpp`, `ApplySpellFix({ 16609, 460939 }` | **Silent:** the Alliance Rend buff shows but does nothing |
+| Town heralds and criers | `sql/custom/world/2026_11_19_86_world_everlake_rend_heralds.sql` | **Silent:** the Rend buff reaches only Orgrimmar / Stormwind |
+| Mattingly's turn-in + perk script | `sql/custom/world/2026_11_19_85_world_everlake_might_of_stormwind.sql` | **Silent:** quest 97883 gives no buff, or Second Chance's mark stays after Might of Stormwind ends |
+| Config block | `src/server/worldserver/worldserver.conf.dist`, `Classic.WorldBuffs.*` after `Classic.CreatureHealth.Raids` | Defaults still apply (they're in the code), but the options are no longer documented |
+| Tests | `tests/game/WorldBuffCycle.cpp` | Timing changes go unnoticed |
+
+Check after a merge:
+
+```bash
+grep -n "AddSC_classic_world_buffs" src/server/scripts/Custom/Classic/classic_script_loader.cpp
+grep -n "ApplySpellFix({ 22888 }" src/server/game/Spells/SpellMgr.cpp
+grep -n "ApplySpellFix({ 16609, 460939 }" src/server/game/Spells/SpellMgr.cpp
+grep -n "^Classic.WorldBuffs.Enable" src/server/worldserver/worldserver.conf.dist
+```
+
+On the PTR, the worldserver log shows `Classic.WorldBuffs: next Rallying Cry of the Dragonslayer in N min` at start-up. To test quickly,
+set `FirstMinMinutes`, `FirstMaxMinutes`, `MinMinutes` and `MaxMinutes` to 15 and stand in Stormwind or Orgrimmar.
+
 ## Forever mechanics audit fixes (2026-11-19)
 
 Places where TrinityCore's retail or Wrath rules leaked through and we now follow live WoW Forever (or vanilla where Forever
@@ -64,6 +121,7 @@ the retail rule back without a build error.
 | Dungeon kill XP at live's 60% of Classic Era | `Rate.XP.DungeonKill` default 0.6 | Dungeon kills give 1.8x (about 3x live) |
 | Faction auction houses, goblin houses cross-faction | `AllowTwoSide.Interaction.Auction` default 0 | One shared house everywhere at 5% / 5% |
 | Riding 100g / 1,000g at Friendly | `sql/custom/world/2026_11_19_81_world_forever_riding_prices.sql` | Prices back to 90g / 900g (the Honored price) |
+| Raids Forever hasn't released are closed: Molten Core, Blackwing Lair, Zul'Gurub, both Ahn'Qiraj raids, Naxxramas, and Onyxia until 2026-12-09; their dead-end quests are hidden | `sql/custom/world/2026_11_19_83_world_everlake_close_vanilla_raids.sql` (`disables` map and quest rows) | **Silent:** players can enter raids live doesn't have and pick up quests they can't finish |
 
 Check after a merge:
 
@@ -83,8 +141,6 @@ Everlake choices that differ from live Forever or have no Forever source (decide
 - **Rated 2v2 / 3v3 arenas** (Mak'gora Arena in Hyjal Crater, Ring of Law in Blackrock Depths;
   `sql/custom/world/2026_11_02_50_world_arena_makgora.sql`, `2026_11_08_70_world_arena_ring_of_law.sql`). Forever has not
   announced arenas; Everlake keeps them.
-- **Every vanilla raid stays open:** Molten Core, Blackwing Lair, Zul'Gurub, both Ahn'Qiraj raids and Naxxramas, which Forever
-  doesn't have, and Onyxia before Forever's 2026-12-09 release. No `disables` rows for them.
 
 ## Bots swim under the surface while they move (`WaterRouteAdjust`), PTR report 2026-11-19
 

@@ -5441,6 +5441,53 @@ Classic.CreatureHealth.RaiseFromLevel = 20
 Classic.CreatureHealth.RaiseAt60Pct = 20
 Classic.CreatureHealth.Raids = 0
 
+#    Classic.WorldBuffs.Enable
+#        Description: Everlake: hands out the raid head world buffs on a random timer, since Everlake does not offer those
+#                     turn-ins. Each cycle Rallying Cry of the Dragonslayer goes to the Alliance in Stormwind and the Horde
+#                     in Orgrimmar at the same moment, and Spirit of Zandalar follows in Stranglethorn Vale for both. Each
+#                     faction is told first, with the realm time the buff drops. Not saved: a restart rolls a new first
+#                     cycle. Rend's head (Warchief's Blessing, Might of Stormwind) is left to players.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+
+Classic.WorldBuffs.Enable = 1
+
+#    Classic.WorldBuffs.MinMinutes
+#    Classic.WorldBuffs.MaxMinutes
+#        Description: Minutes from one cycle's Rallying Cry to the next, rolled at random in this range every cycle. Keep
+#                     MinMinutes above Classic.WorldBuffs.Zandalar.OffsetMinutes.
+#        Default:     30 / 150
+
+Classic.WorldBuffs.MinMinutes = 30
+Classic.WorldBuffs.MaxMinutes = 150
+
+#    Classic.WorldBuffs.FirstMinMinutes
+#    Classic.WorldBuffs.FirstMaxMinutes
+#        Description: Minutes from start-up to the first Rallying Cry, rolled at random in this range. A config reload
+#                     keeps a cycle that is already counting down; new values count from the next cycle.
+#                     Every Classic.WorldBuffs minute value is capped at 10080 (a week).
+#        Default:     30 / 150
+
+Classic.WorldBuffs.FirstMinMinutes = 30
+Classic.WorldBuffs.FirstMaxMinutes = 150
+
+#    Classic.WorldBuffs.WarningMinutes
+#        Description: How many minutes before each buff its faction is told. 0 = no heads-up.
+#        Default:     10
+
+Classic.WorldBuffs.WarningMinutes = 10
+
+#    Classic.WorldBuffs.RallyingCry.Enable
+#    Classic.WorldBuffs.Zandalar.Enable
+#    Classic.WorldBuffs.Zandalar.OffsetMinutes
+#        Description: Switch each buff on or off. Spirit of Zandalar drops OffsetMinutes after Rallying Cry; with the
+#                     defaults (10 and WarningMinutes 10) its heads-up goes out as Rallying Cry lands.
+#        Default:     1 / 1 / 10
+
+Classic.WorldBuffs.RallyingCry.Enable = 1
+Classic.WorldBuffs.Zandalar.Enable = 1
+Classic.WorldBuffs.Zandalar.OffsetMinutes = 10
+
 #    Forever.VanillaAoE
 #        Description: Puts the two AoE spells WoW Forever reworked back to vanilla 1.12.
 #                     Consecration: every enemy in it takes the vanilla damage each second (rank 1: 64 over 8 sec, rank 5:
