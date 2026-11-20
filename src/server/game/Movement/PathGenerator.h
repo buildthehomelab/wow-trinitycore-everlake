@@ -88,6 +88,11 @@ class TC_GAME_API PathGenerator
         // `waterPolys`: the corridor runs over navmesh water polygons past its first one (the liquid probes miss some of them).
         using LiquidRouteCheck = bool(*)(WorldObject const* source, Movement::PointsArray const& path, bool waterPolys);
         static void SetLiquidRouteCheck(LiquidRouteCheck check) { _liquidRouteCheck = check; }
+        // Optional adjustment (set by a module): moves the points of a finished route whose corridor runs over navmesh water
+        // polygons, for a source whose body belongs elsewhere than on those polygons (a bot swims under the surface they lie on).
+        // The first point, the source's own place, is not the adjustment's to move. Called on the thread that calculates the path.
+        using WaterRouteAdjust = void(*)(WorldObject const* source, Movement::PointsArray& path);
+        static void SetWaterRouteAdjust(WaterRouteAdjust adjust) { _waterRouteAdjust = adjust; }
         // This path goes straight at its target whatever the source's liquid preference (a charge): no land-only search.
         void SetIgnoreLiquidRouteCheck(bool ignore) { _ignoreLiquidRouteCheck = ignore; }
 
@@ -177,7 +182,9 @@ class TC_GAME_API PathGenerator
         bool CalculatePathImpl(float srcX, float srcY, float srcZ, float destX, float destY, float destZ, bool forceDest);
         bool CalculateLiquidAwarePath(float srcX, float srcY, float srcZ, float destX, float destY, float destZ, bool forceDest);
         bool FindClosedDoorOnPath(G3D::Vector3& hit) const;
+        void AdjustWaterRoute();
         static LiquidRouteCheck _liquidRouteCheck;
+        static WaterRouteAdjust _waterRouteAdjust;
         static ClosedDoorCheck _closedDoorCheck;
         static constexpr uint32 MAX_CLOSED_DOOR_DETOURS = 6;
 

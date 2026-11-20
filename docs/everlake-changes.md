@@ -141,3 +141,25 @@ Everlake choices that differ from live Forever or have no Forever source (decide
 - **Rated 2v2 / 3v3 arenas** (Mak'gora Arena in Hyjal Crater, Ring of Law in Blackrock Depths;
   `sql/custom/world/2026_11_02_50_world_arena_makgora.sql`, `2026_11_08_70_world_arena_ring_of_law.sql`). Forever has not
   announced arenas; Everlake keeps them.
+
+## Bots swim under the surface while they move (`WaterRouteAdjust`), PTR report 2026-11-19
+
+A bot's route over deep water runs at its swim depth (`Swim::SwimZ`, head out, body under) instead of on the navmesh's
+water polygons, which lie on the surface. Before it, a moving or following bot swam on top of the water and only sank
+in once it stood still. The core's `PathGenerator` calls an optional hook for every finished route whose corridor
+crosses water polygons; the bot module lowers each deep-water point above the swim z to it. Dives and points on the
+lake bed keep their depth, the bot's own start point is never moved, and only bots are touched.
+
+| Hook | Where | What breaks if it goes |
+|---|---|---|
+| `SetWaterRouteAdjust` / `AdjustWaterRoute()` | `src/server/game/Movement/PathGenerator.h` / `.cpp`, called at both exits of `CalculatePath` | **Silent:** bots swim on top of the water again while they move |
+| `BotSwimRouteDepth` + its registration | `src/modules/PlayerbotV2/PlayerbotV2Scripts.cpp`, `AddSC_playerbot_v2` | Build fails if the core hook goes; **silent** if only the registration goes |
+| `Swim::RoutePointNeedsLowering` | `src/modules/PlayerbotV2/Api/BotSwim.h` | Build fails |
+| Tests | `tests/game/BotSwimRoute.cpp` | Rule changes go unnoticed |
+
+Check after a merge:
+
+```bash
+grep -n "AdjustWaterRoute()" src/server/game/Movement/PathGenerator.cpp
+grep -n "SetWaterRouteAdjust" src/modules/PlayerbotV2/PlayerbotV2Scripts.cpp
+```

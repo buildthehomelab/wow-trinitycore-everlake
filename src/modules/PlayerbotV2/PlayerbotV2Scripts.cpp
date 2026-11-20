@@ -21,6 +21,7 @@
 #include "Random.h"
 #include "Player.h"
 #include "PlayerbotMovement.h"
+#include "Api/BotSwim.h"
 #include "ScriptMgr.h"
 #include "Services.h"
 #include "Util/ConfigReader.h"   // Services::Config().refresh() on `.reload config`
@@ -32,6 +33,7 @@
 #include "Bot/Raid/RaidManaLedger.h"
 #include "WorldSession.h"
 #include <algorithm>
+#include <atomic>
 
 void AddSC_playerbot_v2_commandscript();
 void AddSC_playerbot_v2_hire_broker();
@@ -69,6 +71,38 @@ bool BotPathTouchesAvoidedLiquid(WorldObject const* source, Movement::PointsArra
     {
         return ClassifyDestinationLiquid(player, x, y, z) != LiquidVerdict::Dry;
     });
+}
+
+// PathGenerator::WaterRouteAdjust: a bot's route over deep water runs at its swim z (Api/BotSwim.h), not on the surface where the
+// navmesh's water polygons lie. Without it a moving or following bot swam on top of the water and sank in only once it stood still
+// (UpdateSwimState's settle), which a follower never did. Not for a bot that keeps its own movement over water (flying, a taxi, a
+// transport, a vehicle, water walking, hovering) or a ghost, which walks the lake bed to its corpse.
+void BotSwimRouteDepth(WorldObject const* source, Movement::PointsArray& path)
+{
+    using namespace Playerbot::BotMovement;
+    Player* player = const_cast<Player*>(source->ToPlayer());
+    if (!player || !player->GetSession() || !player->GetSession()->IsBot() || !player->IsInWorld())
+        return;
+    if (!player->IsAlive() || player->IsFlying() || player->IsInFlight() || player->GetTransport() || player->GetVehicle() ||
+        player->HasAuraType(SPELL_AURA_WATER_WALK) || player->HasAuraType(SPELL_AURA_HOVER))
+        return;
+    uint32 lowered = 0;
+    for (std::size_t i = 1; i < path.size(); ++i)
+    {
+        G3D::Vector3& v = path[i];
+        float swim_z = 0.0f;
+        if (SwimLevel(player, v.x, v.y, v.z, swim_z) && Swim::RoutePointNeedsLowering(v.z, swim_z))
+        {
+            v.z = swim_z;
+            ++lowered;
+        }
+    }
+    if (lowered)
+    {
+        static std::atomic<uint32> s_logged{ 0 };
+        if (s_logged.fetch_add(1, std::memory_order_relaxed) < 200)
+            TC_LOG_DEBUG("playerbot.v2", "[swim_route] {} route of {} points: {} lowered to swim depth", player->GetName(), path.size(), lowered);
+    }
 }
 
 // A bot's walks keep clear of closed doors (SFK 2026-11-17: bots pulled the courtyard and the cells through the closed gates).
@@ -490,4 +524,5 @@ void AddSC_playerbot_v2()
 
     PathGenerator::SetLiquidRouteCheck(&BotPathTouchesAvoidedLiquid);
     PathGenerator::SetClosedDoorCheck(&BotPathAvoidsClosedDoors);
+    PathGenerator::SetWaterRouteAdjust(&BotSwimRouteDepth);
 }

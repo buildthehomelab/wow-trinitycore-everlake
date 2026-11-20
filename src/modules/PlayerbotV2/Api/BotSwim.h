@@ -61,6 +61,16 @@ inline bool NeedsSettle(float bot_z, float swim_z)
     return std::fabs(bot_z - swim_z) > kSettleTolerance;
 }
 
+// A route point over deep water above the swim z goes down to it. The navmesh's water polygons lie on the surface, so a bot that moved
+// or followed along them ran on top of the water and only sank in once it stood still (NeedsSettle), and a follower never did (PTR
+// 2026-11-19: "bots swim above water sometimes"). A point already at or under the swim z (a dive to something on the floor, a bot
+// walking the bed) keeps its depth.
+constexpr float kRouteLowerSlack = 0.05f;
+inline bool RoutePointNeedsLowering(float point_z, float swim_z)
+{
+    return point_z > swim_z + kRouteLowerSlack;
+}
+
 // A follower's settle to (dx, dy, dz) from its leader keeps it inside the follow generator's 3D range (combat reaches + follow
 // distance), with a margin so the next leader step does not tip it out at once. Out of range, the generator would path it back up
 // to the surface by the leader at his next step, and the settle would start again.
