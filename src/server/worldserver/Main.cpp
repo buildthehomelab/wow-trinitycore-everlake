@@ -64,6 +64,8 @@
 #include <iostream>
 #include <csignal>
 #include <algorithm>
+#include <atomic>
+#include <functional>
 #include <filesystem>
 #include <map>
 
@@ -123,6 +125,11 @@ private:
 };
 
 void SignalHandler(boost::system::error_code const& error, int signalNumber);
+// A stop signal (docker stop, a restart from the app) with SignalShutdownDelay set: the world thread starts the normal
+// shutdown countdown instead of stopping at once (World::ShutdownServ must not run on the signal's network thread).
+std::atomic<uint32> SignalShutdownDelay{ 0 };
+std::atomic<bool> SignalShutdownRequested{ false };
+std::atomic<uint32> SignalsReceived{ 0 };
 std::unique_ptr<Trinity::Net::AsyncAcceptor> StartRaSocketAcceptor(Trinity::Asio::IoContext& ioContext);
 bool StartDB();
 int CreateAccountFromCommandLine(variables_map const& vm);
@@ -282,7 +289,15 @@ int main(int argc, char** argv)
 #if TRINITY_PLATFORM == TRINITY_PLATFORM_WINDOWS
     signals.add(SIGBREAK);
 #endif
-    signals.async_wait(SignalHandler);
+    SignalShutdownDelay = uint32(std::max(0, sConfigMgr->GetIntDefault("SignalShutdownDelay", 0)));
+    std::function<void(boost::system::error_code const&, int)> onSignal;
+    onSignal = [&signals, &onSignal](boost::system::error_code const& error, int signalNumber)
+    {
+        SignalHandler(error, signalNumber);
+        if (!error && !World::IsStopped())
+            signals.async_wait(onSignal);   // a second signal during the countdown stops at once
+    };
+    signals.async_wait(onSignal);
 
     // Start the Boost based thread pool
     int numThreads = sConfigMgr->GetIntDefault("ThreadPool", 1);
@@ -595,6 +610,9 @@ void WorldUpdateLoop()
             continue;
         }
 
+        if (SignalShutdownRequested.exchange(false) && !sWorld->IsShuttingDown())
+            sWorld->ShutdownServ(SignalShutdownDelay, 0, SHUTDOWN_EXIT_CODE, "Realm restart");
+
         sWorld->Update(diff);
         realPrevTime = realCurrTime;
 
@@ -615,10 +633,22 @@ void WorldUpdateLoop()
     HotfixDatabase.WarnAboutSyncQueries(false);
 }
 
-void SignalHandler(boost::system::error_code const& error, int /*signalNumber*/)
+void SignalHandler(boost::system::error_code const& error, int signalNumber)
 {
-    if (!error)
-        World::StopNow(SHUTDOWN_EXIT_CODE);
+    if (error)
+        return;
+
+    // First signal with a delay set: count down in game so players are warned, then stop the normal way (players saved).
+    // A second signal, or no delay: stop now; the kicked players are still saved, the database queues drain before closing.
+    if (SignalShutdownDelay && SignalsReceived++ == 0)
+    {
+        TC_LOG_INFO("server.worldserver", "Signal {} received, shutting down in {} seconds (send it again to stop now)", signalNumber, SignalShutdownDelay.load());
+        SignalShutdownRequested = true;
+        return;
+    }
+
+    TC_LOG_INFO("server.worldserver", "Signal {} received, stopping now", signalNumber);
+    World::StopNow(SHUTDOWN_EXIT_CODE);
 }
 
 void FreezeDetector::Handler(std::weak_ptr<FreezeDetector> freezeDetectorRef, boost::system::error_code const& error)

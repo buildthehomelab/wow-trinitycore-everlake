@@ -637,6 +637,17 @@ LogDB.Opt.ClearTime = 1209600
 MaxCoreStuckTime = 60
 
 #
+#    SignalShutdownDelay
+#        Description: Seconds of in-game shutdown countdown when the server gets SIGTERM or SIGINT
+#                     (docker stop, a container restart). Players are warned, then the server stops
+#                     the normal way. A second signal stops at once. Keep the container's stop timeout
+#                     longer than this plus the time to save every character.
+#        Default:     0  - (Stop at once)
+#                     60 - (One minute countdown)
+
+SignalShutdownDelay = 0
+
+#
 #    AddonChannel
 #        Description: Configure the use of the addon channel through the server (some client side
 #                     addons will not work correctly with disabled addon channel)
