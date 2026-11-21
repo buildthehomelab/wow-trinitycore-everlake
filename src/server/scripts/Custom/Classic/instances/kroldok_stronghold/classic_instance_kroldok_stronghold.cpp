@@ -63,9 +63,10 @@ enum ClassicKroldokCreatures : uint32
     NPC_KDS_NARGURK = 258964,
     NPC_KDS_MUGG = 258968,
     NPC_KDS_TOOF = 264773,
-    NPC_KDS_SHAMAN = 8110002,           // placeholder entries (no live ids known yet)
-    NPC_KDS_CENTURION = 8110004,
-    NPC_KDS_WAR_WOLF = 8110005
+    NPC_KDS_SHAMAN = 257888,            // live entries (EG Link records, build 70959); they replace the placeholders
+    NPC_KDS_CENTURION = 257885,         // 8110002, 8110004 and 8110005 (2026_11_21_80_world_forever_kroldok_live_trash.sql)
+    NPC_KDS_SNARLFANG = 259283,         // Ashka's two wolves have names of their own on live
+    NPC_KDS_TERRORHOWL = 259285
 };
 
 enum ClassicKroldokSpells : uint32
@@ -235,7 +236,8 @@ struct classic_boss_kds_ashka : public KdsTimedBossAI
     void JustEngagedWith(Unit* who) override
     {
         KdsTimedBossAI::JustEngagedWith(who);
-        KdsCallGuards(me, NPC_KDS_WAR_WOLF, 25.0f, who);
+        KdsCallGuards(me, NPC_KDS_SNARLFANG, 25.0f, who);
+        KdsCallGuards(me, NPC_KDS_TERRORHOWL, 25.0f, who);
     }
 };
 
