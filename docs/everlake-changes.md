@@ -120,6 +120,7 @@ the retail rule back without a build error.
 | Meeting stones don't summon | `GameObject::Use`, `GAMEOBJECT_TYPE_MEETINGSTONE` | Stones try the Wrath spell 59782 (not in the client) |
 | Dungeon kill XP at live's 60% of Classic Era | `Rate.XP.DungeonKill` default 0.6 | Dungeon kills give 1.8x (about 3x live) |
 | Faction auction houses, goblin houses cross-faction | `AllowTwoSide.Interaction.Auction` default 0 | One shared house everywhere at 5% / 5% |
+| Auction house bot stocks and buys in the Alliance, Horde and goblin houses | `src/modules/PlayerbotV2/conf/zz-0-playerbot-defaults.conf` (`*.Items.Amount.Ratio` 100 each, faction buyers on) and `zz-forever-bots.conf` (faction buyers on) | **Silent:** the bot stocks only house 1 (goblin auctioneers); Alliance and Horde houses stay empty |
 | Riding 100g / 1,000g at Friendly | `sql/custom/world/2026_11_19_81_world_forever_riding_prices.sql` | Prices back to 90g / 900g (the Honored price) |
 | Raids Forever hasn't released are closed: Molten Core, Blackwing Lair, Zul'Gurub, both Ahn'Qiraj raids, Naxxramas, and Onyxia until 2026-12-09; their dead-end quests are hidden | `sql/custom/world/2026_11_19_83_world_everlake_close_vanilla_raids.sql` (`disables` map and quest rows) | **Silent:** players can enter raids live doesn't have and pick up quests they can't finish |
 
@@ -131,6 +132,7 @@ grep -n "ReputationDiscount" src/server/game/Entities/Player/Player.cpp
 grep -n "BlocksDungeonCarry" src/server/game/Entities/Player/KillRewarder.cpp
 grep -n "DazeChance" src/server/game/Entities/Unit/Unit.cpp
 grep -n "HasAchievedOnAccount" src/server/game/Spells/TraitMgr.cpp src/server/game/Entities/Player/Player.cpp
+grep -n "Alliance.Items.Amount.Ratio\|Buyer.Horde.Enabled" src/modules/PlayerbotV2/conf/zz-*.conf   # ratio 100, buyers 1
 ```
 
 Everlake choices that differ from live Forever or have no Forever source (decided 2026-11-19, keep them):
