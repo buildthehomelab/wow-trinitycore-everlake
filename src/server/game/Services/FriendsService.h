@@ -99,10 +99,10 @@ namespace BattlenetPresence
         Ok,
         NoAccount,          // a game account without a Battle.net account
         InvalidName,        // not 2-12 letters and digits starting with a letter
-        NoFreeNumber        // the name is crowded (or the tag was taken meanwhile)
+        NoFreeNumber        // the name is full, or the tag was taken meanwhile
     };
 
-    // .battletag: the player picks the name, the server draws the number ("Name#1234"), as Evermore's friend tags
+    // .battletag: the player picks the name, the server draws the number ("Name#1234")
     TC_GAME_API std::string GetBattleTag(WorldSession const* session);
     TC_GAME_API BattleTagResult SetBattleTag(WorldSession* session, std::string const& name, std::string& tag);
 }

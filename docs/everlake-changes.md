@@ -154,7 +154,7 @@ lake bed keep their depth, the bot's own start point is never moved, and only bo
 
 | Hook | Where | What breaks if it goes |
 |---|---|---|
-| `SetWaterRouteAdjust` / `AdjustWaterRoute()` | `src/server/game/Movement/PathGenerator.h` / `.cpp`, called at both exits of `CalculatePath` | **Silent:** bots swim on top of the water again while they move |
+| `SetWaterRouteAdjust` / `FinishPath()` | `src/server/game/Movement/PathGenerator.h` / `.cpp`, called at every exit of `CalculatePath` (Karrz 0.1.39 took this fix into his tree and renamed our `AdjustWaterRoute()` to `FinishPath()`; the Karrz 0.1.39 bot port uses his) | **Silent:** bots swim on top of the water again while they move |
 | `BotSwimRouteDepth` + its registration | `src/modules/PlayerbotV2/PlayerbotV2Scripts.cpp`, `AddSC_playerbot_v2` | Build fails if the core hook goes; **silent** if only the registration goes |
 | `Swim::RoutePointNeedsLowering` | `src/modules/PlayerbotV2/Api/BotSwim.h` | Build fails |
 | Tests | `tests/game/BotSwimRoute.cpp` | Rule changes go unnoticed |
