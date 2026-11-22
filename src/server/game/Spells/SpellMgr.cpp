@@ -3917,6 +3917,128 @@ void SpellMgr::LoadForeverVanillaAoe()
 // Classic 1.60 (Forever): the bundles a labeled Waylaid Crate takes. The client lists them only in the Stock Crate spell's text
 // ("$M3 Peacebloom ...") with the counts in its dummy effects, and offers the materials of its ItemSalvage list; the server needs
 // the pairs, so classic_crate_bundle holds them (one row per material, made from the client data).
+// Classic 1.60 (WoW Forever): item effects stronger against one kind of enemy (ClassicVersusBonus.h). spell_versus_bonus names the spell the factor
+// scales, the effect that holds the factor and the enemies; creature_versus_group puts creatures in the groups no creature field holds (Trolls,
+// Plants, Naga...), written by tools/classic_versus_groups from creature_template's names, types and families.
+void SpellMgr::LoadClassicVersusBonus()
+{
+    uint32 oldMSTime = getMSTime();
+
+    mClassicVersusBonus.clear();
+    mClassicVersusCreatureGroups.clear();
+
+    //                                                   0         1     2             3              4       5              6
+    if (QueryResult result = WorldDatabase.Query("SELECT spell_id, kind, source_spell, source_effect, factor, versus_groups, versus_types FROM spell_versus_bonus"))
+    {
+        do
+        {
+            Field* fields = result->Fetch();
+            uint32 const spellId = fields[0].GetUInt32();
+            uint8 const kind = fields[1].GetUInt8();
+            uint32 const sourceSpellId = fields[2].GetUInt32();
+            uint8 const sourceEffect = fields[3].GetUInt8();
+            float const overrideFactor = fields[4].GetFloat();
+            uint32 const groups = fields[5].GetUInt32();
+            uint32 const types = fields[6].GetUInt32();
+
+            if (!GetSpellInfo(spellId, DIFFICULTY_NONE))
+            {
+                TC_LOG_ERROR("sql.sql", "Table `spell_versus_bonus`: spell {} does not exist, row skipped.", spellId);
+                continue;
+            }
+            if (kind >= uint8(ClassicVersusBonus::Kind::Max))
+            {
+                TC_LOG_ERROR("sql.sql", "Table `spell_versus_bonus`: spell {} has unknown kind {}, row skipped.", spellId, kind);
+                continue;
+            }
+            if ((groups & ~uint32(ClassicVersusBonus::GROUP_ALL)) || (!groups && !types))
+            {
+                TC_LOG_ERROR("sql.sql", "Table `spell_versus_bonus`: spell {} kind {} has groups {:#x} and creature types {:#x}, row skipped.", spellId, kind, groups, types);
+                continue;
+            }
+
+            SpellInfo const* source = GetSpellInfo(sourceSpellId, DIFFICULTY_NONE);
+            if (!source)
+            {
+                TC_LOG_ERROR("sql.sql", "Table `spell_versus_bonus`: spell {} kind {} reads its factor from spell {}, which does not exist, row skipped.", spellId, kind, sourceSpellId);
+                continue;
+            }
+            float basePoints = 0.0f;
+            if (sourceEffect < source->GetEffects().size())
+                basePoints = source->GetEffect(SpellEffIndex(sourceEffect)).BasePoints;
+            else if (overrideFactor <= 0.0f)
+            {
+                TC_LOG_ERROR("sql.sql", "Table `spell_versus_bonus`: spell {} kind {} reads its factor from effect {} of spell {}, which has no such effect, row skipped.",
+                    spellId, kind, sourceEffect, sourceSpellId);
+                continue;
+            }
+
+            float const factor = ClassicVersusBonus::Factor(overrideFactor, basePoints);
+            if (factor <= 1.0f)
+            {
+                TC_LOG_ERROR("sql.sql", "Table `spell_versus_bonus`: spell {} kind {} has factor {} (effect {} of spell {} reads {}), row skipped.",
+                    spellId, kind, overrideFactor, sourceEffect, sourceSpellId, basePoints);
+                continue;
+            }
+
+            mClassicVersusBonus[(uint64(spellId) << 8) | kind] = { sourceSpellId, sourceEffect, factor, groups, types };
+        } while (result->NextRow());
+    }
+
+    //                                                   0      1
+    if (QueryResult result = WorldDatabase.Query("SELECT entry, `groups` FROM creature_versus_group"))
+    {
+        do
+        {
+            Field* fields = result->Fetch();
+            uint32 const entry = fields[0].GetUInt32();
+            uint32 const groups = fields[1].GetUInt32();
+            if (!sObjectMgr->GetCreatureTemplate(entry))
+            {
+                TC_LOG_ERROR("sql.sql", "Table `creature_versus_group`: creature {} does not exist, row skipped.", entry);
+                continue;
+            }
+            if (!groups || (groups & ~uint32(ClassicVersusBonus::GROUP_ALL)))
+            {
+                TC_LOG_ERROR("sql.sql", "Table `creature_versus_group`: creature {} has groups {:#x}, row skipped.", entry, groups);
+                continue;
+            }
+            mClassicVersusCreatureGroups[entry] = groups;
+        } while (result->NextRow());
+    }
+
+    TC_LOG_INFO("server.loading", ">> Loaded {} classic versus bonuses and {} creatures in versus groups in {} ms", mClassicVersusBonus.size(),
+        mClassicVersusCreatureGroups.size(), GetMSTimeDiffToNow(oldMSTime));
+}
+
+SpellMgr::ClassicVersusBonusEntry const* SpellMgr::GetClassicVersusBonus(uint32 spellId, ClassicVersusBonus::Kind kind) const
+{
+    return Trinity::Containers::MapGetValuePtr(mClassicVersusBonus, (uint64(spellId) << 8) | uint8(kind));
+}
+
+uint32 SpellMgr::GetClassicVersusGroups(Unit const* target) const
+{
+    if (!target)
+        return 0;
+    if (Player const* player = target->ToPlayer())
+        return ClassicVersusBonus::GroupsOfRace(player->GetRace());
+    if (uint32 const* groups = Trinity::Containers::MapGetValuePtr(mClassicVersusCreatureGroups, target->GetEntry()))
+        return *groups;
+    return 0;
+}
+
+float SpellMgr::GetClassicVersusFactor(uint32 spellId, ClassicVersusBonus::Kind kind, Unit const* target) const
+{
+    if (!target)
+        return 1.0f;
+    ClassicVersusBonusEntry const* bonus = GetClassicVersusBonus(spellId, kind);
+    if (!bonus)
+        return 1.0f;
+    if (!ClassicVersusBonus::Matches(bonus->Groups, bonus->CreatureTypes, GetClassicVersusGroups(target), target->GetCreatureTypeMask()))
+        return 1.0f;
+    return bonus->Factor;
+}
+
 void SpellMgr::LoadClassicCrateBundles()
 {
     uint32 oldMSTime = getMSTime();
