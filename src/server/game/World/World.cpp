@@ -1623,6 +1623,9 @@ bool World::SetInitialWorldSettings()
     TC_LOG_INFO("server.loading", "Loading Classic item durability...");      // must be after LoadItemTemplates
     sObjectMgr->LoadClassicItemDurability();
 
+    TC_LOG_INFO("server.loading", "Loading Classic weapon damage...");        // must be after LoadItemTemplates
+    sObjectMgr->LoadClassicItemDamage();
+
     TC_LOG_INFO("server.loading", "Loading Classic crate bundles...");        // must be after LoadSpellInfoStore and LoadItemTemplates
     sSpellMgr->LoadClassicCrateBundles();
 

@@ -187,3 +187,15 @@ Check after a merge:
 grep -n "WaitForEmptyQueue" src/server/database/Database/DatabaseWorkerPool.cpp
 grep -n "SignalShutdownRequested" src/server/worldserver/Main.cpp
 ```
+
+## Molten Core tier 1: the Forever copies, not Karrz's Classic rows
+
+Everlake's Molten Core drops the Forever tier 1 copies 288823-288894 (world data #253), so the Classic pieces
+16795-16868 stay without item rows here. Karrz's 0.1.39 brings them back as Classic items; leave those out.
+
+| Karrz file | What to leave out |
+|---|---|
+| `sql/custom/hotfixes/2026_11_21_85_hotfixes_forever_molten_core_tier1.sql` | The whole file |
+| `sql/custom/hotfixes/2026_11_21_86_hotfixes_forever_blackwing_lair_armor.sql` | Only the end: the sell prices of 16849-16868 and `hotfix_data` 26112720-26112739 (our copy already stops before it) |
+
+If a later Karrz file writes an `item_sparse` row for one of the 72 ids in 16795-16868, leave that row out too.

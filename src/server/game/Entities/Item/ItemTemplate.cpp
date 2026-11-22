@@ -207,7 +207,7 @@ uint32 ItemTemplate::GetArmor(uint32 itemLevel) const
     return uint32(shield->Quality[quality] + 0.5f);
 }
 
-float ItemTemplate::GetDPS(uint32 itemLevel) const
+float ItemTemplate::GetTableDPS(uint32 itemLevel) const
 {
     uint32 quality = ItemQualities(GetQuality()) != ITEM_QUALITY_HEIRLOOM ? ItemQualities(GetQuality()) : ITEM_QUALITY_RARE;
     if (GetClass() != ITEM_CLASS_WEAPON || quality > ITEM_QUALITY_ARTIFACT)
@@ -260,12 +260,33 @@ float ItemTemplate::GetDPS(uint32 itemLevel) const
     return dps;
 }
 
+// Classic 1.60: a weapon with a vanilla damage row (classic_item_damage) uses it at its own item level; at another item level the
+// vanilla damage follows the item level table by the same ratio
+float ItemTemplate::GetClassicDamageScale(uint32 itemLevel) const
+{
+    uint32 baseItemLevel = GetBaseItemLevel();
+    if (itemLevel == baseItemLevel)
+        return 1.0f;
+
+    float baseDps = GetTableDPS(baseItemLevel);
+    return baseDps > 0.0f ? GetTableDPS(itemLevel) / baseDps : 1.0f;
+}
+
+float ItemTemplate::GetDPS(uint32 itemLevel) const
+{
+    if (ClassicMinDamage > 0.0f && GetDelay())
+        return (ClassicMinDamage + ClassicMaxDamage) * 0.5f * GetClassicDamageScale(itemLevel) / (GetDelay() * 0.001f);
+
+    return GetTableDPS(itemLevel);
+}
+
 // Classic 1.60 (WoW Forever): the table DPS with a reduced caster weapon's share, 2/3 one-hand, 29/39 two-hand (EV-0097). The flag is
 // ItemSparse Flags[4] 0x100 (ITEM_FLAG5_CLASSIC_REDUCED_CASTER_DPS); a random suffix can set it too (Item::GetClassicWeaponDPS).
 float ItemTemplate::GetClassicDPS(uint32 itemLevel, bool reducedCasterDps) const
 {
     float dps = GetDPS(itemLevel);
-    if (reducedCasterDps)
+    // a classic_item_damage row is already the in-game range, caster share included
+    if (reducedCasterDps && ClassicMinDamage <= 0.0f)
     {
         switch (GetInventoryType())
         {
@@ -336,6 +357,13 @@ float ItemTemplate::GetClassicBonusArmor() const
 void ItemTemplate::GetClassicDamage(uint32 itemLevel, bool reducedCasterDps, float& minDamage, float& maxDamage) const
 {
     minDamage = maxDamage = 0.0f;
+    // a classic_item_damage row is already the in-game range (caster share and QualityModifier included)
+    if (ClassicMinDamage > 0.0f && GetDelay())
+    {
+        GetDamage(itemLevel, minDamage, maxDamage);
+        return;
+    }
+
     float const dps = GetClassicDPS(itemLevel, reducedCasterDps);
     if (dps <= 0.0f)
         return;
@@ -355,7 +383,15 @@ void ItemTemplate::GetClassicDamage(uint32 itemLevel, bool reducedCasterDps, flo
 void ItemTemplate::GetDamage(uint32 itemLevel, float& minDamage, float& maxDamage) const
 {
     minDamage = maxDamage = 0.0f;
-    float dps = GetDPS(itemLevel);
+    if (ClassicMinDamage > 0.0f && GetDelay())
+    {
+        float scale = GetClassicDamageScale(itemLevel);
+        minDamage = ClassicMinDamage * scale;
+        maxDamage = ClassicMaxDamage * scale;
+        return;
+    }
+
+    float dps = GetTableDPS(itemLevel);
     if (dps > 0.0f)
     {
         float avgDamage = dps * GetDelay() * 0.001f;
