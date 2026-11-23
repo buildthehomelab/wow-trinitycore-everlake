@@ -2975,6 +2975,180 @@ class classic_spell_pal_consecration_tick : public SpellScript
     uint32 _fullHits = 0;
 };
 
+// 10373, 16549, 18107, 18206, 1300185 - Fatal Wound / Wound (Pendulum of Doom 9425, Blackhand Doomsaw 12583, Gut Ripper 2164, Diabolic Skiver
+// 9475, Deathblow 10628): "Deals $s2% increased damage to targets below $s3% health." Both are dummies that nothing read, so the bonus never
+// landed. A hit on a target below the third effect's health percent deals the second effect's percent more (wowsims/forever, MIT,
+// sim/common/forever/items_weapons.go, EV-0136).
+class classic_spell_item_fatal_wound : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_2 } });
+    }
+
+    void CalcDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod)
+    {
+        if (!victim)
+            return;
+
+        int32 const healthPct = GetEffectInfo(EFFECT_2).CalcValueAsInt(GetCaster());
+        if (healthPct > 0 && victim->HealthBelowPct(float(healthPct)))
+            AddPct(pctMod, GetEffectInfo(EFFECT_1).CalcValueAsInt(GetCaster()));
+    }
+
+    void Register() override
+    {
+        SpellScript::CalcDamage += SpellCalcDamageFn(classic_spell_item_fatal_wound::CalcDamage);
+    }
+};
+
+// 1320269 - Toofbreak (Toofbreaker 286430): "Deals $s2 times as much damage if the target is facing you." The multiplier is a dummy nothing
+// read (wowsims/forever, MIT, sim/common/shared/shared_utils.go).
+class classic_spell_item_toofbreak : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
+    }
+
+    void CalcDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod)
+    {
+        if (!victim || !victim->isInFront(GetCaster()))
+            return;
+
+        float const multiplier = float(GetEffectInfo(EFFECT_1).CalcValue(GetCaster()));
+        if (multiplier > 1.0f)
+            pctMod *= multiplier;
+    }
+
+    void Register() override
+    {
+        SpellScript::CalcDamage += SpellCalcDamageFn(classic_spell_item_toofbreak::CalcDamage);
+    }
+};
+
+// 14118 - Rend (Dragonkin): "Deals $s2 times as much damage to Dragonkin." 1300787 - Rend (Barman Shanker 12791): "Deals $s2 times as much
+// damage if applied while behind the target." Each bleed's second effect is a dummy aura with the multiplier that nothing read. Where the
+// rogue stood is taken when the bleed goes on (and again when it is put on afresh), as the tooltip says; the Dragonkin check is per tick
+// (wowsims/forever, MIT, sim/common/forever/items_weapons.go, EV-0146).
+class classic_spell_item_rend_bonus : public AuraScript
+{
+    static constexpr uint32 SPELL_REND_DRAGONKIN = 14118;
+    static constexpr uint32 SPELL_REND_FROM_BEHIND = 1300787;
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
+    }
+
+    void CalcAmount(AuraEffect const* /*aurEff*/, SpellEffectValue& /*amount*/, bool& /*canBeRecalculated*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* owner = GetUnitOwner();
+        _fromBehind = caster && owner && !owner->isInFront(caster);
+    }
+
+    void CalcDamage(AuraEffect const* /*aurEff*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod)
+    {
+        if (!victim)
+            return;
+
+        bool bonus = false;
+        switch (GetId())
+        {
+            case SPELL_REND_DRAGONKIN:
+                bonus = victim->GetCreatureType() == CREATURE_TYPE_DRAGONKIN;
+                break;
+            case SPELL_REND_FROM_BEHIND:
+                bonus = _fromBehind;
+                break;
+            default:
+                break;
+        }
+        if (!bonus)
+            return;
+
+        float const multiplier = float(GetEffectInfo(EFFECT_1).CalcValue(GetCaster()));
+        if (multiplier > 1.0f)
+            pctMod *= multiplier;
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(classic_spell_item_rend_bonus::CalcAmount, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE);
+        DoEffectCalcDamageAndHealing += AuraEffectCalcDamageFn(classic_spell_item_rend_bonus::CalcDamage, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE);
+    }
+
+    bool _fromBehind = false;
+};
+
+// 1293881 - Pendulum of Doom (Pendulum of Doom 9425, equip): "Each swing alternates your attack speed between $1293885s1% faster and
+// $1293886s1% slower." The equip aura is a melee haste aura of 0 that procs on each swing, and the two buffs only show the state (a dummy
+// with the percent, and the removal of the other buff); nothing turned a swing into the next state, so the axe swung at its plain speed.
+// Each swing now puts on the other buff and sets the haste to it: +100% after a slow swing, -50% after a fast one, which comes out at the
+// plain speed over two swings (0.5 and 1.5 of the weapon's time). The 10 s periodic dummy puts the axe back to its plain speed once the
+// wearer is out of combat, so a fight never opens on the slow swing.
+class classic_spell_item_pendulum_of_doom : public AuraScript
+{
+    static constexpr uint32 SPELL_PENDULUM_FAST = 1293885;
+    static constexpr uint32 SPELL_PENDULUM_SLOW = 1293886;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellEffect({ { SPELL_PENDULUM_FAST, EFFECT_0 }, { SPELL_PENDULUM_SLOW, EFFECT_0 } });
+    }
+
+    static int32 StateHaste(uint32 spellId)
+    {
+        int32 const pct = sSpellMgr->AssertSpellInfo(spellId, DIFFICULTY_NONE)->GetEffect(EFFECT_0).CalcValueAsInt();
+        return spellId == SPELL_PENDULUM_SLOW ? -pct : pct;
+    }
+
+    void SetState(uint32 spellId)
+    {
+        Unit* wielder = GetTarget();
+        if (spellId)
+            wielder->CastSpell(wielder, spellId, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringAura(GetEffect(EFFECT_0)));
+        else
+        {
+            wielder->RemoveAurasDueToSpell(SPELL_PENDULUM_FAST, wielder->GetGUID());
+            wielder->RemoveAurasDueToSpell(SPELL_PENDULUM_SLOW, wielder->GetGUID());
+        }
+
+        if (AuraEffect* haste = GetEffect(EFFECT_0))
+            haste->ChangeAmount(spellId ? StateHaste(spellId) : 0);
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        Unit* wielder = GetTarget();
+        SetState(wielder->HasAura(SPELL_PENDULUM_FAST, wielder->GetGUID()) ? SPELL_PENDULUM_SLOW : SPELL_PENDULUM_FAST);
+    }
+
+    void HandlePeriodic(AuraEffect const* /*aurEff*/)
+    {
+        AuraEffect const* haste = GetEffect(EFFECT_0);
+        if (haste && haste->GetAmountAsInt() != 0 && !GetTarget()->IsInCombat())
+            SetState(0);
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetTarget()->RemoveAurasDueToSpell(SPELL_PENDULUM_FAST, GetTarget()->GetGUID());
+        GetTarget()->RemoveAurasDueToSpell(SPELL_PENDULUM_SLOW, GetTarget()->GetGUID());
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_item_pendulum_of_doom::HandleProc, EFFECT_0, SPELL_AURA_MOD_MELEE_HASTE_NO_REGEN);
+        OnEffectPeriodic += AuraEffectPeriodicFn(classic_spell_item_pendulum_of_doom::HandlePeriodic, EFFECT_1, SPELL_AURA_PERIODIC_DUMMY);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_item_pendulum_of_doom::HandleRemove, EFFECT_0, SPELL_AURA_MOD_MELEE_HASTE_NO_REGEN,
+            AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+
 // Weapon procs that "deal $s2 times as much damage" to one kind of enemy, the multiplier being a second effect, a dummy, that nothing read:
 // Drain Life 16414 and Corpse Eater 1299869 (health leech) and Smite 1299631 against Undead, Lightning Bolt 1292851 against Mechanical,
 // Holy Cleaver 1293787 against Undead and boars ("Swine"), Blazewind Blast 1282503 against wolves. Blazewind Blast's tooltip also names
@@ -3033,6 +3207,10 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_item_versus_bonus);
     RegisterSpellScript(classic_spell_cleave_melee_reach);
     RegisterSpellScript(classic_spell_pal_consecration_tick);
+    RegisterSpellScript(classic_spell_item_fatal_wound);
+    RegisterSpellScript(classic_spell_item_toofbreak);
+    RegisterSpellScript(classic_spell_item_rend_bonus);
+    RegisterSpellScript(classic_spell_item_pendulum_of_doom);
     RegisterSpellScript(classic_spell_warr_gore_drinker);
     RegisterSpellScript(classic_spell_dru_not_from_shadowmeld);
     RegisterSpellScript(classic_spell_warr_gore_drinker_enrage);
