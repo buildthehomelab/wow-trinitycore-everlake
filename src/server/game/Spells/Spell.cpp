@@ -6432,6 +6432,42 @@ SpellCastResult Spell::CheckCast(bool strict, int32* param1 /*= nullptr*/, int32
             return castResult;
     }
 
+    // Classic: Corrupted Mind (Loatheb). His 29201 gives every healer an aura (29185 / 29194 / 29196 / 29198) whose next heal
+    // triggers 29184 / 29195 / 29197 / 29199: SPELL_AURA_OVERRIDE_CLASS_SCRIPTS with misc value 4327, for 60 s. While that lasts the
+    // caster's healing spells fizzle (VMaNGOS Spell::CheckCast, "Loatheb Corrupted Mind spell failed"). Nothing here read misc value
+    // 4327, so every healer healed through the whole fight. Spells from items (potions, healthstones, bandages) still work.
+    // From Karrz 0.1.39.
+    if (!IsTriggered() && !m_CastItem)
+    {
+        if (Unit const* unitCaster = m_caster->ToUnit())
+        {
+            bool corruptedMind = false;
+            for (AuraEffect const* aurEff : unitCaster->GetAuraEffectsByType(SPELL_AURA_OVERRIDE_CLASS_SCRIPTS))
+                if (aurEff->GetMiscValue() == 4327)
+                    corruptedMind = true;
+            // Holy Shock (20473 / 20929 / 20930) is a dummy whose script casts the rank's heal on a friendly target (triggered, so not
+            // checked here): on a friend it is a heal like any other. naxx_loatheb af40 (1119): locked paladins healed with it every minute.
+            uint32 const holyShockFirst = m_spellInfo->GetFirstRankSpell()->Id;
+            if (corruptedMind && (holyShockFirst == 20473 || m_spellInfo->Id == 20929 || m_spellInfo->Id == 20930))
+                if (Unit const* friendTarget = m_targets.GetUnitTarget())
+                    if (unitCaster->IsFriendlyTo(friendTarget))
+                    {
+                        TC_LOG_INFO("spells.corruptedmind", "Corrupted Mind: {} ({}) casts Holy Shock {} on a friend, it fizzles", unitCaster->GetName(),
+                            unitCaster->GetGUID().ToString(), m_spellInfo->Id);
+                        return SPELL_FAILED_FIZZLE;
+                    }
+            if (corruptedMind)
+                for (SpellEffectInfo const& spellEffectInfo : m_spellInfo->GetEffects())
+                    if (spellEffectInfo.IsEffect(SPELL_EFFECT_HEAL) || spellEffectInfo.IsEffect(SPELL_EFFECT_HEAL_PCT)
+                        || spellEffectInfo.IsEffect(SPELL_EFFECT_HEAL_MAX_HEALTH) || spellEffectInfo.IsAura(SPELL_AURA_PERIODIC_HEAL))
+                    {
+                        TC_LOG_INFO("spells.corruptedmind", "Corrupted Mind: {} ({}) casts {} ({}), it fizzles", unitCaster->GetName(),
+                            unitCaster->GetGUID().ToString(), m_spellInfo->Id, (*m_spellInfo->SpellName)[DEFAULT_LOCALE]);
+                        return SPELL_FAILED_FIZZLE;
+                    }
+        }
+    }
+
     // script hook
     castResult = CallScriptCheckCastHandlers();
     if (castResult != SPELL_CAST_OK)
