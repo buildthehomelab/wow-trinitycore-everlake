@@ -1638,6 +1638,9 @@ bool World::SetInitialWorldSettings()
     TC_LOG_INFO("server.loading", "Loading Creature templates...");
     sObjectMgr->LoadCreatureTemplates();
 
+    TC_LOG_INFO("server.loading", "Loading Classic versus bonuses (item effects stronger against one kind of enemy)...");
+    sSpellMgr->LoadClassicVersusBonus();                          // must be after LoadCreatureTemplates() and LoadSpellProcs()
+
     TC_LOG_INFO("server.loading", "Loading Classic creature levels...");
     sObjectMgr->LoadCreatureClassicLevels();
     sObjectMgr->LoadCreatureClassicMelee();

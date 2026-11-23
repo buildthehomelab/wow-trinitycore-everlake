@@ -5984,6 +5984,8 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
             float exact = damage == damageBeforeHook ? float(std::max(GetAmount(), SpellEffectValue(0))) : float(damage);
             if (caster)
                 exact = caster->SpellDamageBonusDoneExact(target, GetSpellInfo(), exact, DOT, GetSpellEffectInfo(), stackAmountForBonuses, nullptr, this);
+            // Classic 1.60: "Deals $s2 times as much damage to Aquatic enemies" (Rot; spell_versus_bonus, ClassicVersusBonus.h)
+            exact *= sSpellMgr->GetClassicVersusFactor(GetId(), ClassicVersusBonus::Kind::Damage, target);
             exact += _periodicDamageRemainder;
             damage = uint32(std::max(exact, 0.0f));
             _periodicDamageRemainder = std::max(exact, 0.0f) - float(damage);
@@ -6490,9 +6492,16 @@ void AuraEffect::HandleProcTriggerSpellAuraProc(AuraApplication* aurApp, ProcEve
     if (SpellInfo const* triggeredSpellInfo = sSpellMgr->GetSpellInfo(triggerSpellId, GetBase()->GetCastDifficulty()))
     {
         TC_LOG_DEBUG("spells.aura.effect", "AuraEffect::HandleProcTriggerSpellAuraProc: Triggering spell {} from aura {} proc", triggeredSpellInfo->Id, GetId());
-        triggerCaster->CastSpell(triggerTarget, triggeredSpellInfo->Id, CastSpellExtraArgs(this)
-            .SetTriggeringSpell(eventInfo.GetProcSpell())
-            .SetTriggerFlags(TRIGGERED_FULL_MASK & ~(TRIGGERED_IGNORE_POWER_COST | TRIGGERED_IGNORE_REAGENT_COST)));
+        CastSpellExtraArgs args(this);
+        args.SetTriggeringSpell(eventInfo.GetProcSpell());
+        args.SetTriggerFlags(TRIGGERED_FULL_MASK & ~(TRIGGERED_IGNORE_POWER_COST | TRIGGERED_IGNORE_REAGENT_COST));
+        // Classic 1.60: "Restores $s1 times as much if attacking an Earth Elemental" (Fist of Stone; spell_versus_bonus, ClassicVersusBonus.h). The
+        // enemy is the unit the wearer hit, whatever the triggered spell targets (the wearer, for mana).
+        Unit* enemy = triggerCaster == eventInfo.GetActor() ? eventInfo.GetActionTarget() : eventInfo.GetActor();
+        float const versus = sSpellMgr->GetClassicVersusFactor(GetId(), ClassicVersusBonus::Kind::Restore, enemy);
+        if (versus > 1.0f && !triggeredSpellInfo->GetEffects().empty())
+            args.AddSpellBP0(triggeredSpellInfo->GetEffect(EFFECT_0).CalcValue(triggerCaster) * versus);
+        triggerCaster->CastSpell(triggerTarget, triggeredSpellInfo->Id, args);
     }
     else if (triggerSpellId && GetAuraType() != SPELL_AURA_DUMMY)
         TC_LOG_ERROR("spells.aura.effect.nospell","AuraEffect::HandleProcTriggerSpellAuraProc: Spell {} has non-existent spell {} in EffectTriggered[{}] and is therefore not triggered.", GetId(), triggerSpellId, GetEffIndex());
