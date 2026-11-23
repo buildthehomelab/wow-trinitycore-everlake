@@ -171,32 +171,33 @@ namespace
         return {};
     }
 
-    // Gives the account "<name>#<free number>" (as Evermore's friend tags: the player picks the name, the number is
-    // drawn). onlyIfEmpty: leave an account that has a tag alone (the automatic tag at login). The unique key on
-    // battle_tag (case-insensitive) settles a race with another account taking the same tag: that try fails and the
-    // next number is drawn. Returns the new tag, or empty when the name has no free number left or the account was
-    // tagged meanwhile.
+    // Gives the account "<name>#<free number>". onlyIfEmpty leaves an account that already has a tag alone (the automatic tag
+    // at login). battle_tag has a unique key, so when another account takes the same tag at the same moment the UPDATE does
+    // nothing and the next try draws again. Returns the new tag, or empty when the name is invalid or full, or the account got
+    // a tag meanwhile.
     std::string AssignBattleTag(uint32 accountId, std::string const& name, bool onlyIfEmpty)
     {
-        if (!Trinity::BattleTag::IsValidName(name))     // letters and digits only: nothing to escape
+        if (!Trinity::BattleTag::IsValidName(name))     // letters and digits only, so nothing to escape
             return {};
 
         for (uint32 attempt = 0; attempt < 5; ++attempt)
         {
-            std::unordered_set<uint32> used;
+            std::unordered_set<uint32> taken;
             if (QueryResult result = LoginDatabase.PQuery("SELECT battle_tag FROM battlenet_accounts WHERE battle_tag LIKE '{}#%'", name))
             {
                 do
+                {
                     if (Optional<uint32> number = Trinity::BattleTag::NumberOf((*result)[0].GetStringView()))
-                        used.insert(*number);
-                while (result->NextRow());
+                        taken.insert(*number);
+                } while (result->NextRow());
             }
-            Optional<uint32> number = Trinity::BattleTag::DrawNumber(used, [](uint32 min, uint32 max) { return urand(min, max); });
+
+            Optional<uint32> number = Trinity::BattleTag::DrawNumber(taken, [](uint32 min, uint32 max) { return urand(min, max); });
             if (!number)
                 return {};
 
             std::string const tag = Trinity::BattleTag::Make(name, *number);
-            LoginDatabase.DirectPExecute("UPDATE battlenet_accounts SET battle_tag = '{}' WHERE id = {}{}", tag, accountId,
+            LoginDatabase.DirectPExecute("UPDATE IGNORE battlenet_accounts SET battle_tag = '{}' WHERE id = {}{}", tag, accountId,
                 onlyIfEmpty ? " AND (battle_tag IS NULL OR battle_tag = '')" : "");
             std::string const now = ReadBattleTag(accountId);
             if (now == tag)
@@ -223,16 +224,35 @@ namespace
         return {};
     }
 
-    // A character's full name ("Ora Brightleaf", "Ora-Brightleaf"): the Add Friend box sends one when the text holds no '#' or '@'
-    // (C_BattleNet.SendTitleFriendInviteByName, as title friends are on). The request goes to that character's Battle.net account;
-    // a character with none (a bot) is not found.
-    Optional<AccountInfo> FindAccountByCharacterName(std::string name)
+    // A character's name, with or without its Classic 1.60 surname ("Ora", "Ora Brightleaf", "Ora-Brightleaf"). With title
+    // friends on (battleNetTitleFriendsEnabledClient) the Add Friend box sends a typed character name this way
+    // (C_BattleNet.SendTitleFriendInviteByName); the invitation goes to that character's Battle.net account. Character names
+    // are unique on their own, so the surname, when given, only has to match. A character without a Battle.net account
+    // (a bot) is not found.
+    CharacterCacheEntry const* FindCharacterByTypedName(std::string const& target)
     {
-        if (!Trinity::FullName::Normalize(name))
-            return {};
+        size_t const split = target.find_first_of(" -");
+        std::string name = target.substr(0, split);
+        std::string surname = split == std::string::npos ? std::string() : target.substr(split + 1);
+        while (!surname.empty() && (surname.back() == ' ' || surname.back() == '\t'))
+            surname.pop_back();
+        if (!normalizePlayerName(name))
+            return nullptr;
+
         CharacterCacheEntry const* character = sCharacterCache->GetCharacterCacheByName(name);
         if (!character || character->IsDeleted)
+            return nullptr;
+        if (!surname.empty() && !StringEqualI(surname, character->Surname))
+            return nullptr;
+        return character;
+    }
+
+    Optional<AccountInfo> FindAccountByCharacterName(std::string const& target)
+    {
+        CharacterCacheEntry const* character = FindCharacterByTypedName(target);
+        if (!character)
             return {};
+
         if (QueryResult result = LoginDatabase.PQuery("SELECT battlenet_account FROM account WHERE id = {}", character->AccountId))
             if (!(*result)[0].IsNull() && (*result)[0].GetUInt32() != 0)
                 return GetAccount((*result)[0].GetUInt32());
@@ -556,7 +576,17 @@ uint32 FriendsService::HandleSendInvitation(friends::v2::client::SendInvitationR
     {
         invitee = FindAccount(target.name());
         if (!invitee && target.name().find_first_of("#@") == std::string::npos)
+        {
+            // A bot's account never answers an invitation (and holds many bots): a bot becomes a character friend, shown online
+            // or offline in the friends list as soon as it is added, as the legacy Add Friend does (energetik, 19 Nov).
+            if (CharacterCacheEntry const* character = FindCharacterByTypedName(target.name());
+                character && WorldSession::IsAutomatedAccount(character->AccountId))
+            {
+                _session->AddCharacterFriend(character->Guid, character->AccountId, character->Race, std::string());
+                return ERROR_OK;
+            }
             invitee = FindAccountByCharacterName(target.name());
+        }
     }
 
     if (!invitee)
@@ -957,11 +987,13 @@ void BattlenetPresence::OnLogin(WorldSession* session)
     if (!player)
         return;
 
-    // An account without a BattleTag has no name in its friends' lists: Whisper opened "Tell :" with no target. Until the
-    // player picks one (.battletag <name>), it takes the first name of the character it enters the world with.
+    // An account without a BattleTag has no name in its friends' lists (Whisper opened "Tell :" with no target, the Social window
+    // showed a bare "#"). Until the player picks one with .battletag, it takes the first name of the character it enters the world
+    // with. Bots are left alone.
     bool untagged = false;
     if (accountId && !session->IsBot() && ReadBattleTag(accountId).empty())
-        untagged = AssignBattleTag(accountId, Trinity::BattleTag::NameFromCharacter(player->GetName()), true).empty() && ReadBattleTag(accountId).empty();
+        untagged = AssignBattleTag(accountId, Trinity::BattleTag::NameFromCharacter(player->GetName()), true).empty()
+            && ReadBattleTag(accountId).empty();
 
     {
         std::vector<uint32> ids = LoadFriendIds(accountId);
@@ -1007,7 +1039,7 @@ BattlenetPresence::BattleTagResult BattlenetPresence::SetBattleTag(WorldSession*
     if (tag.empty())
         return BattleTagResult::NoFreeNumber;
 
-    // the new tag to ourselves (Social window) and to online friends (their list, whisper target)
+    // the new tag to the player (Social window) and to online friends (their list and whisper target)
     if (Player const* player = session->GetPlayer())
     {
         AccountInfo const account{ accountId, tag };
