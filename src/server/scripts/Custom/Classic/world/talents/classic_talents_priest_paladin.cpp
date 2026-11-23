@@ -877,7 +877,11 @@ enum ClassicPaladinTalents
     SPELL_PAL_SACRED_SHIELD_ABSORB          = 412018,
     SPELL_PAL_SACRED_SHIELD_FLASH_OF_LIGHT  = 412020,
     SPELL_PAL_RECKONING_STORED              = 1326084,  // dummy aura, one stack per stored extra attack
-    SPELL_PAL_GUARDED_BY_THE_LIGHT_MANA     = 415058
+    SPELL_PAL_GUARDED_BY_THE_LIGHT_MANA     = 415058,
+    // Karrz 0.1.39
+    SPELL_PAL_VINDICATION_DEBUFF            = 440667,   // attack power and ranged attack power, scaled by the paladin's level
+    SPELL_PAL_OATH_OF_LIGHT                 = 1328548,  // on the ally: effect 0 Holy Light, 1 Flash of Light, 2 Holy Shock bonus healing
+    SPELL_PAL_BOUNDLESS_LIGHT               = 1328550   // effect 0: Holy Shock crit chance on allies without the paladin's Oath of Light
 };
 
 // 9799 - Eye for an Eye: "All critical strikes against you cause 15% of the damage taken to the attacker as well. The damage caused by Eye
@@ -1719,10 +1723,101 @@ class classic_spell_pri_inner_focus : public AuraScript
     }
 };
 
+// 9452 - Vindication (70532): "Gives your damaging melee attacks a chance to reduce the target's Attack Power by ${$m1/-3*$440667m1} for
+// $440667d." Both talent effects are dummies without a triggered spell, so nothing happened (123 + 123 "does not have triggered spell"
+// lines in the af54 log). Effect 0 is the rank (1 / 2 / 3); the debuff 440667 is the full reduction at rank 3 (its value grows with the
+// paladin's level: 204 at 60), so a rank gives a third of it, on attack power and ranged attack power alike. The client row states no
+// rate (chance 100); in game it is 5 procs a minute on the weapon's speed (spell_proc), on white hits and melee specials, and the debuff
+// is a spell of its own that can miss (wowsims/forever, MIT: sim/paladin/talents_retribution.go).
+class classic_spell_pal_vindication : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_PAL_VINDICATION_DEBUFF });
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        Unit* paladin = GetTarget();
+        Unit* target = eventInfo.GetActionTarget();
+        if (!target || target == paladin)
+            return;
+
+        SpellInfo const* debuff = sSpellMgr->AssertSpellInfo(SPELL_PAL_VINDICATION_DEBUFF, DIFFICULTY_NONE);
+        int32 const full = std::min(0, debuff->GetEffect(EFFECT_0).CalcValueAsInt(paladin));
+        int32 const reduction = full * std::clamp(aurEff->GetAmountAsInt(), 0, 3) / 3;
+        if (!reduction)
+            return;
+
+        paladin->CastSpell(target, SPELL_PAL_VINDICATION_DEBUFF, CastSpellExtraArgs(aurEff).SetTriggerFlags(TRIGGERED_FULL_MASK)
+            .AddSpellMod(SPELLVALUE_BASE_POINT0, SpellEffectValue(reduction)).AddSpellMod(SPELLVALUE_BASE_POINT1, SpellEffectValue(reduction)));
+    }
+
+    void HandleTooltipEffect(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_pal_vindication::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+        OnEffectProc += AuraEffectProcFn(classic_spell_pal_vindication::HandleTooltipEffect, EFFECT_1, SPELL_AURA_DUMMY);
+    }
+};
+
+// 1328548 - Oath of Light, 1328550 - Boundless Light (Forever paladin talents, live hotfix data). Oath of Light: "Swear an Oath to protect
+// target ally for $d, increasing the healing of your Holy Light on them by up to $s1, your Flash of Light by up to $s2, and your Holy Shock
+// by up to $s3." Boundless Light: "Increases the critical strike chance of your Holy Shock spell by $s1% when cast on allies not affected by
+// your Oath of Light." Every effect of both is a dummy and nothing read them, so neither did anything. The Oath's three effects carry the
+// bonuses, scaled by the paladin's level (400 / 115 / 230 at 60), and are added to the base heal of the paladin's own Holy Light, Flash of
+// Light and Holy Shock heal on the ally with the Oath; Holy Shock heals on any other ally get the Boundless Light crit. One Oath per paladin
+// is the spell's own single-target attribute. The full bonus whatever the rank, as wowsims/forever (MIT) does (sim/paladin/oath_of_light.go,
+// holy_shock.go).
+class classic_spell_pal_oath_of_light_heal : public SpellScript
+{
+    static bool IsHolyShockHeal(uint32 spellId)
+    {
+        return spellId == 25903 || spellId == 25913 || spellId == 25914 || spellId == 1311605;
+    }
+
+    void HandleCalcHealing(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*healing*/, int32& flatMod, float& /*pctMod*/)
+    {
+        if (!victim)
+            return;
+
+        SpellInfo const* spellInfo = GetSpellInfo();
+        SpellEffIndex const bonusEffect = IsHolyShockHeal(spellInfo->Id) ? EFFECT_2
+                                        : (spellInfo->SpellFamilyFlags[0] & 0x80000000) ? EFFECT_0   // Holy Light
+                                        : EFFECT_1;                                                  // Flash of Light
+        if (AuraEffect const* oath = victim->GetAuraEffect(SPELL_PAL_OATH_OF_LIGHT, bonusEffect, GetCaster()->GetGUID()))
+            flatMod += std::max(0, oath->GetAmountAsInt());
+    }
+
+    void CalcCritChance(Unit const* victim, float& critChance)
+    {
+        if (!victim || !IsHolyShockHeal(GetSpellInfo()->Id) || victim->HasAura(SPELL_PAL_OATH_OF_LIGHT, GetCaster()->GetGUID()))
+            return;
+
+        if (AuraEffect const* boundless = GetCaster()->GetAuraEffect(SPELL_PAL_BOUNDLESS_LIGHT, EFFECT_0))
+            critChance += float(boundless->GetAmount());
+    }
+
+    void Register() override
+    {
+        CalcHealing += SpellCalcHealingFn(classic_spell_pal_oath_of_light_heal::HandleCalcHealing);
+        OnCalcCritChance += SpellOnCalcCritChanceFn(classic_spell_pal_oath_of_light_heal::CalcCritChance);
+    }
+};
+
+
 void AddSC_classic_spells_priest();
 
 void AddSC_classic_talents_priest_paladin()
 {
+    RegisterSpellScript(classic_spell_pal_vindication);
+    RegisterSpellScript(classic_spell_pal_oath_of_light_heal);
     AddSC_classic_spells_priest();
     RegisterSpellScript(classic_spell_pri_inner_focus);
     RegisterSpellScript(classic_spell_pri_holy_binding);
