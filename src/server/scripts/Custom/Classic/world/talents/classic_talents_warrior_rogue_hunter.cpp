@@ -90,6 +90,10 @@ enum ClassicWarriorRogueHunterTalents
     SPELL_HUNTER_EXPOSE_PREY_STATE              = 1310726,  // gives the defensive aura state (SpellInfo::_LoadAuraState): Mongoose Bite
     SPELL_HUNTER_IMPROVED_MEND_PET              = 19572,    // effect 0: cleanse chance per heal (dummy)
     SPELL_HUNTER_IMPROVED_MEND_PET_DISPEL       = 24406,    // dispel 1 Curse, Disease, Magic or Poison on the pet
+    // Karrz 0.1.39
+    SPELL_WARRIOR_BERSERKER_RAGE                = 18499,
+    SPELL_WARRIOR_IMPROVED_BERSERKER_RAGE_RAGE  = 23690,    // energize rage (base points: rage x10)
+    SPELL_ROGUE_REMORSELESS                     = 14143,    // +crit on the next Sinister Strike, Backstab, Ambush, Mutilate or Ghostly Strike, 1 charge
 };
 
 // The client data of the talent spells these scripts read, once per spell at script validation: name, then per effect the effect,
@@ -2114,8 +2118,79 @@ class classic_spell_talent_ability_proc_chance : public AuraScript
     }
 };
 
+// 20500 - Improved Berserker Rage (70959): "Your Berserker Rage ability will instantly generate $/10;m1 Rage and has a $m2% chance to remove
+// all movement impairing effects when activated." Both effects are dummies with no triggered spell and the proc has no class mask, so
+// the talent fired on every helpful or harmful spell and did nothing. Bound here to Berserker Rage: effect 0 is the rage (x10) given
+// through 23690, effect 1 the chance to remove movement impairing effects.
+class classic_spell_warr_improved_berserker_rage : public AuraScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        LogTalentSpellOnce(spellInfo);
+        return ValidateSpellInfo({ SPELL_WARRIOR_IMPROVED_BERSERKER_RAGE_RAGE });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        return spellInfo && spellInfo->GetFirstRankSpell()->Id == SPELL_WARRIOR_BERSERKER_RAGE;
+    }
+
+    void HandleRage(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        int32 const rage = int32(aurEff->GetAmount());
+        if (rage > 0)
+            GetTarget()->CastSpell(GetTarget(), SPELL_WARRIOR_IMPROVED_BERSERKER_RAGE_RAGE,
+                CastSpellExtraArgs(aurEff).SetTriggerFlags(TRIGGERED_FULL_MASK).AddSpellBP0(rage));
+    }
+
+    void HandleImpairing(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        if (roll_chance(float(aurEff->GetAmount())))
+            GetTarget()->RemoveMovementImpairingAuras(true);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_warr_improved_berserker_rage::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_warr_improved_berserker_rage::HandleRage, EFFECT_0, SPELL_AURA_DUMMY);
+        OnEffectProc += AuraEffectProcFn(classic_spell_warr_improved_berserker_rage::HandleImpairing, EFFECT_1, SPELL_AURA_DUMMY);
+    }
+};
+
+// 14144 - Remorseless Attacks: "After killing a non-trivial enemy, gives you a $m1% increased critical strike chance on your next Sinister
+// Strike, Backstab, Ambush, Mutilate, or Ghostly Strike. Lasts $14143d." The client talent is a kill-proc dummy with
+// no triggered spell, so nothing happened (60 "does not have triggered spell" lines in the af54 log). Its proc already needs a kill that
+// gives experience or honor (SpellMgr adds PROC_ATTR_REQ_EXP_OR_HONOR for PROC_FLAG_KILL). The kill gives Remorseless 14143 with the
+// talent amount (20 / 40); its charge is used by the next of those strikes (charged spell mod).
+class classic_spell_rog_remorseless_attacks : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_ROGUE_REMORSELESS });
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        int32 const crit = int32(aurEff->GetAmount());
+        if (crit > 0)
+            GetTarget()->CastSpell(GetTarget(), SPELL_ROGUE_REMORSELESS, CastSpellExtraArgs(aurEff).SetTriggerFlags(TRIGGERED_FULL_MASK).AddSpellBP0(crit));
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_rog_remorseless_attacks::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+
 void AddSC_classic_talents_warrior_rogue_hunter()
 {
+    RegisterSpellScript(classic_spell_warr_improved_berserker_rage);
+    RegisterSpellScript(classic_spell_rog_remorseless_attacks);
     // warrior
     RegisterSpellScript(classic_spell_warr_stance_rage);
     RegisterSpellScript(classic_spell_warr_enrage_talent);

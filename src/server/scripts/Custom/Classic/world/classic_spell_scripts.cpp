@@ -1682,8 +1682,21 @@ class classic_spell_pal_unsealed_wrath : public AuraScript
 // Live order (player tests, forever-paladin-feedback): the damage lands first, then the taunt copies the top threat, so the damage's
 // threat is not added on top of the copied value. The effect handlers run before the damage is dealt, so the effect only marks the
 // target and the taunt itself waits for AfterHit, which comes after the damage.
+// The taunt is 9970901 (serverside, SPELL_AURA_MOD_TAUNT for 4 sec): matching the threat alone left a mob on its current target, because
+// the victim only changes past the 110%/130% threshold. The taunt aura fixates the mob on the paladin like Taunt and Growl, and the
+// matched threat keeps it there afterwards. Taunt immune bosses ignore it. (Karrz 0.1.39)
+enum ClassicPaladinJudgementOfFury
+{
+    SPELL_PAL_JUDGEMENT_OF_FURY_TAUNT = 9970901
+};
+
 class classic_spell_pal_judgement_of_fury : public SpellScript
 {
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_PAL_JUDGEMENT_OF_FURY_TAUNT });
+    }
+
     void MarkTaunt(SpellEffIndex /*effIndex*/)
     {
         _taunt = true;
@@ -1701,8 +1714,9 @@ class classic_spell_pal_judgement_of_fury : public SpellScript
             return;
 
         target->GetThreatManager().MatchUnitThreatToHighestThreat(paladin);
-        if (target->IsAIEnabled())
-            target->AI()->AttackStart(paladin);
+        paladin->CastSpell(target, SPELL_PAL_JUDGEMENT_OF_FURY_TAUNT, CastSpellExtraArgs(TRIGGERED_FULL_MASK)
+            .SetTriggeringSpell(GetSpell())
+            .AddSpellMod(SPELLVALUE_DURATION, 4 * IN_MILLISECONDS));
     }
 
     // effect 2 has no implicit target, so it runs once in hit mode against the judged unit
@@ -2909,6 +2923,58 @@ class classic_spell_item_feralheart_4p : public AuraScript
     }
 };
 
+// 19983 - Cleave (Sapphiron, Vaelastrasz and other classic NPCs): ChainTargets 10, a melee spell. The core chains it jump by jump, 5 y a
+// jump, out to 50 y from the target (Spell::SearchChainTargets), so it ran through a whole raid. In vanilla a melee chain only takes those
+// within its melee range (range index 2, 5 y) of the target it lands on (VMaNGOS, Spell::SetTargetMap for TARGET_UNIT_ENEMY: the search
+// range is the spell's own range for a melee spell, the jumps only for the others). naxx_sapphiron r29 (1118): 16 of 39 died to his
+// Cleave, healers among them 34-48 y from him.
+class classic_spell_cleave_melee_reach : public SpellScript
+{
+    static constexpr float MELEE_CHAIN_REACH = 5.0f;
+
+    void FilterTargets(std::list<WorldObject*>& targets)
+    {
+        Unit* first = GetExplTargetUnit();
+        if (!first)
+            return;
+        targets.remove_if([first](WorldObject* target)
+        {
+            return first->GetDistance(target) > MELEE_CHAIN_REACH;
+        });
+    }
+
+    void Register() override
+    {
+        OnObjectAreaTargetSelect += SpellObjectAreaTargetSelectFn(classic_spell_cleave_melee_reach::FilterTargets, EFFECT_0, TARGET_UNIT_TARGET_ENEMY);
+    }
+};
+
+// 1280345-1280349 - Consecration damage ticks (Classic 1.60, WoW Forever): every enemy in the area takes the tick, but only the first four
+// it hits take the full effect 1 (the one with the spell power); the rest get effect 0 alone. Forever.VanillaAoE = 1 leaves every
+// target the full tick. From Karrz 0.1.39.
+class classic_spell_pal_consecration_tick : public SpellScript
+{
+    static constexpr uint32 FULL_HIT_TARGETS = 4;
+
+    void HandleFullHit(SpellEffIndex effIndex)
+    {
+        if (sWorld->getBoolConfig(CONFIG_FOREVER_VANILLA_AOE))
+            return;
+
+        if (_fullHits < FULL_HIT_TARGETS)
+            ++_fullHits;
+        else
+            PreventHitDefaultEffect(effIndex);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_pal_consecration_tick::HandleFullHit, EFFECT_1, SPELL_EFFECT_ANY);
+    }
+
+    uint32 _fullHits = 0;
+};
+
 // 10373, 16549, 18107, 18206, 1300185 - Fatal Wound / Wound (Pendulum of Doom 9425, Blackhand Doomsaw 12583, Gut Ripper 2164, Diabolic Skiver
 // 9475, Deathblow 10628): "Deals $s2% increased damage to targets below $s3% health." Both are dummies that nothing read, so the bonus never
 // landed. A hit on a target below the third effect's health percent deals the second effect's percent more (wowsims/forever, MIT,
@@ -3139,6 +3205,8 @@ class classic_spell_item_versus_bonus : public SpellScript
 void AddSC_classic_spell_scripts()
 {
     RegisterSpellScript(classic_spell_item_versus_bonus);
+    RegisterSpellScript(classic_spell_cleave_melee_reach);
+    RegisterSpellScript(classic_spell_pal_consecration_tick);
     RegisterSpellScript(classic_spell_item_fatal_wound);
     RegisterSpellScript(classic_spell_item_toofbreak);
     RegisterSpellScript(classic_spell_item_rend_bonus);
