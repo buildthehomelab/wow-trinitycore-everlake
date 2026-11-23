@@ -46,17 +46,24 @@
 //  14    57 SPELL_AURA_MOD_SPELL_CRIT_CHANCE                  the same crit                             (guess: for Lightning Breath)
 //  15   418 SPELL_AURA_MOD_MAX_POWER             2 focus      +50, from the client (150 focus, wiki)
 //  16-17 593 (no handler)                        4, 2         0: unknown aura
-//  18    49 SPELL_AURA_MOD_DODGE_PERCENT                      0: the wiki lists no dodge inheritance     (guess)
+//  18    49 SPELL_AURA_MOD_DODGE_PERCENT                      half of Aspect of the Monkey's dodge with Improved Aspect of the Monkey 19549
 //
 // The amounts follow the hunter's current stats: effect 0 ticks every second and recalculates the effects whose value changed.
 class classic_spell_hun_pet_scaling : public AuraScript
 {
     static constexpr int32 RecalculateIntervalMs = 1 * IN_MILLISECONDS;
-    static constexpr std::array<SpellEffIndex, 7> ScaledEffects = { EFFECT_0, EFFECT_1, EFFECT_8, EFFECT_9, EFFECT_10, EFFECT_13, EFFECT_14 };
+    static constexpr std::array<SpellEffIndex, 8> ScaledEffects = { EFFECT_0, EFFECT_1, EFFECT_8, EFFECT_9, EFFECT_10, EFFECT_13, EFFECT_14, EFFECT_18 };
+
+    // 19549 - Improved Aspect of the Monkey: "Additionally, your pet gains 50% of the effect of your Aspect of the Monkey ability." The talent
+    // holds it in a dummy (effect 1) nothing read. Effect 18 (SPELL_AURA_MOD_DODGE_PERCENT, 0 in the client) carries half of the hunter's
+    // current Aspect of the Monkey dodge (the talent's flat bonus included) while the aspect is up; a creature's dodge reads the aura total.
+    static constexpr uint32 SPELL_HUN_ASPECT_OF_THE_MONKEY          = 13163;
+    static constexpr uint32 SPELL_HUN_IMPROVED_ASPECT_OF_THE_MONKEY = 19549;
+    static constexpr float MonkeyPetShare                           = 0.5f;
 
     bool Validate(SpellInfo const* spellInfo) override
     {
-        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_14 } });
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_18 } });
     }
 
     // Pet::GetOwner (the owner pointer the pet is created with), not WorldObject::GetOwner (a lookup by OwnerGUID): a pet being tamed casts its
@@ -87,11 +94,22 @@ class classic_spell_hun_pet_scaling : public AuraScript
         return stats;
     }
 
+    static float MonkeyDodge(Player const* hunter)
+    {
+        if (!hunter->HasAura(SPELL_HUN_IMPROVED_ASPECT_OF_THE_MONKEY))
+            return 0.0f;
+        AuraEffect const* monkey = hunter->GetAuraEffect(SPELL_HUN_ASPECT_OF_THE_MONKEY, EFFECT_0);
+        return monkey ? float(monkey->GetAmount()) * MonkeyPetShare : 0.0f;
+    }
+
     static float ScaledAmount(Unit const* pet, uint8 effIndex)
     {
         Player const* hunter = GetHunter(pet);
         if (!hunter)
             return 0.0f;
+
+        if (effIndex == EFFECT_18)
+            return MonkeyDodge(hunter);
 
         HunterPetForever::HunterStats const stats = ReadHunter(hunter);
         switch (effIndex)
@@ -156,6 +174,7 @@ class classic_spell_hun_pet_scaling : public AuraScript
         DoEffectCalcAmount += AuraEffectCalcAmountFn(classic_spell_hun_pet_scaling::CalcAmount, EFFECT_10, SPELL_AURA_MOD_SPELL_HIT_CHANCE);
         DoEffectCalcAmount += AuraEffectCalcAmountFn(classic_spell_hun_pet_scaling::CalcAmount, EFFECT_13, SPELL_AURA_MOD_WEAPON_CRIT_PERCENT);
         DoEffectCalcAmount += AuraEffectCalcAmountFn(classic_spell_hun_pet_scaling::CalcAmount, EFFECT_14, SPELL_AURA_MOD_SPELL_CRIT_CHANCE);
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(classic_spell_hun_pet_scaling::CalcAmount, EFFECT_18, SPELL_AURA_MOD_DODGE_PERCENT);
         DoEffectCalcPeriodic += AuraEffectCalcPeriodicFn(classic_spell_hun_pet_scaling::CalcRecalculateTimer, EFFECT_0, SPELL_AURA_MOD_MAX_HEALTH);
         OnEffectUpdatePeriodic += AuraEffectUpdatePeriodicFn(classic_spell_hun_pet_scaling::RecalculateChanged, EFFECT_0, SPELL_AURA_MOD_MAX_HEALTH);
     }
