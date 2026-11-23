@@ -408,12 +408,16 @@ class classic_spell_warr_flurry_buff : public AuraScript
     bool CheckProc(ProcEventInfo& eventInfo)
     {
         Unit* warrior = GetTarget();
-        switch (warrior->GetLastExtraAttackSpell())
+        // Windfury Totem's strike: a melee ability hit since the 2026-11-14 live hotfix (no longer an extra swing)
+        if (SpellInfo const* spellInfo = eventInfo.GetSpellInfo())
         {
-            case 8516: case 10608: case 10610:          // Windfury Totem's strike
-                return false;
-            default:
-                break;
+            switch (spellInfo->Id)
+            {
+                case 8516: case 10608: case 10610:
+                    return false;
+                default:
+                    break;
+            }
         }
         if ((eventInfo.GetHitMask() & PROC_HIT_CRITICAL) && warrior->HasAura(12319))
             return false;

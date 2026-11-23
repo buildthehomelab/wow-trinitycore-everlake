@@ -1187,11 +1187,11 @@ class classic_spell_sha_maelstrom_weapon : public AuraScript
         if (!damageInfo || !damageInfo->GetDamage())
             return false;
 
-        // an extra swing of Windfury Totem runs while its attack spell is the last extra attack spell
+        // Windfury Totem's strike is a melee ability hit since the 2026-11-14 live hotfix (no longer an extra swing)
         if (eventInfo.GetTypeMask() & PROC_FLAG_DEAL_MELEE_SWING)
-            return !IsWindfuryTotemAttack(GetTarget()->GetLastExtraAttackSpell());
-        if (eventInfo.GetTypeMask() & PROC_FLAG_DEAL_MELEE_ABILITY)
             return true;
+        if (eventInfo.GetTypeMask() & PROC_FLAG_DEAL_MELEE_ABILITY)
+            return !eventInfo.GetSpellInfo() || !IsWindfuryTotemAttack(eventInfo.GetSpellInfo()->Id);
 
         SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
         return spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_SHAMAN && (spellInfo->SpellFamilyFlags[0] & 0x1)
@@ -1685,15 +1685,21 @@ class classic_spell_sha_lightning_shield : public AuraScript
 // 8515, 10609, 10612 - Windfury Totem (passive, ranks 1-3); 8230, 8250, 10521, 15036 - Flametongue Totem (passive, ranks 1-4): the totem's area aura on
 // the party members. The client data has no trigger spell on these effects: the Windfury ones carry the Windfury Totem attack spell (8516, 10608, 10610)
 // in the base points of the effect, Flametongue rank 1, 3 and 4 the proc spell (8253, 10523, 16389) there and rank 2 (8250) nothing at all, so the party
-// members' melee hits cast nothing and neither totem did anything. Windfury grants the member 1 extra attack (the spell is a self buff), Flametongue
-// casts its proc spell (fire damage by weapon speed, classic_spell_sha_flametongue_proc) on the target of the hit.
+// members' melee hits cast nothing and neither totem did anything. Both cast their proc spell at the target of the hit. Flametongue's is fire damage by
+// weapon speed (classic_spell_sha_flametongue_proc). Windfury's is no longer an extra attack on the member: since the 2026-11-14 live hotfix (client
+// 71037) it is a main hand weapon damage hit on the enemy (SPELL_EFFECT_WEAPON_DAMAGE at TARGET_UNIT_TARGET_ENEMY), so cast on the member it failed
+// with bad targets and no strike landed. The strike adds the raid aura's effect 1 (a dummy, 246 at rank 3) as attack power; live ranks 1 and 2 add none
+// (wowsims/forever, MIT, docs/evidence EV-0002, sim/core/buffs/drivers.go newWindfuryTotemStrike). A weapon damage effect's base points are added to the
+// weapon's damage, so the attack power goes in as base points: AP / 14 x the main hand's (non-normalized) speed, as Unit::CalculateDamage does.
 class classic_spell_sha_weapon_totem_aura : public AuraScript
 {
+    static constexpr uint32 SPELL_SHAMAN_WINDFURY_TOTEM_R3 = 10612;
+
     struct TotemProc
     {
         uint32 AuraSpellId;
         uint32 ProcSpellId;
-        bool OnSelf;
+        bool IsWindfury;
     };
 
     static constexpr TotemProc Procs[] =
@@ -1719,7 +1725,7 @@ class classic_spell_sha_weapon_totem_aura : public AuraScript
     static bool HasWindfuryTotemAura(Unit const* member)
     {
         for (TotemProc const& proc : Procs)
-            if (proc.OnSelf && member->HasAura(proc.AuraSpellId))
+            if (proc.IsWindfury && member->HasAura(proc.AuraSpellId))
                 return true;
         return false;
     }
@@ -1738,7 +1744,7 @@ class classic_spell_sha_weapon_totem_aura : public AuraScript
             return false;
 
         TotemProc const* proc = Find(GetSpellInfo()->Id);
-        return proc && (proc->OnSelf || !HasWindfuryTotemAura(GetTarget()));
+        return proc && (proc->IsWindfury || !HasWindfuryTotemAura(GetTarget()));
     }
 
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
@@ -1747,17 +1753,45 @@ class classic_spell_sha_weapon_totem_aura : public AuraScript
 
         TotemProc const* proc = Find(GetSpellInfo()->Id);
         Unit* member = GetTarget();
-        Unit* target = proc->OnSelf ? member : eventInfo.GetActionTarget();
-        if (!target || !target->IsAlive())
+        Unit* target = eventInfo.GetActionTarget();
+        if (!target || target == member || !target->IsAlive())
             return;
 
-        member->CastSpell(target, proc->ProcSpellId, CastSpellExtraArgs(aurEff));
+        CastSpellExtraArgs args(aurEff);
+        if (proc->IsWindfury && proc->AuraSpellId == SPELL_SHAMAN_WINDFURY_TOTEM_R3)
+            if (AuraEffect const* attackPower = GetAura()->GetEffect(EFFECT_1))
+                if (attackPower->GetAmount() > 0)
+                    args.AddSpellBP0(float(attackPower->GetAmount()) / 14.0f * member->GetAPMultiplier(BASE_ATTACK, false));
+
+        member->CastSpell(target, proc->ProcSpellId, args);
     }
 
     void Register() override
     {
         DoCheckProc += AuraCheckProcFn(classic_spell_sha_weapon_totem_aura::CheckProc);
         OnEffectProc += AuraEffectProcFn(classic_spell_sha_weapon_totem_aura::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
+// 8516, 10608, 10610 - Windfury Totem (the strike, ranks 1-3): a main hand weapon damage hit since the 2026-11-14 live hotfix (see
+// classic_spell_sha_weapon_totem_aura). A landed strike gives the rage of a landed main hand white swing, crit or not (wowsims/forever, MIT,
+// docs/evidence EV-0138), which a spell hit does not give by itself (Unit::AttackerStateUpdate rewards white swings only).
+class classic_spell_sha_windfury_totem_strike : public SpellScript
+{
+    void GiveSwingRage()
+    {
+        Unit* caster = GetCaster();
+        if (!caster || caster->GetPowerType() != POWER_RAGE || GetHitUnit() == caster)
+            return;
+
+        float const rage = caster->GetClassicSwingRage(BASE_ATTACK, IsHitCrit());
+        if (rage > 0.0f)
+            caster->RewardClassicRage(rage, true);
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(classic_spell_sha_windfury_totem_strike::GiveSwingRage);
     }
 };
 
@@ -1933,6 +1967,7 @@ void AddSC_classic_talents_mage_shaman()
     RegisterSpellScript(classic_spell_sha_ancestral_guidance);
     RegisterSpellScript(classic_spell_sha_lightning_shield);
     RegisterSpellScript(classic_spell_sha_weapon_totem_aura);
+    RegisterSpellScript(classic_spell_sha_windfury_totem_strike);
     RegisterSpellScript(classic_spell_sha_ancestral_healing);
     RegisterSpellScript(classic_spell_sha_water_shield);
     RegisterSpellScript(classic_spell_sha_totemic_call);
