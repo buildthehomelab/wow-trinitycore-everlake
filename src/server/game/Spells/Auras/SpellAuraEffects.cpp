@@ -600,7 +600,7 @@ NonDefaultConstructible<pAuraEffectHandler> AuraEffectHandler[TOTAL_AURAS]=
     &AuraEffect::HandleNULL,                                      //525 SPELL_AURA_DISPLAY_PROFESSION_EQUIPMENT
     &AuraEffect::HandleNULL,                                      //526
     &AuraEffect::HandleAuraModIncreaseBackwardSpeed,              //527 SPELL_AURA_MOD_INCREASE_BACKWARD_SPEED
-    &AuraEffect::HandleNULL,                                      //528 SPELL_AURA_ALLOW_BLOCKING_SPELLS
+    &AuraEffect::HandleNoImmediateEffect,                         //528 SPELL_AURA_ALLOW_BLOCKING_SPELLS implemented in WorldObject::MagicSpellHitResult
     &AuraEffect::HandleNULL,                                      //529 SPELL_AURA_MOD_SPELL_BLOCK_CHANCE
     &AuraEffect::HandleNULL,                                      //530
     &AuraEffect::HandleNULL,                                      //531

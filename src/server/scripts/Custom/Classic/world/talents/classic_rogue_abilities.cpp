@@ -555,12 +555,25 @@ class classic_spell_rog_death_mark : public AuraScript
 // 1856, 1857, 27617 - Vanish: ported from vMaNGOS (GPL-2.0, scripts/spells/spell_rogue.cpp, RogueVanishScript). Vanish also ends effects that let
 // an enemy always know where the rogue is (Hunter's Mark, Mind Vision; patch 1.12) and puts the rogue straight into the highest Stealth rank
 // known, so the stealth stays after the Vanish aura (10 s in the client data) runs out.
+// Nightslayer Armor 8-piece, Clean Escape 23582: "Heals the rogue for $23583s1 when Vanish is performed." The set aura is a dummy with no
+// proc flags, so nothing cast the heal; Vanish casts it while the rogue has the set aura.
 class classic_spell_rog_vanish : public SpellScript
 {
+    static constexpr uint32 SPELL_CLEAN_ESCAPE = 23582;
+    static constexpr uint32 SPELL_CLEAN_ESCAPE_HEAL = 23583;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_CLEAN_ESCAPE_HEAL });
+    }
+
     void HandleAfterCast()
     {
         Unit* rogue = GetCaster();
         rogue->RemoveAurasByType(SPELL_AURA_MOD_STALKED);
+
+        if (rogue->HasAura(SPELL_CLEAN_ESCAPE))
+            rogue->CastSpell(rogue, SPELL_CLEAN_ESCAPE_HEAL, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
 
         Player* player = rogue->ToPlayer();
         if (!player)

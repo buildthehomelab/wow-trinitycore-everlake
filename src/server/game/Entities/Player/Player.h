@@ -1388,7 +1388,6 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         // pet auras
         std::unordered_set<PetAura const*> m_petAuras;
-        std::unordered_set<uint32> m_accountLegacyAchievements;    // Legacy challenges done by other characters on the account
         void AddPetAura(PetAura const* petSpell);
         void RemovePetAura(PetAura const* petSpell);
 
@@ -2966,8 +2965,10 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         uint32 GetAchievementPoints() const;
         std::vector<uint32> GetCompletedAchievementIds() const;
         bool HasAchieved(uint32 achievementId) const;
-        // Classic 1.60: a Legacy challenge counts once it is done by any character on the account (this one or another)
+        // HasAchieved, or a Legacy Points challenge another character of the account did (Classic 1.60: Legacy Points are per account)
         bool HasAchievedOnAccount(uint32 achievementId) const;
+        struct AccountLegacyAchievement { ObjectGuid Owner; time_t Date = 0; };   // the first character of the account that did it
+        std::unordered_map<uint32, AccountLegacyAchievement> const& GetAccountLegacyAchievements() const { return m_accountLegacyAchievements; }
         void ResetAchievements();
         void FailCriteria(CriteriaFailEvent condition, int32 failAsset);
         void UpdateCriteria(CriteriaType type, uint64 miscValue1 = 0, uint64 miscValue2 = 0, uint64 miscValue3 = 0, WorldObject* ref = nullptr);
@@ -3292,6 +3293,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void _LoadCharacterBankTabSettings(PreparedQueryResult result);
         void _LoadDayCycle(PreparedQueryResult result);
         void _LoadAccountLegacyAchievements(PreparedQueryResult result);
+        // the Legacy Points challenges the account's characters have done, as read at login
+        std::unordered_map<uint32, AccountLegacyAchievement> m_accountLegacyAchievements;
 
         /*********************************************************/
         /***                   SAVE SYSTEM                     ***/

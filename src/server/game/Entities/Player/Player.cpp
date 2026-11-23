@@ -2420,6 +2420,7 @@ void Player::UpdateClassicLegacyUnlock()
     // Renown on the Legacy reward track = Legacy Points earned: the challenges ("Reach level 25/45/60 for the first time on <class>")
     // are TraitCurrencySource rows of currency 4225. Rows still tied to another ruleset (SuperDistrictSetID != 0 after the
     // 2026_09_30_00 hotfix) belong to the other copy of each challenge and are not counted. The first point comes at level 25.
+    // The points are the account's: a challenge any of its characters did counts ("Points are shared across your whole account").
     int32 earnedLegacyPoints = 0;
     for (TraitCurrencySourceEntry const* source : sTraitCurrencySourceStore)
         if (source->TraitCurrencyID == LegacyPointsTraitCurrencyID && !source->SuperDistrictSetID && source->AchievementID && HasAchievedOnAccount(source->AchievementID))
@@ -3346,6 +3347,17 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
     }
     else
     {
+        // Classic 1.60: a spell listed under several skill lines is one ability those lines share, so learning it does not open
+        // the lines the player lacks. Languages 1293657 sits under Common 98 and Orcish 109 (AutomaticCharLevel in both): every
+        // character learns it from its own language and was then given the other faction's language at 1/300 through
+        // SkillRaceClassInfo 49 (Orcish for Alliance) or 41 (Common for Horde), both Availability 0. On the official realm
+        // those lines show 0/0 (70938 login sniffs, 18 and 19 Nov 2026). The other such spells are pet abilities.
+        bool const sharedBySkillLines = skill_bounds.first != skill_bounds.second
+            && std::any_of(skill_bounds.first, skill_bounds.second, [first = skill_bounds.first->second->SkillLine](SkillLineAbilityMap::value_type const& ability)
+            {
+                return ability.second->SkillLine != first;
+            });
+
         // not ranked skills
         for (SkillLineAbilityMap::const_iterator _spell_idx = skill_bounds.first; _spell_idx != skill_bounds.second; ++_spell_idx)
         {
@@ -3357,7 +3369,8 @@ bool Player::AddSpell(uint32 spellId, bool active, bool learning, bool dependent
                 continue;
 
             // Runeforging special case
-            if ((_spell_idx->second->GetAcquireMethod() == SkillLineAbilityAcquireMethod::AutomaticCharLevel && !HasSkill(_spell_idx->second->SkillLine)) || ((_spell_idx->second->SkillLine == SKILL_RUNEFORGING) && _spell_idx->second->TrivialSkillLineRankHigh == 0))
+            if ((_spell_idx->second->GetAcquireMethod() == SkillLineAbilityAcquireMethod::AutomaticCharLevel && !sharedBySkillLines && !HasSkill(_spell_idx->second->SkillLine))
+                || ((_spell_idx->second->SkillLine == SKILL_RUNEFORGING) && _spell_idx->second->TrivialSkillLineRankHigh == 0))
             {
                 if (SkillRaceClassInfoEntry const* rcInfo = sDB2Manager.GetSkillRaceClassInfo(_spell_idx->second->SkillLine, GetRace(), GetClass()))
                     LearnDefaultSkill(rcInfo);
@@ -5072,6 +5085,7 @@ void Player::DurabilityRepairAll(bool takeCost, float discountMod, bool guildBan
 
         // We must calculate total repair cost and take money once to avoid spam in the guild bank log and reduce number of transactions in the database
         uint64 totalCost = 0;
+        std::vector<Item*> paidFor;
 
         for (auto const& [item, cost] : itemRepairCostStore)
         {
@@ -5080,13 +5094,16 @@ void Player::DurabilityRepairAll(bool takeCost, float discountMod, bool guildBan
                 break;
 
             totalCost = newTotalCost;
-
-            // Repair item without taking cost. We'll do it later.
-            DurabilityRepair(item->GetPos(), false, 0.f);
+            paidFor.push_back(item);
         }
 
-        // Take money for repairs from the guild bank
-        guild->HandleMemberWithdrawMoney(GetSession(), totalCost, true);
+        // Take the money from the guild bank first and repair only when it was taken. The items were repaired before and the withdraw's
+        // result was not looked at, so a refused withdraw (no repair right, the bank emptied meanwhile) left the repair free.
+        if (paidFor.empty() || !guild->HandleMemberWithdrawMoney(GetSession(), totalCost, true))
+            return;
+
+        for (Item* item : paidFor)
+            DurabilityRepair(item->GetPos(), false, 0.f);
     }
     else
     {
@@ -8887,9 +8904,15 @@ void Player::_ApplyItemBonuses(Item* item, uint8 slot, bool apply)
     // Classic 1.60 (WoW Forever): an armor item's ItemSparse QualityModifier is its green bonus armor, the "+60 Armor" line under Tree Bark
     // Jacket's "44 Armor" (44 + 60 = its vanilla 104). The core read only the table armor, so 491 items in wowsims' item list lost it
     // (Heavy Mithril Breastplate +90, Green Iron Hauberk +120). It counts as item armor, as ITEM_MOD_EXTRA_ARMOR does (wowsims/forever, MIT,
-    // tools/database/dbc/item.go GetStats; Wowhead Forever tooltip of item 1486)
+    // tools/database/dbc/item.go GetStats; the tooltip of item 1486)
+    if (float const bonusArmor = proto->GetClassicBonusArmor())
+    {
+        HandleStatFlatModifier(UNIT_MOD_ARMOR, TOTAL_VALUE, bonusArmor, apply);
+        m_classicItemArmor += apply ? bonusArmor : -bonusArmor;
+    }
+
     // Classic 1.60 (WoW Forever): a caster weapon's implicit spell power, or healing and damage (ItemTemplate::GetClassicCasterPower,
-    // EV-0112); the client's tooltip shows it, the core never gave it
+    // EV-0112); the client's tooltip shows it, the server never gave it
     {
         int32 spellPower = 0, healing = 0, damage = 0;
         proto->GetClassicCasterPower(itemLevel, spellPower, healing, damage);
@@ -8899,12 +8922,6 @@ void Player::_ApplyItemBonuses(Item* item, uint8 slot, bool apply)
             _ApplyClassicSpellHealingOrDamageMod(ITEM_MOD_SPELL_HEALING_DONE, healing, apply);
         if (damage)
             _ApplyClassicSpellHealingOrDamageMod(ITEM_MOD_SPELL_DAMAGE_DONE, damage, apply);
-    }
-
-    if (float const bonusArmor = proto->GetClassicBonusArmor())
-    {
-        HandleStatFlatModifier(UNIT_MOD_ARMOR, TOTAL_VALUE, bonusArmor, apply);
-        m_classicItemArmor += apply ? bonusArmor : -bonusArmor;
     }
 
     WeaponAttackType attType = Player::GetAttackBySlot(slot, proto->GetInventoryType());
@@ -16439,6 +16456,7 @@ void Player::RewardQuest(Quest const* quest, LootItemType rewardType, uint32 rew
 
     SetQuestCompletedBit(quest_id, true);
 
+    uint64 objectiveMoneyPaid = 0;
     for (QuestObjective const& obj : quest->GetObjectives())
     {
         switch (obj.Type)
@@ -16453,6 +16471,10 @@ void Player::RewardQuest(Quest const* quest, LootItemType rewardType, uint32 rew
             }
             case QUEST_OBJECTIVE_CURRENCY:
                 RemoveCurrency(obj.ObjectID, obj.Amount, CurrencyDestroyReason::QuestTurnin);
+                break;
+            case QUEST_OBJECTIVE_MONEY:                     // pay-money objective (e.g. quest 97179): the money is spent on turn-in
+                ModifyMoney(-int64(obj.Amount));
+                objectiveMoneyPaid += uint64(obj.Amount);
                 break;
         }
     }
@@ -16584,7 +16606,9 @@ void Player::RewardQuest(Quest const* quest, LootItemType rewardType, uint32 rew
         moneyRew = int32(quest->GetRewMoneyMaxLevel() * sWorld->getRate(RATE_DROP_MONEY));
 
     moneyRew += GetQuestMoneyReward(quest);
-    moneyRew -= int32(quest->GetClassicRequiredMoney());    // Classic 1.60: vanilla quests that cost money
+    // Classic 1.60: vanilla quests that cost money. Not charged twice when the quest also has a money objective.
+    if (uint64 classicCost = quest->GetClassicRequiredMoney(); classicCost > objectiveMoneyPaid)
+        moneyRew -= int32(classicCost - objectiveMoneyPaid);
 
     if (moneyRew)
     {
@@ -19640,6 +19664,15 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     ReplaceAllPlayerFlagsEx(fields.playerFlagsEx);
     SetWatchedFactionIndex(fields.watchedFaction);
 
+    // a choice the other choices rule out (Feather Color with Feathers: None, from before the client data paired them) is set to the
+    // allowed one and saved with the character, instead of refusing the login
+    if (GetSession()->NormalizeDependentChoices(Races(GetRace()), Classes(GetClass()), customizations))
+    {
+        TC_LOG_INFO("entities.player.loading", "Player::LoadFromDB: Player ({}) had customization choices its other choices rule out, set to the allowed ones",
+            guid.ToString());
+        SetCustomizations(Trinity::Containers::MakeIteratorPair(customizations.begin(), customizations.end()));
+    }
+
     if (!GetSession()->ValidateAppearance(Races(GetRace()), Classes(GetClass()), fields.gender, MakeChrCustomizationChoiceRange(customizations)))
     {
         TC_LOG_ERROR("entities.player.loading", "Player::LoadFromDB: Player ({}) has wrong Appearance values (Hair/Skin/Color), can't load.", guid.ToString());
@@ -21873,27 +21906,34 @@ void Player::_LoadDayCycle(PreparedQueryResult result)
     m_skyMode = uint8(result ? DayCycle::SkyModeFromDb((*result)[0].GetUInt8()) : DayCycle::SkyMode::Auto);
 }
 
+// Classic 1.60: Legacy Points (trait currency 4225) come from challenges ("Reach level 25 for the first time on a Warrior"), which are
+// character achievements; the official realm counts them for the whole account. Only the achievements that are a source of Legacy
+// Points are kept, so no other achievement turns account-wide. A deleted character no longer counts (its row has no account).
 void Player::_LoadAccountLegacyAchievements(PreparedQueryResult result)
 {
-    // Classic 1.60 (WoW Forever): each Legacy challenge ("Reach level 25 on a Druid" and so on) pays its Legacy Points the first
-    // time any character on the account completes it, and every character can spend them. Keep only the achievements that are
-    // sources of Legacy Points (trait currency 4225); the character's own ones come from its achievement manager as usual.
     static constexpr uint32 LegacyPointsTraitCurrencyID = 4225;
 
     m_accountLegacyAchievements.clear();
     if (!result)
         return;
 
-    std::unordered_set<uint32> legacySources;
+    std::unordered_set<uint32> legacyChallenges;
     for (TraitCurrencySourceEntry const* source : sTraitCurrencySourceStore)
         if (source->TraitCurrencyID == LegacyPointsTraitCurrencyID && source->AchievementID)
-            legacySources.insert(source->AchievementID);
+            legacyChallenges.insert(source->AchievementID);
 
     do
     {
-        uint32 achievementId = (*result)[0].GetUInt32();
-        if (legacySources.contains(achievementId))
-            m_accountLegacyAchievements.insert(achievementId);
+        Field* fields = result->Fetch();
+        uint32 const achievementId = fields[0].GetUInt32();
+        if (!legacyChallenges.contains(achievementId))
+            continue;
+
+        ObjectGuid const owner = ObjectGuid::Create<HighGuid::Player>(fields[1].GetUInt64());
+        time_t const date = time_t(fields[2].GetInt64());
+        auto [itr, added] = m_accountLegacyAchievements.try_emplace(achievementId, AccountLegacyAchievement{ owner, date });
+        if (!added && date < itr->second.Date)
+            itr->second = { owner, date };
     } while (result->NextRow());
 }
 
@@ -25941,15 +25981,17 @@ void Player::ReportedAfkBy(Player* reporter)
     if (m_bgData.bgAfkReporter.find(reporter->GetGUID()) == m_bgData.bgAfkReporter.end() && !HasAura(43680) && !HasAura(43681) && reporter->CanReportAfkDueToLimit())
     {
         m_bgData.bgAfkReporter.insert(reporter->GetGUID());
+        // every accepted report is a success for the reporter (before, only the one that applied the debuff was, so the
+        // earlier reports were answered as failed), and the marks are counted before the list is cleared
+        reportAfkResult.NumBlackMarksOnOffender = uint8(m_bgData.bgAfkReporter.size());
+        reportAfkResult.NumPlayersIHaveReported = reporter->m_bgData.bgAfkReportedCount;
+        reportAfkResult.Result = WorldPackets::Battleground::ReportPvPPlayerAFKResult::PVP_REPORT_AFK_SUCCESS;
         // by default 3 players have to complain to apply debuff
         if (m_bgData.bgAfkReporter.size() >= sWorld->getIntConfig(CONFIG_BATTLEGROUND_REPORT_AFK))
         {
             // cast 'Idle' spell
             CastSpell(this, 43680, true);
             m_bgData.bgAfkReporter.clear();
-            reportAfkResult.NumBlackMarksOnOffender = m_bgData.bgAfkReporter.size();
-            reportAfkResult.NumPlayersIHaveReported = reporter->m_bgData.bgAfkReportedCount;
-            reportAfkResult.Result = WorldPackets::Battleground::ReportPvPPlayerAFKResult::PVP_REPORT_AFK_SUCCESS;
         }
     }
 

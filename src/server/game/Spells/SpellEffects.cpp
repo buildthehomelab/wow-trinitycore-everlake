@@ -528,7 +528,12 @@ void Spell::EffectEnvironmentalDMG()
     uint32 damage = GetEffectValueAsInt();
     // CalcAbsorbResist already in Player::EnvironmentalDamage
     if (unitTarget->GetTypeId() == TYPEID_PLAYER)
+    {
+        // Player::EnvironmentalDamage deals the damage as the player on itself with no spell, so the damage hooks only see a
+        // self-inflicted hit. Name the spell and its caster to the scripts first; the next damage hook on this player is this hit.
+        sScriptMgr->OnDamageSpell(GetUnitCasterForEffectHandlers(), unitTarget, damage, m_spellInfo);
         unitTarget->ToPlayer()->EnvironmentalDamage(DAMAGE_FIRE, damage);
+    }
     else
     {
         Unit* unitCaster = GetUnitCasterForEffectHandlers();

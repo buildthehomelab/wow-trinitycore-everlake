@@ -23,11 +23,13 @@
 #include "Formulas.h"
 #include "Group.h"
 #include "Guild.h"
+#include "Map.h"
 #include "GuildMgr.h"
 #include "Pet.h"
 #include "Player.h"
 #include "Scenario.h"
 #include "SpellAuraEffects.h"
+#include "World.h"
 #include <boost/container/small_vector.hpp>
 
  // == KillRewarder ====================================================

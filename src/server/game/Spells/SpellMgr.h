@@ -718,6 +718,9 @@ class TC_GAME_API SpellMgr
 
         // Classic 1.60: vanilla damage / heal / absorb value of an effect of a legacy spell (ClassicSpellValue.h)
         ClassicSpellValue::Value const* GetClassicSpellValue(uint32 spellId, uint32 effectIndex) const;
+        // Classic 1.60: the legacy spell whose values a spell takes: the legacy spell a Forever creature spell copies (LoadClassicCreatureSpellTwins),
+        // else the spell itself
+        uint32 GetClassicValueSpellId(uint32 spellId) const;
         ClassicSpellValue::Cost const* GetClassicSpellCost(uint32 spellId) const;
         // WoW Forever downranking: the share of spell power bonus and class proc chance a player's lower rank keeps (1: not penalised)
         float GetClassicDownrankFactor(SpellInfo const* spellInfo, Unit const* caster) const;
@@ -816,6 +819,7 @@ class TC_GAME_API SpellMgr
         void LoadSpellInfoServerside();
         void LoadSpellInfoCustomAttributes();
         void LoadSpellInfoCorrections();
+        void LoadClassicCreatureSpellTwins();               // must be after LoadSpellInfoCorrections and before LoadClassicSpellEffects (which rewrites legacy auras)
         void LoadClassicSpellInfo();                        // must be after LoadSpellInfoCorrections (table classic_spell_info: cast time, cooldowns, duration, range)
         void LoadClassicSpellEffects();                     // must be after LoadClassicSpellInfo and before LoadClassicSpellValues (table classic_spell_effect: aura, misc value, class mask)
         void LoadClassicTwinChannels();                     // must be after LoadClassicSpellInfo (table classic_spell_twin: a twin of a channeled vanilla spell is channeled too)
@@ -863,6 +867,7 @@ class TC_GAME_API SpellMgr
         std::deque<SpellDurationEntry> mClassicDurations;
         std::deque<SpellRangeEntry> mClassicRanges;
         std::unordered_map<uint64, ClassicSpellValue::Value> mClassicSpellValues;   // (spellId << 8 | effectIndex)
+        std::unordered_map<uint32, uint32> mClassicCreatureSpellTwins;               // Forever copy -> the legacy spell it copies
         std::unordered_map<uint32, ClassicSpellValue::Cost> mClassicSpellCosts;
         std::unordered_map<uint32, std::vector<ClassicCrateBundle>> mClassicCrateBundles;   // Stock Crate spell -> its bundles
         std::unordered_map<uint64, ClassicVersusBonusEntry> mClassicVersusBonus;           // (spellId << 8 | kind)

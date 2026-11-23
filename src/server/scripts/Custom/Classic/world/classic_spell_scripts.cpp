@@ -589,6 +589,10 @@ class classic_spell_pal_judgement_of_command_damage : public SpellScript
 // self-targeted heal / mana, which went to the enemy (Discord, dumpins 2026-11-17).
 class classic_spell_pal_judgement_intermediate : public SpellScript
 {
+    // Redemption Armor 2-piece 28775: "Increases the amount healed by your Judgement of Light by $s1." A dummy whose class mask names no spell
+    // the heal is filed under (the heals have no class mask), so it never applied; the heal is cast with the bonus added.
+    static constexpr uint32 SPELL_REDEMPTION_JUDGEMENT_OF_LIGHT = 28775;
+
     static uint32 GetRankSpell(bool light, uint32 debuffId)
     {
         if (light)
@@ -630,9 +634,15 @@ class classic_spell_pal_judgement_intermediate : public SpellScript
             if (!rankSpell)
                 continue;
 
-            attacker->CastSpell(attacker, rankSpell, CastSpellExtraArgs(TRIGGERED_FULL_MASK)
-                .SetOriginalCaster(aurApp->GetBase()->GetCasterGUID())
-                .SetTriggeringSpell(GetSpell()));
+            CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+            args.SetOriginalCaster(aurApp->GetBase()->GetCasterGUID()).SetTriggeringSpell(GetSpell());
+            if (light)
+                if (Unit* paladin = aurApp->GetBase()->GetCaster())
+                    if (AuraEffect const* redemption = paladin->GetAuraEffect(SPELL_REDEMPTION_JUDGEMENT_OF_LIGHT, EFFECT_0))
+                        args.AddSpellBP0(sSpellMgr->AssertSpellInfo(rankSpell, DIFFICULTY_NONE)->GetEffect(EFFECT_0).CalcValue(attacker)
+                            + redemption->GetAmount());
+
+            attacker->CastSpell(attacker, rankSpell, args);
             break;
         }
     }
@@ -2068,6 +2078,46 @@ public:
     }
 };
 
+// 1216997 - Unflinching Morale (Grand Marshal's and High Warlord's weapons, equip): "Reduces all damage taken from players and their pets by
+// $s2%. This effect cannot be combined from multiple sources." The aura is a dummy of 5 (the client has no second effect; the tooltip's
+// $s2 reads the first) and nothing read it, so the rank 14 weapons gave no damage cut. Damage from a player, or from a pet, guardian or
+// totem a player owns, is cut by the aura's amount before armor and resistances; two of the weapons give one cut.
+class classic_unit_unflinching_morale : public UnitScript
+{
+public:
+    classic_unit_unflinching_morale() : UnitScript("classic_unit_unflinching_morale") { }
+
+    static constexpr uint32 SPELL_UNFLINCHING_MORALE = 1216997;
+
+    template <typename T>
+    static void Apply(Unit const* target, Unit const* attacker, T& damage)
+    {
+        if (!target || !attacker || !damage || !attacker->GetCharmerOrOwnerPlayerOrPlayerItself())
+            return;
+
+        AuraEffect const* morale = target->GetAuraEffect(SPELL_UNFLINCHING_MORALE, EFFECT_0);
+        if (!morale || morale->GetAmountAsInt() <= 0)
+            return;
+
+        damage = T(CalculatePct(damage, 100 - std::min(morale->GetAmountAsInt(), 100)));
+    }
+
+    void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage) override
+    {
+        Apply(target, attacker, damage);
+    }
+
+    void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* /*spellInfo*/) override
+    {
+        Apply(target, attacker, damage);
+    }
+
+    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage) override
+    {
+        Apply(target, attacker, damage);
+    }
+};
+
 // Tauren racial Cultivation (1.60): "Cultivate a nearby herb, growing a duplicate you can harvest without requiring Herbalism skill.
 // Each herb may only be cultivated once." Official sniffs (2026-09-28, 2026-10-01): the spellbook spell 20552 (instant, dummy on game
 // objects within 5 yd) makes the server start 1312643 (3 sec cast) on the herb; when it completes a duplicate herb appears on the same
@@ -3218,6 +3268,7 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_tauren_cultivation);
     RegisterSpellScript(classic_spell_tauren_cultivate_herb);
     new classic_unit_tigers_fury();
+    new classic_unit_unflinching_morale();
     RegisterSpellScript(classic_spell_pri_vampiric_embrace);
     RegisterSpellScript(classic_spell_item_moonshadow_stave);
     RegisterSpellScript(classic_spell_item_argent_defender);

@@ -972,6 +972,8 @@ void GameObject::AddToWorld()
             else
                 GetMap()->InsertGameObjectModel(*m_model);
         }
+        if (GetGoType() == GAMEOBJECT_TYPE_DOOR)
+            GetMap()->AddDoor(this);    // published for paths searched off the map thread (Map::PublishClosedDoors)
 
         EnableCollision(toggledState);
         WorldObject::AddToWorld();
@@ -990,6 +992,7 @@ void GameObject::RemoveFromWorld()
         if (m_model)
             if (GetMap()->ContainsGameObjectModel(*m_model))
                 GetMap()->RemoveGameObjectModel(*m_model);
+        GetMap()->RemoveDoor(this);
 
         // If linked trap exists, despawn it
         if (GameObject* linkedTrap = GetLinkedTrap())
@@ -4211,6 +4214,8 @@ void GameObject::EnableCollision(bool enable)
         GetMap()->InsertGameObjectModel(*m_model);*/
 
     m_model->EnableCollision(enable);
+    if (IsInWorld() && GetGoType() == GAMEOBJECT_TYPE_DOOR)
+        GetMap()->MarkClosedDoorsChanged();
 }
 
 void GameObject::UpdateModel()
@@ -4237,6 +4242,8 @@ void GameObject::UpdateModel()
         if (modelCollisionEnabled)
             m_model->EnableCollision(modelCollisionEnabled);
     }
+    if (GetGoType() == GAMEOBJECT_TYPE_DOOR)
+        GetMap()->MarkClosedDoorsChanged();
 
     switch (GetGoType())
     {
@@ -4452,6 +4459,8 @@ void GameObject::UpdateModelPosition()
         GetMap()->RemoveGameObjectModel(*m_model);
         m_model->UpdatePosition();
         GetMap()->InsertGameObjectModel(*m_model);
+        if (GetGoType() == GAMEOBJECT_TYPE_DOOR)
+            GetMap()->MarkClosedDoorsChanged();
     }
 }
 
