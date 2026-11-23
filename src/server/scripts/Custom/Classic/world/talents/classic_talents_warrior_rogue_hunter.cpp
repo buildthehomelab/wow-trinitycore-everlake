@@ -1293,6 +1293,102 @@ class classic_spell_rog_ghostly_strike : public SpellScript
     }
 };
 
+// 16511 - Hemorrhage (rogue talent): "An instant strike that deals $m4% weapon damage ($m5% if a Dagger is equipped) and causes the target
+// to take $m3% increased Rupture and Garrote damage from the Rogue." Effect 3 is the weapon damage percent and effect 4 the dagger percent
+// as a dummy, so a dagger got the lower one, as Ghostly Strike's did (wowsims/forever, MIT, sim/rogue/talents_subtlety.go
+// registerHemorrhage: EffectN(5) with a main hand dagger, else EffectN(4)). The Rupture and Garrote bonus is the client's aura 271.
+class classic_spell_rog_hemorrhage : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_4 } });
+    }
+
+    void CalculateDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* /*victim*/, int32& /*damage*/, int32& /*flatMod*/, float& pctMod) const
+    {
+        Player* rogue = GetCaster()->ToPlayer();
+        if (!rogue)
+            return;
+
+        Item const* mainHand = rogue->GetWeaponForAttack(BASE_ATTACK, true);
+        if (!mainHand || mainHand->GetTemplate()->GetSubClass() != ITEM_SUBCLASS_WEAPON_DAGGER)
+            return;
+
+        float const normal = GetSpellInfo()->GetEffect(EFFECT_3).CalcValue(rogue);
+        float const dagger = GetSpellInfo()->GetEffect(EFFECT_4).CalcValue(rogue);
+        if (normal > 0.0f)
+            pctMod *= dagger / normal;
+    }
+
+    void Register() override
+    {
+        CalcDamage += SpellCalcDamageFn(classic_spell_rog_hemorrhage::CalculateDamage);
+    }
+};
+
+// 14183 - Premeditation (rogue talent): "Adds $s1 Combo Points to your target. You must add to or use those combo points within $d or the
+// combo points are lost." Effect 0 (energize) puts the points on the explicit target (Spell::EffectEnergize, ClassicComboTarget) and the
+// dummy (effect 2) only gives the spell that enemy target. Effect 1, aura 560 (retain combo points), had no handler, so the points never
+// went away. The aura keeps the points and target it was applied with: an ability that changes either (adds to or spends the points)
+// removes it, and when it runs out with both unchanged the $s1 points are lost (wowsims/forever, MIT, sim/rogue/talents_subtlety.go
+// registerPremeditation adds the points and does not model the loss).
+class classic_spell_rog_premeditation : public AuraScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
+    }
+
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        // effect 0 (the energize) is handled before this aura effect: these are the points with Premeditation's in them
+        Unit* rogue = GetTarget();
+        _comboPoints = rogue->GetPower(POWER_COMBO_POINTS);
+        _comboTarget = rogue->GetClassicComboTarget();
+    }
+
+    bool Unchanged() const
+    {
+        Unit* rogue = GetTarget();
+        return rogue->GetPower(POWER_COMBO_POINTS) == _comboPoints && rogue->GetClassicComboTarget() == _comboTarget;
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        if (eventInfo.GetSpellInfo() && eventInfo.GetSpellInfo()->Id == GetId())
+            return false;
+        return !Unchanged();
+    }
+
+    void HandleProc(ProcEventInfo& /*eventInfo*/)
+    {
+        // the points were added to or used: they are the rogue's to keep
+        Remove();
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (GetTargetApplication()->GetRemoveMode() != AURA_REMOVE_BY_EXPIRE || !Unchanged())
+            return;
+
+        Unit* rogue = GetTarget();
+        int32 const added = GetSpellInfo()->GetEffect(EFFECT_0).CalcValueAsInt(rogue);
+        // SetPower to 0 also clears ClassicComboTarget (Unit::SetPower)
+        rogue->SetPower(POWER_COMBO_POINTS, std::max(0, _comboPoints - added));
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_spell_rog_premeditation::HandleApply, EFFECT_1, SPELL_AURA_560, AURA_EFFECT_HANDLE_REAL);
+        DoCheckProc += AuraCheckProcFn(classic_spell_rog_premeditation::CheckProc);
+        OnProc += AuraProcFn(classic_spell_rog_premeditation::HandleProc);
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_rog_premeditation::HandleRemove, EFFECT_1, SPELL_AURA_560, AURA_EFFECT_HANDLE_REAL);
+    }
+
+    int32 _comboPoints = 0;
+    ObjectGuid _comboTarget;
+};
+
 // 438040 - Redirect (rogue ability): "Removes all your existing combo points from your target and stores them for up to 15 sec. These
 // stored combo points will be transferred to the next non-player enemy you hit with a melee or ranged ability." The stored points are
 // kept in the self aura (effect 1, 1 proc charge); the transfer sets UnitData ClassicComboTarget like Spell::EffectEnergize.
@@ -2256,6 +2352,8 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellAndAuraScriptPair(classic_spell_rog_redirect, classic_spell_rog_redirect_aura);
     RegisterSpellScript(classic_spell_rog_mutilate_strike);
     RegisterSpellScript(classic_spell_rog_ghostly_strike);
+    RegisterSpellScript(classic_spell_rog_hemorrhage);
+    RegisterSpellScript(classic_spell_rog_premeditation);
 
     // hunter
     RegisterSpellScript(classic_spell_hun_entrapment_trap);

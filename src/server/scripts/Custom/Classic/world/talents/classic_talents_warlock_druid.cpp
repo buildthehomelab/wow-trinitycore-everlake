@@ -509,6 +509,54 @@ class classic_talent_warl_improved_shadow_bolt : public AuraScript
     }
 };
 
+// 18096 - Apocalypse (Forever): "Your non-periodic critical strikes with your Fire spells increase your Shadow damage done by $m1% for
+// $18093d, and your non-periodic critical strikes with your Shadow spells increase your Fire damage done by $m1% for $18093d." The client
+// spell is only a dummy aura that procs on harmful spells, and nothing cast a buff. 1293803 ("Pyroclasm", Shadow damage done, used nowhere
+// else) is the client's buff for the Shadow half; the Fire half has none, 9971001 is serverside. Both get the talent's amount and $18093d
+// (3 sec). Not in wowsims/forever, which has no Apocalypse.
+class classic_talent_warl_apocalypse : public AuraScript
+{
+    static constexpr uint32 SPELL_APOCALYPSE_SHADOW = 1293803;  // SPELL_AURA_MOD_DAMAGE_PERCENT_DONE, shadow
+    static constexpr uint32 SPELL_APOCALYPSE_FIRE   = 9971001;  // serverside: SPELL_AURA_MOD_DAMAGE_PERCENT_DONE, fire
+    static constexpr int32 BuffDurationMs           = 3 * IN_MILLISECONDS;  // $18093d
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_APOCALYPSE_SHADOW, SPELL_APOCALYPSE_FIRE });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        // periodic ticks are PROC_FLAG_DEAL_HARMFUL_PERIODIC, which the talent's proc flags (harmful spell) leave out
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        return spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_WARLOCK && (eventInfo.GetHitMask() & PROC_HIT_CRITICAL)
+            && (spellInfo->GetSchoolMask() & (SPELL_SCHOOL_MASK_FIRE | SPELL_SCHOOL_MASK_SHADOW));
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        Unit* warlock = GetTarget();
+        SpellSchoolMask const school = eventInfo.GetSpellInfo()->GetSchoolMask();
+
+        CastSpellExtraArgs args(aurEff);
+        args.AddSpellBP0(aurEff->GetAmount());
+        args.AddSpellMod(SPELLVALUE_DURATION, BuffDurationMs);
+
+        if (school & SPELL_SCHOOL_MASK_FIRE)
+            warlock->CastSpell(warlock, SPELL_APOCALYPSE_SHADOW, args);
+        if (school & SPELL_SCHOOL_MASK_SHADOW)
+            warlock->CastSpell(warlock, SPELL_APOCALYPSE_FIRE, args);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_talent_warl_apocalypse::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_talent_warl_apocalypse::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 // 980, 1014, 6217, 11711, 11712, 11713 - Curse of Agony: the damage per tick ramps up in three stages of four ticks, half, full and one and a
 // half of the listed tick (the total over the 12 ticks stays the listed damage). Behaviour from vMaNGOS (GPL-2.0), Aura::HandlePeriodicDamage:
 // fdamage += (-1 + (tick - 1) / 4) * (base / 2). The tick amount itself still comes from the client spell data.
@@ -2547,6 +2595,7 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_talent_warl_life_tap);
     RegisterSpellScript(classic_talent_warl_demonic_energies);
     RegisterSpellScript(classic_talent_warl_improved_shadow_bolt);
+    RegisterSpellScript(classic_talent_warl_apocalypse);
     RegisterSpellScript(classic_talent_warl_nightfall);
     RegisterSpellScript(classic_talent_warl_pyroclasm);
     RegisterSpellScript(classic_spell_warl_curse_of_agony);
