@@ -41,6 +41,7 @@
 #include "OpenSSLCrypto.h"
 #include "OutdoorPvP/OutdoorPvPMgr.h"
 #include "ProcessPriority.h"
+#include "QueueDrain.h"
 #include "RASession.h"
 #include "RealmList.h"
 #include "ScriptLoader.h"
@@ -52,6 +53,7 @@
 #include "TerrainMgr.h"
 #include "ThreadPool.h"
 #include "World.h"
+#include "WorldSession.h"
 #include "WorldSocketMgr.h"
 #include "Util.h"
 #include <openssl/opensslv.h>
@@ -135,6 +137,7 @@ bool StartDB();
 int CreateAccountFromCommandLine(variables_map const& vm);
 void StopDB();
 void WorldUpdateLoop();
+void SavePlayersBeforeShutdown();
 void ClearOnlineAccounts(uint32 realmId);
 void PruneCrashFiles(size_t keep);
 void AddModuleScripts();                             // generated from src/modules, empty when no module is built
@@ -480,6 +483,9 @@ int main(int argc, char** argv)
     WorldUpdateLoop();
 
     // Shutdown starts here
+    // Players first, before anything else is taken down (see SavePlayersBeforeShutdown)
+    SavePlayersBeforeShutdown();
+
     WorldPackets::Auth::ConnectTo::ShutdownEncryption();
     WorldPackets::Auth::EnterEncryptedMode::ShutdownEncryption();
 
@@ -631,6 +637,36 @@ void WorldUpdateLoop()
     CharacterDatabase.WarnAboutSyncQueries(false);
     WorldDatabase.WarnAboutSyncQueries(false);
     HotfixDatabase.WarnAboutSyncQueries(false);
+}
+
+// The world has stopped: log every player out and wait until the saves are in the database, before any other shutdown
+// step. The saves used to be queued much later (when the network was taken down, after the scripts' OnShutdown hooks and
+// the bots had gone) and written only when the database pools closed at the very end, so anything that failed, hung or
+// was killed in between still rolled every online character back to its last periodic save. Here a logout is the same
+// as any other one (maps, scripts and bots are all still there), and nothing else happens until it is on disk.
+void SavePlayersBeforeShutdown()
+{
+    uint32 players = 0;
+    for (auto const& [accountId, session] : sWorld->GetAllSessions())
+        if (session && session->GetPlayer())
+            ++players;
+
+    TC_LOG_INFO("server.worldserver", "Shutdown: saving {} online players ({} sessions)...", players, sWorld->GetActiveAndQueuedSessionCount());
+
+    sWorld->KickAll();              // closes every connection
+    sWorld->UpdateSessions(1);      // the kicked sessions log their player out (Player::SaveToDB) and are removed
+
+    auto drain = [](char const* name, auto& database)
+    {
+        Trinity::Database::WaitForEmptyQueue([&database] { return database.QueueSize(); }, [name](size_t remaining)
+        {
+            TC_LOG_INFO("server.worldserver", "Shutdown: still {} queued {} database queries.", remaining, name);
+        });
+    };
+    drain("character", CharacterDatabase);
+    drain("login", LoginDatabase);
+
+    TC_LOG_INFO("server.worldserver", "Shutdown: {} players saved, {} sessions left.", players, sWorld->GetActiveAndQueuedSessionCount());
 }
 
 void SignalHandler(boost::system::error_code const& error, int signalNumber)
