@@ -81,3 +81,9 @@ pin; record the move here before porting from that release.
 2026-11-12: v0.1.35 (pin unchanged, `f63ffc12b3`), tag `karrz-v0.1.35` = `6dae366c19`.
 2026-11-13: v0.1.36 (pin unchanged, `f63ffc12b3`), tag `karrz-v0.1.36` = `441114b453`, checked with `verify.sh`.
 2026-11-14 and 2026-11-16: v0.1.36.1, v0.1.37, v0.1.37.1, v0.1.37.2, v0.1.37.3 (pin unchanged, `f63ffc12b3`), checked with `verify.sh`.
+
+From v0.1.37.5 on, the releases have no `wow-forever-source-<version>.zip` (v0.1.37.4 is the last one with it), so
+`import.sh` cannot import them. The release repo's `v0.1.39.1` tag points at the same commit as `v0.1.39` and does not
+hold the 0.1.39.1 SQL. Karrz git is complete instead: Karrz1/TrinityCore is now
+[Karrz1/ForeverCore](https://github.com/Karrz1/ForeverCore) (same repo, renamed), and its `forever-bots` holds each
+release (0.1.38 `8e679df0e1`, merged in #105; 0.1.39 `b441bf74e0`; 0.1.39.1 `7509ecbfcc`). Port from there.

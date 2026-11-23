@@ -1623,6 +1623,9 @@ bool World::SetInitialWorldSettings()
     TC_LOG_INFO("server.loading", "Loading Classic item durability...");      // must be after LoadItemTemplates
     sObjectMgr->LoadClassicItemDurability();
 
+    TC_LOG_INFO("server.loading", "Loading Classic weapon damage...");        // must be after LoadItemTemplates
+    sObjectMgr->LoadClassicItemDamage();
+
     TC_LOG_INFO("server.loading", "Loading Classic crate bundles...");        // must be after LoadSpellInfoStore and LoadItemTemplates
     sSpellMgr->LoadClassicCrateBundles();
 
@@ -1634,6 +1637,9 @@ bool World::SetInitialWorldSettings()
 
     TC_LOG_INFO("server.loading", "Loading Creature templates...");
     sObjectMgr->LoadCreatureTemplates();
+
+    TC_LOG_INFO("server.loading", "Loading Classic versus bonuses (item effects stronger against one kind of enemy)...");
+    sSpellMgr->LoadClassicVersusBonus();                          // must be after LoadCreatureTemplates() and LoadSpellProcs()
 
     TC_LOG_INFO("server.loading", "Loading Classic creature levels...");
     sObjectMgr->LoadCreatureClassicLevels();

@@ -568,7 +568,9 @@ void Spell::EffectSchoolDMG()
         if (unitCaster && apply_direct_bonus)
         {
             int32 bonus = unitCaster->SpellDamageBonusDone(unitTarget, m_spellInfo, damage, SPELL_DIRECT_DAMAGE, *effectInfo, 1, this);
-            damage = ClassicRounding::RoundByFraction(bonus * (1.0 + variance), rand_norm());
+            // Classic 1.60: "Deals $s2 times as much damage to Plants" (spell_versus_bonus, ClassicVersusBonus.h)
+            float const versus = sSpellMgr->GetClassicVersusFactor(m_spellInfo->Id, ClassicVersusBonus::Kind::Damage, unitTarget);
+            damage = ClassicRounding::RoundByFraction(bonus * (1.0 + variance) * versus, rand_norm());
             damage = unitTarget->SpellDamageBonusTaken(unitCaster, m_spellInfo, damage, SPELL_DIRECT_DAMAGE);
         }
 

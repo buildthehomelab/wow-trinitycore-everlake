@@ -398,6 +398,15 @@ Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundQueueTypeId que
         return nullptr;
     }
 
+    // A template that is only a choice of others ("All Arenas", the random battlegrounds) loads no start points
+    // (LoadBattlegroundTemplates), and SendToBattleground reads them for everyone who enters: playing one crashed the server
+    // when someone entered (".debug arena 6"). Karrz 0.1.39.
+    if (!bg_template->StartLocation[TEAM_ALLIANCE] || !bg_template->StartLocation[TEAM_HORDE])
+    {
+        TC_LOG_ERROR("bg.battleground", "Battleground: CreateNewBattleground - bg template {} has no start points, it cannot be played itself", bgTypeId);
+        return nullptr;
+    }
+
     PVPDifficultyEntry const* bracketEntry = DB2Manager::GetBattlegroundBracketById(bg_template->MapIDs.front(), bracketId);
     if (!bracketEntry)
     {
@@ -584,6 +593,11 @@ bool BattlegroundMgr::ToggleArenaTesting(uint32 battlemasterListId)
             return false;
 
         if (!bgTemplate->IsArena())
+            return false;
+
+        // The test plays this arena itself (GetRandomBG), so it must be one with start points: not "All Arenas" (6), which only
+        // picks another arena and has none. Karrz 0.1.39.
+        if (!bgTemplate->StartLocation[TEAM_ALLIANCE] || !bgTemplate->StartLocation[TEAM_HORDE])
             return false;
     }
 

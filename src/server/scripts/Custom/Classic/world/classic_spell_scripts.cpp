@@ -2975,8 +2975,62 @@ class classic_spell_pal_consecration_tick : public SpellScript
     uint32 _fullHits = 0;
 };
 
+// Weapon procs that "deal $s2 times as much damage" to one kind of enemy, the multiplier being a second effect, a dummy, that nothing read:
+// Drain Life 16414 and Corpse Eater 1299869 (health leech) and Smite 1299631 against Undead, Lightning Bolt 1292851 against Mechanical,
+// Holy Cleaver 1293787 against Undead and boars ("Swine"), Blazewind Blast 1282503 against wolves. Blazewind Blast's tooltip also names
+// Worgen, who are humanoids with no family to tell them apart, so only wolves get it (wowsims/forever, MIT, tools/database/overrides/
+// spell_overrides.go, VersusBonuses).
+class classic_spell_item_versus_bonus : public SpellScript
+{
+    static bool IsFamily(Unit const* victim, CreatureFamily family)
+    {
+        Creature const* creature = victim->ToCreature();
+        return creature && creature->GetCreatureTemplate()->family == family;
+    }
+
+    static bool HasBonusAgainst(uint32 spellId, Unit const* victim)
+    {
+        switch (spellId)
+        {
+            case 16414:   // Drain Life
+            case 1299869: // Corpse Eater
+            case 1299631: // Smite
+                return victim->GetCreatureType() == CREATURE_TYPE_UNDEAD;
+            case 1292851: // Lightning Bolt
+                return victim->GetCreatureType() == CREATURE_TYPE_MECHANICAL;
+            case 1293787: // Holy Cleaver
+                return victim->GetCreatureType() == CREATURE_TYPE_UNDEAD || IsFamily(victim, CREATURE_FAMILY_BOAR);
+            case 1282503: // Blazewind Blast
+                return IsFamily(victim, CREATURE_FAMILY_WOLF);
+            default:
+                return false;
+        }
+    }
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } });
+    }
+
+    void CalcDamage(SpellEffectInfo const& /*spellEffectInfo*/, Unit* victim, int32& /*damage*/, int32& /*flatMod*/, float& pctMod)
+    {
+        if (!victim || !HasBonusAgainst(GetSpellInfo()->Id, victim))
+            return;
+
+        float const multiplier = float(GetEffectInfo(EFFECT_1).CalcValue(GetCaster()));
+        if (multiplier > 1.0f)
+            pctMod *= multiplier;
+    }
+
+    void Register() override
+    {
+        SpellScript::CalcDamage += SpellCalcDamageFn(classic_spell_item_versus_bonus::CalcDamage);
+    }
+};
+
 void AddSC_classic_spell_scripts()
 {
+    RegisterSpellScript(classic_spell_item_versus_bonus);
     RegisterSpellScript(classic_spell_cleave_melee_reach);
     RegisterSpellScript(classic_spell_pal_consecration_tick);
     RegisterSpellScript(classic_spell_warr_gore_drinker);
