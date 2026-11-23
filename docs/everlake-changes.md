@@ -174,8 +174,16 @@ master has the same `Close()`. Now `Close()` waits for the queue to empty first,
 default 0) turns the first stop signal into the in-game shutdown countdown, as Evermore's core does; a second signal
 stops at once.
 
+That was not enough (22 Nov: a live restart with the countdown still rolled a character back): the saves were queued
+late, when the network was taken down after the scripts' `OnShutdown` hooks and the bots' logout, and written only when
+the pools closed at the very end, so any step in between that failed, hung or was killed lost them. Now
+`SavePlayersBeforeShutdown()` runs first, straight after the world loop: it logs every player out while everything is
+still up, then waits for the character and login queues to empty. It logs `Shutdown: saving N online players` and
+`Shutdown: N players saved`.
+
 | Hook | Where | What breaks if it goes |
 |---|---|---|
+| `SavePlayersBeforeShutdown()` straight after `WorldUpdateLoop()` | `src/server/worldserver/Main.cpp`, `main` | **Silent:** a stop can roll characters back again |
 | `WaitForEmptyQueue` before `_ioContext->stop()` | `src/server/database/Database/DatabaseWorkerPool.cpp`, `Close()` | **Silent:** characters roll back on every stop |
 | `SignalShutdownDelay`, `SignalShutdownRequested`, re-armed `onSignal` | `src/server/worldserver/Main.cpp` (`main`, `WorldUpdateLoop`, `SignalHandler`) | **Silent:** a stop has no countdown |
 | `WaitForEmptyQueue` | `src/server/database/Database/QueueDrain.h` | Build fails |
@@ -185,7 +193,7 @@ Check after a merge:
 
 ```bash
 grep -n "WaitForEmptyQueue" src/server/database/Database/DatabaseWorkerPool.cpp
-grep -n "SignalShutdownRequested" src/server/worldserver/Main.cpp
+grep -n "SignalShutdownRequested\|SavePlayersBeforeShutdown" src/server/worldserver/Main.cpp
 ```
 
 ## Molten Core tier 1: the Forever copies, not Karrz's Classic rows
