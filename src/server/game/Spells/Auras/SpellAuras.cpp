@@ -2066,6 +2066,12 @@ uint32 Aura::GetProcEffectMask(AuraApplication* aurApp, ProcEventInfo& eventInfo
             if ((procEntry->DisableEffectsMask & (1u << aurEff->GetEffIndex())) || !aurEff->CheckEffectProc(aurApp, eventInfo))
                 procEffectMask &= ~(1u << aurEff->GetEffIndex());
 
+    // Classic 1.60: the effect holding a "times as likely to activate" factor is only that number (Hand of Justice's second effect would
+    // otherwise trigger a second extra attack with every proc; spell_versus_bonus, ClassicVersusBonus.h)
+    if (SpellMgr::ClassicVersusBonusEntry const* versus = sSpellMgr->GetClassicVersusBonus(GetId(), ClassicVersusBonus::Kind::ProcChance))
+        if (versus->SourceSpellId == GetId())
+            procEffectMask &= ~(1u << versus->SourceEffect);
+
     if (!procEffectMask)
         return 0;
 
@@ -2185,6 +2191,11 @@ float Aura::CalcProcChance(SpellProcEntry const& procEntry, ProcEventInfo& event
 
         if (GetSpellInfo()->ProcBasePPM > 0.0f && !castTimePriced)
             chance = CalcPPMProcChance(caster);
+
+        // Classic 1.60: "Attacks against Dwarves are $s2 times as likely to activate this effect" (Hand of Justice; spell_versus_bonus,
+        // ClassicVersusBonus.h). The enemy is the unit the wearer hit, or the one that hit the wearer.
+        Unit* enemy = eventInfo.GetActor() == caster ? eventInfo.GetActionTarget() : eventInfo.GetActor();
+        chance *= sSpellMgr->GetClassicVersusFactor(GetId(), ClassicVersusBonus::Kind::ProcChance, enemy);
 
         // apply chance modifer aura, applies also to ppm chance (see improved judgement of light spell)
         if (Player* modOwner = caster->GetSpellModOwner())
