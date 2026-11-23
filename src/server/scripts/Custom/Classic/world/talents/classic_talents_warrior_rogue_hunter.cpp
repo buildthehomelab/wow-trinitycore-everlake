@@ -20,10 +20,12 @@
 // so the scripts read aurEff->GetAmount() and never hardcode rank values.
 
 #include "ScriptMgr.h"
+#include "CellImpl.h"
 #include "Containers.h"
 #include "Creature.h"
 #include "DB2Stores.h"
 #include "Formulas.h"
+#include "GridNotifiersImpl.h"
 #include "Item.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
@@ -469,12 +471,40 @@ class classic_spell_warr_sweeping_strikes : public AuraScript
         return !spellInfo || (spellInfo->Id != SPELL_WARRIOR_SWEEPING_STRIKES_STRIKE && spellInfo->Id != SPELL_WARRIOR_SWEEPING_STRIKES_NORMALIZED);
     }
 
+    // Unit::SelectNearbyTarget, plus: "Sweeping Strikes will now ignore dead targets, and will ignore PvP enabled targets if you are not
+    // PvP enabled" (patch 1.7.0; VMaNGOS CanAttackWithoutEnablingPvP). A neutral or hostile mob next to the target is still hit and
+    // pulled, as in Classic: only a player, or a player's pet, that the hit would turn PvP on for is left out.
+    static Unit* SelectSecondTarget(Unit* warrior, Unit* victim)
+    {
+        std::list<Unit*> targets;
+        Trinity::AnyUnfriendlyUnitInObjectRangeCheck check(warrior, warrior, NOMINAL_MELEE_RANGE);
+        Trinity::UnitListSearcher<Trinity::AnyUnfriendlyUnitInObjectRangeCheck> searcher(warrior, targets, check);
+        Cell::VisitAllObjects(warrior, searcher, NOMINAL_MELEE_RANGE);
+
+        Player const* warriorPlayer = warrior->GetCharmerOrOwnerPlayerOrPlayerItself();
+        targets.remove_if([&](Unit* unit)
+        {
+            if (unit == victim || unit == warrior->GetVictim() || !warrior->IsWithinLOSInMap(unit) || unit->IsTotem() || unit->IsSpiritService()
+                || unit->IsCritter() || !warrior->IsValidAttackTarget(unit))
+                return true;
+
+            if (Player const* attackedPlayer = unit->GetCharmerOrOwnerPlayerOrPlayerItself(); attackedPlayer && warriorPlayer)
+                if (!warriorPlayer->IsPvP() && !(warriorPlayer->IsFFAPvP() && attackedPlayer->IsFFAPvP())
+                    && !(warriorPlayer->duel && warriorPlayer->duel->Opponent == attackedPlayer))
+                    return true;
+
+            return false;
+        });
+
+        return targets.empty() ? nullptr : Trinity::Containers::SelectRandomContainerElement(targets);
+    }
+
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
         PreventDefaultAction();
 
         Unit* warrior = GetTarget();
-        Unit* other = warrior->SelectNearbyTarget(eventInfo.GetActionTarget());
+        Unit* other = SelectSecondTarget(warrior, eventInfo.GetActionTarget());
         if (!other)
             return;
 

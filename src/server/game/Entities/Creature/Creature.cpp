@@ -1407,7 +1407,22 @@ void Creature::SetTappedBy(Unit const* unit, bool withGroup)
     // tagged first and players still took full loot, XP and quest credit off the same mob under the retail rule)
     bool const classicTagging = sWorld->getBoolConfig(CONFIG_CLASSIC_FIRST_TAG_OWNS_MOB);
     if (!CreatureTapRules::AcceptsTag(classicTagging, m_tapList.size(), CREATURE_TAPPERS_SOFT_CAP))
-        return;
+    {
+        // Karrz 0.1.39: under the classic rule a player whose group already holds the tag (joined the owner's group after the
+        // tag) still gets a share; an owner hitting again or anyone else adds nothing
+        if (!classicTagging || m_tapList.contains(player->GetGUID()))
+            return;
+        bool ownersGroup = false;
+        if (Group const* group = player->GetGroup())
+            for (GroupReference const& itr : group->GetMembers())
+                if (m_tapList.contains(itr.GetSource()->GetGUID()))
+                {
+                    ownersGroup = true;
+                    break;
+                }
+        if (!ownersGroup)
+            return;
+    }
 
     m_tapList.insert(player->GetGUID());
     if (withGroup)

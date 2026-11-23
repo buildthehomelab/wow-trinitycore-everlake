@@ -1292,6 +1292,26 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 dama
 
     SpellSchoolMask damageSchoolMask = SpellSchoolMask(damageInfo->schoolMask);
 
+    // Classic 1.60 (vanilla): a blocked spell loses the flat shield block value like a melee hit (retail: a share of the damage;
+    // Player::GetBlockPercent gave a fraction that truncated to 0, so players blocked nothing)
+    auto applyBlock = [&]()
+    {
+        float value = float(victim->GetClassicShieldBlockValue());
+        if (victim->IsBlockCritical())
+        {
+            value *= 2; // double blocked amount if block is critical
+            value *= GetTotalAuraMultiplier(SPELL_AURA_MOD_CRITICAL_BLOCK_AMOUNT);
+        }
+
+        damageInfo->blocked = uint32(value);
+        if (damage <= int32(damageInfo->blocked))
+        {
+            damageInfo->blocked = uint32(damage);
+            damageInfo->fullBlock = true;
+        }
+        damage -= damageInfo->blocked;
+    };
+
     // Spells with SPELL_ATTR4_IGNORE_DAMAGE_TAKEN_MODIFIERS ignore resilience because their damage is based off another spell's damage.
     if (!spellInfo->HasAttribute(SPELL_ATTR4_IGNORE_DAMAGE_TAKEN_MODIFIERS))
     {
@@ -1325,24 +1345,7 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 dama
 
                 // Spell weapon based damage CAN BE crit & blocked at same time
                 if (blocked)
-                {
-                    // Classic 1.60 (vanilla): weapon based spells are blocked by the flat shield block value like melee hits (retail: a
-                    // share of the damage; Player::GetBlockPercent gave a fraction that truncated to 0, so players blocked nothing)
-                    float value = float(victim->GetClassicShieldBlockValue());
-                    if (victim->IsBlockCritical())
-                    {
-                        value *= 2; // double blocked amount if block is critical
-                        value *= GetTotalAuraMultiplier(SPELL_AURA_MOD_CRITICAL_BLOCK_AMOUNT);
-                    }
-
-                    damageInfo->blocked = uint32(value);
-                    if (damage <= int32(damageInfo->blocked))
-                    {
-                        damageInfo->blocked = uint32(damage);
-                        damageInfo->fullBlock = true;
-                    }
-                    damage -= damageInfo->blocked;
-                }
+                    applyBlock();
 
                 if (CanApplyResilience())
                     Unit::ApplyResilience(victim, &damage);
@@ -1358,6 +1361,10 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 dama
                     damageInfo->HitInfo |= SPELL_HIT_TYPE_CRIT;
                     damage = Unit::SpellCriticalDamageBonus(this, spellInfo, damage, victim);
                 }
+
+                // a spell block (SPELL_AURA_ALLOW_BLOCKING_SPELLS, WorldObject::MagicSpellHitResult)
+                if (blocked)
+                    applyBlock();
 
                 if (CanApplyResilience())
                     Unit::ApplyResilience(victim, &damage);
@@ -3535,6 +3542,14 @@ void Unit::SetCurrentCastSpell(Spell* pSpell)
                     InterruptSpell(CURRENT_CHANNELED_SPELL, false);
             }
 
+            break;
+        }
+        case CURRENT_MELEE_SPELL:
+        {
+            // a new on-next-swing ability replaces the queued one. The queued one must end with a failure packet, or the client
+            // keeps its cast visual on the caster forever and the old spell is never finished (Felmusk Rogue: Overwhelming Stench
+            // queued, Shred cast over it in the same tick). DONT_REPORT: a player swapping Heroic Strike for Cleave sees no error.
+            InterruptSpell(CURRENT_MELEE_SPELL, true, true, SPELL_FAILED_DONT_REPORT);
             break;
         }
         default:
@@ -7349,9 +7364,10 @@ void Unit::EnergizeBySpell(Unit* victim, SpellInfo const* spellInfo, int32 damag
 // Classic 1.60: the VMaNGOS spell power / healing power factor of a legacy spell effect, when the vanilla table has one (classic_spell_value.bonus_coeff)
 static ClassicSpellValue::Value const* ClassicCoefficientRow(SpellInfo const* spellInfo, SpellEffectInfo const& effectInfo)
 {
-    if (!ClassicSpellValue::AppliesToSpell(spellInfo->Id))
+    uint32 const valueSpellId = sSpellMgr->GetClassicValueSpellId(spellInfo->Id);   // a Forever copy takes the legacy spell's row
+    if (!ClassicSpellValue::AppliesToSpell(valueSpellId))
         return nullptr;
-    return sSpellMgr->GetClassicSpellValue(spellInfo->Id, uint32(effectInfo.EffectIndex));
+    return sSpellMgr->GetClassicSpellValue(valueSpellId, uint32(effectInfo.EffectIndex));
 }
 
 // Classic 1.60: the spell power / healing power factor of an effect (ClassicSpellValue::BonusCoefficientOr: the vanilla hold's or the
@@ -7365,7 +7381,8 @@ static float ClassicBonusCoefficient(Unit const* caster, SpellInfo const* spellP
 
 int32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, int32 pdamage, DamageEffectType damagetype, SpellEffectInfo const& spellEffectInfo, uint32 stack /*= 1*/, Spell* spell /*= nullptr*/, AuraEffect const* aurEff /*= nullptr*/) const
 {
-    // Classic 1.60: whole points by the fraction (ClassicRounding.h, EV-0095)
+    // Classic 1.60: a hit's amount rounds up with a chance equal to its fraction (ClassicRounding.h, EV-0095); a periodic damage tick
+    // calls the exact form and carries its fraction instead (AuraEffect::HandlePeriodicDamageAurasTick), which averages the same.
     return ClassicRounding::RoundByFraction(SpellDamageBonusDoneExact(victim, spellProto, float(pdamage), damagetype, spellEffectInfo, stack, spell, aurEff), rand_norm());
 }
 
@@ -8776,8 +8793,11 @@ int32 Unit::MeleeDamageBonusTaken(Unit* attacker, int32 pdamage, WeaponAttackTyp
     else
         TakenFlatBenefit += GetTotalAuraModifier(SPELL_AURA_MOD_RANGED_DAMAGE_TAKEN);
 
-    if ((TakenFlatBenefit < 0) && (pdamage < -TakenFlatBenefit))
-        return 0;
+    // Classic 1.60: a flat reduction (Force of Will, Stoneskin Totem, Gold-plated) takes at most half of the hit, one cap for every flat
+    // amount on the target together; before, a hit smaller than the reduction did nothing (wowsims EV-0154, Warcraft Logs: a swing under
+    // twice Force of Will's 51 lands at half). A flat bonus is not capped.
+    if (TakenFlatBenefit < 0)
+        TakenFlatBenefit = std::max(TakenFlatBenefit, -(pdamage / 2));
 
     // Taken total percent damage auras
     float TakenTotalMod = 1.0f;

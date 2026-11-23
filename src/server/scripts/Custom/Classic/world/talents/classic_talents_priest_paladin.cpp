@@ -24,6 +24,8 @@
 #include "Containers.h"
 #include "GameTime.h"
 #include "GridNotifiersImpl.h"
+#include "Item.h"
+#include "ItemTemplate.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "Random.h"
@@ -35,6 +37,7 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "Unit.h"
+#include <algorithm>
 #include <cmath>
 
 namespace
@@ -1437,8 +1440,24 @@ class classic_spell_pal_holy_light_flash_of_light : public SpellScript
 // Holy damage." Effect 0 (normalized weapon damage) holds the flat $s1, effect 1 the weapon percent. The core adds the flat part to the weapon
 // roll before the percent, so only half of $s1 was dealt and spell power (effect 0 bonus coefficient) was ignored. The missing part of $s1
 // and the spell power share are added back to the final weapon effect; the spell is Holy school in the client data.
+//
+// Shieldsworn (1328544, Forever talent): "Holy Strike now strikes with your shield, triggering your active Holy Shield and Shield
+// Specialization talents without consuming their charges or triggering their cooldowns, and allowing you to Block spells for
+// $1328551d." (its cooldown part is a spell modifier in the client data). With a shield on, a Holy Strike that lands deals the
+// Holy Shield damage of the active Holy Shield as a block would, gives the Shield Specialization mana at its chance, and puts up
+// the spell block 1328551 (SPELL_AURA_ALLOW_BLOCKING_SPELLS). The charges and the proc cooldowns are left alone.
 class classic_spell_pal_holy_strike : public SpellScript
 {
+    static constexpr uint32 SPELL_PAL_SHIELDSWORN           = 1328544;
+    static constexpr uint32 SPELL_PAL_SHIELDSWORN_SPELL_BLOCK = 1328551;
+    static constexpr uint32 SPELL_PAL_SHIELD_SPECIALIZATION = 20150;
+    static constexpr uint32 SPELL_PAL_SHIELD_SPEC_MANA      = 1310925;
+
+    static bool IsHolyShield(uint32 spellId)
+    {
+        return spellId == 20925 || spellId == 20927 || spellId == 20928;
+    }
+
     void HandleCalcDamage(SpellEffectInfo const& spellEffectInfo, Unit* /*victim*/, int32& /*damage*/, int32& flatMod, float& /*pctMod*/)
     {
         if (spellEffectInfo.EffectIndex != EFFECT_1)
@@ -1452,9 +1471,52 @@ class classic_spell_pal_holy_strike : public SpellScript
         flatMod += int32(caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_HOLY) * holyEffect.BonusCoefficient);
     }
 
+    void HandleShieldsworn(SpellEffIndex /*effIndex*/)
+    {
+        Player* paladin = Object::ToPlayer(GetCaster());
+        Unit* target = GetHitUnit();
+        if (!paladin || !target || !paladin->HasAura(SPELL_PAL_SHIELDSWORN))
+            return;
+
+        Item const* offhand = paladin->GetUseableItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+        if (!offhand || offhand->IsBroken() || offhand->GetTemplate()->GetInventoryType() != INVTYPE_SHIELD)
+            return;
+
+        // the active Holy Shield's block damage (its SPELL_AURA_PROC_TRIGGER_DAMAGE effect), dealt as AuraEffect::HandleProcTriggerDamageAuraProc does
+        for (AuraEffect const* holyShield : paladin->GetAuraEffectsByType(SPELL_AURA_PROC_TRIGGER_DAMAGE))
+        {
+            if (!IsHolyShield(holyShield->GetId()) || !target->IsAlive())
+                continue;
+
+            SpellInfo const* spellInfo = holyShield->GetSpellInfo();
+            if (target->IsImmunedToDamage(paladin, spellInfo, &holyShield->GetSpellEffectInfo()))
+                break;
+
+            SpellNonMeleeDamage damageInfo(paladin, target, spellInfo, holyShield->GetBase()->GetSpellVisual(), spellInfo->SchoolMask,
+                holyShield->GetBase()->GetCastId());
+            uint32 damage = paladin->SpellDamageBonusDone(target, spellInfo, holyShield->GetAmountAsInt(), SPELL_DIRECT_DAMAGE,
+                holyShield->GetSpellEffectInfo(), 1, nullptr, holyShield);
+            damage = target->SpellDamageBonusTaken(paladin, spellInfo, damage, SPELL_DIRECT_DAMAGE);
+            paladin->CalculateSpellDamageTaken(&damageInfo, damage, spellInfo);
+            Unit::DealDamageMods(damageInfo.attacker, damageInfo.target, damageInfo.damage, &damageInfo.absorb);
+            paladin->DealSpellDamage(&damageInfo, true);
+            paladin->SendSpellNonMeleeDamageLog(&damageInfo);
+            break;
+        }
+
+        // Shield Specialization: its mana at the chance of its effect 1, as on a block (classic_spell_proc_chance_from_effect)
+        if (Aura const* shieldSpec = paladin->GetAura(SPELL_PAL_SHIELD_SPECIALIZATION))
+            if (AuraEffect const* chance = shieldSpec->GetEffect(EFFECT_1))
+                if (roll_chance(chance->GetAmount()))
+                    paladin->CastSpell(paladin, SPELL_PAL_SHIELD_SPEC_MANA, CastSpellExtraArgs(chance));
+
+        paladin->CastSpell(paladin, SPELL_PAL_SHIELDSWORN_SPELL_BLOCK, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
+    }
+
     void Register() override
     {
         CalcDamage += SpellCalcDamageFn(classic_spell_pal_holy_strike::HandleCalcDamage);
+        OnEffectHitTarget += SpellEffectFn(classic_spell_pal_holy_strike::HandleShieldsworn, EFFECT_1, SPELL_EFFECT_WEAPON_PERCENT_DAMAGE);
     }
 };
 

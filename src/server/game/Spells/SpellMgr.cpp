@@ -3825,6 +3825,79 @@ ClassicSpellValue::Value const* SpellMgr::GetClassicSpellValue(uint32 spellId, u
     return Trinity::Containers::MapGetValuePtr(mClassicSpellValues, (uint64(spellId) << 8) | effectIndex);
 }
 
+uint32 SpellMgr::GetClassicValueSpellId(uint32 spellId) const
+{
+    if (uint32 const* legacy = Trinity::Containers::MapGetValuePtr(mClassicCreatureSpellTwins, spellId))
+        return *legacy;
+    return spellId;
+}
+
+// Classic 1.60: the spells new to Forever (ids from ClassicSpellValue::FirstScaledSpellId) carry their base points as a percentage of the
+// expected stat, but some are plain copies of a legacy spell: same name, same attributes, every effect the same type, aura, base points, period
+// and misc value. Those carry the legacy spell's flat numbers, and take its values as the legacy spell does (classic_spell_value, the flat or
+// scaled rule of SpellEffectInfo::UsesClassicFlatBasePoints). The Shaper's Terrace's Conflagration 1310512 is vanilla Conflagration 16805 to the
+// byte, down to the 16806 it triggers: its 300 a second, read as 300 % of the creature spell damage, burnt a level 59 player for 7539 a second.
+// A spell that differs in anything (Blackmaw's Shadow Bolt 1283362 has another cast time, range and attributes than 13440) is Forever's own.
+void SpellMgr::LoadClassicCreatureSpellTwins()
+{
+    uint32 oldMSTime = getMSTime();
+
+    mClassicCreatureSpellTwins.clear();
+
+    auto sameAttributes = [](SpellInfo const& a, SpellInfo const& b)
+    {
+        return a.Attributes == b.Attributes && a.AttributesEx == b.AttributesEx && a.AttributesEx2 == b.AttributesEx2 &&
+            a.AttributesEx3 == b.AttributesEx3 && a.AttributesEx4 == b.AttributesEx4 && a.AttributesEx5 == b.AttributesEx5 &&
+            a.AttributesEx6 == b.AttributesEx6 && a.AttributesEx7 == b.AttributesEx7 && a.AttributesEx8 == b.AttributesEx8 &&
+            a.AttributesEx9 == b.AttributesEx9 && a.AttributesEx10 == b.AttributesEx10 && a.AttributesEx11 == b.AttributesEx11 &&
+            a.AttributesEx12 == b.AttributesEx12 && a.AttributesEx13 == b.AttributesEx13 && a.AttributesEx14 == b.AttributesEx14 &&
+            a.AttributesEx15 == b.AttributesEx15 && a.AttributesEx16 == b.AttributesEx16;
+    };
+    auto sameEffects = [](SpellInfo const& a, SpellInfo const& b)
+    {
+        if (a.GetEffects().size() != b.GetEffects().size())
+            return false;
+        for (std::size_t i = 0; i < a.GetEffects().size(); ++i)
+        {
+            SpellEffectInfo const& ea = a.GetEffects()[i];
+            SpellEffectInfo const& eb = b.GetEffects()[i];
+            if (ea.Effect != eb.Effect || ea.ApplyAuraName != eb.ApplyAuraName || ea.BasePoints != eb.BasePoints ||
+                ea.ApplyAuraPeriod != eb.ApplyAuraPeriod || ea.MiscValue != eb.MiscValue)
+                return false;
+        }
+        return true;
+    };
+    auto hasValue = [](SpellInfo const& spellInfo)
+    {
+        for (SpellEffectInfo const& effect : spellInfo.GetEffects())
+            if (effect.BasePoints != 0.0f)
+                return true;
+        return false;
+    };
+
+    std::unordered_map<std::string_view, std::vector<SpellInfo const*>> legacyByName;
+    for (SpellInfo const& spellInfo : mSpellInfoMap)
+        if (spellInfo.Difficulty == DIFFICULTY_NONE && ClassicSpellValue::AppliesToSpell(spellInfo.Id) && spellInfo.SpellName && hasValue(spellInfo))
+            legacyByName[(*spellInfo.SpellName)[LOCALE_enUS]].push_back(&spellInfo);
+
+    for (SpellInfo const& spellInfo : mSpellInfoMap)
+    {
+        if (spellInfo.Difficulty != DIFFICULTY_NONE || ClassicSpellValue::AppliesToSpell(spellInfo.Id) || !spellInfo.SpellName || !hasValue(spellInfo))
+            continue;
+        std::vector<SpellInfo const*> const* legacy = Trinity::Containers::MapGetValuePtr(legacyByName, std::string_view((*spellInfo.SpellName)[LOCALE_enUS]));
+        if (!legacy)
+            continue;
+        uint32 twin = 0;
+        for (SpellInfo const* candidate : *legacy)
+            if ((!twin || candidate->Id < twin) && sameAttributes(spellInfo, *candidate) && sameEffects(spellInfo, *candidate))
+                twin = candidate->Id;
+        if (twin)
+            mClassicCreatureSpellTwins[spellInfo.Id] = twin;
+    }
+
+    TC_LOG_INFO("server.loading", ">> Loaded {} Forever copies of legacy spells in {} ms", mClassicCreatureSpellTwins.size(), GetMSTimeDiffToNow(oldMSTime));
+}
+
 // Classic 1.60: vanilla mana cost of the legacy spells (table classic_spell_cost, VMaNGOS spell_template manaCost / manaCostPercentage)
 void SpellMgr::LoadClassicSpellCosts()
 {

@@ -3834,6 +3834,8 @@ void ObjectMgr::LoadClassicItemDurability()
     TC_LOG_INFO("server.loading", ">> Loaded {} classic item durabilities in {} ms", count, GetMSTimeDiffToNow(oldMSTime));
 }
 
+// Classic 1.60: vanilla weapon damage. The item level tables (ItemDamageOneHand/TwoHand) give vanilla damage for melee weapons only;
+// a vanilla bow at item level 75 does 0.6 of the two-hand table, wands and caster weapons follow no table at all.
 void ObjectMgr::LoadClassicItemDamage()
 {
     uint32 oldMSTime = getMSTime();

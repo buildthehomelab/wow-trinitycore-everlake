@@ -549,6 +549,7 @@ static ClassicSpellValue::Value const* GetClassicValue(WorldObject const* caster
 {
     if (!caster)
         return nullptr;
+    spellId = sSpellMgr->GetClassicValueSpellId(spellId);     // a Forever copy of a legacy spell takes the legacy spell's row
     if (!ClassicSpellValue::AppliesToSpell(spellId))
         return nullptr;
     return sSpellMgr->GetClassicSpellValue(spellId, effectIndex);
@@ -757,12 +758,20 @@ bool SpellEffectInfo::UsesClassicFlatBasePoints(WorldObject const* caster) const
     if (caster && caster->GetAffectingPlayer())
         return true;
 
+    // Mana amounts are flat in the Forever data, new spells too: Debilitate 1240750 burns 200 mana and deals twice that, Drain
+    // Mana 1216501 takes 200, Arcane Megabomb 1213924 and EZ-Thro Mana Bomb 1269337 burn 1300 and 900, Mana Infusion 1219506
+    // gives 6000. Read as a percentage of the expected player mana, Debilitate burnt 4330 at level 31 and hit for up to 8660,
+    // many times a player's health (cod_full af53: one cast killed a level 33 priest for 7197).
+    if (GetScalingExpectedStat() == ExpectedStatType::PlayerMana)
+        return true;
+
     // Some legacy creature spells were re-tuned to percentages in the Forever data: Vile Familiar Fireball 11921 carries
     // 327.43 (~7 damage at level 4) and hit level 3 players for 300+ as a flat value. Vanilla flat values are whole numbers.
     if (BasePoints != std::trunc(BasePoints))
         return false;
 
-    return _spellInfo->Id < CLASSIC_FIRST_SCALED_SPELL_ID;
+    // a Forever copy of a legacy spell carries the legacy spell's numbers (SpellMgr::LoadClassicCreatureSpellTwins)
+    return sSpellMgr->GetClassicValueSpellId(_spellInfo->Id) < CLASSIC_FIRST_SCALED_SPELL_ID;
 }
 
 // Vanilla melee damage of a warrior-class creature at levels 1..63 (VMaNGOS creature_classlevelstats, class 1)

@@ -2335,8 +2335,10 @@ private:
 
     void CheckEnergy(AuraEffect* /*aurEff*/)
     {
-        Unit* druid = GetTarget();
-        if (!druid->IsAlive() || druid->IsInCombat() || druid->HasAura(_buffSpellId))
+        // GetTarget() is not valid in an update-periodic hook (it logs "called in a hook in which the call won't have effect" and
+        // returns null, and the null read cost a whole map tick every second on af54); the aura's owner is the same unit.
+        Unit* druid = GetUnitOwner();
+        if (!druid || !druid->IsAlive() || druid->IsInCombat() || druid->HasAura(_buffSpellId))
             return;
 
         int32 const maxEnergy = druid->GetMaxPower(POWER_ENERGY);

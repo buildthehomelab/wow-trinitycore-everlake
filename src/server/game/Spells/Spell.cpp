@@ -8529,8 +8529,8 @@ void Spell::Delayed() // only called in DealDamage()
     if (!unitCaster)
         return;
 
-    // Classic 1.60 (vanilla, wowsims/forever): every damaging hit pushes the cast back, no cap on the number of hits (the 2-hit cap
-    // is a TBC/Wrath rule); the delay never goes past the time already cast (below)
+    // Classic 1.60 (vanilla, wowsims/forever): every damaging hit pushes the cast back 500 ms, with no cap on the number of hits (the
+    // two-hit cap is a Wrath rule); the cast never goes back past its full cast time (below)
     //check pushback reduce
     int32 delaytime = 500;                                  // spellcasting delay is normally 500ms
 

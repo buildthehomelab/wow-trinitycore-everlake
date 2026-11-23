@@ -477,8 +477,9 @@ struct classic_npc_threshwackonator : public FollowerAI
     {
         me->SetFaction(FACTION_HOSTILE);
 
-        // FollowerAI::UpdateAI despawns a completed follower that is not engaged. AttackStart only sets a victim
-        // (combat starts with the first hit), so without this the robot vanished before its first swing.
+        // FollowerAI::UpdateAI despawns a completed follower that is not engaged, and AttackStart alone only picks a victim:
+        // combat would start with the first swing, after the follow timer already ran out. Put the robot in combat with its
+        // holder right away, so it stays to be killed (quest 2078, Gyromast's Revenge).
         if (Player* holder = GetLeaderForFollower())
         {
             me->EngageWithTarget(holder);
