@@ -432,6 +432,11 @@ class classic_spell_warr_flurry_buff : public AuraScript
 
 // 12322 - Unbridled Wrath (talent): "Gives you a $m1% chance to generate an additional Rage point when you deal melee damage with a weapon."
 // The client talent triggers 12964 (one rage) with the spell's own 100% proc chance; the rank (aura amount) is the chance.
+// WoW Forever: only landed white swings, Windfury Totem's strike, Heroic Strike and each target a Cleave lands on roll it (hotfix of 16 Nov:
+// "now activates from Cleave and Heroic Strike"; wowsims/forever, MIT, EV-0148: white swings 1,241 of 2,109, Heroic Strike 248 of 402,
+// Windfury Totem 16 of 27, Cleave 0.60 a target; Shield Slam 0 of 977, Revenge 0 of 601, Thunder Clap 0 of 2,238, Retaliation, Victory
+// Rush and Shield Bash none; Whirlwind none in EV-0138). Every other melee ability rolled it here. Heroic Strike and Cleave are the
+// warrior's on-next-swing abilities.
 class classic_spell_warr_unbridled_wrath : public AuraScript
 {
     bool Validate(SpellInfo const* spellInfo) override
@@ -441,8 +446,26 @@ class classic_spell_warr_unbridled_wrath : public AuraScript
         return true;
     }
 
-    bool CheckProc(ProcEventInfo& /*eventInfo*/)
+    static bool RollsUnbridledWrath(SpellInfo const* spellInfo)
     {
+        if (!spellInfo)
+            return true;    // a white swing
+
+        switch (spellInfo->Id)
+        {
+            case 8516: case 10608: case 10610:  // Windfury Totem's strike, a main hand swing
+                return true;
+            default:
+                break;
+        }
+        return spellInfo->IsNextMeleeSwingSpell();  // Heroic Strike, Cleave
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        if (!RollsUnbridledWrath(eventInfo.GetSpellInfo()))
+            return false;
+
         AuraEffect const* talent = GetEffect(EFFECT_0);
         return talent && roll_chance(talent->GetAmountAsInt());
     }
