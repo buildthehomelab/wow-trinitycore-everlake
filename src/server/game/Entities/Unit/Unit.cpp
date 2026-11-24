@@ -3165,7 +3165,11 @@ float Unit::GetUnitCriticalChanceDone(WeaponAttackType attackType) const
     {
         if (!(ToCreature()->GetCreatureTemplate()->flags_extra & CREATURE_FLAG_EXTRA_NO_CRIT))
         {
-            chance = 5.0f;
+            // Classic 1.60 (WoW Forever): a hunter's tamed pet has no crit of its own, only what it inherits from the hunter (Hunter Pet
+            // Scaling 415429) and its talents. Live logs show pet abilities crit at about the hunter's crit with no 5% on top
+            // (forever-bugs #556; wowsims/forever, MIT, EV-0134: ability crit slope 0.94 on owner crit, white swings 0.6% at Ferocity 0
+            // over 154,361 swings). Warlock demons keep the 5%: in game a demon still has a crit of its own (wowsims EV-0081).
+            chance = IsHunterPet() ? 0.0f : 5.0f;
             chance += GetTotalAuraModifier(SPELL_AURA_MOD_WEAPON_CRIT_PERCENT);
             chance += GetTotalAuraModifier(SPELL_AURA_MOD_CRIT_PCT);
         }

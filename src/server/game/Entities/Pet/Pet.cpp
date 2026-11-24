@@ -59,7 +59,11 @@ Pet::Pet(Player* owner, PetType type) :
 
     m_unitTypeMask |= UNIT_MASK_PET;
     if (type == HUNTER_PET)
+    {
         m_unitTypeMask |= UNIT_MASK_HUNTER_PET;
+        // Classic 1.60 (WoW Forever): no spell crit of its own either (Lightning Breath); Unit::GetUnitCriticalChanceDone has the melee side
+        m_baseSpellCritChance = 0.0f;
+    }
 
     if (!(m_unitTypeMask & UNIT_MASK_CONTROLABLE_GUARDIAN))
     {
