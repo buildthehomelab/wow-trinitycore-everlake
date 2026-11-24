@@ -73,7 +73,7 @@ enum ClassicShamanTalentSpells
 {
     SPELL_SHAMAN_FLURRY_BUFF                = 16257,
     SPELL_SHAMAN_ELEMENTAL_DEVASTATION_BUFF = 30165,
-    SPELL_SHAMAN_MAELSTROM_WEAPON_TALENT    = 408498,   // effect 1: proc chance, effect 2: max stacks
+    SPELL_SHAMAN_MAELSTROM_WEAPON_TALENT    = 408498,   // effect 1: procs per minute on the main hand's speed, effect 2: max stacks
     SPELL_SHAMAN_MAELSTROM_WEAPON_BUFF      = 408505,
     SPELL_SHAMAN_MAELSTROM_READY            = 408501,
     SPELL_SHAMAN_LIGHTNING_BOLT_MAELSTROM   = 1291078,  // lets Lightning Bolt hits activate Maelstrom Weapon (effect 0: chance)
@@ -1165,7 +1165,13 @@ class classic_spell_sha_lightning_overload : public AuraScript
 // speed) to reduce the cast time and Mana cost of your next Lightning Bolt spell by $m1%. Stacks up to $s3 times." (live 70938
 // tooltip). Effect 1 is a rate per minute on the main hand's speed (6 at one point up to 10 at five), not a flat chance; live
 // combat logs show ~0.59 stacks per landed white hit on a 3.4-3.5 s two-hander at 5/5 (wowsims/forever EV-0009, MIT), which is
-// 10 PPM. Effect 2 is the stack count that shows "Maelstrom Ready!" (408501). With 1291078 Lightning Bolt hits can also add a
+// 10 PPM. Blizzard's 10 November hotfix (live push 113722, in client 70959 and in 2026_11_24_50_hotfixes_forever_live_pushes_71037):
+// effect 1's base points are 2, and the talent rank sets it (TraitDefinitionEffectPoints 25235, Set, curve 128299: 6/7/8/9/10 at
+// ranks 1-5; SpellEffectInfo::CalcValue applies it to the aura amount read below); effect 0's curve 85306 is -20 at every rank, and
+// the buff 408505 takes 20% off the cast time and the mana cost per stack at every rank. Blizzard's 16 November hotfix: "can no
+// longer benefit two casts": the buff's spell_proc row has one charge on the cast phase (PROC_ATTR_REQ_SPELLMOD), so the first
+// Lightning Bolt the stacks change takes all of them; a triggered bolt (Lightning Overload) pays no cost and has no cast time, so the
+// stacks give it nothing. Effect 2 is the stack count that shows "Maelstrom Ready!" (408501). With 1291078 Lightning Bolt hits can also add a
 // stack "with a $s1% reduced chance" (the same roll less that share). Windfury Totem's extra attack never adds a stack
 // (EV-0009: 0 of 261 landed strikes); Windfury Weapon's do. 408505 and 408501 are used by the next Lightning Bolt (spell_proc).
 class classic_spell_sha_maelstrom_weapon : public AuraScript
