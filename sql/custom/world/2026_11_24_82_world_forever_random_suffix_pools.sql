@@ -3,7 +3,7 @@
 -- 1.60.1.70959 links every random-suffix item to one bonus tree (ItemXBonusTree), whose nodes are the suffix bonus lists
 -- (ItemBonusTreeNode -> ItemBonus: stat shares and the suffix name). Forever's pools hold the new suffixes (of Magic, of X
 -- Protection, of the Prophet / Physician / Hierophant, of the Sorcerer / Elder / Channeler, of Holy Wrath, of the Beast, of the
--- Champion) and drop the old "of X Resistance" and wrath suffixes the vanilla groups had.
+-- Champion) and drop the old "of X Resistance" suffixes; the school wrath suffixes stay only in the pools whose tree has them.
 -- How the server picks a suffix: GenerateItemRandomBonusListId (ItemEnchantmentMgr.cpp) rolls a weighted entry of the
 -- item_random_bonus_list_template group named by item_template_addon.RandomBonusListTemplateId, for loot, quest rewards, vendors,
 -- the auction house bot and boosts alike. The client trees are not used directly: ItemBonusMgr::GetBonusListsForItem skips a tree

@@ -13,6 +13,7 @@
 -- Spiritcaller pieces, changed again by later pushes: the import of every newer push brings them); records live marks invalid (status 3: 18 Marshal
 -- / General / Warlord PvP set pieces that live hides from clients, not changes to them); and, as in every earlier import,
 -- the per-item shop pushes above 16 million (for these 108 items they hold the same bytes as the regular record taken here).
+-- At the end: 11 server-only spell power effects from 2026_11_22_70 removed, since these records now carry that power as stats.
 -- Made with live_hotfix_sql.py (--records, --max-push 114196, --statuses 1,2), taking each record's newest push inside the window.
 -- hotfix_data ids 2116000-2116331. Safe to run again.
 
@@ -691,3 +692,9 @@ INSERT INTO `hotfix_data` (`Id`,`UniqueId`,`TableHash`,`RecordId`,`Status`,`Veri
 (2116329,1397836329,2442913102,274206,1,71037),
 (2116330,1397836330,2442913102,274217,1,71037),
 (2116331,1397836331,2442913102,277288,1,71037);
+-- Live's records give these 11 items their spell power / healing as item stats (45, or 41 + 42). Karrz's server-only equip
+-- effects that stood in for that missing power (2026_11_22_70, item effects 9900101-9900312) would now count it twice:
+-- Prophetic Cane, Azure Moon Amice, Penelope's Rose, Astoria Robes and seven Soulforge pieces lose theirs. Whiteout Staff,
+-- Crackling Staff, Keen Skinning Knife and Pathfinder's Clearway keep theirs (their live records carry no spell power).
+DELETE FROM `item_x_item_effect` WHERE `ID` IN (9900216,9900240,9900252,9900253,9900301,9900302,9900303,9900304,9900305,9900306,9900307);
+DELETE FROM `item_effect` WHERE `ID` IN (9900216,9900240,9900252,9900253,9900301,9900302,9900303,9900304,9900305,9900306,9900307);
