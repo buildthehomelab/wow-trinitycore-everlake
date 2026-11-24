@@ -161,6 +161,7 @@
 #include "WorldSession.h"
 #include "WorldStateMgr.h"
 #include "WorldStatePackets.h"
+#include <array>
 #include <boost/dynamic_bitset.hpp>
 #include <G3D/g3dmath.h>
 #include <sstream>
@@ -24228,6 +24229,69 @@ int32 Player::IsAffectedBySpellmod(SpellInfo const* spellInfo, SpellModifier con
     }
 
     return spellInfo->IsAffectedBySpellMod(mod);
+}
+
+// WoW Forever: Revelation (weapon enchant 8217) on a channel. A Blizzard developer on forever-bugs #163 (2026-09-29): "Won't work on
+// DoTs anymore, will work for full duration of channels"; #592 reports every tick of Blizzard, Hurricane and Hellfire critting under it
+// on live, and a collaborator answered that this is intended. The class buff's crit mod has one charge and IsAffectedBySpellmod keeps
+// charged crit mods away from rolls without a Spell (ticks), so a channel the buff's class flags name spends the charge here, as it
+// starts, and its ticks get the mod's chance until that channel ends: ground ticks (classic_spell_ground_area_damage), periodic
+// damage ticks on others (AuraEffect::GetCritChanceFor) and the spells it triggers each tick (Unit::SpellCritChanceDone). Damage over
+// time outside a channel never gets it, and the bonus ends with the channel.
+static constexpr std::array<uint32, 7> RevelationClassBuffs = { 1248808, 1323377, 1323392, 1323400, 1323410, 1323418, 1323419 };
+
+void Player::StartRevelationChannel(Spell const* channel)
+{
+    m_revelationChannelCastId.Clear();
+    m_revelationChannelSpellId = 0;
+    m_revelationChannelCritBonus = 0.0f;
+
+    SpellInfo const* channelInfo = channel->GetSpellInfo();
+    for (uint32 buffId : RevelationClassBuffs)
+    {
+        Aura* buff = GetAura(buffId, GetGUID());
+        if (!buff || !buff->IsUsingCharges() || !buff->GetCharges())
+            continue;
+
+        for (AuraEffect const* aurEff : buff->GetAuraEffects())
+        {
+            if (!aurEff || aurEff->GetMiscValue() != int32(SpellModOp::CritChance)
+                || aurEff->GetAuraType() != SPELL_AURA_ADD_FLAT_MODIFIER
+                || !aurEff->IsAffectingSpell(channelInfo))
+                continue;
+
+            m_revelationChannelCastId = channel->m_castId;
+            m_revelationChannelSpellId = channelInfo->Id;
+            m_revelationChannelCritBonus = float(aurEff->GetAmount());
+            buff->DropCharge();
+            return;
+        }
+    }
+}
+
+// Matched by the channel's cast id alone, not by the current channeled spell: the last tick comes in the update that already
+// finished the channel. Only that cast's auras carry the id, and they end with the channel.
+float Player::GetRevelationChannelCritBonus(ObjectGuid const& channelCastId) const
+{
+    if (m_revelationChannelCastId.IsEmpty() || channelCastId != m_revelationChannelCastId)
+        return 0.0f;
+
+    return m_revelationChannelCritBonus;
+}
+
+float Player::GetRevelationChannelCritBonus(Spell const* tickSpell) const
+{
+    if (!tickSpell || m_revelationChannelCastId.IsEmpty())
+        return 0.0f;
+
+    // a spell the channel's own aura triggers each tick (Hellfire Effect, Arcane Missile). A triggered cast carries no cast id of the
+    // channel, so it is matched by the channel's spell id; the next channel resets the record (StartRevelationChannel), and the
+    // channel's aura, the only one triggering these, ends with it. Missiles still in flight at the channel's end keep the bonus.
+    SpellInfo const* triggeredBy = tickSpell->GetTriggeredByAuraSpell();
+    if (!triggeredBy || triggeredBy->Id != m_revelationChannelSpellId)
+        return 0.0f;
+
+    return m_revelationChannelCritBonus;
 }
 
 void Player::GetSpellModValues(SpellInfo const* spellInfo, SpellModOp op, Spell* spell, double base, int32* flat, float* pct) const
