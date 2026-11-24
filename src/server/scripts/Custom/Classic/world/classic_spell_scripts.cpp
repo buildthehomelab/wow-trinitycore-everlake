@@ -3252,6 +3252,223 @@ class classic_spell_item_versus_bonus : public SpellScript
     }
 };
 
+// 1306410 - Restore Mathystral Amulet (Mathystral Amulet Fragment 279276): "Combine 20 Mathystral Amulet Fragments into a restored
+// Mathystral Amulet." The client spell is a bare dummy with no reagent, so using a fragment did nothing and the amulet 279277, which
+// summons Baron Marinous at the Fathom Stone, could not be made. The cast needs 20 fragments and room for the amulet, then trades them
+// for it, the fragments going once the amulet is in the bags, as the half keys of the rogue's dead drop do (classic_rogue_dead_drop.cpp).
+class classic_spell_item_restore_mathystral_amulet : public SpellScript
+{
+    static constexpr uint32 ITEM_MATHYSTRAL_AMULET_FRAGMENT = 279276;
+    static constexpr uint32 ITEM_MATHYSTRAL_AMULET = 279277;
+    static constexpr uint32 FRAGMENTS_NEEDED = 20;
+
+    SpellCastResult CheckCast()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        if (!player || !player->HasItemCount(ITEM_MATHYSTRAL_AMULET_FRAGMENT, FRAGMENTS_NEEDED))
+            return SPELL_FAILED_REAGENTS;
+
+        ItemPosCountVec dest;
+        if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, ITEM_MATHYSTRAL_AMULET, 1) != EQUIP_ERR_OK)
+            return SPELL_FAILED_DONT_REPORT;
+        return SPELL_CAST_OK;
+    }
+
+    void HandleAfterCast()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        if (!player || !player->HasItemCount(ITEM_MATHYSTRAL_AMULET_FRAGMENT, FRAGMENTS_NEEDED))
+            return;
+
+        if (player->AddItem(ITEM_MATHYSTRAL_AMULET, 1))
+            player->DestroyItemCount(ITEM_MATHYSTRAL_AMULET_FRAGMENT, FRAGMENTS_NEEDED, true);
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(classic_spell_item_restore_mathystral_amulet::CheckCast);
+        AfterCast += SpellCastFn(classic_spell_item_restore_mathystral_amulet::HandleAfterCast);
+    }
+};
+
+// 1292052 - Bag of Ashen Warlock Bones (A Fitting End 96435): "Throw the bloodied bones of the Ashen Reign leaders into the slime altar."
+// Its aura reaches the nearby unit its target conditions name: the kill credit 266513 the quest asks for, which now stands on the Bone
+// Pile 652449 (sql 2026_11_23_40). The credit nothing gave is given for the throw.
+class classic_spell_item_ashen_warlock_bones : public SpellScript
+{
+    static constexpr uint32 NPC_ASHEN_BONES_CREDIT = 266513;
+
+    void HandleHit(SpellEffIndex /*effIndex*/)
+    {
+        Unit* target = GetHitUnit();
+        Player* player = GetCaster()->ToPlayer();
+        if (player && target && target->GetEntry() == NPC_ASHEN_BONES_CREDIT)
+            player->KilledMonsterCredit(NPC_ASHEN_BONES_CREDIT, target->GetGUID());
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_item_ashen_warlock_bones::HandleHit, EFFECT_0, SPELL_EFFECT_APPLY_AURA);
+    }
+};
+
+// 13006 - Shrink Ray (Gnomish Shrink Ray 10716): "Shrinks the target reducing their attack power by 250. Thats what it usually does
+// anyway....." The client spell is a dummy. Usually the target takes Shrink Ray 13003; otherwise it backfires: Shrink 13010 on the
+// engineer and the party around them, or Grow 13004 on the engineer. INFERRED: the odds (no source states them; 80% as the
+// Poultryizer below, the rest split evenly).
+class classic_spell_item_shrink_ray : public SpellScript
+{
+    static constexpr uint32 SPELL_SHRINK_RAY_TARGET = 13003;
+    static constexpr uint32 SPELL_GROW_SELF = 13004;
+    static constexpr uint32 SPELL_SHRINK_PARTY = 13010;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_SHRINK_RAY_TARGET, SPELL_GROW_SELF, SPELL_SHRINK_PARTY });
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!target)
+            return;
+
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        uint32 roll = urand(0, 99);
+        if (roll < 80)
+            caster->CastSpell(target, SPELL_SHRINK_RAY_TARGET, args);
+        else if (roll < 90)
+            caster->CastSpell(caster, SPELL_SHRINK_PARTY, args);
+        else
+            caster->CastSpell(caster, SPELL_GROW_SELF, args);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_item_shrink_ray::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
+// 1270941 - Poultryizer (Gnomish Poultryizer 260824): "Turns the target into a chicken for 15 sec. Well, that is assuming the
+// transmogrification polarity has not been reversed..." The client spell is a dummy whose points name three outcomes: Poultryized!
+// 1270942 (the target, a slowed chicken), 1270943 (the engineer instead) and 1270944 (the target, a chicken twice as fast).
+// INFERRED: the odds, 80% the intended one as the core's Poultryizer of later expansions (spell_item_poultryizer), the rest split.
+class classic_spell_item_forever_poultryizer : public SpellScript
+{
+    static constexpr uint32 SPELL_POULTRYIZED_TARGET = 1270942;
+    static constexpr uint32 SPELL_POULTRYIZED_SELF = 1270943;
+    static constexpr uint32 SPELL_POULTRYIZED_FAST = 1270944;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_POULTRYIZED_TARGET, SPELL_POULTRYIZED_SELF, SPELL_POULTRYIZED_FAST });
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!target)
+            return;
+
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        uint32 roll = urand(0, 99);
+        if (roll < 80)
+            caster->CastSpell(target, SPELL_POULTRYIZED_TARGET, args);
+        else if (roll < 90)
+            caster->CastSpell(caster, SPELL_POULTRYIZED_SELF, args);
+        else
+            caster->CastSpell(target, SPELL_POULTRYIZED_FAST, args);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_item_forever_poultryizer::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
+// 1295271 - Everlook Delivery Bot 274760: "Marks a target for delivery. After landing 6 to 8 spells or attacks, deal 467 Fire damage.
+// Number of spells or attacks is halved in Snowy areas." Effects 0 and 1 hold the 6 and the 8, effect 2 is the mark on the target, a
+// dummy that names the strike 1295633 and whose client proc flags hear the hits it takes. Only the engineer's hits count; the strike
+// lands on the last one and takes the mark off. Without this the dummy fired the strike on every hit anyone landed.
+// INFERRED: which areas are snowy: Winterspring (618), where Everlook stands, and Dun Morogh (1).
+class classic_spell_item_everlook_delivery_bot : public AuraScript
+{
+    static constexpr uint32 SPELL_DELIVERY_STRIKE = 1295633;
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellInfo({ SPELL_DELIVERY_STRIKE }) && ValidateSpellEffect({ { spellInfo->Id, EFFECT_2 } });
+    }
+
+    void AfterApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* caster = GetCaster();
+        int32 low = GetSpellInfo()->GetEffect(EFFECT_0).CalcValueAsInt(caster);
+        int32 high = GetSpellInfo()->GetEffect(EFFECT_1).CalcValueAsInt(caster);
+        _hitsLeft = int32(urand(uint32(std::max(low, 1)), uint32(std::max(high, low))));
+        uint32 zone = GetTarget()->GetZoneId();
+        if (zone == 618 || zone == 1)
+            _hitsLeft = std::max(1, _hitsLeft / 2);
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        return GetCasterGUID() == (eventInfo.GetActor() ? eventInfo.GetActor()->GetGUID() : ObjectGuid::Empty);
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        if (--_hitsLeft > 0)
+            return;
+
+        if (Unit* caster = GetCaster())
+            caster->CastSpell(GetTarget(), SPELL_DELIVERY_STRIKE, CastSpellExtraArgs(aurEff));
+        Remove();
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(classic_spell_item_everlook_delivery_bot::AfterApply, EFFECT_2, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        DoCheckProc += AuraCheckProcFn(classic_spell_item_everlook_delivery_bot::CheckProc);
+        OnEffectProc += AuraEffectProcFn(classic_spell_item_everlook_delivery_bot::HandleProc, EFFECT_2, SPELL_AURA_DUMMY);
+    }
+
+    int32 _hitsLeft = 6;
+};
+
+// 1309550 - Claymore of Two Moons 280080: "Your attacks have a chance to Wax, dealing 189 Arcane damage or Wane, granting 40 Strength
+// for 10s." The equip dummy names neither spell. Each proc casts Waxing Moon 1319378 at the target or gives Waning Moon 1319382, one in
+// two each, never both; 1.35 a minute on landed melee hits (spell_proc row, sql 2026_11_23_40; wowsims/forever, MIT, EV-0163).
+class classic_spell_item_claymore_of_two_moons : public AuraScript
+{
+    static constexpr uint32 SPELL_WAXING_MOON = 1319378;
+    static constexpr uint32 SPELL_WANING_MOON = 1319382;
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_WAXING_MOON, SPELL_WANING_MOON });
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        Unit* wearer = GetTarget();
+        Unit* enemy = eventInfo.GetActionTarget();
+        if (enemy && enemy != wearer && roll_chance(50))
+            wearer->CastSpell(enemy, SPELL_WAXING_MOON, CastSpellExtraArgs(aurEff));
+        else
+            wearer->CastSpell(wearer, SPELL_WANING_MOON, CastSpellExtraArgs(aurEff));
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(classic_spell_item_claymore_of_two_moons::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 void AddSC_classic_spell_scripts()
 {
     RegisterSpellScript(classic_spell_item_versus_bonus);
@@ -3333,4 +3550,10 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_quest_testing_the_wells);
     RegisterSpellScript(classic_spell_item_revelation);
     RegisterSpellScript(classic_spell_item_feralheart_4p);
+    RegisterSpellScript(classic_spell_item_restore_mathystral_amulet);
+    RegisterSpellScript(classic_spell_item_ashen_warlock_bones);
+    RegisterSpellScript(classic_spell_item_shrink_ray);
+    RegisterSpellScript(classic_spell_item_forever_poultryizer);
+    RegisterSpellScript(classic_spell_item_everlook_delivery_bot);
+    RegisterSpellScript(classic_spell_item_claymore_of_two_moons);
 }
