@@ -4362,13 +4362,14 @@ void SpellMgr::LoadSpellInfoCorrections()
     });
 
     // Classic 1.60 (WoW Forever): Ice Lance's damage effect states no spell power coefficient, though the spell scales with spell power in
-    // game; TBC's 1/7 until measured (wowsims/forever, MIT,
-    // tools/database/overrides/spell_overrides.go, a TBC carry-over). All six ranks; no vanilla row exists for this Forever spell.
+    // game. Measured 0.11 (wowsims/forever, MIT, docs/evidence EV-0171: one level 60 mage's logs of 20-21 Nov, 28 casts at 0 spell power
+    // and 255 geared casts at 228.5, 0.108 to 0.115; TBC's 1/7 sits four standard errors above). All six ranks; no vanilla row exists for
+    // this Forever spell.
     ApplySpellFix({ 400640, 1240044, 1240045, 1240046, 1240047, 1312002 }, [](SpellInfo* spellInfo)
     {
         ApplySpellEffectFix(spellInfo, EFFECT_0, [](SpellEffectInfo* spellEffectInfo)
         {
-            spellEffectInfo->BonusCoefficient = 1.0f / 7.0f;
+            spellEffectInfo->BonusCoefficient = 0.11f;
         });
     });
 
