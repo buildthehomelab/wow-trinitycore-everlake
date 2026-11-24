@@ -81,6 +81,16 @@ namespace HunterPetForever
         return std::max(0.0f, std::max(hunter.RangedHit, hunter.MeleeHit));
     }
 
+    // Spell hit (Lightning Breath and the pet's other magic hits): 17/8 of the hunter's ranged hit, from Forever's developers on their
+    // tracker, 22 Oct 2026 (forever-bugs issue 394, the same reply as the warlock demons' 8/17 melee share in WarlockPetForever.h;
+    // MythicSim docs/mechanics.md "Pet hit" and wowsims/forever sim/hunter/pets.go, both MIT). Before, the pet took Hit() as spell hit.
+    constexpr float SpellHitShare = 17.0f / 8.0f;
+
+    inline float SpellHit(HunterStats const& hunter)
+    {
+        return std::max(0.0f, hunter.RangedHit * SpellHitShare);
+    }
+
     inline uint32 NextLevelXp(uint32 hunterXpForLevel)
     {
         return uint32(float(hunterXpForLevel) * LevelXpShare);

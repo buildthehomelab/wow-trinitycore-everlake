@@ -62,6 +62,17 @@ TEST_CASE("Pet hit is the higher of the hunter's ranged and melee hit", "[Hunter
     CHECK(HunterPetForever::Hit(hunter) == Catch::Approx(3.0f));
 }
 
+TEST_CASE("Pet spell hit is 17/8 of the hunter's ranged hit", "[HunterPetForever]")
+{
+    HunterPetForever::HunterStats hunter;
+    hunter.RangedHit = 8.0f;
+    hunter.MeleeHit = 10.0f;    // melee hit plays no part
+    CHECK(HunterPetForever::SpellHit(hunter) == Catch::Approx(17.0f));
+
+    hunter.RangedHit = 3.0f;
+    CHECK(HunterPetForever::SpellHit(hunter) == Catch::Approx(6.375f));
+}
+
 TEST_CASE("Inherited amounts never go below zero", "[HunterPetForever]")
 {
     HunterPetForever::HunterStats hunter;
@@ -73,6 +84,7 @@ TEST_CASE("Inherited amounts never go below zero", "[HunterPetForever]")
     CHECK(HunterPetForever::AttackPower(hunter) == 0.0f);
     CHECK(HunterPetForever::Armor(hunter) == 0.0f);
     CHECK(HunterPetForever::Hit(hunter) == 0.0f);
+    CHECK(HunterPetForever::SpellHit(hunter) == 0.0f);
 }
 
 TEST_CASE("A pet level needs 20% of the hunter's XP for that level", "[HunterPetForever]")

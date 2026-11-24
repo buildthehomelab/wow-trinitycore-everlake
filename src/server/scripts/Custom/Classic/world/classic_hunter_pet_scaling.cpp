@@ -39,7 +39,7 @@
 //   3-7  22 SPELL_AURA_MOD_RESISTANCE            fire, frost, nature, shadow, arcane   0: the wiki lists no resistance inheritance
 //   8   674 armor (handled as SPELL_AURA_MOD_RESISTANCE, physical)   30% of hunter armor             (wiki)
 //   9    54 SPELL_AURA_MOD_HIT_CHANCE                         hunter hit, higher of ranged and melee    (wiki: "inherited"; which one is a guess)
-//  10    55 SPELL_AURA_MOD_SPELL_HIT_CHANCE                   the same hit                              (guess: for Lightning Breath)
+//  10    55 SPELL_AURA_MOD_SPELL_HIT_CHANCE                   17/8 of the hunter's ranged hit            (Forever developers, forever-bugs 394)
 //  11   319 SPELL_AURA_MOD_MELEE_HASTE_NO_REGEN               0: the wiki lists no haste inheritance     (guess)
 //  12    65 SPELL_AURA_MOD_CASTING_SPEED                      0                                         (guess)
 //  13    52 SPELL_AURA_MOD_WEAPON_CRIT_PERCENT                100% of the higher of ranged and melee crit (wiki)
@@ -117,8 +117,8 @@ class classic_spell_hun_pet_scaling : public AuraScript
             case EFFECT_0:  return std::floor(HunterPetForever::MaxHealth(stats));
             case EFFECT_1:  return std::floor(HunterPetForever::AttackPower(stats));
             case EFFECT_8:  return std::floor(HunterPetForever::Armor(stats));
-            case EFFECT_9:
-            case EFFECT_10: return HunterPetForever::Hit(stats);
+            case EFFECT_9:  return HunterPetForever::Hit(stats);
+            case EFFECT_10: return HunterPetForever::SpellHit(stats);
             case EFFECT_13:
             case EFFECT_14: return HunterPetForever::Crit(stats);
             default:        return 0.0f;
