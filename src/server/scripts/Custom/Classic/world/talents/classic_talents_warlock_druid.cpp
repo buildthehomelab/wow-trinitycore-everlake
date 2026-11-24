@@ -28,6 +28,7 @@
 #include "Random.h"
 #include "Spell.h"
 #include "SpellAuraEffects.h"
+#include "SpellHistory.h"
 #include "SpellAuras.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
