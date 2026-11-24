@@ -3039,7 +3039,13 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
                 // EV-0021, docs/rulings R-0041).
                 bool const requiresShield = spell->m_spellInfo->EquippedItemClass == ITEM_CLASS_ARMOR
                     && (spell->m_spellInfo->EquippedItemSubClassMask & (1 << ITEM_SUBCLASS_ARMOR_SHIELD));
-                if (spell->m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MELEE || spell->m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_RANGED)
+                // WoW Forever: a ranged attack that strikes with no ranged weapon hears no melee item procs. SpellInfo::GetAttackType gives it
+                // the main hand (BASE_ATTACK), so the main hand's chance-on-hit spells and enchants would roll. Blizzard's 11 November hotfix:
+                // Judgement (Righteousness, Fury, Light, Wisdom, Justice, the Crusader: SpellCategories DefenseType 3) "is a Ranged Attack"
+                // and no longer triggers melee item procs; Judgement of Command stays a melee attack and still procs on hit (13 November).
+                bool const rangedWithWeapon = spell->m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_RANGED
+                    && spell->m_spellInfo->GetAttackType() == RANGED_ATTACK;
+                if (spell->m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MELEE || rangedWithWeapon)
                     if (!spell->m_spellInfo->HasAttribute(SPELL_ATTR0_CANCELS_AUTO_ATTACK_COMBAT) && !spell->m_spellInfo->HasAttribute(SPELL_ATTR4_SUPPRESS_WEAPON_PROCS) && !requiresShield)
                         caster->ToPlayer()->CastItemCombatSpell(*spellDamageInfo);
             }

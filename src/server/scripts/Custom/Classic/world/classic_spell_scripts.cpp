@@ -54,6 +54,7 @@
 #include "World.h"
 #include "WorldSession.h"
 #include <algorithm>
+#include <any>
 #include <cmath>
 #include <mutex>
 #include <unordered_map>
@@ -1811,8 +1812,12 @@ class classic_spell_pal_consecration : public AuraScript
 };
 
 // 15286 - Vampiric Embrace (vanilla, VMaNGOS UnitAuraProcHandler): a debuff on the enemy. Shadow damage the priest deals to it
-// heals the priest's party (15290, the priest included) for 20% of the damage. The retail script treated it as a self buff and
-// made the debuffed enemy cast the heal.
+// heals the priest's party (15290, the priest included). The retail script treated it as a self buff and made the debuffed enemy
+// cast the heal.
+// WoW Forever (Blizzard's 16 November hotfix, live push 114093): "causes all party members to be healed for $s1% of any Shadow spell
+// damage you deal ... You receive $s2% increased healing on yourself from this effect." The party gets effect 0's share of the damage
+// (10 live) and the priest that share raised by effect 1's percent (1372611, 100 live: twice the share). 15290 heals the whole party
+// for the share; classic_spell_pri_vampiric_embrace_heal raises the priest's own heal.
 // WoW Forever: Spirit Tap 15270 "Gives you a $m1% chance ... after killing a non-trivial target or when an enemy afflicted by your Vampiric
 // Embrace dies": the second part has no proc flag, so when the debuffed enemy dies, a priest with the talent gets 15271 without a roll,
 // whoever made the kill (tooltip; wowsims/forever, MIT, sim/priest/talents_shadow.go; no log reading).
@@ -1847,10 +1852,14 @@ class classic_spell_pri_vampiric_embrace : public AuraScript
     {
         PreventDefaultAction();
         Unit* priest = eventInfo.GetActor();
-        int32 heal = std::max<int32>(1, CalculatePct(int32(eventInfo.GetDamageInfo()->GetDamage()), aurEff->GetAmount()));
+        int32 const heal = std::max<int32>(1, CalculatePct(int32(eventInfo.GetDamageInfo()->GetDamage()), aurEff->GetAmount()));
 
         CastSpellExtraArgs args(aurEff);
         args.AddSpellMod(SPELLVALUE_BASE_POINT0, heal);
+        // effect 1: the priest's own heal is raised by this percent (without the live effect 1 the priest gets the plain share)
+        if (AuraEffect const* selfBonus = GetAura()->GetEffect(EFFECT_1))
+            if (selfBonus->GetAmount() > 0)
+                args.SetCustomArg(selfBonus->GetAmount());
         priest->CastSpell(priest, SPELL_VAMPIRIC_EMBRACE_HEAL, args);
     }
 
@@ -1859,6 +1868,25 @@ class classic_spell_pri_vampiric_embrace : public AuraScript
         DoCheckProc += AuraCheckProcFn(classic_spell_pri_vampiric_embrace::CheckProc);
         OnEffectProc += AuraEffectProcFn(classic_spell_pri_vampiric_embrace::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
         AfterEffectRemove += AuraEffectRemoveFn(classic_spell_pri_vampiric_embrace::HandleRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 15290 - Vampiric Embrace (heal): heals the priest's party (TARGET_UNIT_CASTER_AREA_PARTY) for the share 15286 puts in its base points;
+// the priest, its caster, gets that share raised by the percent 15286 passes along with the cast (its effect 1, see above)
+class classic_spell_pri_vampiric_embrace_heal : public SpellScript
+{
+    void HandleHeal(SpellEffIndex /*effIndex*/)
+    {
+        if (GetHitUnit() != GetCaster())
+            return;
+
+        if (SpellEffectValue const* selfBonusPct = std::any_cast<SpellEffectValue>(&GetSpell()->m_customArg))
+            SetEffectValue(GetEffectValue() + CalculatePct(GetEffectValue(), *selfBonusPct));
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_pri_vampiric_embrace_heal::HandleHeal, EFFECT_0, SPELL_EFFECT_HEAL);
     }
 };
 
@@ -3445,6 +3473,7 @@ void AddSC_classic_spell_scripts()
     new classic_unit_tigers_fury();
     new classic_unit_unflinching_morale();
     RegisterSpellScript(classic_spell_pri_vampiric_embrace);
+    RegisterSpellScript(classic_spell_pri_vampiric_embrace_heal);
     RegisterSpellScript(classic_spell_item_moonshadow_stave);
     RegisterSpellScript(classic_spell_item_argent_defender);
     RegisterSpellScript(classic_spell_item_proc_damage_component);
