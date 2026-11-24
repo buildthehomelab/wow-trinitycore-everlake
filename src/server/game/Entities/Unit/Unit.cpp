@@ -1912,13 +1912,30 @@ void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinit
 }
 
 // Classic 1.60 (WoW Forever): a binary spell's hit roll took its whole resist, so a hit or tick of one that lands takes no partial resist
-// and no Spell Piercing bonus (EV-0142: 0 partial resists on the live realms' binary hits and ticks against hundreds expected, where the
-// beta realms still rolled them).
+// (EV-0142: 0 partial resists on the live realms' binary hits and ticks against hundreds expected, where the beta realms still rolled them).
 static bool IsClassicBinaryResistRoll(SpellInfo const* spellInfo, ClassicResistRoll resistRoll)
 {
     if (resistRoll == ClassicResistRoll::Binary)
         return true;
     return resistRoll == ClassicResistRoll::Spell && spellInfo && spellInfo->HasAttribute(SPELL_ATTR0_CU_BINARY_SPELL);
+}
+
+// Classic 1.60 (WoW Forever, hotfix 114309 of 20 Nov 2026): the binary ticks that take the Spell Piercing bonus at the full share, Mind Flay's
+// and Insect Swarm's (EV-0142: Mind Flay 483 of 5,398 ticks against 388, Insect Swarm 1,089 of 9,240 against 1,051). Other binary ticks
+// (Hurricane, Entangling Roots, Curse and Bane of Agony, Immolate's) take none.
+static bool IsClassicPiercedBinaryTick(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+
+    switch (spellInfo->Id)
+    {
+        case 15407: case 17311: case 17312: case 17313: case 17314: case 18807:  // Mind Flay
+        case 5570: case 24974: case 24975: case 24976: case 24977:               // Insect Swarm
+            return true;
+        default:
+            return false;
+    }
 }
 
 /*static*/ uint32 Unit::CalcSpellResistedDamage(Unit const* attacker, Unit* victim, uint32 damage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo, bool periodicTick /*= false*/,
@@ -2024,8 +2041,14 @@ static bool IsClassicBinaryResistRoll(SpellInfo const* spellInfo, ClassicResistR
         if (Player const* player = caster->GetSpellModOwner())
         {
             victimResistance += float(player->GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_TARGET_RESISTANCE, schoolMask));
-            victimResistance -= float(player->GetSpellPenetrationItemMod());
-            victimResistance -= float(player->GetClassicSpellPenetration(schoolMask));
+            // Classic 1.60 (WoW Forever): a totem's attacks take none of the shaman's Spell Piercing (wowsims/forever, MIT, EV-0142: Magma
+            // Totem 186 of 26,257 hits with a bonus against 3,042 expected, Searing Totem 3 of 3,160 against 334)
+            Unit const* unitCaster = caster->ToUnit();
+            if (!unitCaster || !unitCaster->IsTotem())
+            {
+                victimResistance -= float(player->GetSpellPenetrationItemMod());
+                victimResistance -= float(player->GetClassicSpellPenetration(schoolMask));
+            }
         }
         else if (Unit const* unitCaster = caster->ToUnit())
             victimResistance += float(unitCaster->GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_TARGET_RESISTANCE, schoolMask));
@@ -2037,20 +2060,31 @@ static bool IsClassicBinaryResistRoll(SpellInfo const* spellInfo, ClassicResistR
 // Classic 1.60 (WoW Forever): Spell Piercing beyond the target's resistance makes the average resist negative, and the partial resist roll
 // on its size pays out bonus damage in tenths instead: a hit gains 10% or 20% (wowsims/forever, MIT, docs/evidence EV-0091 and EV-0092:
 // pierced hits carry a negative resisted amount of exactly 10% or 20%, about 2:1, at the caster's piercing rate). Only a hit or tick at the
-// full share takes it: a tick at a tenth (Shadow Word: Pain 0 of 515 at 8 piercing, Flamestrike's ground ticks 0 of 4,177) and a binary
-// spell (Frostbolt 0 of 425, Frost Nova 0 of 1,258, Mind Flay ticks 0 of 320) take none, while Fire Blast, Blizzard's ticks and
-// Devouring Plague's, Pyroblast's and Starshards' ticks take it in full (EV-0092, EV-0142).
+// full share takes it: a tick at a tenth (Shadow Word: Pain 0 of 515 at 8 piercing, Flamestrike's ground ticks 0 of 4,177) takes none,
+// while Fire Blast, Blizzard's ticks and Devouring Plague's, Pyroblast's and Starshards' ticks take it in full (EV-0092, EV-0142).
+// Since hotfix 114309 (20 Nov 2026, build 71037) a landed binary hit takes it at the full share too, still with no partial resist
+// (EV-0142: Frostbolt 1,863 of 6,276 against 1,802, Cone of Cold 1,111 of 4,675, Arcane Wrath 898 of 3,385...), and so do Mind Flay's and
+// Insect Swarm's ticks; Hurricane's ticks (ClassicResistRoll::Binary) and the other binary ticks take none. A negative share under 1% pays
+// nothing: 5 piercing at level 60 gives no bonus, 6 does (EV-0142 "The 1% cut": 0.11% of hits at a 0.70-0.80% share against 5.88%).
 /*static*/ uint32 Unit::CalcSpellPiercingBonusDamage(Unit const* attacker, Unit* victim, uint32 damage, SpellSchoolMask schoolMask, SpellInfo const* spellInfo, bool periodicTick /*= false*/,
     ClassicResistRoll resistRoll /*= ClassicResistRoll::Spell*/)
 {
     if (!attacker || !(schoolMask & SPELL_SCHOOL_MASK_MAGIC))
         return 0;
 
-    if (IsClassicBinaryResistRoll(spellInfo, resistRoll) || ClassicTickResistShare(spellInfo, periodicTick, resistRoll) < 1.0f)
+    if (resistRoll == ClassicResistRoll::Binary)
+        return 0;
+
+    if (IsClassicBinaryResistRoll(spellInfo, resistRoll))
+    {
+        if (periodicTick && !IsClassicPiercedBinaryTick(spellInfo))
+            return 0;
+    }
+    else if (ClassicTickResistShare(spellInfo, periodicTick, resistRoll) < 1.0f)
         return 0;
 
     float const averageResist = Unit::CalculateSignedAverageResist(attacker, schoolMask, victim, spellInfo);
-    if (averageResist >= 0.0f)
+    if (averageResist > -0.01f)
         return 0;
 
     // the same tenths roll as CalcSpellResistedDamage, on the size of the negative share (always under 10% in practice)
@@ -3165,7 +3199,11 @@ float Unit::GetUnitCriticalChanceDone(WeaponAttackType attackType) const
     {
         if (!(ToCreature()->GetCreatureTemplate()->flags_extra & CREATURE_FLAG_EXTRA_NO_CRIT))
         {
-            chance = 5.0f;
+            // Classic 1.60 (WoW Forever): a hunter's tamed pet has no crit of its own, only what it inherits from the hunter (Hunter Pet
+            // Scaling 415429) and its talents. Live logs show pet abilities crit at about the hunter's crit with no 5% on top
+            // (forever-bugs #556; wowsims/forever, MIT, EV-0134: ability crit slope 0.94 on owner crit, white swings 0.6% at Ferocity 0
+            // over 154,361 swings). Warlock demons keep the 5%: in game a demon still has a crit of its own (wowsims EV-0081).
+            chance = IsHunterPet() ? 0.0f : 5.0f;
             chance += GetTotalAuraModifier(SPELL_AURA_MOD_WEAPON_CRIT_PERCENT);
             chance += GetTotalAuraModifier(SPELL_AURA_MOD_CRIT_PCT);
         }

@@ -153,8 +153,8 @@ namespace ClassicProcRules
         { 11180,   SPELLFAMILY_MAGE,    flag128(0x00000020),                   0, 0 },                              // Winter's Chill: Frostbolt
     } };
 
-    // Whether the event is one the talent's tooltip names. Talents without a rule (Unbridled Wrath: melee swings, Spirit Tap:
-    // kills) take every event their proc flags let through.
+    // Whether the event is one the talent's tooltip names. Talents without a rule (Spirit Tap: kills) take every event their proc
+    // flags let through. Unbridled Wrath's filter is in its own script (classic_spell_warr_unbridled_wrath).
     inline bool TalentProcMatches(uint32 talentSpellId, ProcEvent const& event)
     {
         auto rule = std::ranges::find(TalentProcRules, talentSpellId, &TalentProcRule::TalentSpellId);

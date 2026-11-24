@@ -432,6 +432,11 @@ class classic_spell_warr_flurry_buff : public AuraScript
 
 // 12322 - Unbridled Wrath (talent): "Gives you a $m1% chance to generate an additional Rage point when you deal melee damage with a weapon."
 // The client talent triggers 12964 (one rage) with the spell's own 100% proc chance; the rank (aura amount) is the chance.
+// WoW Forever: only landed white swings, Windfury Totem's strike, Heroic Strike and each target a Cleave lands on roll it (hotfix of 16 Nov:
+// "now activates from Cleave and Heroic Strike"; wowsims/forever, MIT, EV-0148: white swings 1,241 of 2,109, Heroic Strike 248 of 402,
+// Windfury Totem 16 of 27, Cleave 0.60 a target; Shield Slam 0 of 977, Revenge 0 of 601, Thunder Clap 0 of 2,238, Retaliation, Victory
+// Rush and Shield Bash none; Whirlwind none in EV-0138). Every other melee ability rolled it here. Heroic Strike and Cleave are the
+// warrior's on-next-swing abilities.
 class classic_spell_warr_unbridled_wrath : public AuraScript
 {
     bool Validate(SpellInfo const* spellInfo) override
@@ -441,8 +446,26 @@ class classic_spell_warr_unbridled_wrath : public AuraScript
         return true;
     }
 
-    bool CheckProc(ProcEventInfo& /*eventInfo*/)
+    static bool RollsUnbridledWrath(SpellInfo const* spellInfo)
     {
+        if (!spellInfo)
+            return true;    // a white swing
+
+        switch (spellInfo->Id)
+        {
+            case 8516: case 10608: case 10610:  // Windfury Totem's strike, a main hand swing
+                return true;
+            default:
+                break;
+        }
+        return spellInfo->IsNextMeleeSwingSpell();  // Heroic Strike, Cleave
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        if (!RollsUnbridledWrath(eventInfo.GetSpellInfo()))
+            return false;
+
         AuraEffect const* talent = GetEffect(EFFECT_0);
         return talent && roll_chance(talent->GetAmountAsInt());
     }
@@ -946,33 +969,56 @@ class classic_spell_warr_execute : public SpellScript
 
     // VMaNGOS (scripts/spells/spell_warrior.cpp, WarriorExecuteDummyScript): the damage spell is cast from OnCast, not from the effect, with
     // the base points plus the rage still held times the per-rage factor, and the rage is gone afterwards.
+    // WoW Forever: an Execute that misses, is dodged or parried costs its base rage alone; the extra rage stays and none of the cost comes
+    // back (MythicSim docs/mechanics.md, MIT: 36 of 36 avoided Executes from 14 warriors, client 70862 logs). The extra rage is the
+    // warrior's until the damage spell lands: classic_spell_warr_execute_damage takes it then.
     void HandleCast()
     {
         Unit* warrior = GetCaster();
         Unit* target = GetExplTargetUnit();
         if (!target)
         {
-            TC_LOG_ERROR("scripts.classic", "Execute {}: cast without a target unit", GetSpellInfo()->Id);
+            TC_LOG_DEBUG("scripts.classic", "Execute {}: cast without a target unit", GetSpellInfo()->Id);
             return;
         }
 
         // The cost is taken before the cast: what is left of the rage, plus whatever the cast took beyond the 15 rage
         // (a cost row that drains everything), is what Execute turns into damage.
         int32 spent = GetSpell()->GetPowerTypeCostAmount(POWER_RAGE).value_or(0);
-        int32 extraRage = std::max(0, spent - EXECUTE_RAGE_COST) + int32(warrior->GetPower(POWER_RAGE));
+        int32 const takenBeyondCost = std::max(0, spent - EXECUTE_RAGE_COST);
+        int32 extraRage = takenBeyondCost + int32(warrior->GetPower(POWER_RAGE));
         int32 damage = GetSpellInfo()->GetEffect(EFFECT_0).CalcValue(warrior) + (extraRage / 10) * GetDamagePerRage(GetSpellInfo()->Id);
+
+        // an avoided Execute keeps the extra rage, so what a draining cost row took beyond the base cost goes back before the roll
+        if (takenBeyondCost > 0)
+            warrior->SetPower(POWER_RAGE, warrior->GetPower(POWER_RAGE) + takenBeyondCost);
 
         SpellCastResult result = warrior->CastSpell(target, SPELL_WARRIOR_EXECUTE_DAMAGE, CastSpellExtraArgs(TRIGGERED_FULL_MASK)
             .SetTriggeringSpell(GetSpell())
             .AddSpellBP0(damage));
-        TC_LOG_ERROR("scripts.classic", "Execute {}: damage spell {} on {} for {} (extra rage {}) -> cast result {}",
+        TC_LOG_DEBUG("scripts.classic", "Execute {}: damage spell {} on {} for {} (extra rage {}) -> cast result {}",
             GetSpellInfo()->Id, SPELL_WARRIOR_EXECUTE_DAMAGE, target->GetGUID().ToString(), damage, extraRage, uint32(result));
-        warrior->SetPower(POWER_RAGE, 0);
     }
 
     void Register() override
     {
         OnCast += SpellCastFn(classic_spell_warr_execute::HandleCast);
+    }
+};
+
+// 20647 - Execute (the damage spell): a hit that lands (a partial block included) takes the warrior's extra rage, which classic_spell_warr_execute
+// already turned into damage; a miss, dodge or parry runs no effect and leaves it (MythicSim docs/mechanics.md, see classic_spell_warr_execute).
+class classic_spell_warr_execute_damage : public SpellScript
+{
+    void HandleLanded(SpellEffIndex /*effIndex*/)
+    {
+        if (Unit* warrior = GetCaster())
+            warrior->SetPower(POWER_RAGE, 0);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(classic_spell_warr_execute_damage::HandleLanded, EFFECT_0, SPELL_EFFECT_ANY);
     }
 };
 
@@ -1002,19 +1048,19 @@ class classic_spell_warr_execute_damage_probe : public SpellScript
 {
     SpellCastResult CheckCastProbe()
     {
-        TC_LOG_ERROR("scripts.classic", "Execute damage 20647: check cast, triggered {}, explicit target {}", GetSpell()->IsTriggered(),
+        TC_LOG_DEBUG("scripts.classic", "Execute damage 20647: check cast, triggered {}, explicit target {}", GetSpell()->IsTriggered(),
             GetExplTargetUnit() ? GetExplTargetUnit()->GetName() : "none");
         return SPELL_CAST_OK;
     }
 
     void LaunchProbe(SpellEffIndex /*effIndex*/)
     {
-        TC_LOG_ERROR("scripts.classic", "Execute damage 20647: effect launch on {}, effect value {}", GetHitUnit() ? GetHitUnit()->GetName() : "none", GetEffectValue());
+        TC_LOG_DEBUG("scripts.classic", "Execute damage 20647: effect launch on {}, effect value {}", GetHitUnit() ? GetHitUnit()->GetName() : "none", GetEffectValue());
     }
 
     void HitProbe()
     {
-        TC_LOG_ERROR("scripts.classic", "Execute damage 20647: hit {}, damage {}", GetHitUnit() ? GetHitUnit()->GetName() : "none", GetHitDamage());
+        TC_LOG_DEBUG("scripts.classic", "Execute damage 20647: hit {}, damage {}", GetHitUnit() ? GetHitUnit()->GetName() : "none", GetHitDamage());
     }
 
     void Register() override
@@ -2343,6 +2389,7 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScript(classic_spell_warr_execute);
     RegisterSpellScript(classic_spell_warr_overpower_probe);
     RegisterSpellScript(classic_spell_warr_execute_damage_probe);
+    RegisterSpellScript(classic_spell_warr_execute_damage);
     RegisterSpellScript(classic_spell_warr_spearing_strike);
     RegisterSpellScript(classic_spell_warr_improved_whirlwind_closest);
 

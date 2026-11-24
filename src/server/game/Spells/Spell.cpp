@@ -5759,6 +5759,11 @@ void Spell::ClassicReserveCharge(ObjectGuid const& auraCaster, uint32 auraSpellI
         m_classicReservedCharges.push_back(key);
 }
 
+void Spell::ClassicReleaseCharge(ObjectGuid const& auraCaster, uint32 auraSpellId)
+{
+    std::erase(m_classicReservedCharges, std::pair<ObjectGuid, uint32>{ auraCaster, auraSpellId });
+}
+
 void Spell::ClassicSpendReservedCharges()
 {
     if (m_classicReservedCharges.empty())
