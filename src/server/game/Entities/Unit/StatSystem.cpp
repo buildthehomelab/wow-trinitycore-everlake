@@ -1434,6 +1434,7 @@ void Creature::CalculateMinMaxDamage(WeaponAttackType attType, bool normalized, 
 #define ENTRY_IMP               416
 #define ENTRY_VOIDWALKER        1860
 #define ENTRY_SUCCUBUS          1863
+#define ENTRY_INCUBUS           185317  // Summon Incubus 713: the Sayaad, as the Succubus
 #define ENTRY_FELHUNTER         417
 #define ENTRY_FELGUARD          17252
 #define ENTRY_WATER_ELEMENTAL   510
@@ -1551,7 +1552,8 @@ void Guardian::UpdateMaxHealth()
     {
         case ENTRY_IMP:         multiplicator = 8.4f;   break;
         case ENTRY_VOIDWALKER:  multiplicator = 11.0f;  break;
-        case ENTRY_SUCCUBUS:    multiplicator = 9.1f;   break;
+        case ENTRY_SUCCUBUS:
+        case ENTRY_INCUBUS:     multiplicator = 9.1f;   break;
         case ENTRY_FELHUNTER:   multiplicator = 9.5f;   break;
         case ENTRY_FELGUARD:    multiplicator = 11.0f;  break;
         case ENTRY_BLOODWORM:   multiplicator = 1.0f;   break;
@@ -1593,7 +1595,7 @@ void Guardian::UpdateAttackPowerAndDamage(bool ranged)
     if (GetEntry() == ENTRY_IMP)                                   // imp's attack power
         val = GetStat(STAT_STRENGTH) - 10.0f;
     // WoW Forever: the Voidwalker's and Sayaad's own attack power is 3 x level + 6, nothing from Strength (wowsims/forever EV-0075, EV-0076)
-    else if (IsPet() && (GetEntry() == ENTRY_VOIDWALKER || GetEntry() == ENTRY_SUCCUBUS))
+    else if (IsPet() && (GetEntry() == ENTRY_VOIDWALKER || GetEntry() == ENTRY_SUCCUBUS || GetEntry() == ENTRY_INCUBUS))
         val = WarlockPetForever::DemonAttackPower(GetLevel());
     // WoW Forever: a hunter pet's own attack power is 30% of its level's creature dps as attack power, nothing from Strength
     // (HunterPetForever::OwnAttackPower, EV-0070); the hunter's 10% comes on top (415429, classic_hunter_pet_scaling.cpp)

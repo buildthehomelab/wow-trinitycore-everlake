@@ -7796,6 +7796,11 @@ float Unit::SpellCritChanceDone(Spell* spell, AuraEffect const* aurEff, SpellSch
     if (Player* modOwner = GetSpellModOwner())
         modOwner->ApplySpellMod(spellInfo, SpellModOp::CritChance, crit_chance, spell);
 
+    // WoW Forever: a spell triggered by each tick of a channel that spent a Revelation charge (Player::StartRevelationChannel)
+    if (spell)
+        if (Player const* player = ToPlayer())
+            crit_chance += player->GetRevelationChannelCritBonus(spell);
+
     return std::max(crit_chance, 0.0f);
 }
 

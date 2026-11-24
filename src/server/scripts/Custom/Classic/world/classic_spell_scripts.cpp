@@ -155,9 +155,14 @@ class classic_spell_ground_area_damage : public AuraScript
             damage = target->SpellDamageBonusTaken(caster, spellInfo, damage, DOT);
 
             // Ground ticks that are hits (Flamestrike) roll a critical strike like a direct spell: the sheet chance with the crit spell
-            // mods and the target's taken chance. Other ground ticks never crit (vanilla).
+            // mods and the target's taken chance. Other ground ticks never crit (vanilla), except under Revelation: a channel that
+            // spent its charge crits with every tick (forever-bugs #163 dev reply, #592; Player::StartRevelationChannel).
             bool crit = false;
-            if (values.TicksAreHits && !spellInfo->HasAttribute(SPELL_ATTR2_CANT_CRIT))
+            Player const* playerCaster = caster->ToPlayer();
+            float const revelationBonus = playerCaster ? playerCaster->GetRevelationChannelCritBonus(GetAura()->GetCastId()) : 0.0f;
+            if (!values.TicksAreHits && revelationBonus > 0.0f && !spellInfo->HasAttribute(SPELL_ATTR2_CANT_CRIT))
+                crit = roll_chance(revelationBonus);
+            else if (values.TicksAreHits && !spellInfo->HasAttribute(SPELL_ATTR2_CANT_CRIT))
             {
                 float doneChance = 0.0f;
                 if (Player* player = caster->ToPlayer(); player && tickSpell)
@@ -223,6 +228,8 @@ class classic_spell_ground_area_damage : public AuraScript
 // the 13.42% logs are also a higher level, so the curve is the best reading of thin data, to be refit when more logs come.
 class classic_spell_enchant_revelation : public AuraScript
 {
+    static constexpr uint32 SPELL_REVELATION_NO_PROC_VAMPIRIC_EMBRACE_HEAL = 15290;
+
     static uint32 BuffFor(uint8 playerClass)
     {
         switch (playerClass)
@@ -253,6 +260,14 @@ class classic_spell_enchant_revelation : public AuraScript
     {
         Player const* wearer = GetTarget()->ToPlayer();
         if (!wearer || !BuffFor(wearer->GetClass()))
+            return false;
+
+        // Only in combat and never off a melee-class spell such as a seal (live, forever-bugs #163, #401; these checks came from
+        // classic_spell_item_revelation, whose binding 2026_11_24_62 removes). Blizzard 10 November 2026: Vampiric Embrace healing no
+        // longer procs it (forever-bugs #374, closed fixed). The heal 15290 is cast with TRIGGERED_FULL_MASK and so raises no procs;
+        // the explicit check keeps it that way if the cast changes.
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        if (!wearer->IsInCombat() || !spellInfo || spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MELEE || spellInfo->Id == SPELL_REVELATION_NO_PROC_VAMPIRIC_EMBRACE_HEAL)
             return false;
 
         if (!roll_chance(ProcChance(*wearer->m_activePlayerData->SpellCritPercentage)))
@@ -2880,63 +2895,6 @@ class classic_spell_quest_testing_the_wells : public SpellScript
 };
 
 
-// 1248806 - Revelation, the equip aura of weapon enchant 8217 (Enchant Weapon - Revelation 1248805): "a chance to trigger Revelation when a
-// non-periodic spell fails to critically strike. Revelation grants $s2% increased critical strike chance to the next non-periodic spell
-// cast." The aura names no trigger spell: each class has its own buff, a one-charge crit modifier on that class's spells. Live
-// (forever-bugs #163, #401; wowsims EV-0129): only in combat, about 8% (spell_proc Chance) on each non-crit damage or heal hit of a spell,
-// rolled per target, never on crits, aura-only applications or periodic ticks, and not on seals (melee attacks); it can refresh the buff
-// while it is up. Warriors and rogues have no buff. Not modelled: the lower chance at high crit and for lower ranks (no formula known).
-class classic_spell_item_revelation : public AuraScript
-{
-    static uint32 BuffFor(uint8 playerClass)
-    {
-        switch (playerClass)
-        {
-            case CLASS_MAGE:    return 1248808;
-            case CLASS_PRIEST:  return 1323377;
-            case CLASS_WARLOCK: return 1323392;
-            case CLASS_DRUID:   return 1323400;
-            case CLASS_HUNTER:  return 1323410;
-            case CLASS_SHAMAN:  return 1323418;
-            case CLASS_PALADIN: return 1323419;
-            default:            return 0;
-        }
-    }
-
-    bool Validate(SpellInfo const* /*spellInfo*/) override
-    {
-        return ValidateSpellInfo({ 1248808, 1323377, 1323392, 1323400, 1323410, 1323418, 1323419 });
-    }
-
-    bool CheckProc(ProcEventInfo& eventInfo)
-    {
-        Unit* actor = eventInfo.GetActor();
-        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
-        if (!actor || !actor->IsPlayer() || !actor->IsInCombat() || !spellInfo || !BuffFor(actor->GetClass()))
-            return false;
-
-        if (spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MELEE || (eventInfo.GetHitMask() & PROC_HIT_CRITICAL))
-            return false;
-
-        DamageInfo const* damageInfo = eventInfo.GetDamageInfo();
-        HealInfo const* healInfo = eventInfo.GetHealInfo();
-        return (damageInfo && damageInfo->GetDamage()) || (healInfo && healInfo->GetHeal());
-    }
-
-    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
-    {
-        PreventDefaultAction();
-        Unit* actor = eventInfo.GetActor();
-        actor->CastSpell(actor, BuffFor(actor->GetClass()), CastSpellExtraArgs(aurEff));
-    }
-
-    void Register() override
-    {
-        DoCheckProc += AuraCheckProcFn(classic_spell_item_revelation::CheckProc);
-        OnEffectProc += AuraEffectProcFn(classic_spell_item_revelation::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
-    }
-};
-
 // 450608 - "S03 - Druid Energize Trigger - Wildheart Raiment", the Feralheart Raiment 4-piece bonus (item set 1667, also set 1666 6-piece and
 // 185 5-piece): "Chance on spellcast to restore $27782s1 Mana, on melee attack to regenerate $27784o1 Energy over $27784d, and when struck by
 // a melee attack to generate ${$27783s1/10} Rage." The aura is a dummy with proc flags and no trigger, so it did nothing (forever-bugs #523).
@@ -3548,7 +3506,6 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_proc_chance_from_effect);
     RegisterSpellScript(classic_spell_proc_chance_from_effect_dummy);
     RegisterSpellScript(classic_spell_quest_testing_the_wells);
-    RegisterSpellScript(classic_spell_item_revelation);
     RegisterSpellScript(classic_spell_item_feralheart_4p);
     RegisterSpellScript(classic_spell_item_restore_mathystral_amulet);
     RegisterSpellScript(classic_spell_item_ashen_warlock_bones);

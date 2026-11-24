@@ -95,14 +95,16 @@ namespace WarlockPetForever
 
     // The demons' own stats as shares of the client's ExpectedStat creature values for their level (wowsims/forever pets.go, EV-0075,
     // EV-0076, EV-0078; read at levels 20 and 30, level 60 extrapolated). Armor already matches the vanilla pet_levelstats within 3%;
-    // health is in 2026_11_17_10_world_forever_demon_base_health.sql, the weapons in Pet::InitStatsForLevel, attack power and the
+    // health is in 2026_11_17_10_world_forever_demon_base_health.sql (Imp and Sayaad +15% for Blizzard's 10 November hotfix in
+    // 2026_11_24_61_world_forever_demon_base_health_1110.sql), the weapons in Pet::InitStatsForLevel, attack power and the
     // Voidwalker's halved melee in Guardian::UpdateAttackPowerAndDamage and Guardian::UpdateDamagePhysical.
     constexpr float ImpHealthShare = 0.359f;
     constexpr float VoidwalkerHealthShare = 1.400f;
     constexpr float SayaadHealthShare = 0.699f;
 
     constexpr uint32 VoidwalkerEntry = 1860;
-    constexpr uint32 SayaadEntry = 1863;
+    constexpr uint32 SayaadEntry = 1863;          // Succubus
+    constexpr uint32 IncubusEntry = 185317;       // Summon Incubus 713; the same Sayaad as the Succubus
 
     // A demon's average swing before attack power, as a share of the creature dps at its 2.0 s swing, and how far either side of it
     // the damage range spans.
@@ -122,7 +124,8 @@ namespace WarlockPetForever
     {
         switch (entry)
         {
-            case SayaadEntry:     return &SayaadSwing;
+            case SayaadEntry:
+            case IncubusEntry:    return &SayaadSwing;
             case VoidwalkerEntry: return &VoidwalkerSwing;
             default:              return nullptr;
         }

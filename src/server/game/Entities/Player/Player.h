@@ -2138,6 +2138,11 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void SetSpellModTakingSpell(Spell* spell, bool apply);
         void SendSpellModifiers() const;
 
+        // WoW Forever: a Revelation charge spent by a channel covers every tick of that channel (Player.cpp)
+        void StartRevelationChannel(Spell const* channel);
+        float GetRevelationChannelCritBonus(ObjectGuid const& channelCastId) const;
+        float GetRevelationChannelCritBonus(Spell const* tickSpell) const;
+
         void RemoveArenaSpellCooldowns(bool removeActivePetCooldowns = false);
 
         float GetEmpowerMinHoldStagePercent() const { return m_empowerMinHoldStagePercent; }
@@ -2990,6 +2995,11 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         uint32 GetChampioningFaction() const { return m_ChampioningFaction; }
         void SetChampioningFaction(uint32 faction) { m_ChampioningFaction = faction; }
         Spell* m_spellModTakingSpell;
+
+        // the channel that spent a Revelation charge and the crit chance it keeps for its ticks
+        ObjectGuid m_revelationChannelCastId;
+        uint32 m_revelationChannelSpellId = 0;
+        float m_revelationChannelCritBonus = 0.0f;
 
         float GetAverageItemLevel() const;
         bool isDebugAreaTriggers;

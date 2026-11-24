@@ -1340,7 +1340,15 @@ float AuraEffect::GetCritChanceFor(Unit const* caster, Unit const* target) const
     if (!GetBase()->CanPeriodicTickCrit())
         return 0.0f;
 
-    return target->SpellCritChanceTaken(caster, nullptr, this, GetSpellInfo()->GetSchoolMask(), CalcPeriodicCritChance(caster), GetSpellInfo()->GetAttackType());
+    float doneChance = CalcPeriodicCritChance(caster);
+
+    // WoW Forever: a tick of a channel that spent a Revelation charge (Mind Flay, Drain Life; Player::StartRevelationChannel), not the
+    // damage a channel does to its own caster (Hellfire)
+    if (caster && target != caster)
+        if (Player const* player = caster->ToPlayer())
+            doneChance += player->GetRevelationChannelCritBonus(GetBase()->GetCastId());
+
+    return target->SpellCritChanceTaken(caster, nullptr, this, GetSpellInfo()->GetSchoolMask(), doneChance, GetSpellInfo()->GetAttackType());
 }
 
 bool AuraEffect::IsAffectingSpell(SpellInfo const* spell) const
