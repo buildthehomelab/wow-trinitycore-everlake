@@ -1393,8 +1393,13 @@ class classic_spell_pal_improved_seal_of_fury : public AuraScript
 //   target by up to X and the effect Flash of Light spells used on the target by up to Y". Effect 0 is the Holy Light bonus, effect 1 the
 //   Flash of Light bonus; the best blessing on the target counts (no stacking between paladins), scaled by the heal coefficient (vanilla).
 // - 412019 Sacred Shield: Flash of Light gets the shield's crit bonus (412018 effect 1, +50%) on targets with the paladin's Sacred Shield.
+// - 28851 Libram of Light 23006 (and 23204): "Increases healing done by Flash of Light by up to 83." The equip aura is a dummy nothing read;
+//   its amount is the paladin's own bonus healing for Flash of Light, scaled by the heal coefficient like any (wowsims/forever, MIT,
+//   sim/paladin/item_librams.go).
 class classic_spell_pal_holy_light_flash_of_light : public SpellScript
 {
+    static constexpr uint32 SPELL_ITEM_LIBRAM_OF_LIGHT = 28851;
+
     static bool IsHolyLight(SpellInfo const* spellInfo)
     {
         return (spellInfo->SpellFamilyFlags[0] & 0x80000000) != 0;
@@ -1415,6 +1420,10 @@ class classic_spell_pal_holy_light_flash_of_light : public SpellScript
         for (AuraEffect const* aurEff : victim->GetAuraEffectsByType(SPELL_AURA_DUMMY))
             if (aurEff->GetEffIndex() == blessingEffect && IsBlessingOfLight(aurEff->GetId()))
                 bonus = std::max(bonus, aurEff->GetAmountAsInt());
+
+        if (!IsHolyLight(GetSpellInfo()))
+            if (AuraEffect const* libram = GetCaster()->GetAuraEffect(SPELL_ITEM_LIBRAM_OF_LIGHT, EFFECT_0))
+                bonus += libram->GetAmountAsInt();
 
         if (bonus > 0)
             flatMod += int32(bonus * spellEffectInfo.BonusCoefficient);

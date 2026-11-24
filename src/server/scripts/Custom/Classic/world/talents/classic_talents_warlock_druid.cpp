@@ -2139,8 +2139,12 @@ std::unordered_map<ObjectGuid, std::vector<classic_spell_dru_entangling_roots_li
 // 18562 - Swiftmend: "Consumes a Rejuvenation or Regrowth effect on a friendly target to instantly heal them an amount equal to 12 sec of
 // Rejuvenation or 18 sec of Regrowth." The client spell is a plain heal of 1 and consumed nothing. The heal is now the periodic effect's
 // base amount times the ticks of 12 / 18 sec, the effect is removed, and the cast needs one of the two from the druid on the target.
+// 1291075 - Swiftmend Cooldown Reduction (Idol of Synthesis 272429): "Each of your heal over time effects on the target reduces the remaining
+// cooldown on Swiftmend by 1 sec when you cast it." The equip aura is a dummy holding the 1000 ms; the druid's heals over time on the target
+// are counted as the cast lands, the consumed one included, and the cooldown the cast started is shortened by that many.
 class classic_spell_dru_swiftmend : public SpellScript
 {
+    static constexpr uint32 SPELL_ITEM_SWIFTMEND_COOLDOWN_REDUCTION = 1291075;
     static constexpr uint32 FAMILY_REJUVENATION = 0x10;
     static constexpr uint32 FAMILY_REGROWTH = 0x40;
 
@@ -2181,6 +2185,21 @@ class classic_spell_dru_swiftmend : public SpellScript
         int32 ticks = (hot->GetSpellInfo()->SpellFamilyFlags[0] & FAMILY_REJUVENATION) ? TICKS_REJUVENATION : TICKS_REGROWTH;
         SetEffectValue(hot->GetAmount() * ticks);
         _consumedSpell = hot->GetId();
+
+        std::vector<uint32> hots;
+        for (AuraEffect const* effect : target->GetAuraEffectsByType(SPELL_AURA_PERIODIC_HEAL))
+            if (effect->GetCasterGUID() == GetCaster()->GetGUID() && std::find(hots.begin(), hots.end(), effect->GetId()) == hots.end())
+                hots.push_back(effect->GetId());
+        _hotCount = uint32(hots.size());
+    }
+
+    void HandleAfterCast()
+    {
+        Unit* caster = GetCaster();
+        if (!_hotCount)
+            return;
+        if (AuraEffect const* idol = caster->GetAuraEffect(SPELL_ITEM_SWIFTMEND_COOLDOWN_REDUCTION, EFFECT_0))
+            caster->GetSpellHistory()->ModifyCooldown(GetSpellInfo(), -Milliseconds(int64(idol->GetAmountAsInt()) * _hotCount));
     }
 
     void HandleHitHeal(SpellEffIndex /*effIndex*/)
@@ -2195,10 +2214,12 @@ class classic_spell_dru_swiftmend : public SpellScript
         OnCheckCast += SpellCheckCastFn(classic_spell_dru_swiftmend::CheckCast);
         OnEffectLaunchTarget += SpellEffectFn(classic_spell_dru_swiftmend::HandleLaunchHeal, EFFECT_0, SPELL_EFFECT_HEAL);
         OnEffectHitTarget += SpellEffectFn(classic_spell_dru_swiftmend::HandleHitHeal, EFFECT_0, SPELL_EFFECT_HEAL);
+        AfterCast += SpellCastFn(classic_spell_dru_swiftmend::HandleAfterCast);
     }
 
 private:
     uint32 _consumedSpell = 0;
+    uint32 _hotCount = 0;
 };
 
 // 22842 - Frenzied Regeneration: "Converts up to 10 Rage per second into health for $d. Each point of Rage is converted into $s1% health."
