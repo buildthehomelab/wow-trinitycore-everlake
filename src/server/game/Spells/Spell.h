@@ -772,6 +772,8 @@ class TC_GAME_API Spell
         std::vector<std::pair<ObjectGuid, uint32>> m_classicReservedCharges;
     public:
         void ClassicReserveCharge(ObjectGuid const& auraCaster, uint32 auraSpellId);
+        // drops a reservation: a buff that came back fresh during the channel (Arcane Concentration's Clearcasting) is not this channel's
+        void ClassicReleaseCharge(ObjectGuid const& auraCaster, uint32 auraSpellId);
     protected:
         void ClassicSpendReservedCharges();
         int32 m_comboPointsPending = 0;                     // combo points a finisher spends once its effects are done (they read the points)
