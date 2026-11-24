@@ -691,7 +691,8 @@ static float ArcaneMissilesRollShare(SpellInfo const* channel)
 static void KeepClearcastingPastChannel(Unit* mage, uint32 clearcastingSpellId)
 {
     if (Spell* channel = mage->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
-        channel->ClassicReleaseCharge(mage->GetGUID(), clearcastingSpellId);
+        if (IsArcaneMissilesChannel(channel->GetSpellInfo()->Id))
+            channel->ClassicReleaseCharge(mage->GetGUID(), clearcastingSpellId);
 }
 
 // 11213 - Arcane Concentration: "Gives you a $s1% chance of entering a Clearcasting state after any damage spell hits a target." The client
