@@ -2497,6 +2497,12 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void LearnSkillRewardedSpells(uint32 skillId, uint32 skillValue, Races race);
         int32 GetProfessionSlotFor(uint32 skillId) const;
         int32 FindEmptyProfessionSlotFor(uint32 skillId) const;
+        // Everlake: MaxPrimaryTradeSkill can be above 2, but the client has only 2 ProfessionSkillLine slots, and only
+        // professions in a slot get a window and a Professions tab entry. .profession show moves one into a slot.
+        enum class ShowProfessionResult { Ok, AlreadyShown, NotPrimaryProfession, ToolsEquipped };
+        std::vector<uint32> GetPrimaryProfessions() const;
+        ShowProfessionResult ShowProfession(uint32 skillId, uint32* hiddenSkillId = nullptr);
+        void FillFreeProfessionSlots(uint32 exceptSkillId = 0);
         uint16 GetSkillLineIdByPos(uint32 pos) const { return m_activePlayerData->Skill->SkillLineID[pos]; }
         void SetSkillLineId(uint32 pos, uint16 skillLineId) { SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::Skill).ModifyValue(&UF::SkillInfo::SkillLineID, pos), skillLineId); }
         uint16 GetSkillStepByPos(uint32 pos) const { return m_activePlayerData->Skill->SkillStep[pos]; }
@@ -3526,6 +3532,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
 
         uint32 m_lastFallTime;
         float  m_lastFallZ;
+
+        int32 _lastShownProfessionSlot = -1; // slot .profession show filled last, so the next one replaces the other
 
         std::array<MirrorTimer, MIRROR_TIMER_MAX> m_mirrorTimers;
         int32 m_environmentalDamageTimer;

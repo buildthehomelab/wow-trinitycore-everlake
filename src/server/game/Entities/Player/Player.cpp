@@ -6442,6 +6442,9 @@ void Player::SetSkill(uint32 id, uint16 step, uint16 newVal, uint16 maxVal)
 
                 // Clear profession lines
                 SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::ProfessionSkillLine, professionSlot), 0);
+
+                // Everlake: with MaxPrimaryTradeSkill above 2, a hidden profession takes the freed slot
+                FillFreeProfessionSlots(id);
             }
 
             //remove enchantments needing this skill
@@ -27390,6 +27393,77 @@ int32 Player::FindEmptyProfessionSlotFor(uint32 skillId) const
     // if there is no same profession, find any free slot
     auto freeSlot = std::find(professionsBegin, professionsEnd, 0);
     return freeSlot != professionsEnd ? std::distance(professionsBegin, freeSlot) : -1;
+}
+
+std::vector<uint32> Player::GetPrimaryProfessions() const
+{
+    std::vector<uint32> professions;
+    for (auto const& [skillId, status] : mSkillStatus)
+        if (status.uState != SKILL_DELETED && IsPrimaryProfessionSkill(skillId) && HasSkill(skillId))
+            professions.push_back(skillId);
+
+    std::sort(professions.begin(), professions.end());
+    return professions;
+}
+
+// Puts a learned primary profession into one of the client's 2 ProfessionSkillLine slots. A free slot is used first;
+// otherwise the slot not filled last by this command is taken, so two calls in a row pick the two shown professions.
+// The hidden profession keeps its skill and recipes. The slot is saved in character_skills.professionSlot.
+Player::ShowProfessionResult Player::ShowProfession(uint32 skillId, uint32* hiddenSkillId /*= nullptr*/)
+{
+    if (hiddenSkillId)
+        *hiddenSkillId = 0;
+
+    if (!IsPrimaryProfessionSkill(skillId) || !HasSkill(skillId))
+        return ShowProfessionResult::NotPrimaryProfession;
+
+    if (GetProfessionSlotFor(skillId) != -1)
+        return ShowProfessionResult::AlreadyShown;
+
+    int32 slot = FindEmptyProfessionSlotFor(skillId);
+    if (slot == -1)
+        slot = _lastShownProfessionSlot == 1 ? 0 : 1;
+
+    // profession tools and gear sit in per-slot equipment slots; they would end up under the other profession
+    uint8 const professionSlotStart = PROFESSION_SLOT_PROFESSION1_TOOL + slot * PROFESSION_SLOT_MAX_COUNT;
+    for (uint8 slotOffset = 0; slotOffset < PROFESSION_SLOT_MAX_COUNT; ++slotOffset)
+        if (GetItemByPos(INVENTORY_SLOT_BAG_0, professionSlotStart + slotOffset))
+            return ShowProfessionResult::ToolsEquipped;
+
+    uint32 const oldSkillId = uint32(m_activePlayerData->ProfessionSkillLine[slot]);
+    SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::ProfessionSkillLine, slot), int32(skillId));
+    _lastShownProfessionSlot = slot;
+
+    for (uint32 changedSkillId : { skillId, oldSkillId })
+    {
+        auto itr = mSkillStatus.find(changedSkillId);
+        if (itr != mSkillStatus.end() && itr->second.uState == SKILL_UNCHANGED)
+            itr->second.uState = SKILL_CHANGED;
+    }
+
+    if (hiddenSkillId)
+        *hiddenSkillId = oldSkillId;
+
+    return ShowProfessionResult::Ok;
+}
+
+// A slot freed by unlearning a profession goes to a learned primary profession that had none.
+void Player::FillFreeProfessionSlots(uint32 exceptSkillId /*= 0*/)
+{
+    for (uint32 skillId : GetPrimaryProfessions())
+    {
+        if (skillId == exceptSkillId || GetProfessionSlotFor(skillId) != -1)
+            continue;
+
+        int32 slot = FindEmptyProfessionSlotFor(skillId);
+        if (slot == -1)
+            return;
+
+        SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::ProfessionSkillLine, slot), int32(skillId));
+        auto itr = mSkillStatus.find(skillId);
+        if (itr != mSkillStatus.end() && itr->second.uState == SKILL_UNCHANGED)
+            itr->second.uState = SKILL_CHANGED;
+    }
 }
 
 void Player::SendAurasForTarget(Unit* target) const

@@ -762,6 +762,7 @@ enum RBACPermissions
     RBAC_PERM_COMMAND_BATTLETAG                              = 1002, // .battletag [name] (players too)
     RBAC_PERM_COMMAND_GM_COMBATLOG                           = 1003, // .gm combatlog: a unit's or group's combat log from any distance (admins)
     RBAC_PERM_COMMAND_DEATHRECAP                             = 1004, // .deathrecap [name]: text dump of a player's last recorded death
+    RBAC_PERM_COMMAND_PROFESSION                             = 1005, // .profession [show <name>]: pick the 2 primary professions the client shows (players too)
     RBAC_PERM_MAX
 };
 
