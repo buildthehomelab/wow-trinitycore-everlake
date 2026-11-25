@@ -1843,8 +1843,14 @@ void Player::RegenerateHealth()
 
     addValue += m_healthFraction;
     int32 integerValue = int32(addValue);
+    // less than one health this tick: keep it for the next ticks, as RegeneratePower does. Returning without it lost
+    // every tick's share, so a regen under 1 per tick gave nothing at all (a level 4 High Order Skyborne warrior, 18
+    // Spirit: 0.08 a tick, never a single point)
     if (!integerValue)
+    {
+        m_healthFraction = addValue;
         return;
+    }
 
     if (curValue + integerValue < maxValue)
     {
