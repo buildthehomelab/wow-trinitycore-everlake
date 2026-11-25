@@ -2720,7 +2720,7 @@ void GameObject::Use(Unit* user, bool ignoreCastInProgress /*= false*/)
     // If cooldown data present in template
     if (uint32 cooldown = GetGOInfo()->GetCooldown())
     {
-        if (m_cooldownTime > GameTime::GetGameTime())
+        if (m_cooldownTime > GameTime::GetGameTimeMS())
             return;
 
         m_cooldownTime = GameTime::GetGameTimeMS() + cooldown * IN_MILLISECONDS;
