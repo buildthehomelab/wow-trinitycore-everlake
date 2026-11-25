@@ -4233,6 +4233,17 @@ AuctionHouseBot.Vanilla.MarketPrices = 0
 AuctionHouseBot.Vanilla.MarketPrices.Scale = 1
 
 #
+#    AuctionHouseBot.Vanilla.MarketPrices.Only
+#       Description: List only items that have a market price in auctionhousebot_market_price. When the prices come from
+#                    live trading, an item without one never traded there: out of era, raid-only, event or never traded.
+#                    Off while no prices are loaded (AuctionHouseBot.Vanilla.MarketPrices = 0 or an empty table), so it
+#                    can not empty the auction house. Read when the bot starts.
+#       Default:     0 - (Disabled, every item the other filters allow)
+#                    1 - (Enabled)
+
+AuctionHouseBot.Vanilla.MarketPrices.Only = 0
+
+#
 #    AuctionHouseBot.Alliance.Items.Amount.Ratio
 #       Description: Enable/Disable (disabled if 0) the part of AHBot that puts items up for auction on Alliance AH
 #       Default:     100 - (Enabled with 100% of items specified in AuctionHouse.Items.Amount.color section)
