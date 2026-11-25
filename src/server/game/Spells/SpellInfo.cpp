@@ -4455,11 +4455,13 @@ Optional<SpellPowerCost> SpellInfo::CalcPowerCost(SpellPowerEntry const* power, 
             switch (power->PowerType)
             {
                 // health as power used
+                // Classic 1.60: a percent health cost is of the base health ("Costs 25% of base health", Reckless Swings 1329555;
+                // Bloodrage 2687 20%), the number the tooltip shows; max health charged far more with stamina (Karrz1/ForeverCore#411)
                 case POWER_HEALTH:
                     if (G3D::fuzzyEq(power->PowerCostPct, 0.0f))
-                        powerCost += int32(CalculatePct(unitCaster->GetMaxHealth(), power->PowerCostMaxPct));
+                        powerCost += int32(CalculatePct(unitCaster->GetCreateHealth(), power->PowerCostMaxPct));
                     else
-                        powerCost += int32(CalculatePct(unitCaster->GetMaxHealth(), power->PowerCostPct));
+                        powerCost += int32(CalculatePct(unitCaster->GetCreateHealth(), power->PowerCostPct));
                     break;
                 case POWER_MANA:
                     powerCost += int32(CalculatePct(unitCaster->GetCreateMana(), power->PowerCostPct));
@@ -4491,7 +4493,7 @@ Optional<SpellPowerCost> SpellInfo::CalcPowerCost(SpellPowerEntry const* power, 
             {
                 // health as power used
                 case POWER_HEALTH:
-                    powerCost += int32(CalculatePct(unitCaster->GetMaxHealth(), power->OptionalCostPct));
+                    powerCost += int32(CalculatePct(unitCaster->GetCreateHealth(), power->OptionalCostPct));
                     break;
                 case POWER_MANA:
                     powerCost += int32(CalculatePct(unitCaster->GetCreateMana(), power->OptionalCostPct));
