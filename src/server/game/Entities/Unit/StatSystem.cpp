@@ -447,11 +447,10 @@ float Player::OCTRegenMPPerSpirit() const
 }
 
 // Classic 1.60 (vanilla, VMaNGOS / TrinityCoreClassic): health per 2 second tick from spirit, out of combat
-float Player::OCTRegenHPPerSpirit() const
+static float ClassicOCTRegenHP(uint8 playerClass, float spirit)
 {
-    float spirit = GetStat(STAT_SPIRIT);
     float regen;
-    switch (GetClass())
+    switch (playerClass)
     {
         case CLASS_DRUID:
         case CLASS_MAGE:    regen = spirit * 0.11f + 1.0f; break;
@@ -465,6 +464,20 @@ float Player::OCTRegenHPPerSpirit() const
         default:            regen = 0.0f; break;
     }
     return std::max(0.0f, regen);
+}
+
+float Player::OCTRegenHPPerSpirit() const
+{
+    float regen = ClassicOCTRegenHP(GetClass(), GetStat(STAT_SPIRIT));
+    // The formulas are fitted to the vanilla races, the lowest of which in Spirit is the Dwarf (-1). WoW Forever's High
+    // Order Skyborne (race 95) has -3 (live character sheets, 2026_11_18_00): a warrior of it gets 0 to 0.08 health a tick
+    // up to level 6 and 1.3 to level 9. No race regenerates less than a Dwarf of its class and level would from its base
+    // Spirit (user decision 2026-11-24; live's own Skyborne regen is not measured). A class no Dwarf can be has no floor.
+    PlayerLevelInfo dwarf;
+    sObjectMgr->GetPlayerLevelInfo(RACE_DWARF, GetClass(), GetLevel(), &dwarf);
+    if (dwarf.stats[STAT_SPIRIT] > 0)
+        regen = std::max(regen, ClassicOCTRegenHP(GetClass(), float(dwarf.stats[STAT_SPIRIT])));
+    return regen;
 }
 
 void Player::UpdateAttackPowerAndDamage(bool ranged)
