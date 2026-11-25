@@ -203,8 +203,8 @@ namespace Trinity
                     }
 
                     // Classic 1.60: kill experience in 5 player dungeons (Rate.XP.DungeonKill). Blizzard (Kaivax, November 10
-                    // 2026): the November 8 hotfix "took dungeon kill XP from 40% of the values in Classic Era to 60%", so the
-                    // default is 0.6 of the Classic Era value this formula gives
+                    // 2026): the November 8 hotfix "took dungeon kill XP from 40% of the values in Classic Era to 60%", so live
+                    // is 0.6 of the Classic Era value this formula gives. Everlake's default is 1 (Classic Era, the open-world rate)
                     if (u->GetMap()->IsNonRaidDungeon())
                         xpMod *= sWorld->getRate(RATE_XP_DUNGEON_KILL);
 

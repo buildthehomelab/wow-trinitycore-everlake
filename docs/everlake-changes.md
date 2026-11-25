@@ -118,7 +118,6 @@ the retail rule back without a build error.
 | No cap on pushback hits | `Spell::Delayed`, `Spell::DelayedChannel` (no `IsDelayableNoMore`) | **Silent:** pushback stops after 2 hits |
 | Legacy Points earned per account, 16 spendable | `Player::_LoadAccountLegacyAchievements` (login query `CHAR_SEL_ACCOUNT_ACHIEVEMENTS`), `Player::HasAchievedOnAccount` in `UpdateClassicLegacyUnlock` and `TraitMgr` `FillOwnedCurrenciesMap` (plus the `SourcedMax` clamp there) | **Silent:** every alt starts at 0 Legacy Points, or more than 16 can be spent |
 | Meeting stones don't summon | `GameObject::Use`, `GAMEOBJECT_TYPE_MEETINGSTONE` | Stones try the Wrath spell 59782 (not in the client) |
-| Dungeon kill XP at live's 60% of Classic Era | `Rate.XP.DungeonKill` default 0.6 | Dungeon kills give 1.8x (about 3x live) |
 | Faction auction houses, goblin houses cross-faction | `AllowTwoSide.Interaction.Auction` default 0 | One shared house everywhere at 5% / 5% |
 | Auction house bot stocks and buys in the Alliance, Horde and goblin houses | `src/modules/PlayerbotV2/conf/zz-0-playerbot-defaults.conf` (`*.Items.Amount.Ratio` 100 each, faction buyers on) and `zz-forever-bots.conf` (faction buyers on) | **Silent:** the bot stocks only house 1 (goblin auctioneers); Alliance and Horde houses stay empty |
 | Riding 100g / 1,000g at Friendly | `sql/custom/world/2026_11_19_81_world_forever_riding_prices.sql` | Prices back to 90g / 900g (the Honored price) |
@@ -137,6 +136,8 @@ grep -n "Alliance.Items.Amount.Ratio\|Buyer.Horde.Enabled" src/modules/Playerbot
 
 Everlake choices that differ from live Forever or have no Forever source (decided 2026-11-19, keep them):
 
+- **Dungeon kill XP at the open-world rate** (`Rate.XP.DungeonKill` default 1, Classic Era; decided 2026-11-25). Live
+  Forever pays 0.6 of Era since its November 8 hotfix. The carry block (`Classic.DungeonCarryXpBlock`) still applies.
 - **No debuff cap.** The official realm probably caps debuffs per target (Era: 16); Everlake keeps no cap (`MAX_AURAS`).
 - **Open-world raid tagging is vanilla:** with a raid on the tap list, every raid member near the looter can roll, tagged
   or not. Keep it until Forever says otherwise.
