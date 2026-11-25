@@ -281,6 +281,7 @@ Player::Player(WorldSession* session) : Unit(true), m_sceneMgr(this)
     m_petResummonDelay = 0;
     m_petParkedForTravel = false;
     m_petParkedCheckTimer = 0;
+    m_petParkedLoadFails = 0;
     //cache for CreatedBySpell to allow
     //returning reagents for temporarily removed pets
     //when dying/logging out
@@ -1137,7 +1138,10 @@ void Player::Update(uint32 p_time)
     Pet* pet = GetPet();
     // A pet out of sight on the same map (stuck on the terrain, left at a fight) is set down next to its owner, the way a player's pet
     // catches up in Classic; before, it was dismissed and a warlock's Imp just vanished while fighting or travelling (player report, 3 Nov).
-    if (pet && !pet->IsWithinDistInMap(this, GetMap()->GetVisibilityRange()) && !pet->isPossessed() && !pet->CatchUpWithOwner())
+    // One that cannot follow where the owner went (a taxi, a boat) is parked until the owner is back on the ground, never dismissed:
+    // Pet::Update has this same fallback, and whichever of the two ticks first used to decide whether the pet survived the trip.
+    if (pet && !pet->IsWithinDistInMap(this, GetMap()->GetVisibilityRange()) && !pet->isPossessed()
+        && !pet->CatchUpWithOwner() && !(pet->isControlled() && pet->ParkForOwnerTravel()))
     //if (pet && !pet->IsWithinDistInMap(this, GetMap()->GetVisibilityDistance()) && (GetCharmGUID() && (pet->GetGUID() != GetCharmGUID())))
     {
         TC_LOG_INFO("entities.pet", "Pet {} ({}) of {} dismissed: out of its owner's sight", pet->GetName(), pet->GetEntry(), GetName());
@@ -1361,9 +1365,9 @@ bool Player::TeleportTo(TeleportLocation const& teleportLocation, TeleportToOpti
 
         if (!(options & TELE_TO_NOT_UNSUMMON_PET))
         {
-            //same map, only remove pet if out of range for new position
+            //same map, only remove pet if out of range for new position; parked so UpdateParkedPet can retry the bring-back
             if (pet && !pet->IsWithinDist3d(&teleportLocation.Location, GetMap()->GetVisibilityRange()))
-                UnsummonPetTemporaryIfAny();
+                ParkPetForTravel();
         }
 
         if (!IsAlive() && options & TELE_REVIVE_AT_TELEPORT)
@@ -1452,9 +1456,9 @@ bool Player::TeleportTo(TeleportLocation const& teleportLocation, TeleportToOpti
                 pet->RemoveArenaAuras();
         }
 
-        // remove pet on map change
+        // remove pet on map change; parked so a resummon that cannot fire right away is retried instead of lost
         if (pet)
-            UnsummonPetTemporaryIfAny();
+            ParkPetForTravel();
 
         // remove all dyn objects
         RemoveAllDynObjects();
@@ -29960,6 +29964,7 @@ void Player::ParkPetForTravel()
     {
         m_petParkedForTravel = true;
         m_petParkedCheckTimer = 2000;
+        m_petParkedLoadFails = 0;
     }
 }
 
@@ -29985,8 +29990,11 @@ void Player::UpdateParkedPet(uint32 diff)
     if (!IsInWorld() || IsBeingTeleported() || IsInFlight() || GetTransport() || GetVehicle() || IsPetNeedBeTemporaryUnsummoned())
         return;
 
-    m_petParkedForTravel = false;
     ResummonPetTemporaryUnSummonedIfAny();
+    // The flag stays set while a retry is still owed; a pet brought back (or brought back by someone
+    // else) or the retry limit reached clears it.
+    if (!m_temporaryUnsummonedPetNumber || !GetPetGUID().IsEmpty())
+        m_petParkedForTravel = false;
 }
 
 void Player::ResummonPetTemporaryUnSummonedIfAny()
@@ -30002,8 +30010,23 @@ void Player::ResummonPetTemporaryUnSummonedIfAny()
         return;
 
     Pet* NewPet = new Pet(this);
-    if (!NewPet->LoadPetFromDB(this, 0, m_temporaryUnsummonedPetNumber, true))
-        delete NewPet;
+    if (NewPet->LoadPetFromDB(this, 0, m_temporaryUnsummonedPetNumber, true))
+    {
+        m_temporaryUnsummonedPetNumber = 0;
+        return;
+    }
+
+    delete NewPet;
+    // A pet parked for travel gets the load retried by UpdateParkedPet rather than dropped after one
+    // failure. Give up after a few tries but keep the number, so a later resummon trigger can still
+    // bring the pet back.
+    if (m_petParkedForTravel)
+    {
+        if (++m_petParkedLoadFails < 5)
+            return;
+        m_petParkedForTravel = false;
+        return;
+    }
 
     m_temporaryUnsummonedPetNumber = 0;
 }

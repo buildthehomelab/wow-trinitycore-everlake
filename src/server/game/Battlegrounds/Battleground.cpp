@@ -608,6 +608,11 @@ char const* Battleground::GetMountRefusal(Player const* player) const
     return nullptr;
 }
 
+uint8 Battleground::GetLfgRole(ChrSpecializationEntry const* spec)
+{
+    return uint8(spec ? spec->GetRole() : ChrSpecializationRole::Dps);
+}
+
 bool Battleground::IsMountRefused(Player const* player, bool checkStartArea) const
 {
     if (checkStartArea && GetStatus() == STATUS_WAIT_JOIN && IsEnclosedStartArea(GetMapId()))
@@ -1444,6 +1449,7 @@ void Battleground::BuildPvPLogDataPacket(WorldPackets::Battleground::PVPMatchSta
             playerData.Race = player->GetRace();
             playerData.Class = player->GetClass();
             playerData.HonorLevel = player->GetHonorLevel();
+            playerData.Role = GetLfgRole(player->GetPrimarySpecializationEntry());
 
             pvpLogData.Statistics.push_back(playerData);
         }

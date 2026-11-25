@@ -3549,6 +3549,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         uint32 m_petResummonDelay;                          // ms until the pet remembered at login is summoned (0 = none pending)
         bool m_petParkedForTravel;                          // pet put away because it could not follow the owner (boat, taxi, teleport)
         uint32 m_petParkedCheckTimer;
+        uint8 m_petParkedLoadFails;                         // resummon loads that failed while parked; bounded so a bad record cannot retry forever
         Optional<ReactStates> m_temporaryPetReactState;
         uint32 m_oldpetspell;
         ObjectGuid m_temporaryUnsummonedBattlePet;

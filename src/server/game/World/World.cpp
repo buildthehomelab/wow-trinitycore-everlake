@@ -1074,6 +1074,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "Rate.MoveSpeed"sv, .DefaultValue = 1.0f, .Index = RATE_MOVESPEED, .Min = 0.01f },
         { .Name = "Rate.MoveSpeed.Creature"sv, .DefaultValue = 1.0f, .Index = RATE_MOVESPEED_CREATURE, .Min = 0.01f },
         { .Name = "Rate.Corpse.Decay.Looted"sv, .DefaultValue = 0.5f, .Index = RATE_CORPSE_DECAY_LOOTED },
+        { .Name = "Rate.PetHappiness.Decay"sv, .DefaultValue = 1.0f, .Index = RATE_PET_HAPPINESS_DECAY, .Min = 0.0f, .Max = 2.0f },
         { .Name = "DurabilityLoss.OnDeath"sv, .DefaultValue = 10.0f, .Index = RATE_DURABILITY_LOSS_ON_DEATH, .Min = 0.0f, .Max = 100.0f },
         { .Name = "DurabilityLossChance.Damage"sv, .DefaultValue = 0.5f, .Index = RATE_DURABILITY_LOSS_DAMAGE, .Min = 0.0f },
         { .Name = "DurabilityLossChance.Absorb"sv, .DefaultValue = 0.5f, .Index = RATE_DURABILITY_LOSS_ABSORB, .Min = 0.0f },

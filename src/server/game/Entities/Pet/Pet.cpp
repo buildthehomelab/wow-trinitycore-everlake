@@ -763,7 +763,8 @@ void Pet::Update(uint32 diff)
                 else
                 {
                     m_happinessTimer = HAPPINESS_LOSS_INTERVAL;
-                    ModifyPower(POWER_HAPPINESS, -(IsInCombat() ? HAPPINESS_LOSS * 3 / 2 : HAPPINESS_LOSS));
+                    int32 loss = int32(HAPPINESS_LOSS * (IsInCombat() ? 1.5f : 1.0f) * sWorld->getRate(RATE_PET_HAPPINESS_DECAY));
+                    ModifyPower(POWER_HAPPINESS, -loss);
                 }
             }
 

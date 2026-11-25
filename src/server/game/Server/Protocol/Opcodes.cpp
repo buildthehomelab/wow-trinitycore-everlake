@@ -783,7 +783,7 @@ void OpcodeTable::InitializeClientOpcodes()
     DEFINE_HANDLER(CMSG_MOVE_SET_MOD_MOVEMENT_FORCE_MAGNITUDE_ACK,          STATUS_LOGGEDIN,  PROCESS_THREADSAFE,   &WorldSession::HandleMoveSetModMovementForceMagnitudeAck);
     DEFINE_HANDLER(CMSG_MOVE_SET_PITCH,                                     STATUS_LOGGEDIN,  PROCESS_THREADSAFE,   &WorldSession::HandleMovementOpcodes);
     DEFINE_HANDLER(CMSG_MOVE_SET_RUN_MODE,                                  STATUS_LOGGEDIN,  PROCESS_THREADSAFE,   &WorldSession::HandleMovementOpcodes);
-    DEFINE_HANDLER(CMSG_MOVE_SET_TURN_RATE_CHEAT,                           STATUS_UNHANDLED, PROCESS_THREADSAFE,   &WorldSession::Handle_NULL);
+    DEFINE_HANDLER(CMSG_MOVE_SET_TURN_RATE_CHEAT,                           STATUS_LOGGEDIN,  PROCESS_THREADSAFE,   &WorldSession::HandleMoveSetTurnRateCheat);
     DEFINE_HANDLER(CMSG_MOVE_SET_VEHICLE_REC_ID_ACK,                        STATUS_LOGGEDIN,  PROCESS_THREADSAFE,   &WorldSession::HandleMoveSetVehicleRecAck);
     DEFINE_HANDLER(CMSG_MOVE_SET_WALK_MODE,                                 STATUS_LOGGEDIN,  PROCESS_THREADSAFE,   &WorldSession::HandleMovementOpcodes);
     DEFINE_HANDLER(CMSG_MOVE_SPLINE_DONE,                                   STATUS_LOGGEDIN,  PROCESS_THREADSAFE,   &WorldSession::HandleMoveSplineDoneOpcode);

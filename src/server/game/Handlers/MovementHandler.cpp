@@ -743,6 +743,34 @@ void WorldSession::HandleForceSpeedChangeAck(WorldPackets::Movement::MovementSpe
     }
 }
 
+// The TurnSpeed CVar ("/run SetCVar("TurnSpeed", 450)"): the client asks for
+// its own key turn rate. Blizzard's servers apply it; unhandled, the client
+// kept turning at 180 deg/s. Applied like a forced change: SetSpeed sends
+// SMSG_MOVE_SET_TURN_RATE, and the client's CMSG_MOVE_FORCE_TURN_RATE_CHANGE_ACK
+// then matches the server's value in HandleForceSpeedChangeAck.
+void WorldSession::HandleMoveSetTurnRateCheat(WorldPackets::Movement::MoveSetTurnRateCheat& packet)
+{
+    if (!_player->IsInWorld())
+        return;
+
+    Unit* mover = _player->GetUnitBeingMoved();
+    if (!mover)
+        return;
+
+    // 90 to 3600 degrees per second
+    float const minRate = float(M_PI) / 2.0f;
+    float const maxRate = float(M_PI) * 20.0f;
+    if (!std::isfinite(packet.Speed) || packet.Speed < minRate || packet.Speed > maxRate)
+    {
+        TC_LOG_DEBUG("network", "WorldSession::HandleMoveSetTurnRateCheat: {} asked for turn rate {}, out of range - ignored",
+            _player->GetName(), packet.Speed);
+        return;
+    }
+
+    TC_LOG_DEBUG("network", "WorldSession::HandleMoveSetTurnRateCheat: {} turn rate {} rad/s", _player->GetName(), packet.Speed);
+    mover->SetSpeed(MOVE_TURN_RATE, packet.Speed);
+}
+
 void WorldSession::HandleSetAdvFlyingSpeedAck(WorldPackets::Movement::MovementSpeedAck& speedAck)
 {
     Unit* mover = ValidateAndGetUnitBeingMoved(speedAck.Ack.Status.guid, speedAck.GetOpcode(), true);

@@ -45,7 +45,7 @@ namespace
 
     struct MarketPricesOff
     {
-        ~MarketPricesOff() { AuctionBotVanilla::SetMarketPrices({}); }
+        ~MarketPricesOff() { AuctionBotVanilla::SetMarketPrices({}); AuctionBotVanilla::SetMarketPricesOnly(false); }
     };
 }
 
@@ -103,4 +103,20 @@ TEST_CASE("Items without a row, and prices switched off, give no market price", 
 
     AuctionBotVanilla::SetMarketPrices({});
     REQUIRE(AuctionBotVanilla::MarketUnitPrice(&linen.proto) == 0);
+}
+
+TEST_CASE("MarketPrices.Only lists only items with a market price, and nothing changes without prices", "[AuctionBotMarketPrice]")
+{
+    MarketPricesOff off;
+    TestItem linen(2589, ITEM_CLASS_TRADE_GOODS, 13, 55);
+    TestItem other(765, ITEM_CLASS_TRADE_GOODS, 10, 40);
+    AuctionBotVanilla::SetMarketPrices({ { 2589, 24 } });
+    REQUIRE(AuctionBotVanilla::IsAllowed(&other.proto));     // option off: no change
+
+    AuctionBotVanilla::SetMarketPricesOnly(true);
+    REQUIRE(AuctionBotVanilla::IsAllowed(&linen.proto));
+    REQUIRE_FALSE(AuctionBotVanilla::IsAllowed(&other.proto));
+
+    AuctionBotVanilla::SetMarketPrices({});                  // no prices loaded: the filter would leave nothing, so it is off
+    REQUIRE(AuctionBotVanilla::IsAllowed(&other.proto));
 }
