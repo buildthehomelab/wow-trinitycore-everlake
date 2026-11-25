@@ -2150,6 +2150,17 @@ Corpse.Decay.MinusMob  = 150
 Rate.Corpse.Decay.Looted = 0.5
 
 #
+#    Rate.PetHappiness.Decay
+#        Description: Multiplier for the happiness hunter pets lose over time (vanilla:
+#                     670 points every 7.5 seconds, 1.5x that in combat).
+#        Range:       0-2
+#         Default:    1.0 - Classic 1.60 (blizzlike)
+#                     0.5 - WoW Forever tuning (half the vanilla decay)
+#                     0   - no happiness decay
+
+Rate.PetHappiness.Decay = 1.0
+
+#
 #    Rate.Creature.Damage.Normal
 #    Rate.Creature.Damage.Elite
 #    Rate.Creature.Damage.RareElite
