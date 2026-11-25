@@ -40,4 +40,4 @@ INSERT INTO `creature_template_gossip` (`CreatureID`,`MenuID`,`VerifiedBuild`) V
 (6110030,6110000,0);
 
 INSERT INTO `creature` (`guid`,`id`,`map`,`zoneId`,`areaId`,`spawnDifficulties`,`phaseUseFlags`,`PhaseId`,`PhaseGroup`,`terrainSwapMap`,`modelid`,`equipment_id`,`position_x`,`position_y`,`position_z`,`orientation`,`spawntimesecs`,`wander_distance`,`currentwaypoint`,`curHealthPct`,`MovementType`,`npcflag`,`unit_flags`,`unit_flags2`,`unit_flags3`,`ScriptName`,`StringId`,`VerifiedBuild`) VALUES
-(61100300,6110030,0,0,0,0,0,0,0,0,-1,0,0,-10509.899,1026.5471,60.5227,0.527376,300,0,0,100,0,NULL,NULL,NULL,NULL,'',NULL,0);
+(61100300,6110030,0,0,0,'0',0,0,0,-1,0,0,-10509.899,1026.5471,60.5227,0.527376,300,0,0,100,0,NULL,NULL,NULL,NULL,'',NULL,0);
