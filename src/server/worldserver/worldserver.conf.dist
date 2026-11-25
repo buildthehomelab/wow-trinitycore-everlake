@@ -2927,10 +2927,10 @@ StackSize.Exclude = ""
 #                     values in Classic Era to 60%". 1 here is Classic Era (with the vanilla 2.5x elite bonus in 5 player
 #                     dungeons), so live Forever is 0.6. If Era's 5 player elite bonus turns out to be 2x, live would be
 #                     0.48 in these terms. The old default 1.8 paid about 3x live.
-#        Default:     0.6 - (WoW Forever live: 60% of Classic Era)
-#                     1   - (Classic Era, the same rate as the open world)
+#        Default:     1   - (Everlake: Classic Era, the same rate as the open world)
+#                     0.6 - (WoW Forever live: 60% of Classic Era)
 
-Rate.XP.DungeonKill = 0.6
+Rate.XP.DungeonKill = 1
 
 #
 #    Rate.XP.BattlegroundKill
