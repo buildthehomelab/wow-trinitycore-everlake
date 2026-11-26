@@ -41,7 +41,9 @@
 #include "SpellHistory.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "ScriptedCreature.h"
 #include "SpellScript.h"
+#include "TemporarySummon.h"
 #include "Unit.h"
 #include <atomic>
 #include <mutex>
@@ -1983,6 +1985,108 @@ class classic_spell_hun_summon_hawk : public SpellScript
     }
 };
 
+// 264850 - Hawk, the guardian of Summon Hawk. WoW Forever notes: "Summon Hawk will now stick your Hawk to the target that it was summoned
+// on" (70450, Oct 16); "Summoned Hawks now attack the target they're summoned on even if the player's pet is set to Passive" and
+// "Summoned Hawks will attack your current target if they are not actively attacking a target" (71139, Nov 25). The sniffed SmartAI
+// only cast 415431 on reset, so the hawk picked victims like any guardian (react state, owner's attackers, whoever hit it).
+// The summon target is the hunter's target when the hawk appears (Summon Hawk is cast on the targeted enemy). The hawk keeps it while it
+// lives, then takes the hunter's current target while the hunter is in combat, and goes back to the hunter when there is none.
+struct classic_npc_hun_summoned_hawk : public ScriptedAI
+{
+    static constexpr uint32 SPELL_HAWK_ON_RESET = 415431;
+
+    classic_npc_hun_summoned_hawk(Creature* creature) : ScriptedAI(creature) { }
+
+    void Reset() override
+    {
+        DoCastSelf(SPELL_HAWK_ON_RESET);
+    }
+
+    void IsSummonedBy(WorldObject* summoner) override
+    {
+        Player* hunter = summoner ? summoner->ToPlayer() : nullptr;
+        Unit* target = hunter ? hunter->GetSelectedUnit() : nullptr;
+        if (!IsGoodTarget(target))
+            return;
+
+        _summonTarget = target->GetGUID();
+        AttackStart(target);
+    }
+
+    // the hawk chooses its own victim: nothing from line of sight, the owner's fights or whoever hits it
+    void MoveInLineOfSight(Unit* /*who*/) override { }
+    void OwnerAttacked(Unit* /*target*/) override { }
+    void OwnerAttackedBy(Unit* /*attacker*/) override { }
+
+    void UpdateAI(uint32 /*diff*/) override
+    {
+        Unit* victim = me->GetVictim();
+        Unit* next = nullptr;
+        if (Unit* summonTarget = _summonTarget.IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*me, _summonTarget); IsGoodTarget(summonTarget))
+            next = summonTarget;
+        else
+        {
+            _summonTarget.Clear();
+            if (IsGoodTarget(victim))
+                next = victim;
+            else if (Player* hunter = GetHunter(); hunter && hunter->IsInCombat())
+                if (Unit* hunterTarget = hunter->GetSelectedUnit(); IsGoodTarget(hunterTarget))
+                    next = hunterTarget;
+        }
+
+        if (next)
+        {
+            if (next != victim)
+                AttackStart(next); // melee swings run in Creature::Update
+        }
+        else if (victim || me->IsEngaged())
+            EnterEvadeMode(EvadeReason::NoHostiles); // follows the hunter again
+    }
+
+private:
+    Player* GetHunter() const
+    {
+        if (Unit* owner = me->GetCharmerOrOwner())
+            return owner->ToPlayer();
+        TempSummon const* summon = me->ToTempSummon();
+        Unit* summoner = summon ? summon->GetSummonerUnit() : nullptr;
+        return summoner ? summoner->ToPlayer() : nullptr;
+    }
+
+    bool IsGoodTarget(Unit* target) const
+    {
+        return target && target != me && target->IsAlive() && target->IsInMap(me) && me->IsValidAttackTarget(target);
+    }
+
+    ObjectGuid _summonTarget;
+};
+
+// 2641 - Dismiss Pet: "Summoned Hawks are now dismissed when the Dismiss Pet spell is completed" (WoW Forever 71139, Nov 25). Nothing linked
+// the hawks to the spell. They are the hunter's guardians (owner) or, when summoned as plain temporary summons, the hunter's summons.
+class classic_spell_hun_dismiss_pet_hawks : public SpellScript
+{
+    static constexpr uint32 NPC_SUMMONED_HAWK = 264850;
+    static constexpr float HawkSearchRange = 100.0f;
+
+    void DismissHawks()
+    {
+        Unit* hunter = GetCaster();
+        std::list<Creature*> hawks;
+        hunter->GetCreatureListWithEntryInGrid(hawks, NPC_SUMMONED_HAWK, HawkSearchRange);
+        for (Creature* hawk : hawks)
+        {
+            TempSummon* summon = hawk->ToTempSummon();
+            if (summon && (hawk->GetOwnerGUID() == hunter->GetGUID() || summon->GetSummonerGUID() == hunter->GetGUID()))
+                summon->UnSummon();
+        }
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(classic_spell_hun_dismiss_pet_hawks::DismissHawks);
+    }
+};
+
 /*######
 ## Damage done talents without a client aura effect
 ######*/
@@ -2418,6 +2522,8 @@ void AddSC_classic_talents_warrior_rogue_hunter()
     RegisterSpellScript(classic_spell_hun_readiness);
     RegisterSpellScript(classic_spell_hun_refocus);
     RegisterSpellScript(classic_spell_hun_summon_hawk);
+    RegisterCreatureAI(classic_npc_hun_summoned_hawk);
+    RegisterSpellScript(classic_spell_hun_dismiss_pet_hawks);
     new classic_unit_hun_rapid_killing();
     RegisterSpellScript(classic_spell_hun_expose_prey);
     RegisterSpellScript(classic_spell_hun_mongoose_bite);
