@@ -788,7 +788,8 @@ void Battleground::EndBattleground(Team winner)
     {
         { 30,  24955, 24954 },                              // Alterac Valley Mark of Honor 20560
         { 489, 24951, 24950 },                              // Warsong Gulch Mark of Honor 20558
-        { 529, 24953, 24952 }                               // Arathi Basin Mark of Honor 20559
+        { 529, 24953, 24952 },                              // Arathi Basin Mark of Honor 20559
+        { 2997, 1255230, 1255231 }                          // WoW Forever: Darkspear Islands Mark of Honor 274895 (3 for a win, 1 for a loss)
     };
     ClassicMarkSpells const* classicMarks = nullptr;
     for (ClassicMarkSpells const& marks : ClassicMarks)
