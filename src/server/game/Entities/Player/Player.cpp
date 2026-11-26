@@ -7530,7 +7530,14 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, HonorGainS
     data.Target = victim_guid;
     data.Rank = victim_rank;
 
-    SendDirectMessage(data.Write());
+    // WoW Forever 70790: "Killing a player while at Honor cap will no longer show honor gained in floating text or chat messages."
+    bool atHonorCap = false;
+    if (CurrencyTypesEntry const* honorCurrency = sCurrencyTypesStore.LookupEntry(CURRENCY_HONOR_CLASSIC))
+        if (uint32 honorCap = GetCurrencyMaxQuantity(honorCurrency))
+            atHonorCap = GetCurrencyQuantity(CURRENCY_HONOR_CLASSIC) >= honorCap;
+
+    if (!atHonorCap)
+        SendDirectMessage(data.Write());
 
     AddHonorXP(honor);
 

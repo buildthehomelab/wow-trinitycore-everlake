@@ -2218,6 +2218,7 @@ public:
 // made by 2026_10_14_00_world_classic_tauren_cultivation.sql. A twin is found by model + loot.
 namespace ClassicCultivation
 {
+    static constexpr uint32 SPELL_CULTIVATION = 20552;
     static constexpr uint32 SPELL_CULTIVATE_HERB = 1312643;
     static constexpr uint32 LOCK_CULTIVATED_HERB = 4522;
     static constexpr float SEARCH_RANGE = 5.0f;
@@ -2233,6 +2234,20 @@ namespace ClassicCultivation
             if (lock->Type[i] == LOCK_KEY_SKILL && lock->Index[i] == LOCKTYPE_HERBALISM)
                 return true;
         return false;
+    }
+
+    // WoW Forever 70009: "Cultivation now has a player-level requirement for every Herb. The level required is equal to the Herb's level
+    // required to pick it divided by 5. Herbs that require a higher than 300 Herbalism skill to pick can be Cultivated at player level 60."
+    static uint8 GetRequiredLevel(uint32 lockId)
+    {
+        LockEntry const* lock = sLockStore.LookupEntry(lockId);
+        if (!lock)
+            return 0;
+        uint32 skill = 0;
+        for (uint8 i = 0; i < MAX_LOCK_CASE; ++i)
+            if (lock->Type[i] == LOCK_KEY_SKILL && lock->Index[i] == LOCKTYPE_HERBALISM)
+                skill = std::max<uint32>(skill, lock->Skill[i]);
+        return skill > 300 ? 60 : uint8(skill / 5);
     }
 
     // herb (model, loot) -> twin entry
@@ -2279,16 +2294,29 @@ namespace ClassicCultivation
             && GetTwinEntry(go->GetGOInfo()) && !WasCultivated(go->GetGUID());
     }
 
-    static GameObject* FindHerb(Unit* caster)
+    // the nearest herb the caster may cultivate; tooLow is set when the only herbs in reach need a higher level
+    static GameObject* FindHerb(Unit* caster, bool* tooLow = nullptr)
     {
         std::list<GameObject*> objects;
         Trinity::AllWorldObjectsInRange check(caster, SEARCH_RANGE);
         Trinity::GameObjectListSearcher<Trinity::AllWorldObjectsInRange> searcher(caster, objects, check);
         Cell::VisitGridObjects(caster, searcher, SEARCH_RANGE);
         GameObject* best = nullptr;
+        bool foundTooHigh = false;
         for (GameObject* go : objects)
-            if (CanCultivate(go) && (!best || caster->GetExactDist2dSq(go) < caster->GetExactDist2dSq(best)))
+        {
+            if (!CanCultivate(go))
+                continue;
+            if (caster->GetLevel() < GetRequiredLevel(go->GetGOInfo()->chest.open))
+            {
+                foundTooHigh = true;
+                continue;
+            }
+            if (!best || caster->GetExactDist2dSq(go) < caster->GetExactDist2dSq(best))
                 best = go;
+        }
+        if (tooLow)
+            *tooLow = !best && foundTooHigh;
         return best;
     }
 }
@@ -2303,13 +2331,19 @@ class classic_spell_tauren_cultivation : public SpellScript
 
     SpellCastResult CheckCast()
     {
-        return ClassicCultivation::FindHerb(GetCaster()) ? SPELL_CAST_OK : SPELL_FAILED_NO_VALID_TARGETS;
+        bool tooLow = false;
+        if (ClassicCultivation::FindHerb(GetCaster(), &tooLow))
+            return SPELL_CAST_OK;
+        return tooLow ? SPELL_FAILED_LOW_CASTLEVEL : SPELL_FAILED_NO_VALID_TARGETS;
     }
 
     void HandleAfterCast()
     {
-        // Since the 70888 hotfixes Cultivation and Cultivate share category 2578 (15 min), which Cultivation has just started: the
-        // triggered Cultivate must ignore it or it fails "not ready" and no herb grows (forever-bugs #456)
+        // WoW Forever 70862 (2026-11-09): "Cultivation now correctly only goes on cooldown after completing the cast." The 15 min
+        // cooldown (category 2578, 70888 hotfixes) this instant spell has just started is taken off again (client too); Cultivate
+        // 1312643 starts it when its 3 sec cast completes, so an interrupted cast can be tried again. Cultivate still ignores the
+        // shared category itself (forever-bugs #456).
+        GetCaster()->GetSpellHistory()->ResetCooldown(GetSpellInfo()->Id, true);
         if (GameObject* herb = ClassicCultivation::FindHerb(GetCaster()))
             GetCaster()->CastSpell(herb, ClassicCultivation::SPELL_CULTIVATE_HERB, CastSpellExtraArgs(TRIGGERED_IGNORE_GCD | TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD));
     }
@@ -2349,10 +2383,25 @@ class classic_spell_tauren_cultivate_herb : public SpellScript
         herb->GetMap()->AddToMap(twin);
     }
 
+    // the cast completed: Cultivation's cooldown starts now (see classic_spell_tauren_cultivation::HandleAfterCast)
+    void HandleAfterCast()
+    {
+        if (SpellInfo const* cultivation = sSpellMgr->GetSpellInfo(ClassicCultivation::SPELL_CULTIVATION, DIFFICULTY_NONE))
+        {
+            SpellHistory::Duration cooldown, categoryCooldown;
+            uint32 categoryId = 0;
+            SpellHistory::GetCooldownDurations(cultivation, 0, &cooldown, &categoryId, &categoryCooldown);
+            cooldown = std::max(cooldown, categoryCooldown);
+            if (cooldown > SpellHistory::Duration::zero())
+                GetCaster()->GetSpellHistory()->StartCooldown(cultivation, 0, nullptr, false, cooldown);
+        }
+    }
+
     void Register() override
     {
         OnCheckCast += SpellCheckCastFn(classic_spell_tauren_cultivate_herb::CheckCast);
         OnEffectHitTarget += SpellEffectFn(classic_spell_tauren_cultivate_herb::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+        AfterCast += SpellCastFn(classic_spell_tauren_cultivate_herb::HandleAfterCast);
     }
 };
 
