@@ -809,6 +809,28 @@ class classic_talent_warl_demon_talent_sync : public AuraScript
     }
 };
 
+// 1235316 - Demonic Aegis (talent). Blizzard 20 November 2026 (71037+1): "Fixed a bug where the effects of the Demonic Aegis talent
+// could be snapshotted into your Demon Armor or Demon Skin and then untalented to retain the effects. Demonic Aegis and Demon Skin are
+// removed when your talents are unlearned." When the talent's aura leaves a player in the world (talents unlearned), the warlock's own
+// Demon Skin (687, 696) and Demon Armor (706, 1086, 11733-11735) go with it, so a buff cast with the talent cannot be kept without it.
+class classic_talent_warl_demonic_aegis : public AuraScript
+{
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* target = GetTarget();
+        if (!target->IsPlayer() || !target->IsInWorld())
+            return;
+
+        for (uint32 spellId : { 687u, 696u, 706u, 1086u, 11733u, 11734u, 11735u })
+            target->RemoveOwnedAura(spellId, target->GetGUID());
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(classic_talent_warl_demonic_aegis::HandleRemove, EFFECT_FIRST_FOUND, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 // 688 - Summon Imp, 691 - Summon Felhunter, 697 - Summon Voidwalker, 712 - Summon Succubus, 713 - Summon Incubus, 427733 - Summon Felguard
 // Summoning a demon cancels the Demonic Sacrifice buff (vanilla, VMaNGOS Unit::SummonPet / patch 1.12).
 // 425464 - Demonic Pact: "Your Demonic Sacrifice effect is no longer cancelled by summoning a different Demon pet. Resummoning the
@@ -2634,6 +2656,7 @@ void AddSC_classic_talents_warlock_druid()
     RegisterSpellScript(classic_spell_warl_wrack);
     RegisterSpellScript(classic_talent_warl_soul_harvest);
     RegisterSpellScript(classic_talent_warl_demon_talent_sync);
+    RegisterSpellScript(classic_talent_warl_demonic_aegis);
     RegisterSpellScript(classic_talent_warl_summon_demon);
     RegisterSpellScript(classic_talent_warl_demonic_sacrifice);
     RegisterSpellScript(classic_talent_warl_conflagrate);

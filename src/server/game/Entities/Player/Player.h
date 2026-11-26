@@ -2141,10 +2141,12 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void SetSpellModTakingSpell(Spell* spell, bool apply);
         void SendSpellModifiers() const;
 
-        // WoW Forever: a Revelation charge spent by a channel covers every tick of that channel (Player.cpp)
+        // WoW Forever: a Revelation charge spent by a channel covers the first tick of that channel (Player.cpp)
         void StartRevelationChannel(Spell const* channel);
         float GetRevelationChannelCritBonus(ObjectGuid const& channelCastId) const;
         float GetRevelationChannelCritBonus(Spell const* tickSpell) const;
+        // WoW Forever: the priest's Revelation charge is also spent by a periodic damage tick (Player.cpp)
+        float UseRevelationOnPeriodicTick(AuraEffect const* tickEffect);
 
         void RemoveArenaSpellCooldowns(bool removeActivePetCooldowns = false);
 
@@ -3007,10 +3009,12 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void SetChampioningFaction(uint32 faction) { m_ChampioningFaction = faction; }
         Spell* m_spellModTakingSpell;
 
-        // the channel that spent a Revelation charge and the crit chance it keeps for its ticks
+        // the channel that spent a Revelation charge, the crit chance it keeps for its first tick and the world update of that tick
         ObjectGuid m_revelationChannelCastId;
         uint32 m_revelationChannelSpellId = 0;
         float m_revelationChannelCritBonus = 0.0f;
+        mutable Optional<uint32> m_revelationChannelFirstTickMS;
+        float GetRevelationChannelFirstTickBonus() const;
 
         float GetAverageItemLevel() const;
         bool isDebugAreaTriggers;

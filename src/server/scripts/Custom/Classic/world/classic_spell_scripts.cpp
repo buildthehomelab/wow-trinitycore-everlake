@@ -164,7 +164,7 @@ class classic_spell_ground_area_damage : public AuraScript
 
             // Ground ticks that are hits (Flamestrike) roll a critical strike like a direct spell: the sheet chance with the crit spell
             // mods and the target's taken chance. Other ground ticks never crit (vanilla), except under Revelation: a channel that
-            // spent its charge crits with every tick (forever-bugs #163 dev reply, #592; Player::StartRevelationChannel).
+            // spent its charge crits with its first tick (Blizzard 24 November 2026; Player::StartRevelationChannel).
             bool crit = false;
             Player const* playerCaster = caster->ToPlayer();
             float const revelationBonus = playerCaster ? playerCaster->GetRevelationChannelCritBonus(GetAura()->GetCastId()) : 0.0f;
@@ -227,8 +227,8 @@ class classic_spell_ground_area_damage : public AuraScript
 // spell fails to critically strike. Revelation grants 100% increased critical strike chance to the next non-periodic spell cast." The
 // client proc aura (helpful and harmful spells, 100%) names no trigger spell: the buff is the wearer's class one, and the core had no
 // handler, so the enchant did nothing. spell_proc: direct damage or heal hits that do not crit (crits and aura-only hits never roll, a
-// hit while the buff is up rolls and refreshes it; wowsims/forever evidence EV-0129). Flamestrike's ground ticks roll once per enemy
-// hit (EV-0028). Warriors and rogues have no Revelation buff in the client data.
+// hit while the buff is up rolls and refreshes it; wowsims/forever evidence EV-0129). An area spell rolls once per wave, not once per
+// enemy hit (Blizzard 25 November 2026; EV-0028 showed Flamestrike's ground ticks rolling per enemy). Warriors and rogues have no Revelation buff in the client data.
 // The chance: the tooltip says it "is diminished as your critical strike chance increases" and gives no numbers. ProcChance(crit) is
 // the maximum likelihood fit of 12.1% x (1 - sheet spell crit)^4 to EV-0129's eleven logs (druid 8.5-10.1% crit: 189 of 2,233 hits;
 // druid 13.42%: 138 of 2,043; mage 10%: 94 of 1,277): 8.1% at 9.5% crit, 6.9% at 13.4%, 5.0% at 20%, 2.9% at 30%. A linear fit is as
@@ -237,6 +237,11 @@ class classic_spell_ground_area_damage : public AuraScript
 class classic_spell_enchant_revelation : public AuraScript
 {
     static constexpr uint32 SPELL_REVELATION_NO_PROC_VAMPIRIC_EMBRACE_HEAL = 15290;
+
+    // the wave that last rolled (CheckProc)
+    ObjectGuid _lastRollCastId;
+    uint32 _lastRollSpellId = 0;
+    uint32 _lastRollTimeMS = 0;
 
     static uint32 BuffFor(uint8 playerClass)
     {
@@ -278,14 +283,25 @@ class classic_spell_enchant_revelation : public AuraScript
         if (!wearer->IsInCombat() || !spellInfo || spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MELEE || spellInfo->Id == SPELL_REVELATION_NO_PROC_VAMPIRIC_EMBRACE_HEAL)
             return false;
 
-        if (!roll_chance(ProcChance(*wearer->m_activePlayerData->SpellCritPercentage)))
+        DamageInfo const* damage = eventInfo.GetDamageInfo();
+        HealInfo const* heal = eventInfo.GetHealInfo();
+        if (!(damage && damage->GetDamage()) && !(heal && heal->GetHeal()))
             return false;
 
-        if (DamageInfo const* damage = eventInfo.GetDamageInfo(); damage && damage->GetDamage())
-            return true;
-        if (HealInfo const* heal = eventInfo.GetHealInfo(); heal && heal->GetHeal())
-            return true;
-        return false;
+        // Blizzard 25 November 2026 (71139+1): "no longer rolls its proc chance for every target struck by an area of effect spell. It
+        // now rolls once per wave." A wave is one cast (its cast id), or for hits with no Spell (ground ticks) one spell's hits in one
+        // world update; the first hit of a wave that does not crit rolls, the others of that wave do not.
+        Spell const* procSpell = eventInfo.GetProcSpell();
+        ObjectGuid const castId = procSpell ? procSpell->m_castId : ObjectGuid::Empty;
+        uint32 const now = GameTime::GetGameTimeMS();
+        if (procSpell ? castId == _lastRollCastId
+                      : (_lastRollCastId.IsEmpty() && spellInfo->Id == _lastRollSpellId && now == _lastRollTimeMS))
+            return false;
+        _lastRollCastId = castId;
+        _lastRollSpellId = spellInfo->Id;
+        _lastRollTimeMS = now;
+
+        return roll_chance(ProcChance(*wearer->m_activePlayerData->SpellCritPercentage));
     }
 
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)

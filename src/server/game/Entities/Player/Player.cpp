@@ -24203,6 +24203,14 @@ int32 Player::IsAffectedBySpellmod(SpellInfo const* spellInfo, SpellModifier con
     if (!spell && mod->op == SpellModOp::CritChance && mod->ownerAura->IsUsingCharges())
         return 0;
 
+    // Blizzard, build 70755: "Clearcasting is no longer consumed on Arcane Missiles if Missile Barrage is active at the same time." The
+    // mage's Clearcasting (12536) is used up through its proc row (PROC_ATTR_REQ_SPELLMOD), which needs its cost mod on the cast, so an
+    // Arcane Missiles channel (mage class flag 0x800, as Missile Barrage's row) cast with Missile Barrage (400589) up does not take it.
+    if (spell && mod->ownerAura->GetId() == 12536 && spellInfo->SpellFamilyName == SPELLFAMILY_MAGE
+        && (spellInfo->SpellFamilyFlags[0] & 0x800) && spellInfo->IsChanneled())
+        if (Unit const* mage = spell->GetCaster()->ToUnit(); mage && mage->HasAura(400589))
+            return 0;
+
     switch (mod->op)
     {
         case SpellModOp::Duration: // +duration to infinite duration spells making them limited
@@ -24253,6 +24261,10 @@ int32 Player::IsAffectedBySpellmod(SpellInfo const* spellInfo, SpellModifier con
 // starts, and its ticks get the mod's chance until that channel ends: ground ticks (classic_spell_ground_area_damage), periodic
 // damage ticks on others (AuraEffect::GetCritChanceFor) and the spells it triggers each tick (Unit::SpellCritChanceDone). Damage over
 // time outside a channel never gets it, and the bonus ends with the channel.
+// Blizzard 24 November 2026 (71091+1, Mage and Warlock): "The Revelation enchant's bonus now covers only the first tick of a channeled
+// spell such as Blizzard/Hellfire, instead of the whole channel." The first tick is the first world update in which one of these
+// asks for the bonus: every enemy that tick's wave hits (Blizzard's ground ticks, Hellfire Effect's targets) is struck in that
+// update, and later ticks come in later ones.
 static constexpr std::array<uint32, 7> RevelationClassBuffs = { 1248808, 1323377, 1323392, 1323400, 1323410, 1323418, 1323419 };
 
 void Player::StartRevelationChannel(Spell const* channel)
@@ -24260,6 +24272,7 @@ void Player::StartRevelationChannel(Spell const* channel)
     m_revelationChannelCastId.Clear();
     m_revelationChannelSpellId = 0;
     m_revelationChannelCritBonus = 0.0f;
+    m_revelationChannelFirstTickMS.reset();
 
     SpellInfo const* channelInfo = channel->GetSpellInfo();
     for (uint32 buffId : RevelationClassBuffs)
@@ -24291,7 +24304,7 @@ float Player::GetRevelationChannelCritBonus(ObjectGuid const& channelCastId) con
     if (m_revelationChannelCastId.IsEmpty() || channelCastId != m_revelationChannelCastId)
         return 0.0f;
 
-    return m_revelationChannelCritBonus;
+    return GetRevelationChannelFirstTickBonus();
 }
 
 float Player::GetRevelationChannelCritBonus(Spell const* tickSpell) const
@@ -24306,7 +24319,49 @@ float Player::GetRevelationChannelCritBonus(Spell const* tickSpell) const
     if (!triggeredBy || triggeredBy->Id != m_revelationChannelSpellId)
         return 0.0f;
 
+    return GetRevelationChannelFirstTickBonus();
+}
+
+// the channel's bonus for a hit in the current world update: the first update that asks marks the first tick, which keeps it
+float Player::GetRevelationChannelFirstTickBonus() const
+{
+    uint32 const now = GameTime::GetGameTimeMS();
+    if (!m_revelationChannelFirstTickMS)
+        m_revelationChannelFirstTickMS = now;
+    else if (*m_revelationChannelFirstTickMS != now)
+        return 0.0f;
+
     return m_revelationChannelCritBonus;
+}
+
+// Blizzard 24 November 2026 (71091+1, Priest): "The Revelation enchant's bonus is now also used up by your periodic damage, such as
+// Mind Flay's, not only by your direct spells." A periodic damage tick of a priest spell (Shadow Word: Pain, Devouring Plague) that can
+// crit spends the charge of the priest buff and gets its crit chance. Mind Flay's ticks come through the channel record above
+// (StartRevelationChannel spends the charge as the channel starts), so the channel's own ticks are left to it.
+float Player::UseRevelationOnPeriodicTick(AuraEffect const* tickEffect)
+{
+    static constexpr uint32 SPELL_REVELATION_PRIEST = 1323377;
+
+    if (!tickEffect || tickEffect->GetSpellInfo()->SpellFamilyName != SPELLFAMILY_PRIEST)
+        return 0.0f;
+    if (!m_revelationChannelCastId.IsEmpty() && tickEffect->GetBase()->GetCastId() == m_revelationChannelCastId)
+        return 0.0f;
+
+    Aura* buff = GetAura(SPELL_REVELATION_PRIEST, GetGUID());
+    if (!buff || !buff->IsUsingCharges() || !buff->GetCharges())
+        return 0.0f;
+
+    for (AuraEffect const* aurEff : buff->GetAuraEffects())
+    {
+        if (!aurEff || aurEff->GetMiscValue() != int32(SpellModOp::CritChance) || aurEff->GetAuraType() != SPELL_AURA_ADD_FLAT_MODIFIER)
+            continue;
+
+        float const bonus = float(aurEff->GetAmount());
+        buff->DropCharge();
+        return bonus;
+    }
+
+    return 0.0f;
 }
 
 void Player::GetSpellModValues(SpellInfo const* spellInfo, SpellModOp op, Spell* spell, double base, int32* flat, float* pct) const
