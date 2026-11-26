@@ -28301,8 +28301,18 @@ bool Player::CanNoReagentCast(SpellInfo const* spellInfo) const
         return true;
 
     // Classic 1.60 Legacy perk Reagent Economy 1225503 (aura 215, its arena preparation effect is prevented by
-    // classic_spell_legacy_reagent_economy): class abilities no longer require reagents purchasable from vendors
-    if (spellInfo->SpellFamilyName != SPELLFAMILY_GENERIC && HasAura(1225503))
+    // classic_spell_legacy_reagent_economy): class abilities no longer require reagents purchasable from vendors.
+    // Hotfix of 24 Nov (71091): "now also works for your poisons and Vanish". Vanish is a rogue spell; the poison recipes are
+    // generic spells of the Poisons skill (SkillLine 40), so they are taken in by their skill line.
+    auto isPoisonRecipe = [spellInfo]()
+    {
+        SkillLineAbilityMapBounds bounds = sSpellMgr->GetSkillLineAbilityMapBounds(spellInfo->Id);
+        for (auto itr = bounds.first; itr != bounds.second; ++itr)
+            if (itr->second->SkillLine == 40)   // Poisons
+                return true;
+        return false;
+    };
+    if (HasAura(1225503) && (spellInfo->SpellFamilyName != SPELLFAMILY_GENERIC || isPoisonRecipe()))
     {
         bool anyReagent = false;
         bool allFromVendors = true;
