@@ -494,7 +494,11 @@ private:
 enum ClassicPaladinJudgement
 {
     SPELL_JUDGEMENT_OF_THE_CRUSADER_REFRESH_PROC = 25942,
-    SPELL_JUDGEMENT_OF_THE_CRUSADER_REFRESH      = 25943
+    SPELL_JUDGEMENT_OF_THE_CRUSADER_REFRESH      = 25943,
+    SPELL_JUDGEMENT_OF_LIGHT_REFRESH_PROC        = 25752,
+    SPELL_JUDGEMENT_OF_LIGHT_REFRESH             = 25753,
+    SPELL_JUDGEMENT_OF_WISDOM_REFRESH_PROC       = 25757,
+    SPELL_JUDGEMENT_OF_WISDOM_REFRESH            = 25758
 };
 
 static bool IsCrusaderJudgement(uint32 spellId)
@@ -505,6 +509,25 @@ static bool IsCrusaderJudgement(uint32 spellId)
             return true;
         default:
             return false;
+    }
+}
+
+// The judgement debuffs that the paladin's swings keep on the target: the swing proc aura put on the paladin and the refresh it triggers.
+// WoW Forever 1.60.1.71139 (25 November): "Fixed an issue where Judgements on enemies failed to refresh from attacks if they dropped below a
+// 20 second duration." Only the Crusader had its refresh here; Light (25752 -> 25753) and Wisdom (25757 -> 25758) had none.
+static std::pair<uint32, uint32> GetJudgementRefreshSpells(uint32 judgementId)
+{
+    if (IsCrusaderJudgement(judgementId))
+        return { SPELL_JUDGEMENT_OF_THE_CRUSADER_REFRESH_PROC, SPELL_JUDGEMENT_OF_THE_CRUSADER_REFRESH };
+
+    switch (judgementId)
+    {
+        case 20185: case 20344: case 20345: case 20346:
+            return { SPELL_JUDGEMENT_OF_LIGHT_REFRESH_PROC, SPELL_JUDGEMENT_OF_LIGHT_REFRESH };
+        case 20186: case 20354: case 20355:
+            return { SPELL_JUDGEMENT_OF_WISDOM_REFRESH_PROC, SPELL_JUDGEMENT_OF_WISDOM_REFRESH };
+        default:
+            return { 0, 0 };
     }
 }
 
@@ -524,9 +547,10 @@ class classic_spell_pal_judgement : public SpellScript
                 continue;
 
             caster->CastSpell(target, judgement, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
-            // Judgement of the Crusader: the paladin's swings keep it on the target (25942 procs 25943, which casts it again)
-            if (IsCrusaderJudgement(judgement))
-                caster->CastSpell(caster, SPELL_JUDGEMENT_OF_THE_CRUSADER_REFRESH_PROC, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
+            // Judgement of the Crusader, Light and Wisdom: the paladin's swings keep it on the target (25942 procs 25943, 25752 procs 25753,
+            // 25757 procs 25758, which cast it again)
+            if (uint32 refreshProc = GetJudgementRefreshSpells(judgement).first)
+                caster->CastSpell(caster, refreshProc, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
             break;
         }
     }
@@ -671,6 +695,7 @@ class classic_spell_pal_judgement_intermediate : public SpellScript
 
 // 25943 - Judgement of the Crusader (refresh, from the 25942 swing proc): casts the paladin's Judgement of the Crusader on the target
 // again while it is on it (sniff 2026-10-06: every swing after the judgement shows 25942, 21183, 25943)
+// 25753 / 25758 - Judgement of Light / Wisdom (refresh, from the 25752 / 25757 swing procs): the same for those judgements.
 class classic_spell_pal_judgement_of_the_crusader_refresh : public SpellScript
 {
     void HandleDummy(SpellEffIndex /*effIndex*/)
@@ -682,7 +707,7 @@ class classic_spell_pal_judgement_of_the_crusader_refresh : public SpellScript
 
         for (auto const& [auraId, aurApp] : target->GetAppliedAuras())
         {
-            if (!IsCrusaderJudgement(auraId) || aurApp->GetBase()->GetCasterGUID() != caster->GetGUID())
+            if (GetJudgementRefreshSpells(auraId).second != GetSpellInfo()->Id || aurApp->GetBase()->GetCasterGUID() != caster->GetGUID())
                 continue;
 
             caster->CastSpell(target, auraId, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
@@ -692,7 +717,7 @@ class classic_spell_pal_judgement_of_the_crusader_refresh : public SpellScript
 
     void Register() override
     {
-        OnEffectHitTarget += SpellEffectFn(classic_spell_pal_judgement_of_the_crusader_refresh::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+        OnEffectHitTarget += SpellEffectFn(classic_spell_pal_judgement_of_the_crusader_refresh::HandleDummy, EFFECT_0, SPELL_EFFECT_ANY);
     }
 };
 
@@ -1704,11 +1729,12 @@ class classic_spell_pal_unsealed_wrath : public AuraScript
 };
 
 // Judgement of Fury (20183 20411-20414 1311650 1311655): "Unleashing this Seal's energy causes Holy damage to an enemy and taunts the
-// target to attack you for 4 sec." Effect 1 (dummy) is the taunt, effect 2 (dummy) the extra threat.
+// target to attack you for 4 sec." Effect 1 (dummy) is the taunt, effect 2 (dummy) the extra threat. WoW Forever 1.60.1.70755: "Judgement
+// of Fury's duration reduced to 3 seconds (Was 4 seconds).
 // Live order (player tests, forever-paladin-feedback): the damage lands first, then the taunt copies the top threat, so the damage's
 // threat is not added on top of the copied value. The effect handlers run before the damage is dealt, so the effect only marks the
 // target and the taunt itself waits for AfterHit, which comes after the damage.
-// The taunt is 9970901 (serverside, SPELL_AURA_MOD_TAUNT for 4 sec): matching the threat alone left a mob on its current target, because
+// The taunt is 9970901 (serverside, SPELL_AURA_MOD_TAUNT for 3 sec): matching the threat alone left a mob on its current target, because
 // the victim only changes past the 110%/130% threshold. The taunt aura fixates the mob on the paladin like Taunt and Growl, and the
 // matched threat keeps it there afterwards. Taunt immune bosses ignore it. (Karrz 0.1.39)
 enum ClassicPaladinJudgementOfFury
@@ -1742,7 +1768,7 @@ class classic_spell_pal_judgement_of_fury : public SpellScript
         target->GetThreatManager().MatchUnitThreatToHighestThreat(paladin);
         paladin->CastSpell(target, SPELL_PAL_JUDGEMENT_OF_FURY_TAUNT, CastSpellExtraArgs(TRIGGERED_FULL_MASK)
             .SetTriggeringSpell(GetSpell())
-            .AddSpellMod(SPELLVALUE_DURATION, 4 * IN_MILLISECONDS));
+            .AddSpellMod(SPELLVALUE_DURATION, 3 * IN_MILLISECONDS));
     }
 
     // effect 2 has no implicit target, so it runs once in hit mode against the judged unit
