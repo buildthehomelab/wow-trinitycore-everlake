@@ -821,6 +821,10 @@ public:
 
     void OnUnitDeath(Unit* victim, Unit* /*killer*/) override
     {
+        // Blizzard, build 70755: "Devouring Contagion no longer spreads Devouring Plague if it is spreading from a critter."
+        if (victim->GetCreatureType() == CREATURE_TYPE_CRITTER)
+            return;
+
         std::vector<std::pair<ObjectGuid, std::pair<uint32, int32>>> plagues;
         for (AuraEffect const* leech : victim->GetAuraEffectsByType(SPELL_AURA_PERIODIC_LEECH))
         {
