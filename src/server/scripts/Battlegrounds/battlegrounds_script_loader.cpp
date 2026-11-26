@@ -34,6 +34,9 @@ void AddSC_battleground_arathi_basin();
 // Eye of the storm
 void AddSC_battleground_eye_of_the_storm();
 
+// Darkspear Islands (WoW Forever)
+void AddSC_battleground_darkspear_islands();
+
 // Warsong Gulch
 void AddSC_battleground_warsong_gulch();
 
@@ -106,6 +109,9 @@ void AddBattlegroundsScripts()
 
     // Eye of the Storm
     AddSC_battleground_eye_of_the_storm();
+
+    // Darkspear Islands (WoW Forever)
+    AddSC_battleground_darkspear_islands();
 
     // Warsong Gulch
     AddSC_battleground_warsong_gulch();
