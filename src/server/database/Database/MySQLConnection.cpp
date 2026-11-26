@@ -536,7 +536,7 @@ PreparedResultSet* MySQLConnection::Query(PreparedStatementBase* stmt)
     return new PreparedResultSet(mysqlStmt->GetSTMT(), result, rowCount, fieldCount);
 }
 
-bool MySQLConnection::_HandleMySQLErrno(uint32 errNo, uint8 attempts /*= 5*/)
+bool MySQLConnection::_HandleMySQLErrno(uint32 errNo, uint8 attempts /*= 20*/)
 {
     switch (errNo)
     {
