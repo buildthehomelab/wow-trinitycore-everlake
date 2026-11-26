@@ -1761,9 +1761,9 @@ DBC.EnforceItemAttributes = 1
 #
 #   AccountInstancesPerHour
 #        Description: Controls the maximum number of individual instances player can enter per hour.
-#        Default:     10
+#        Default:     5 (WoW Forever: 5 per hour since 2026-11-20)
 
-AccountInstancesPerHour = 10
+AccountInstancesPerHour = 5
 
 #
 #   Account.PasswordChangeSecurity

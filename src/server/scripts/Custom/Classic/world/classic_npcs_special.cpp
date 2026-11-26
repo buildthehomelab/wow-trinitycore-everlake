@@ -29,6 +29,7 @@
 #include "TemporarySummon.h"
 #include "Player.h"
 #include "SpellInfo.h"
+#include "SpellScript.h"
 #include "GameObject.h"
 #include "MovementDefines.h"
 #include "QuaternionData.h"
@@ -1227,9 +1228,31 @@ private:
     bool _cast = false;
 };
 
+// WoW Forever 71139 (2026-11-25): "The Blackblade of Shahram will now correctly perform its haste buff, but only to the wielder of the
+// Blackblade." Fist of Shahram (16601) now targets the caster's master (live spell effect 693406, ImplicitTarget 27), but Shahram is a
+// plain summon with no owner, so the master lookup finds nobody. Point it at the player who summoned him, and only him.
+class classic_spell_fist_of_shahram : public SpellScript
+{
+    void SelectWielder(WorldObject*& target)
+    {
+        if (target)
+            return;
+        if (TempSummon const* shahram = GetCaster() ? GetCaster()->ToTempSummon() : nullptr)
+            if (Unit* summoner = shahram->GetSummonerUnit())
+                if (summoner->GetTypeId() == TYPEID_PLAYER)
+                    target = summoner;
+    }
+
+    void Register() override
+    {
+        OnObjectTargetSelect += SpellObjectTargetSelectFn(classic_spell_fist_of_shahram::SelectWielder, EFFECT_0, TARGET_UNIT_MASTER);
+    }
+};
+
 void AddSC_classic_npcs_special()
 {
     RegisterCreatureAI(classic_npc_shahram);
+    RegisterSpellScript(classic_spell_fist_of_shahram);
     RegisterCreatureAI(classic_npc_talaanis_shadowsong);
     RegisterCreatureAI(classic_npc_valennia_stormfist);
     RegisterCreatureAI(classic_npc_valennia_muster);

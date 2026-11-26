@@ -590,6 +590,62 @@ struct classic_at_energizing_vortex : AreaTriggerAI
 };
 
 /*######
+## classic_at_cozy_sleeping_bag (area trigger of Unroll Bag 429961, create properties 30821)
+######*/
+
+// Cozy Sleeping Bag (211527): the bag's owner gets Well-Rested Tracking Aura 429960 while inside its area (2026_11_11_93). WoW Forever
+// 70959 (2026-11-17): "Mounted Players will no longer be permitted to sleep while saddled up atop the Cozy Sleeping Bag." The aura is
+// kept only while the owner is inside and not mounted, checked every half second, so mounting up inside the bag also ends it.
+enum CozySleepingBag
+{
+    SPELL_WELL_RESTED_TRACKING = 429960
+};
+
+struct classic_at_cozy_sleeping_bag : AreaTriggerAI
+{
+    explicit classic_at_cozy_sleeping_bag(AreaTrigger* areaTrigger) : AreaTriggerAI(areaTrigger) { }
+
+    void OnUnitEnter(Unit* unit) override
+    {
+        if (unit->GetGUID() == at->GetCasterGuid())
+            Refresh(unit);
+    }
+
+    void OnUnitExit(Unit* unit, AreaTriggerExitReason /*reason*/) override
+    {
+        if (unit->GetGUID() == at->GetCasterGuid())
+            unit->RemoveAurasDueToSpell(SPELL_WELL_RESTED_TRACKING);
+    }
+
+    void OnUpdate(uint32 diff) override
+    {
+        _checkTimer += diff;
+        if (_checkTimer < 500)
+            return;
+        _checkTimer = 0;
+
+        if (Unit* owner = at->GetCaster(); owner && at->GetInsideUnits().contains(owner->GetGUID()))
+            Refresh(owner);
+    }
+
+    void OnRemove() override
+    {
+        if (Unit* owner = at->GetCaster())
+            owner->RemoveAurasDueToSpell(SPELL_WELL_RESTED_TRACKING);
+    }
+
+    static void Refresh(Unit* owner)
+    {
+        if (owner->IsMounted())
+            owner->RemoveAurasDueToSpell(SPELL_WELL_RESTED_TRACKING);
+        else if (!owner->HasAura(SPELL_WELL_RESTED_TRACKING))
+            owner->CastSpell(owner, SPELL_WELL_RESTED_TRACKING, true);
+    }
+
+    uint32 _checkTimer = 0;
+};
+
+/*######
 ## classic_at_rohashi_wind (static area trigger at the edge of the Rohashi Spires platform)
 ######*/
 
@@ -678,6 +734,7 @@ void AddSC_classic_go_scripts()
     new classic_event_skycutter_arrival();
     RegisterSpellScript(classic_spell_plainsrunning);
     RegisterAreaTriggerAI(classic_at_energizing_vortex);
+    RegisterAreaTriggerAI(classic_at_cozy_sleeping_bag);
     RegisterAreaTriggerAI(classic_at_rohashi_wind);
     RegisterAreaTriggerAI(classic_at_secluded_house);
     RegisterGameObjectAI(classic_go_field_repair_bot_74A);

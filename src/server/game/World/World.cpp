@@ -917,7 +917,7 @@ void World::LoadConfigSettings(bool reload)
         { .Name = "Battleground.RewardWinnerConquestLast"sv, .DefaultValue = 5000, .Index = CONFIG_BG_REWARD_WINNER_CONQUEST_LAST },
         { .Name = "Battleground.RewardLoserHonorFirst"sv, .DefaultValue = 4500, .Index = CONFIG_BG_REWARD_LOSER_HONOR_FIRST },
         { .Name = "Battleground.RewardLoserHonorLast"sv, .DefaultValue = 3500, .Index = CONFIG_BG_REWARD_LOSER_HONOR_LAST },
-        { .Name = "AccountInstancesPerHour"sv, .DefaultValue = 10, .Index = CONFIG_MAX_INSTANCES_PER_HOUR },
+        { .Name = "AccountInstancesPerHour"sv, .DefaultValue = 5, .Index = CONFIG_MAX_INSTANCES_PER_HOUR },
         { .Name = "AutoBroadcast.Center"sv, .DefaultValue = 0, .Index = CONFIG_AUTOBROADCAST_CENTER },
         { .Name = "AutoBroadcast.Timer"sv, .DefaultValue = 60000, .Index = CONFIG_AUTOBROADCAST_INTERVAL },
         { .Name = "MaxPingTime"sv, .DefaultValue = 30, .Index = CONFIG_DB_PING_INTERVAL },

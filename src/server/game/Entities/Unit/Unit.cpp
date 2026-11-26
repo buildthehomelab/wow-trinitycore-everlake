@@ -3348,6 +3348,9 @@ void Unit::_UpdateAutoRepeatSpell()
 {
     SpellInfo const* autoRepeatSpellInfo = m_currentSpells[CURRENT_AUTOREPEAT_SPELL]->m_spellInfo;
     bool const classicAutoShot = autoRepeatSpellInfo->Id == ClassicAutoShot::SpellId && GetTypeId() == TYPEID_PLAYER;
+    // WoW Forever 70450: "Wands now require you to stand still for 0.5 seconds before shooting". A wand (Shoot) or thrown weapon (Throw)
+    // pauses while the player moves, like Auto Shot, and shoots only after half a second standing still (no hidden retry checks).
+    bool const classicWand = !classicAutoShot && GetTypeId() == TYPEID_PLAYER && autoRepeatSpellInfo->IsAutoRepeatRangedSpell();
 
     if (HasAuraType(SPELL_AURA_DISABLE_AUTOATTACK))
         return;
@@ -3412,6 +3415,12 @@ void Unit::_UpdateAutoRepeatSpell()
         return;
     }
 
+    if (classicWand && isMoving())
+    {
+        m_classicAutoShotStillSince = GameTime::GetGameTimeMS();
+        return;
+    }
+
     // Classic 1.60 retry: the next attempt waits for the first check after the hunter stopped (and after the last failed check). At
     // that check the shot is tested without the wind-up, and the wind-up starts there when it can be taken.
     if (classicAutoShot && shotDue && m_classicAutoShotRetrying)
@@ -3443,6 +3452,9 @@ void Unit::_UpdateAutoRepeatSpell()
     if (shotDue)
     {
         if (classicAutoShot && !IsClassicAutoShotWindupDone())
+            return;
+
+        if (classicWand && !ClassicAutoShot::IsWindupDone(GameTime::GetGameTimeMS(), m_classicAutoShotStillSince))
             return;
 
         // Check if able to cast
@@ -3563,7 +3575,10 @@ void Unit::SetCurrentCastSpell(Spell* pSpell)
             // shot, whatever the weapon speed; later shots follow the weapon speed. Without this the first shot left at once.
             if (IsPlayer() && pSpell->GetSpellInfo()->IsAutoRepeatRangedSpell() && pSpell->GetSpellInfo()->Id != ClassicAutoShot::SpellId
                 && (!m_currentSpells[CSpellType] || m_currentSpells[CSpellType]->GetSpellInfo()->Id != pSpell->GetSpellInfo()->Id))
+            {
                 setAttackTimer(RANGED_ATTACK, std::max<uint32>(getAttackTimer(RANGED_ATTACK), ClassicAutoShot::WindupMs));
+                m_classicAutoShotStillSince = GameTime::GetGameTimeMS();
+            }
 
             if (m_currentSpells[CSpellType] && m_currentSpells[CSpellType]->getState() == SPELL_STATE_IDLE)
                 m_currentSpells[CSpellType]->setState(SPELL_STATE_FINISHED);

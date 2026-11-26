@@ -176,8 +176,11 @@ void WorldSession::HandleWhoOpcode(WorldPackets::Who::WhoRequestPkt& whoRequest)
         if (!request.RaceFilter.HasRace(target.GetRace()))
             continue;
 
+        // WoW Forever 70450: "Who List search now supports subzones (example: characters in Northshire Valley will show up in both
+        // queries "/who northshire" and "/who elwynn")": the target's subzone counts as well as its zone
         if (!whoRequest.Areas.empty())
-            if (std::ranges::find(whoRequest.Areas, int32(target.GetZoneId())) == whoRequest.Areas.end())
+            if (std::ranges::find(whoRequest.Areas, int32(target.GetZoneId())) == whoRequest.Areas.end()
+                && (!target.GetAreaId() || std::ranges::find(whoRequest.Areas, int32(target.GetAreaId())) == whoRequest.Areas.end()))
                 continue;
 
         std::wstring const& wTargetName = target.GetWidePlayerName();
@@ -194,6 +197,10 @@ void WorldSession::HandleWhoOpcode(WorldPackets::Who::WhoRequestPkt& whoRequest)
             std::string aName;
             if (AreaTableEntry const* areaEntry = sAreaTableStore.LookupEntry(target.GetZoneId()))
                 aName = areaEntry->AreaName[GetSessionDbcLocale()];
+            std::string subzoneName;
+            if (target.GetAreaId() != target.GetZoneId())
+                if (AreaTableEntry const* subzoneEntry = sAreaTableStore.LookupEntry(target.GetAreaId()))
+                    subzoneName = subzoneEntry->AreaName[GetSessionDbcLocale()];
 
             bool show = false;
             for (size_t i = 0; i < wWords.size(); ++i)
@@ -202,7 +209,8 @@ void WorldSession::HandleWhoOpcode(WorldPackets::Who::WhoRequestPkt& whoRequest)
                 {
                     if (wTargetName.find(wWords[i]) != std::wstring::npos ||
                         wTargetGuildName.find(wWords[i]) != std::wstring::npos ||
-                        Utf8FitTo(aName, wWords[i]))
+                        Utf8FitTo(aName, wWords[i]) ||
+                        (!subzoneName.empty() && Utf8FitTo(subzoneName, wWords[i])))
                     {
                         show = true;
                         break;

@@ -4249,6 +4249,14 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->Attributes |= SPELL_ATTR0_ALLOW_WHILE_MOUNTED;
     });
 
+    // WoW Forever 71139 (2026-11-25): "The Night Watchman's Torch can once again be used while mounted, casting spells, etc." Light the
+    // torch (1309410, item 280612) while mounted, and keep holding it through mounting and casting; entering combat still ends it.
+    ApplySpellFix({ 1309410 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->Attributes |= SPELL_ATTR0_ALLOW_WHILE_MOUNTED;
+        spellInfo->AuraInterruptFlags &= ~(SpellAuraInterruptFlags::Mount | SpellAuraInterruptFlags::Action | SpellAuraInterruptFlags::ActionDelayed);
+    });
+
     // Forever Skyborne racial buffs Elemental Blessing (Skysight) and Energized (Read Ley Line): next to an Elemental Convergence or a
     // ley line the buff is doubled (classic_spell_skyborne_racial_focus), so the aura sends its real amounts; without them the client
     // tooltip showed the single 15% / 50% from the client data
