@@ -4231,6 +4231,21 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->AttributesEx |= SPELL_ATTR1_NO_THREAT;
     });
 
+    // WoW Forever 1.60.1.70755: "The Blood Craze and Gore Drinker talents no longer generate threat when restoring Health to the Warrior."
+    // Blood Craze regen 16488, Gore Drinker buff 1323969 and its heal 1323968. 1.60.1.70450: "Sanctified Judgement's Mana restore effect no
+    // longer generates threat." (1311077). 1.60.1.70291: Shield Specialization's mana (1310925) no longer generates threat.
+    ApplySpellFix({ 16488, 1323968, 1323969, 1311077, 1310925 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->AttributesEx |= SPELL_ATTR1_NO_THREAT;
+    });
+
+    // WoW Forever 1.60.1.71091 (24 November): "Judgement of Command no longer triggers your weapon enchantments and other chance-on-hit
+    // effects." The damage spells of the five ranks.
+    ApplySpellFix({ 20467, 20963, 20964, 20965, 20966 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->AttributesEx4 |= SPELL_ATTR4_SUPPRESS_WEAPON_PROCS;
+    });
+
     // Forever quest Testing the Wells: the Well Testing Kit's dummy (1258773) aims at a "nearby entry" that no data names; it hits the
     // caster, and classic_spell_quest_testing_the_wells gives the sample next to a well
     ApplySpellFix({ 1258773 }, [](SpellInfo* spellInfo)

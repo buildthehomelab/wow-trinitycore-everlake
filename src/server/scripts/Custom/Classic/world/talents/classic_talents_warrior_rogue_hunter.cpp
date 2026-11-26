@@ -225,6 +225,10 @@ class classic_spell_warr_blood_craze : public AuraScript
         if (!damageInfo || !damageInfo->GetDamage())
             return false;
 
+        // WoW Forever 1.60.1.70755: "Blood Craze will no longer activate when sitting." (a sitting target takes crits every hit)
+        if (!GetTarget()->IsStandState())
+            return false;
+
         if (eventInfo.GetHitMask() & PROC_HIT_CRITICAL)
             return true;
 
@@ -403,6 +407,8 @@ class classic_spell_warr_intercept_stun : public SpellScript
 // 12966 - Flurry (the buff): which swings spend a charge beyond its spell_proc row (2026_11_16_40). Windfury Totem's strike spends none,
 // and a crit always leaves 3 charges: the talent 12319 recasts the buff on the same event, and the charge drop ran after that recast in
 // part of the cases (wowsims/forever, MIT, docs/evidence EV-0140: 60 of 60 crits end at 3; EV-0138).
+// Heroic Strike and Cleave spend none since the 16 Nov hotfix (1.60.1.70938): "Fixed an issue where Flurry stacks were consumed by Cleave or
+// Heroic Strike." (the spell_proc row still names them; the check below wins).
 class classic_spell_warr_flurry_buff : public AuraScript
 {
     bool CheckProc(ProcEventInfo& eventInfo)
@@ -418,6 +424,9 @@ class classic_spell_warr_flurry_buff : public AuraScript
                 default:
                     break;
             }
+            // Heroic Strike, Cleave
+            if (spellInfo->IsNextMeleeSwingSpell())
+                return false;
         }
         if ((eventInfo.GetHitMask() & PROC_HIT_CRITICAL) && warrior->HasAura(12319))
             return false;
@@ -479,6 +488,8 @@ class classic_spell_warr_unbridled_wrath : public AuraScript
 // 12292 - Sweeping Strikes: "Your next 5 melee attacks strike an additional nearby opponent." The client ability is a dummy aura with 5
 // charges; nothing was bound to it (the retail script is bound to 12328, which is Death Wish here). Each melee hit that does damage
 // uses a charge; the copy is 12723 with the damage of the attack, on a nearby enemy of the target when there is one.
+// WoW Forever 1.60.1.70888: "Sweeping Strikes no longer loses charges if no second target is hit." A hit with no second target in reach
+// does not proc (so keeps its charge).
 class classic_spell_warr_sweeping_strikes : public AuraScript
 {
     bool Validate(SpellInfo const* spellInfo) override
@@ -495,7 +506,10 @@ class classic_spell_warr_sweeping_strikes : public AuraScript
             return false;
 
         SpellInfo const* spellInfo = damageInfo->GetSpellInfo();
-        return !spellInfo || (spellInfo->Id != SPELL_WARRIOR_SWEEPING_STRIKES_STRIKE && spellInfo->Id != SPELL_WARRIOR_SWEEPING_STRIKES_NORMALIZED);
+        if (spellInfo && (spellInfo->Id == SPELL_WARRIOR_SWEEPING_STRIKES_STRIKE || spellInfo->Id == SPELL_WARRIOR_SWEEPING_STRIKES_NORMALIZED))
+            return false;
+
+        return SelectSecondTarget(GetTarget(), eventInfo.GetActionTarget()) != nullptr;
     }
 
     // Unit::SelectNearbyTarget, plus: "Sweeping Strikes will now ignore dead targets, and will ignore PvP enabled targets if you are not
@@ -881,10 +895,22 @@ private:
 
 // 12281 - Weaponmaster (sword), 1290312 - Hack and Slash (axe/sword): extra attack passives of the talents above. The proc chance is the
 // talent rank ($s3, put into this aura amount by classic_spell_weapon_type_talent; spell_proc Chance 100).
+// WoW Forever 1.60.1.70450: "Fixed an issue where Weaponmaster's Sword Specialization could be activated by Shield Bash and Shield Slam."
 class classic_spell_weapon_extra_attack_chance : public AuraScript
 {
-    bool CheckProc(ProcEventInfo& /*eventInfo*/)
+    bool CheckProc(ProcEventInfo& eventInfo)
     {
+        if (GetId() == 12281)
+            if (SpellInfo const* spellInfo = eventInfo.GetSpellInfo())
+                switch (spellInfo->Id)
+                {
+                    case 72: case 1671: case 1672:                      // Shield Bash
+                    case 23922: case 23923: case 23924: case 23925:     // Shield Slam
+                        return false;
+                    default:
+                        break;
+                }
+
         AuraEffect const* chance = GetEffect(EFFECT_0);
         return chance && roll_chance(chance->GetAmountAsInt());
     }

@@ -936,6 +936,10 @@ class classic_spell_pal_reckoning : public AuraScript
         if (eventInfo.GetTypeMask() & (PROC_FLAG_TAKE_HARMFUL_PERIODIC | PROC_FLAG_DEAL_HARMFUL_PERIODIC))
             return false;
 
+        // WoW Forever 1.60.1.70755: "Reckoning will no longer gain stacks while sitting." (a sitting paladin takes a crit from every hit)
+        if (!GetTarget()->IsStandState())
+            return false;
+
         float chance = 0.0f;
         if (eventInfo.GetHitMask() & PROC_HIT_BLOCK)
             chance = float(aurEff->GetAmount());
