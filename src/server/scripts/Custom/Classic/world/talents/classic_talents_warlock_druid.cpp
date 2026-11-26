@@ -98,7 +98,7 @@ enum ClassicWarlockDruidTalentSpells
     SPELL_CWD_ECLIPSE                       = 408248,
     SPELL_CWD_ECLIPSE_BUFF                  = 408255,
     SPELL_CWD_DREAMSTATE                    = 408258,
-    SPELL_CWD_DREAMSTATE_BUFF               = 408261,
+    SPELL_CWD_INNERVATE                     = 29166,
     SPELL_CWD_KING_OF_THE_JUNGLE            = 417046,
     SPELL_CWD_KING_OF_THE_JUNGLE_ENERGIZE   = 417045,
     SPELL_CWD_REND_AND_TEAR                 = 1223246,
@@ -1948,32 +1948,41 @@ class classic_talent_dru_eclipse_starfire : public SpellScript
     bool _usesCharge = false;
 };
 
-// 408258 - Dreamstate: "Your damaging non-periodic spell critical strikes grant you $m1% of your mana regeneration while casting for
-// $408261d." (408261: SPELL_AURA_MOD_MANA_REGEN_INTERRUPT)
-class classic_talent_dru_dreamstate : public AuraScript
+// 29166 - Innervate, with 408258 - Dreamstate (WoW Forever, 25 November 2026: replaces Moonfury): "When you cast Innervate on a
+// target other than yourself, you gain $s1% of the effect as well." The share is Dreamstate's amount, 20/40/60/80/100% by rank
+// (its trait definition's curve). The druid gets the same Innervate with every effect scaled to that share.
+class classic_talent_dru_dreamstate : public SpellScript
 {
-    bool Validate(SpellInfo const* /*spellInfo*/) override
+    void HandleAfterHit()
     {
-        return ValidateSpellInfo({ SPELL_CWD_DREAMSTATE_BUFF });
-    }
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target || target == caster)
+            return;
 
-    bool CheckProc(ProcEventInfo& eventInfo)
-    {
-        DamageInfo* damageInfo = eventInfo.GetDamageInfo();
-        return eventInfo.GetSpellInfo() && damageInfo && damageInfo->GetDamage() && (eventInfo.GetHitMask() & PROC_HIT_CRITICAL)
-            && !(eventInfo.GetTypeMask() & PROC_FLAG_DEAL_HARMFUL_PERIODIC);
-    }
+        AuraEffect const* dreamstate = caster->GetAuraEffect(SPELL_CWD_DREAMSTATE, EFFECT_0);
+        if (!dreamstate || dreamstate->GetAmount() <= 0)
+            return;
 
-    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
-    {
-        PreventDefaultAction();
-        GetTarget()->CastSpell(GetTarget(), SPELL_CWD_DREAMSTATE_BUFF, CastSpellExtraArgs(aurEff).AddSpellBP0(aurEff->GetAmount()));
+        Aura const* given = target->GetAura(SPELL_CWD_INNERVATE, caster->GetGUID());
+        if (!given)
+            return;
+
+        int32 const share = std::min(dreamstate->GetAmountAsInt(), 100);
+        caster->CastSpell(caster, SPELL_CWD_INNERVATE, CastSpellExtraArgs(TRIGGERED_FULL_MASK).SetTriggeringSpell(GetSpell()));
+        Aura* own = caster->GetAura(SPELL_CWD_INNERVATE, caster->GetGUID());
+        if (!own || share >= 100)
+            return;
+
+        for (AuraEffect* effect : own->GetAuraEffects())
+            if (effect)
+                if (AuraEffect const* full = given->GetEffect(effect->GetEffIndex()))
+                    effect->ChangeAmount(CalculatePct(full->GetAmount(), share));
     }
 
     void Register() override
     {
-        DoCheckProc += AuraCheckProcFn(classic_talent_dru_dreamstate::CheckProc);
-        OnEffectProc += AuraEffectProcFn(classic_talent_dru_dreamstate::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+        AfterHit += SpellHitFn(classic_talent_dru_dreamstate::HandleAfterHit);
     }
 };
 

@@ -31008,6 +31008,31 @@ void Player::_LoadTraits(PreparedQueryResult configsResult, PreparedQueryResult 
     {
         int32 const ranksBefore = spentRanks(traitConfig);
         std::vector<WorldPackets::Traits::TraitEntry> const entriesBefore = traitConfig.Entries;
+
+        // A node Blizzard gave fewer ranks (WoW Forever, 25 November 2026: Improved Starfire 5 -> 2) holds more ranks than it
+        // can: as on live, every talent point of that config is given back, not only the ranks above the new maximum.
+        auto const overMaxRanks = std::ranges::find_if(traitConfig.Entries, [](WorldPackets::Traits::TraitEntry const& entry)
+        {
+            TraitNodeEntryEntry const* nodeEntry = sTraitNodeEntryStore.LookupEntry(entry.TraitNodeEntryID);
+            return nodeEntry && entry.Rank > 0 && entry.Rank + entry.GrantedRanks > nodeEntry->MaxRanks;
+        });
+        if (overMaxRanks != traitConfig.Entries.end())
+        {
+            TC_LOG_INFO("entities.player.talents", "Player {} ({}): talent config {} (type {}, spec {}) has node {} entry {} at rank {}, above its {} ranks now; every talent point of it is given back.",
+                GetName(), GetGUID().ToString(), traitConfig.ID, AsUnderlyingType(traitConfig.Type), traitConfig.ChrSpecializationID,
+                overMaxRanks->TraitNodeID, overMaxRanks->TraitNodeEntryID, overMaxRanks->Rank + overMaxRanks->GrantedRanks,
+                sTraitNodeEntryStore.AssertEntry(overMaxRanks->TraitNodeEntryID)->MaxRanks);
+
+            traitConfig.Entries.clear();
+            traitConfig.SubTrees.clear();
+            for (UF::TraitEntry const& grantedEntry : TraitMgr::GetGrantedTraitEntriesForConfig(traitConfig, this))
+                traitConfig.Entries.emplace_back(grantedEntry);
+            TraitMgr::ValidateConfig(traitConfig, this, false, true);
+            AddTraitConfig(traitConfig);
+            m_traitConfigStates[traitConfig.ID] = PLAYERSPELL_CHANGED;   // saved emptied: the next login does not reset it again
+            continue;
+        }
+
         TraitMgr::LearnResult const validateResult = TraitMgr::ValidateConfig(traitConfig, this, false, true);
         if (validateResult == TraitMgr::LearnResult::Ok && spentRanks(traitConfig) < ranksBefore)
         {
