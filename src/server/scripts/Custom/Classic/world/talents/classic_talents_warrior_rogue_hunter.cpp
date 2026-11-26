@@ -71,7 +71,6 @@ enum ClassicWarriorRogueHunterTalents
     SPELL_ROGUE_SETUP_COMBO_POINT               = 15250,
     SPELL_ROGUE_SEAL_FATE_COMBO_POINT           = 14189,
     SPELL_ROGUE_CUTTHROAT_BUFF                  = 462707,
-    SPELL_ROGUE_QUIETUS                         = 1310728,
     SPELL_ROGUE_SHIV                            = 424799,
     SPELL_ROGUE_SHIV_STRIKE                     = 424800,
     SPELL_ROGUE_POISONED_KNIFE                  = 425012,
@@ -2118,9 +2117,7 @@ class classic_spell_hun_dismiss_pet_hawks : public SpellScript
 ######*/
 
 // 1223755 - Focused Fire (hunter): "Increases all damage you and your pet deal by $s1% while your pet is active."
-// 1310728 - Quietus (rogue): "Your Sinister Strike, Ghostly Strike, and Hemorrhage abilities cause $m1% more damage against targets
-// below $m2% health." (rogue family flags 0x2 Sinister Strike, 0x4000000 Ghostly Strike, 0x2000000 Hemorrhage; Shiv and Poisoned Knife
-// "benefit from all talents that modify Sinister Strike")
+// (Rogue Quietus is gone: build 70755 notes "Quietus has been removed", and its spell 1310728 is now the talent Quick Getaway.)
 class classic_unit_talent_damage_mods : public UnitScript
 {
 public:
@@ -2154,34 +2151,18 @@ public:
         return 0.0f;
     }
 
-    static float GetQuietusPct(Unit const* target, Unit const* attacker, SpellInfo const* spellInfo)
-    {
-        if (!target || !attacker || !spellInfo || !attacker->IsPlayer() || spellInfo->SpellFamilyName != SPELLFAMILY_ROGUE)
-            return 0.0f;
-
-        if (!(spellInfo->SpellFamilyFlags[0] & 0x06000002) && spellInfo->Id != SPELL_ROGUE_SHIV_STRIKE && spellInfo->Id != SPELL_ROGUE_POISONED_KNIFE_STRIKE)
-            return 0.0f;
-
-        AuraEffect const* bonus = attacker->GetAuraEffect(SPELL_ROGUE_QUIETUS, EFFECT_0);
-        AuraEffect const* threshold = attacker->GetAuraEffect(SPELL_ROGUE_QUIETUS, EFFECT_1);
-        if (!bonus || !threshold || !target->HealthBelowPct(float(threshold->GetAmount())))
-            return 0.0f;
-
-        return float(bonus->GetAmount());
-    }
-
     void ModifyMeleeDamage(Unit* /*target*/, Unit* attacker, uint32& damage) override
     {
         if (float pct = GetFocusedFirePct(attacker); pct > 0.0f)
             AddPct(damage, pct);
     }
 
-    void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage, SpellInfo const* spellInfo) override
+    void ModifySpellDamageTaken(Unit* /*target*/, Unit* attacker, int32& damage, SpellInfo const* /*spellInfo*/) override
     {
         if (damage <= 0)
             return;
 
-        float pct = GetFocusedFirePct(attacker) + GetQuietusPct(target, attacker, spellInfo);
+        float pct = GetFocusedFirePct(attacker);
         if (pct > 0.0f)
             AddPct(damage, pct);
     }

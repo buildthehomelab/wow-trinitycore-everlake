@@ -3977,6 +3977,11 @@ void Unit::_AddAura(UnitAura* aura, Unit* caster)
         caster->GetSingleCastAuras().push_front(aura);
 
         uint32 maxOtherAuras = aura->GetSpellInfo()->MaxAffectedTargets - 1;
+        // Classic 1.60 rogue Quick Getaway 1310728 (Subtlety talent, build 70755): "Increases the maximum number of targets you may
+        // have Sapped by 1" (Sap: rogue family flag 0x80)
+        if (aura->GetSpellInfo()->SpellFamilyName == SPELLFAMILY_ROGUE && (aura->GetSpellInfo()->SpellFamilyFlags[0] & 0x80)
+            && caster->HasAura(1310728))
+            ++maxOtherAuras;
         while (aurasSharingLimit.size() > maxOtherAuras)
         {
             aurasSharingLimit.back()->Remove();

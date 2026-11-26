@@ -1166,6 +1166,32 @@ class classic_spell_sha_flurry : public AuraScript
     }
 };
 
+// 16257 - Flurry (the buff): Windfury Totem's strike spends no charge. Hotfix of 17 Nov (70959): "Fixed an issue where Flurry incorrectly
+// lost stacks when Windfury totem attacks landed." The strike is a melee ability hit since the 14 Nov hotfix, so the buff's client proc
+// flags spent a charge on it; the warrior's Flurry 12966 skips the same spells (classic_spell_warr_flurry_buff).
+class classic_spell_sha_flurry_buff : public AuraScript
+{
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        if (SpellInfo const* spellInfo = eventInfo.GetSpellInfo())
+        {
+            switch (spellInfo->Id)
+            {
+                case 8516: case 10608: case 10610:  // Windfury Totem's strike
+                    return false;
+                default:
+                    break;
+            }
+        }
+        return true;
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_sha_flurry_buff::CheckProc);
+    }
+};
+
 // 30160 - Elemental Devastation: "Your offensive spell critical strikes will increase your chance to get a critical strike with
 // melee attacks by X% for 10 sec." 30165 with the talent amount (its own 3% when the amount is not set).
 // Weapon imbue hits don't trigger it: a method test on the beta (Blizzard forum thread 2366738, 2026-09-30, Elemental Devastation 3/3)
@@ -1419,6 +1445,52 @@ class classic_spell_sha_stormstrike : public SpellScript
     void Register() override
     {
         AfterCast += SpellCastFn(classic_spell_sha_stormstrike::HandleAfterCast);
+    }
+};
+
+// 17364 - Stormstrike (the debuff on the target): its charge is spent only by the shaman who cast it. Build 70450 notes: "Fixed an issue
+// where Stormstrike could be consumed by other players or pets that weren't the casting Shaman." The client proc flags (taken harmful
+// spell) let any attacker's spell spend it.
+class classic_spell_sha_stormstrike_debuff : public AuraScript
+{
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        Unit* actor = eventInfo.GetActor();
+        return actor && actor->GetGUID() == GetCasterGUID();
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(classic_spell_sha_stormstrike_debuff::CheckProc);
+    }
+};
+
+// 8178 - Grounding Totem Effect: the totem is destroyed once it has redirected a spell. Build 70450 notes: "Grounding Totem is now
+// correctly destroyed after redirecting a spell." The redirect spends the magnet aura's charge (WorldObject::GetMagicHitRedirectTarget,
+// removal by expire, at the spell's hit time for a missile), but only a spell that did enough damage killed the totem, so a redirected
+// crowd control or a weak hit left it standing. The kill waits for the totem's next update: it is the aura's caster, and its own
+// auras are being walked here.
+class classic_spell_sha_grounding_totem_effect : public AuraScript
+{
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (GetTargetApplication()->GetRemoveMode() != AURA_REMOVE_BY_EXPIRE || GetAura()->GetCharges() > 0)
+            return;
+
+        Unit* totem = GetCaster();
+        if (!totem || !totem->IsTotem() || !totem->IsAlive())
+            return;
+
+        totem->m_Events.AddEventAtOffset([totem]()
+        {
+            if (totem->IsAlive())
+                totem->KillSelf();
+        }, 1ms);
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(classic_spell_sha_grounding_totem_effect::HandleRemove, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
@@ -2072,12 +2144,15 @@ void AddSC_classic_talents_mage_shaman()
 
     // Shaman
     RegisterSpellScript(classic_spell_sha_flurry);
+    RegisterSpellScript(classic_spell_sha_flurry_buff);
     RegisterSpellScript(classic_spell_sha_elemental_devastation);
     RegisterSpellScript(classic_spell_sha_lightning_overload);
     RegisterSpellScript(classic_spell_sha_maelstrom_weapon);
     RegisterSpellScript(classic_spell_sha_maelstrom_weapon_buff);
     RegisterSpellScript(classic_spell_sha_earthbind_totem_passive);
     RegisterSpellScript(classic_spell_sha_stormstrike);
+    RegisterSpellScript(classic_spell_sha_stormstrike_debuff);
+    RegisterSpellScript(classic_spell_sha_grounding_totem_effect);
     RegisterSpellScript(classic_spell_sha_improved_stormstrike);
     RegisterSpellScript(classic_spell_sha_fire_nova);
     RegisterSpellScript(classic_spell_sha_lava_burst);
