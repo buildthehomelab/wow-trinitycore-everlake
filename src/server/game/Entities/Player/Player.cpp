@@ -24203,6 +24203,14 @@ int32 Player::IsAffectedBySpellmod(SpellInfo const* spellInfo, SpellModifier con
     if (!spell && mod->op == SpellModOp::CritChance && mod->ownerAura->IsUsingCharges())
         return 0;
 
+    // Blizzard, build 70755: "Clearcasting is no longer consumed on Arcane Missiles if Missile Barrage is active at the same time." The
+    // mage's Clearcasting (12536) is used up through its proc row (PROC_ATTR_REQ_SPELLMOD), which needs its cost mod on the cast, so an
+    // Arcane Missiles channel (mage class flag 0x800, as Missile Barrage's row) cast with Missile Barrage (400589) up does not take it.
+    if (spell && mod->ownerAura->GetId() == 12536 && spellInfo->SpellFamilyName == SPELLFAMILY_MAGE
+        && (spellInfo->SpellFamilyFlags[0] & 0x800) && spellInfo->IsChanneled())
+        if (Unit const* mage = spell->GetCaster()->ToUnit(); mage && mage->HasAura(400589))
+            return 0;
+
     switch (mod->op)
     {
         case SpellModOp::Duration: // +duration to infinite duration spells making them limited

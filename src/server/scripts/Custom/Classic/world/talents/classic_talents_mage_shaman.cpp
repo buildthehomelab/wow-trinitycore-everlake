@@ -97,8 +97,9 @@ static bool IsMageChillEffect(SpellInfo const* spellInfo)
         && spellInfo->HasAura(SPELL_AURA_MOD_DECREASE_SPEED);
 }
 
-// 400647 - Fingers of Frost: a Chill effect has effect 1 % chance to grant effect 0 charges of Fingers of Frost for 15 s
-static void TryGrantFingersOfFrost(Unit* mage)
+// 400647 - Fingers of Frost: a Chill effect has effect 1 % chance to grant effect 0 charges of Fingers of Frost for 15 s; chanceFactor
+// is the share a lower Blizzard rank keeps (SpellMgr::GetClassicBlizzardProcDownrankFactor)
+static void TryGrantFingersOfFrost(Unit* mage, float chanceFactor = 1.0f)
 {
     Aura const* talent = mage->GetAura(SPELL_MAGE_FINGERS_OF_FROST_TALENT);
     if (!talent)
@@ -106,7 +107,7 @@ static void TryGrantFingersOfFrost(Unit* mage)
 
     AuraEffect const* charges = talent->GetEffect(EFFECT_0);
     AuraEffect const* chance = talent->GetEffect(EFFECT_1);
-    if (!charges || !chance || !roll_chance(chance->GetAmount()))
+    if (!charges || !chance || !roll_chance(chance->GetAmount() * chanceFactor))
         return;
 
     mage->CastSpell(mage, SPELL_MAGE_FINGERS_OF_FROST_IGNORE, true);
@@ -350,6 +351,8 @@ class classic_spell_mage_improved_blizzard : public AuraScript
             chill = ClassicVanillaAoe::ImprovedBlizzardChill(chill);
 
         SpellInfo const* spellInfo = GetSpellInfo();
+        // a lower Blizzard rank far below the mage's level keeps only part of the Fingers of Frost chance (build 70755)
+        float const fingersOfFrostFactor = sSpellMgr->GetClassicBlizzardProcDownrankFactor(spellInfo, caster);
         GuidUnorderedSet targets;
         for (AreaTrigger* areaTrigger : caster->GetAreaTriggers(spellInfo->Id))
             targets.insert(areaTrigger->GetInsideUnits().begin(), areaTrigger->GetInsideUnits().end());
@@ -363,7 +366,7 @@ class classic_spell_mage_improved_blizzard : public AuraScript
             caster->CastSpell(target, SPELL_MAGE_CHILLED, CastSpellExtraArgs(TRIGGERED_FULL_MASK).AddSpellBP0(chill));
 
             // each chilled enemy rolls (wowsims/forever EV-0030: the gain lands between a tick's damage lines, rolled per target)
-            TryGrantFingersOfFrost(caster);
+            TryGrantFingersOfFrost(caster, fingersOfFrostFactor);
         }
     }
 
@@ -708,6 +711,10 @@ class classic_spell_mage_arcane_concentration : public AuraScript
 {
     bool CheckProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
+        // Blizzard, build 70450: "Clearcasting no longer has a chance to be activated by abilities cast when not in combat."
+        if (!GetTarget()->IsInCombat())
+            return false;
+
         float chance = float(aurEff->GetAmount());
         if (Spell const* procSpell = eventInfo.GetProcSpell())
         {
@@ -769,7 +776,8 @@ class classic_spell_mage_arcane_missiles_concentration : public SpellScript
 
         uint32 const clearcasting = chance->GetSpellEffectInfo().TriggerSpell;
         TimePoint const now = GameTime::Now();
-        if (!clearcasting || talent->IsProcOnCooldown(now))
+        // a channel started out of combat does not roll (build 70450, see classic_spell_mage_arcane_concentration)
+        if (!clearcasting || talent->IsProcOnCooldown(now) || !caster->IsInCombat())
             return;
 
         if (!roll_chance(float(chance->GetAmount()) * ArcaneMissilesRollShare(GetSpellInfo())))

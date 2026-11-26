@@ -118,6 +118,17 @@ namespace ClassicSpellValue
         return factor < 0.0f ? 0.0f : (factor > 1.0f ? 1.0f : factor);
     }
 
+    // The share of the Arcane Concentration, Frostbite and Fingers of Frost chance a lower rank of Blizzard keeps (Blizzard, build
+    // 70755: reduced "when casting a rank learned more than 12 levels lower than the caster's current level"). Blizzard gives the
+    // 12 levels but not the size of the cut; the 5% per level is the community slope of DownrankFactor above.
+    inline float BlizzardProcDownrankFactor(int32_t casterLevel, int32_t spellLevel)
+    {
+        if (spellLevel <= 0 || casterLevel <= 0)
+            return 1.0f;
+        float const factor = 1.0f - 0.05f * float(casterLevel - spellLevel - 12);
+        return factor < 0.0f ? 0.0f : (factor > 1.0f ? 1.0f : factor);
+    }
+
     // The base points of a finisher with the caster's combo points: vanilla points per combo point on top of the base.
     inline float WithComboPoints(Value const& v, float value, int32_t comboPoints)
     {

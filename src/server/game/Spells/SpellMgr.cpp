@@ -3820,6 +3820,21 @@ float SpellMgr::GetClassicDownrankFactor(SpellInfo const* spellInfo, Unit const*
     return ClassicSpellValue::DownrankFactor(int32(caster->GetLevel()), int32(spellInfo->SpellLevel));
 }
 
+// Blizzard, build 70755: "Various talents no longer have a penalty to their chance to trigger when casting spells of a low rank. This
+// penalty does still apply to Blizzard. Blizzard continues to have a reduced chance to trigger Arcane Concentration, Frostbite, and
+// Fingers of Frost when casting a rank learned more than 12 levels lower than the caster's current level." A lower rank of Blizzard
+// (the chain of 10) cast by a player (ClassicSpellValue::BlizzardProcDownrankFactor).
+float SpellMgr::GetClassicBlizzardProcDownrankFactor(SpellInfo const* spellInfo, Unit const* caster) const
+{
+    static constexpr uint32 SPELL_MAGE_BLIZZARD_RANK_1 = 10;
+
+    if (!spellInfo || !caster || caster->GetTypeId() != TYPEID_PLAYER)
+        return 1.0f;
+    if (GetFirstSpellInChain(spellInfo->Id) != SPELL_MAGE_BLIZZARD_RANK_1 || !GetNextSpellInChain(spellInfo->Id))
+        return 1.0f;
+    return ClassicSpellValue::BlizzardProcDownrankFactor(int32(caster->GetLevel()), int32(spellInfo->SpellLevel));
+}
+
 ClassicSpellValue::Value const* SpellMgr::GetClassicSpellValue(uint32 spellId, uint32 effectIndex) const
 {
     return Trinity::Containers::MapGetValuePtr(mClassicSpellValues, (uint64(spellId) << 8) | effectIndex);
