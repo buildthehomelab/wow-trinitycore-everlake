@@ -4153,7 +4153,7 @@ void Spell::handle_immediate()
             // GameObjects shouldn't cast channeled spells
             ASSERT_NOTNULL(m_caster->ToUnit())->AddInterruptMask(m_spellInfo->ChannelInterruptFlags, m_spellInfo->ChannelInterruptFlags2);
 
-            // WoW Forever: a Revelation charge spent by a channel covers all of its ticks (Player::StartRevelationChannel)
+            // WoW Forever: a Revelation charge spent by a channel covers its first tick (Player::StartRevelationChannel)
             if (Player* player = m_caster->ToPlayer(); player && player->GetCurrentSpell(CURRENT_CHANNELED_SPELL) == this)
                 player->StartRevelationChannel(this);
         }

@@ -6037,7 +6037,13 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
             break;
     }
 
-    bool crit = roll_chance(GetCritChanceFor(caster, target));
+    // WoW Forever: a priest's periodic damage also spends Revelation (Player::UseRevelationOnPeriodicTick)
+    float revelationBonus = 0.0f;
+    if (caster && target != caster && GetBase()->CanPeriodicTickCrit())
+        if (Player* player = caster->ToPlayer())
+            revelationBonus = player->UseRevelationOnPeriodicTick(this);
+
+    bool crit = roll_chance(GetCritChanceFor(caster, target) + revelationBonus);
     if (crit)
         damage = Unit::SpellCriticalDamageBonus(caster, m_spellInfo, damage, target);
 
