@@ -27442,6 +27442,14 @@ int32 Player::GetProfessionSlotFor(uint32 skillId) const
     return std::distance(professionsBegin, professionSlot);
 }
 
+// Everlake: with more than 2 primary professions allowed, the client's 2nd ProfessionSkillLine slot is always left
+// empty. The client offers a new primary profession at a trainer only while a slot is free, so a full pair would block
+// learning a 3rd one; the Everlake addon lists every profession next to the window instead.
+uint8 Player::GetUsableProfessionSlots()
+{
+    return sWorld->getIntConfig(CONFIG_MAX_PRIMARY_TRADE_SKILL) > 2 ? 1 : uint8(UF::size<decltype(UF::ActivePlayerData::ProfessionSkillLine)>());
+}
+
 int32 Player::FindEmptyProfessionSlotFor(uint32 skillId) const
 {
     SkillLineEntry const* skillEntry = sSkillLineStore.LookupEntry(skillId);
@@ -27452,7 +27460,7 @@ int32 Player::FindEmptyProfessionSlotFor(uint32 skillId) const
         return -1;
 
     int32 const* professionsBegin = m_activePlayerData->ProfessionSkillLine.begin();
-    int32 const* professionsEnd = m_activePlayerData->ProfessionSkillLine.end();
+    int32 const* professionsEnd = professionsBegin + GetUsableProfessionSlots();
 
     // if there is no same profession, find any free slot
     auto freeSlot = std::find(professionsBegin, professionsEnd, 0);
@@ -27486,7 +27494,7 @@ Player::ShowProfessionResult Player::ShowProfession(uint32 skillId, uint32* hidd
 
     int32 slot = FindEmptyProfessionSlotFor(skillId);
     if (slot == -1)
-        slot = _lastShownProfessionSlot == 1 ? 0 : 1;
+        slot = GetUsableProfessionSlots() == 1 ? 0 : (_lastShownProfessionSlot == 1 ? 0 : 1);
 
     // profession tools and gear sit in per-slot equipment slots; they would end up under the other profession
     uint8 const professionSlotStart = PROFESSION_SLOT_PROFESSION1_TOOL + slot * PROFESSION_SLOT_MAX_COUNT;
@@ -29502,7 +29510,7 @@ void Player::_LoadSkills(PreparedQueryResult result)
                     {
                         if (professionSlot == PROFESSION_SLOT_HIDDEN_BY_PLAYER)
                             _playerHiddenProfessions.insert(skill); // .profession hide: stays out of the client's 2 slots
-                        else if (professionSlot >= 0 && professionSlot < int8(m_activePlayerData->ProfessionSkillLine.size()))
+                        else if (professionSlot >= 0 && professionSlot < int8(GetUsableProfessionSlots()))
                             SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::ProfessionSkillLine, professionSlot), skill);
                         else
                             loadedProfessionsWithoutSlot.push_back(skill);

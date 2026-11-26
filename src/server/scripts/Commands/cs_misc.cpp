@@ -1415,8 +1415,8 @@ public:
 
         handler->PSendSysMessage(ru ? "Показаны: %s." : "Shown: %s.", shown.empty() ? "-" : shown.c_str());
         if (!hidden.empty())
-            handler->PSendSysMessage(ru ? "Скрыты: %s. Окно есть только у двух показанных; .profession show <название> показывает другую."
-                                        : "Hidden: %s. Only the 2 shown have a window; .profession show <name> swaps one in.", hidden.c_str());
+            handler->PSendSysMessage(ru ? "Не в списке профессий игры: %s. Окно любой профессии открывается её заклинанием (/cast) или вкладками аддона Everlake."
+                                        : "Not in the game's profession list: %s. Each one still opens from its spell (/cast) or the Everlake addon's tabs.", hidden.c_str());
         return true;
     }
 
