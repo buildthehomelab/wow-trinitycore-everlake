@@ -2502,6 +2502,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void LearnSkillRewardedSpells(uint32 skillId, uint32 skillValue, Races race);
         int32 GetProfessionSlotFor(uint32 skillId) const;
         int32 FindEmptyProfessionSlotFor(uint32 skillId) const;
+        static uint8 GetUsableProfessionSlots();
         // Everlake: MaxPrimaryTradeSkill can be above 2, but the client has only 2 ProfessionSkillLine slots, and only
         // professions in a slot get a window and a Professions tab entry. .profession show moves one into a slot.
         enum class ShowProfessionResult { Ok, AlreadyShown, AlreadyHidden, NotPrimaryProfession, ToolsEquipped };
