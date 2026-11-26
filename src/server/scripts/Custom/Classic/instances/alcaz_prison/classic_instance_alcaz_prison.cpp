@@ -33,9 +33,20 @@
 //     The guides give him adds; his page lists none, so none come.
 //   Blazeroar (255702): Thrash 3391; Flame Breath 9573; Fireball 12466; Enrage 15716; Flamestrike 18399; Fear 1271593; Searing Scales 1271604.
 //     Fights as Zarla Ober (her Illusion, a fire mage: Fireball, Flamestrike) until 30% health, then Reveal Form (heals him in full) and the dragon: Flame Breath, Thrash, Fear, Searing Scales, Enrage.
+//
+// The Perfumed Note (gameobject 630604, a quest giver; client object data and Icy Veins) lies on the ground where Blazeroar
+// died (Wowhead comment on the quests: "Note spawns on the ground after killing final boss"). It ends The Secret Prison
+// (95262, Alliance) and The Honor of the Kor'kron (95454, Horde) and starts Somber News (95263) and Bad News for Folkar
+// (96369). Their second objective, KC Creature 264861 ("Learn what became of Varian Wrynn" / "Read the note on the
+// ground"), is credited when the player opens the note; no client spell gives that credit, so the note's script does.
+// The instance puts the note back at the same spot whenever Blazeroar is done and the note is missing (a restart, or its
+// grid unloaded), at his spawn point when the death spot is not known.
 
 #include "ScriptMgr.h"
 #include "Creature.h"
+#include "GameObject.h"
+#include "GameObjectAI.h"
+#include "PhasingHandler.h"
 #include "InstanceScript.h"
 #include "Map.h"
 #include "ObjectAccessor.h"
@@ -51,6 +62,14 @@
 namespace
 {
 constexpr uint32 CAP_MAP_ID = 2994;
+constexpr uint32 CAP_BOSS_BLAZEROAR = 4;
+constexpr uint32 CAP_NPC_BLAZEROAR = 255702;
+constexpr uint32 CAP_GO_PERFUMED_NOTE = 630604;
+constexpr uint32 CAP_NPC_KC_READ_NOTE = 264861;
+constexpr uint32 CAP_QUESTS_READ_NOTE[] = { 95262, 95454 };   // The Secret Prison, The Honor of the Kor'kron
+// Blazeroar's spawn (world data guid 974001021): where the note goes when the instance does not know his death spot
+constexpr float CAP_NOTE_FALLBACK[4] = { -8867.0f, 2967.0f, 5.8f, 3.789f };
+constexpr uint32 CAP_NOTE_CHECK_MS = 5000;
 
 enum CAPTarget : uint8
 {
@@ -170,11 +189,51 @@ public:
         void OnUnitDeath(Unit* unit) override
         {
             _encounterTracker.OnUnitDeath(unit);
+            if (unit->GetTypeId() == TYPEID_UNIT && unit->GetEntry() == CAP_NPC_BLAZEROAR)
+            {
+                _notePos.Relocate(unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ(), unit->GetOrientation());
+                SpawnNote();
+            }
         }
 
         void Update(uint32 diff) override
         {
             _encounterTracker.Update(diff);
+
+            _noteCheck += diff;
+            if (_noteCheck < CAP_NOTE_CHECK_MS)
+                return;
+            _noteCheck = 0;
+            if (GetBossState(CAP_BOSS_BLAZEROAR) == DONE && instance->IsGridLoaded(_notePos)
+                && (_noteGuid.IsEmpty() || !instance->GetGameObject(_noteGuid)))
+                SpawnNote();
+        }
+
+    private:
+        ObjectGuid _noteGuid;
+        Position _notePos{ CAP_NOTE_FALLBACK[0], CAP_NOTE_FALLBACK[1], CAP_NOTE_FALLBACK[2], CAP_NOTE_FALLBACK[3] };
+        uint32 _noteCheck = 0;
+
+        // The note belongs to the instance, not to Blazeroar: it stays after his corpse is gone and never despawns on a timer.
+        void SpawnNote()
+        {
+            if (!_noteGuid.IsEmpty())
+                if (GameObject* old = instance->GetGameObject(_noteGuid))
+                    old->Delete();
+            _noteGuid.Clear();
+
+            GameObject* note = GameObject::CreateGameObject(CAP_GO_PERFUMED_NOTE, instance, _notePos,
+                QuaternionData::fromEulerAnglesZYX(_notePos.GetOrientation(), 0.0f, 0.0f), InitialPhaseShift(), 255, GO_STATE_READY);
+            if (!note)
+                return;
+            note->SetRespawnTime(0);
+            note->SetSpawnedByDefault(false);
+            if (!instance->AddToMap(note))
+            {
+                delete note;
+                return;
+            }
+            _noteGuid = note->GetGUID();
         }
     };
 
@@ -293,8 +352,27 @@ private:
 
 };
 
+// The Perfumed Note: opening it reads it. Players on 95262 or 95454 who have Blazeroar's credit get the "read the note"
+// credit first, so the quest list the note then shows offers the turn-in.
+struct classic_go_alcaz_perfumed_note : public GameObjectAI
+{
+    classic_go_alcaz_perfumed_note(GameObject* go) : GameObjectAI(go) { }
+
+    bool OnGossipHello(Player* player) override
+    {
+        for (uint32 questId : CAP_QUESTS_READ_NOTE)
+            if (player->GetQuestStatus(questId) == QUEST_STATUS_INCOMPLETE)
+            {
+                player->KilledMonsterCredit(CAP_NPC_KC_READ_NOTE);
+                break;
+            }
+        return false;
+    }
+};
+
 void AddSC_classic_instance_alcaz_prison()
 {
     new classic_instance_alcaz_prison();
     RegisterCreatureAI(classic_boss_alcaz_prison);
+    RegisterGameObjectAI(classic_go_alcaz_perfumed_note);
 }
