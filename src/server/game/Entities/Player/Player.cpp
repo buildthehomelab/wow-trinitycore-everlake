@@ -27447,6 +27447,28 @@ Player::ShowProfessionResult Player::ShowProfession(uint32 skillId, uint32* hidd
     return ShowProfessionResult::Ok;
 }
 
+Player::ShowProfessionResult Player::HideProfession(uint32 skillId)
+{
+    if (!IsPrimaryProfessionSkill(skillId) || !HasSkill(skillId))
+        return ShowProfessionResult::NotPrimaryProfession;
+
+    int32 const slot = GetProfessionSlotFor(skillId);
+    if (slot == -1)
+        return ShowProfessionResult::AlreadyHidden;
+
+    uint8 const professionSlotStart = PROFESSION_SLOT_PROFESSION1_TOOL + slot * PROFESSION_SLOT_MAX_COUNT;
+    for (uint8 slotOffset = 0; slotOffset < PROFESSION_SLOT_MAX_COUNT; ++slotOffset)
+        if (GetItemByPos(INVENTORY_SLOT_BAG_0, professionSlotStart + slotOffset))
+            return ShowProfessionResult::ToolsEquipped;
+
+    SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::ProfessionSkillLine, slot), 0);
+    auto itr = mSkillStatus.find(skillId);
+    if (itr != mSkillStatus.end() && itr->second.uState == SKILL_UNCHANGED)
+        itr->second.uState = SKILL_CHANGED;
+
+    return ShowProfessionResult::Ok;
+}
+
 // A slot freed by unlearning a profession goes to a learned primary profession that had none.
 void Player::FillFreeProfessionSlots(uint32 exceptSkillId /*= 0*/)
 {

@@ -2499,9 +2499,11 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         int32 FindEmptyProfessionSlotFor(uint32 skillId) const;
         // Everlake: MaxPrimaryTradeSkill can be above 2, but the client has only 2 ProfessionSkillLine slots, and only
         // professions in a slot get a window and a Professions tab entry. .profession show moves one into a slot.
-        enum class ShowProfessionResult { Ok, AlreadyShown, NotPrimaryProfession, ToolsEquipped };
+        enum class ShowProfessionResult { Ok, AlreadyShown, AlreadyHidden, NotPrimaryProfession, ToolsEquipped };
         std::vector<uint32> GetPrimaryProfessions() const;
         ShowProfessionResult ShowProfession(uint32 skillId, uint32* hiddenSkillId = nullptr);
+        // Empties the profession's slot: the client offers a new primary profession at a trainer only with a free slot
+        ShowProfessionResult HideProfession(uint32 skillId);
         void FillFreeProfessionSlots(uint32 exceptSkillId = 0);
         uint16 GetSkillLineIdByPos(uint32 pos) const { return m_activePlayerData->Skill->SkillLineID[pos]; }
         void SetSkillLineId(uint32 pos, uint16 skillLineId) { SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::Skill).ModifyValue(&UF::SkillInfo::SkillLineID, pos), skillLineId); }

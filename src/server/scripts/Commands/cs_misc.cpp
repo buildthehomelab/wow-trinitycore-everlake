@@ -78,6 +78,7 @@ public:
             { "time",             HandleTimeCommand,             rbac::RBAC_PERM_COMMAND_TIME,             Console::No },
             { "profession",       HandleProfessionCommand,       rbac::RBAC_PERM_COMMAND_PROFESSION,       Console::No },
             { "profession show",  HandleProfessionShowCommand,   rbac::RBAC_PERM_COMMAND_PROFESSION,       Console::No },
+            { "profession hide",  HandleProfessionHideCommand,   rbac::RBAC_PERM_COMMAND_PROFESSION,       Console::No },
             { "bug",              HandleBugCommand,              rbac::RBAC_PERM_COMMAND_BUG,              Console::No },
             { "deathrecap",       HandleDeathRecapCommand,       rbac::RBAC_PERM_COMMAND_DEATHRECAP,       Console::No },
             { "time day",         HandleTimeDayCommand,          rbac::RBAC_PERM_COMMAND_TIME,             Console::No },
@@ -1419,9 +1420,10 @@ public:
         return true;
     }
 
-    static bool HandleProfessionShowCommand(ChatHandler* handler, Tail name)
+    // A learned primary profession by exact name, then by the start of one, in the client's language or English. 0 = none
+    // (the reason is already sent).
+    static uint32 FindProfessionByName(ChatHandler* handler, Player* player, std::string_view name)
     {
-        Player* player = handler->GetSession()->GetPlayer();
         bool const ru = handler->GetSession()->GetSessionDbLocaleIndex() == LOCALE_ruRU;
         std::string_view wanted = name;
         while (!wanted.empty() && std::isspace(static_cast<unsigned char>(wanted.front())))
@@ -1430,9 +1432,9 @@ public:
             wanted.remove_suffix(1);
         if (wanted.empty())
         {
-            handler->SendSysMessage(ru ? "Синтаксис: .profession show <название>" : "Syntax: .profession show <name>");
+            handler->SendSysMessage(ru ? "Синтаксис: .profession show|hide <название>" : "Syntax: .profession show|hide <name>");
             handler->SetSentErrorMessage(true);
-            return false;
+            return 0;
         }
 
         // exact name first, then the start of a name ("tail" for Tailoring), in the client's language or English
@@ -1464,8 +1466,19 @@ public:
             handler->PSendSysMessage(ru ? "У вас нет профессии \"%s\". Список: .profession" : "You have no profession called \"%s\". See .profession for yours.",
                 std::string(wanted).c_str());
             handler->SetSentErrorMessage(true);
-            return false;
+            return 0;
         }
+
+        return skillId;
+    }
+
+    static bool HandleProfessionShowCommand(ChatHandler* handler, Tail name)
+    {
+        Player* player = handler->GetSession()->GetPlayer();
+        bool const ru = handler->GetSession()->GetSessionDbLocaleIndex() == LOCALE_ruRU;
+        uint32 const skillId = FindProfessionByName(handler, player, name);
+        if (!skillId)
+            return false;
 
         std::string const shownName = ProfessionName(handler, skillId);
         uint32 hiddenSkillId = 0;
@@ -1487,6 +1500,35 @@ public:
                 break;
             default:
                 handler->PSendSysMessage(ru ? "%s - не основная профессия." : "%s is not a primary profession.", shownName.c_str());
+                break;
+        }
+        handler->SetSentErrorMessage(true);
+        return false;
+    }
+
+    static bool HandleProfessionHideCommand(ChatHandler* handler, Tail name)
+    {
+        Player* player = handler->GetSession()->GetPlayer();
+        bool const ru = handler->GetSession()->GetSessionDbLocaleIndex() == LOCALE_ruRU;
+        uint32 const skillId = FindProfessionByName(handler, player, name);
+        if (!skillId)
+            return false;
+
+        std::string const professionName = ProfessionName(handler, skillId);
+        switch (player->HideProfession(skillId))
+        {
+            case Player::ShowProfessionResult::Ok:
+                handler->PSendSysMessage(ru ? "%s скрыта, навык и рецепты сохранены. Слот свободен: можно изучить новую профессию."
+                                            : "%s is hidden; it keeps its skill and recipes. The slot is free for a new profession.", professionName.c_str());
+                return true;
+            case Player::ShowProfessionResult::AlreadyHidden:
+                handler->PSendSysMessage(ru ? "%s уже скрыта." : "%s is already hidden.", professionName.c_str());
+                return true;
+            case Player::ShowProfessionResult::ToolsEquipped:
+                handler->SendSysMessage(ru ? "Сначала снимите инструменты этой профессии." : "Take off this profession's tools first.");
+                break;
+            default:
+                handler->PSendSysMessage(ru ? "%s - не основная профессия." : "%s is not a primary profession.", professionName.c_str());
                 break;
         }
         handler->SetSentErrorMessage(true);
