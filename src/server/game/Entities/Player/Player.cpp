@@ -23043,6 +23043,8 @@ void Player::_SaveSkills(CharacterDatabaseTransaction trans)
         uint16 value = GetSkillRankByPos(itr->second.pos);
         uint16 max = GetSkillMaxRankByPos(itr->second.pos);
         int8 professionSlot = int8(GetProfessionSlotFor(itr->first));
+        if (professionSlot == -1 && _playerHiddenProfessions.contains(itr->first))
+            professionSlot = PROFESSION_SLOT_HIDDEN_BY_PLAYER;
 
         switch (itr->second.uState)
         {
@@ -27433,6 +27435,8 @@ Player::ShowProfessionResult Player::ShowProfession(uint32 skillId, uint32* hidd
     uint32 const oldSkillId = uint32(m_activePlayerData->ProfessionSkillLine[slot]);
     SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::ProfessionSkillLine, slot), int32(skillId));
     _lastShownProfessionSlot = slot;
+    _playerHiddenProfessions.erase(skillId);
+    RefreshProfessionSkillLines({ skillId, oldSkillId });
 
     for (uint32 changedSkillId : { skillId, oldSkillId })
     {
@@ -27454,7 +27458,13 @@ Player::ShowProfessionResult Player::HideProfession(uint32 skillId)
 
     int32 const slot = GetProfessionSlotFor(skillId);
     if (slot == -1)
+    {
+        // keep it out of a slot that frees up later too
+        if (_playerHiddenProfessions.insert(skillId).second)
+            if (auto itr = mSkillStatus.find(skillId); itr != mSkillStatus.end() && itr->second.uState == SKILL_UNCHANGED)
+                itr->second.uState = SKILL_CHANGED;
         return ShowProfessionResult::AlreadyHidden;
+    }
 
     uint8 const professionSlotStart = PROFESSION_SLOT_PROFESSION1_TOOL + slot * PROFESSION_SLOT_MAX_COUNT;
     for (uint8 slotOffset = 0; slotOffset < PROFESSION_SLOT_MAX_COUNT; ++slotOffset)
@@ -27462,6 +27472,8 @@ Player::ShowProfessionResult Player::HideProfession(uint32 skillId)
             return ShowProfessionResult::ToolsEquipped;
 
     SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::ProfessionSkillLine, slot), 0);
+    _playerHiddenProfessions.insert(skillId);
+    RefreshProfessionSkillLines({ skillId });
     auto itr = mSkillStatus.find(skillId);
     if (itr != mSkillStatus.end() && itr->second.uState == SKILL_UNCHANGED)
         itr->second.uState = SKILL_CHANGED;
@@ -27469,12 +27481,24 @@ Player::ShowProfessionResult Player::HideProfession(uint32 skillId)
     return ShowProfessionResult::Ok;
 }
 
+// The client rebuilds its profession list (Professions tab, profession window) on a skill line update; a change of
+// ProfessionSkillLine alone may not do it. Resend the skill line ids of the moved professions.
+void Player::RefreshProfessionSkillLines(std::initializer_list<uint32> skillIds)
+{
+    for (uint32 skillId : skillIds)
+    {
+        auto itr = mSkillStatus.find(skillId);
+        if (skillId && itr != mSkillStatus.end() && itr->second.uState != SKILL_DELETED)
+            SetSkillLineId(itr->second.pos, uint16(skillId));
+    }
+}
+
 // A slot freed by unlearning a profession goes to a learned primary profession that had none.
 void Player::FillFreeProfessionSlots(uint32 exceptSkillId /*= 0*/)
 {
     for (uint32 skillId : GetPrimaryProfessions())
     {
-        if (skillId == exceptSkillId || GetProfessionSlotFor(skillId) != -1)
+        if (skillId == exceptSkillId || GetProfessionSlotFor(skillId) != -1 || _playerHiddenProfessions.contains(skillId))
             continue;
 
         int32 slot = FindEmptyProfessionSlotFor(skillId);
@@ -29404,7 +29428,9 @@ void Player::_LoadSkills(PreparedQueryResult result)
 
                     if (!skillLine->ParentSkillLineID)
                     {
-                        if (professionSlot != -1)
+                        if (professionSlot == PROFESSION_SLOT_HIDDEN_BY_PLAYER)
+                            _playerHiddenProfessions.insert(skill); // .profession hide: stays out of the client's 2 slots
+                        else if (professionSlot >= 0 && professionSlot < int8(m_activePlayerData->ProfessionSkillLine.size()))
                             SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::ProfessionSkillLine, professionSlot), skill);
                         else
                             loadedProfessionsWithoutSlot.push_back(skill);

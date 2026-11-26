@@ -764,6 +764,9 @@ enum ProfessionSlots : uint8
     PROFESSION_SLOT_MAX_COUNT            = PROFESSION_SLOT_PROFESSION2_TOOL - PROFESSION_SLOT_PROFESSION1_TOOL
 };
 
+// character_skills.professionSlot of a primary profession the player hid with .profession hide (-1 = no slot yet)
+constexpr int8 PROFESSION_SLOT_HIDDEN_BY_PLAYER = -2;
+
 enum InventorySlots : uint8                                 // 4 slots
 {
     INVENTORY_SLOT_BAG_START    = 30,
@@ -3536,6 +3539,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         float  m_lastFallZ;
 
         int32 _lastShownProfessionSlot = -1; // slot .profession show filled last, so the next one replaces the other
+        std::unordered_set<uint32> _playerHiddenProfessions; // .profession hide: saved as professionSlot -2, never put back in a slot by itself
+        void RefreshProfessionSkillLines(std::initializer_list<uint32> skillIds);
 
         std::array<MirrorTimer, MIRROR_TIMER_MAX> m_mirrorTimers;
         int32 m_environmentalDamageTimer;
