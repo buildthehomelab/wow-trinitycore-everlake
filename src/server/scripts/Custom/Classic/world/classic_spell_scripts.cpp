@@ -102,6 +102,8 @@ static std::unordered_map<uint32, ClassicGroundAreaDamage> const ClassicGroundAr
 
 class classic_spell_ground_area_damage : public AuraScript
 {
+    static constexpr uint32 SPELL_DRUID_GENESIS = 1223081;
+
     bool Validate(SpellInfo const* spellInfo) override
     {
         return ClassicGroundAreaDamages.contains(spellInfo->Id);
@@ -151,6 +153,11 @@ class classic_spell_ground_area_damage : public AuraScript
             float modifiedDamage = float(damage) * caster->SpellDamagePctDone(target, spellInfo, DOT, spellInfo->GetEffect(EFFECT_2));
             if (Player* modOwner = caster->GetSpellModOwner())
                 modOwner->ApplySpellMod(spellInfo, SpellModOp::PeriodicHealingAndDamage, modifiedDamage);
+            // Genesis 1223081 effect 1 (71139 hotfix row): a percent mod of the direct damage op on Hurricane (class mask 0x400000), which
+            // these ticks never read, so Hurricane kept its damage (WoW Forever 71139, Nov 25: "Genesis was not increasing the damage of
+            // Hurricane"). Only Genesis is read here: talents that mod both ops would count twice with the whole direct op.
+            if (AuraEffect const* genesis = caster->GetAuraEffect(SPELL_DRUID_GENESIS, EFFECT_1); genesis && genesis->IsAffectingSpell(spellInfo))
+                AddPct(modifiedDamage, genesis->GetAmount());
             damage = int32(std::max(modifiedDamage, 0.0f));
 
             damage = target->SpellDamageBonusTaken(caster, spellInfo, damage, DOT);
@@ -2398,6 +2405,28 @@ class classic_spell_warr_gore_drinker_enrage : public AuraScript
 ## classic_spell_undead_touch_of_the_grave
 ######*/
 
+// Touch of the Grave procs only from what has a damage component, and from a damage over time on its cast, not its ticks (WoW Forever
+// 70009, Sep 24: "no longer breaks CC or activates from spells and abilities that don't have a damage component to them ... Shadow Word:
+// Pain activates it on cast, but not on periodic damage. Distract won't activate it"). Melee and spell-less hits need damage dealt.
+static bool ClassicTouchOfTheGraveProcAllowed(ProcEventInfo& eventInfo)
+{
+    if (eventInfo.GetTypeMask() & PROC_FLAG_DEAL_HARMFUL_PERIODIC)
+        return false;
+
+    SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+    if (!spellInfo)
+    {
+        DamageInfo const* damageInfo = eventInfo.GetDamageInfo();
+        return damageInfo && damageInfo->GetDamage() > 0;
+    }
+
+    return spellInfo->HasEffect(SPELL_EFFECT_SCHOOL_DAMAGE) || spellInfo->HasEffect(SPELL_EFFECT_HEALTH_LEECH)
+        || spellInfo->HasEffect(SPELL_EFFECT_WEAPON_DAMAGE) || spellInfo->HasEffect(SPELL_EFFECT_WEAPON_DAMAGE_NOSCHOOL)
+        || spellInfo->HasEffect(SPELL_EFFECT_NORMALIZED_WEAPON_DMG) || spellInfo->HasEffect(SPELL_EFFECT_WEAPON_PERCENT_DAMAGE)
+        || spellInfo->HasAura(SPELL_AURA_PERIODIC_DAMAGE) || spellInfo->HasAura(SPELL_AURA_PERIODIC_DAMAGE_PERCENT)
+        || spellInfo->HasAura(SPELL_AURA_PERIODIC_LEECH);
+}
+
 // 1260189 / 1260201 - Touch of the Grave (Undead racial, 1.60): "Your spells and attacks have a chance to drain Health from the target,
 // up to $s1% of your maximum Health." Warriors, paladins and rogues learn 1260189 (20%), priests, mages and warlocks learn 1260201 (30%)
 // (SkillLineAbility class masks 11 and 400). The client data procs a dummy aura (15 sec recovery) and has no trigger for the drain
@@ -2414,7 +2443,8 @@ class classic_spell_undead_touch_of_the_grave : public AuraScript
     bool CheckProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
     {
         Unit* target = eventInfo.GetActionTarget();
-        return target && target != GetTarget() && target->IsAlive() && GetTarget()->IsValidAttackTarget(target);
+        return target && target != GetTarget() && target->IsAlive() && GetTarget()->IsValidAttackTarget(target)
+            && ClassicTouchOfTheGraveProcAllowed(eventInfo);
     }
 
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
@@ -2830,7 +2860,8 @@ class classic_spell_grave_touch : public AuraScript
     bool CheckProc(ProcEventInfo& eventInfo)
     {
         Unit* target = eventInfo.GetActionTarget();
-        return target && target != GetTarget() && target->IsAlive();
+        return target && target != GetTarget() && target->IsAlive() && GetTarget()->IsValidAttackTarget(target)
+            && ClassicTouchOfTheGraveProcAllowed(eventInfo);
     }
 
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
