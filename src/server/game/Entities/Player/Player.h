@@ -1571,6 +1571,12 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         bool IsInsertItemsLeftToRight() const { return m_activePlayerData->InsertItemsLeftToRight; }
         void SetInsertItemsLeftToRight(bool enabled) { SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::InsertItemsLeftToRight), enabled); }
         EnumFlag<BagSlotFlags> GetBagSlotFlags(uint32 bagIndex) const { return static_cast<BagSlotFlags>(m_activePlayerData->BagSlotFlags[bagIndex]); }
+        EnumFlag<BagSlotFlags> GetCharacterBankTabDepositFlags(uint32 tabId) const
+        {
+            if (tabId >= m_activePlayerData->CharacterBankTabSettings.size())
+                return BagSlotFlags::None;
+            return static_cast<BagSlotFlags>(*m_activePlayerData->CharacterBankTabSettings[tabId].DepositFlags);
+        }
         void SetBagSlotFlag(uint32 bagIndex, EnumFlag<BagSlotFlags> flags) { SetUpdateFieldFlagValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::BagSlotFlags, bagIndex), flags.AsUnderlyingType()); }
         void RemoveBagSlotFlag(uint32 bagIndex, EnumFlag<BagSlotFlags> flags) { RemoveUpdateFieldFlagValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::BagSlotFlags, bagIndex), flags.AsUnderlyingType()); }
         void ReplaceAllBagSlotFlags(uint32 bagIndex, EnumFlag<BagSlotFlags> flags) { SetUpdateFieldValue(m_values.ModifyValue(&Player::m_activePlayerData).ModifyValue(&UF::ActivePlayerData::BagSlotFlags, bagIndex), flags.AsUnderlyingType()); }
