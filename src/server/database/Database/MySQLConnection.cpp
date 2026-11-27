@@ -417,11 +417,23 @@ int MySQLConnection::ExecuteTransaction(std::shared_ptr<TransactionBase> transac
 
 size_t MySQLConnection::EscapeString(char* to, const char* from, size_t length)
 {
-    return mysql_real_escape_string(m_Mysql, to, from, length);
+    // The pool escapes on its first synchronous connection without locking it, so this can run while that connection is
+    // reconnecting on another thread and has no handle (live segfaults in mysql_real_escape_string reading 0x341 of a null
+    // MYSQL*). Escaping needs no server: without a handle, escape for the client character set (utf8mb4, ASCII-safe).
+    if (MySQLHandle* handle = m_Mysql)
+        return mysql_real_escape_string(handle, to, from, length);
+    return mysql_escape_string(to, from, length);
 }
 
 void MySQLConnection::Ping()
 {
+    // A connection left without a handle (a reconnect that failed) crashed in mysql_ping(nullptr): reconnect it instead.
+    if (!m_Mysql)
+    {
+        _HandleMySQLErrno(CR_CONN_HOST_ERROR);
+        return;
+    }
+
     mysql_ping(m_Mysql);
 }
 
@@ -524,7 +536,7 @@ PreparedResultSet* MySQLConnection::Query(PreparedStatementBase* stmt)
     return new PreparedResultSet(mysqlStmt->GetSTMT(), result, rowCount, fieldCount);
 }
 
-bool MySQLConnection::_HandleMySQLErrno(uint32 errNo, uint8 attempts /*= 5*/)
+bool MySQLConnection::_HandleMySQLErrno(uint32 errNo, uint8 attempts /*= 15*/)
 {
     switch (errNo)
     {
@@ -582,7 +594,12 @@ bool MySQLConnection::_HandleMySQLErrno(uint32 errNo, uint8 attempts /*= 5*/)
                 // It's possible this attempted reconnect throws 2006 at us.
                 // To prevent crazy recursive calls, sleep here.
                 std::this_thread::sleep_for(std::chrono::seconds(3)); // Sleep 3 seconds
-                return _HandleMySQLErrno(lErrno, attempts); // Call self (recursive)
+                // Try to reconnect again whatever the failed attempt answered. Passing its errno on gave up on any error not
+                // listed here: while the MySQL container restarts its host name does not resolve (CR_UNKNOWN_HOST 2005), that
+                // fell to "Unhandled MySQL errno", and the connection stayed open with no handle until a ping or escape on it
+                // crashed (live segfaults in mysql_ping / mysql_real_escape_string on a null MYSQL*).
+                TC_LOG_ERROR("sql.sql", "Reconnect attempt failed with MySQL errno {}, {} attempt(s) left.", lErrno, uint32(attempts));
+                return _HandleMySQLErrno(CR_CONN_HOST_ERROR, attempts); // Call self (recursive)
             }
         }
 

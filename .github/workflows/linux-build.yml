@@ -72,6 +72,9 @@ jobs:
         echo "ccache-key-prefix=ubuntu-${{ matrix.cc }}${{ matrix.sanitize && format('-{0}', matrix.sanitize) || '' }}-${{ github.base_ref || github.ref_name }}" >> "$GITHUB_OUTPUT"
     - name: Dependencies
       run: |
+        # The runner image lists packages.microsoft.com, which answered 403 on 11-26 and failed the gcc job three times in
+        # apt-get update. Nothing here comes from it: drop those sources first.
+        grep -l packages.microsoft.com /etc/apt/sources.list.d/* 2>/dev/null | xargs -r sudo rm -f
         sudo apt-get update && sudo apt-get install -yq ccache libboost-dev libboost-filesystem-dev libboost-locale-dev libboost-program-options-dev libboost-regex-dev libboost-thread-dev libssl-dev libreadline-dev zlib1g-dev libbz2-dev
     - name: Restore nopch cache
       id: ccache-restore

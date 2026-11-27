@@ -102,7 +102,7 @@ class TC_DATABASE_API MySQLConnection
         bool                                 m_prepareError;  //!< Was there any error while preparing statements?
 
     private:
-        bool _HandleMySQLErrno(uint32 errNo, uint8 attempts = 5);
+        bool _HandleMySQLErrno(uint32 errNo, uint8 attempts = 15); // 45 s of 3 s retries: rides out a MySQL container restart, under the 60 s freeze detector
 
         struct WorkerThread;
         std::unique_ptr<WorkerThread> m_workerThread;       //!< Core worker thread.
