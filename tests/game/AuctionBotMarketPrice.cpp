@@ -120,3 +120,35 @@ TEST_CASE("MarketPrices.Only lists only items with a market price, and nothing c
     AuctionBotVanilla::SetMarketPrices({});                  // no prices loaded: the filter would leave nothing, so it is off
     REQUIRE(AuctionBotVanilla::IsAllowed(&other.proto));
 }
+
+TEST_CASE("Profession materials are trade goods up to rare that no vendor sells without limit", "[AuctionBotMarketPrice]")
+{
+    TestItem linen(2589, ITEM_CLASS_TRADE_GOODS, 13, 55);
+    TestItem nexus(20725, ITEM_CLASS_TRADE_GOODS, 0, 0);
+    nexus.sparse.OverallQualityID = ITEM_QUALITY_RARE;
+    TestItem epicGood(1, ITEM_CLASS_TRADE_GOODS, 0, 0);
+    epicGood.sparse.OverallQualityID = ITEM_QUALITY_EPIC;
+    TestItem coarseThread(2320, ITEM_CLASS_TRADE_GOODS, 2, 10);
+    TestItem potion(118, ITEM_CLASS_CONSUMABLE, 5, 25);
+
+    REQUIRE(AuctionBotVanilla::IsProfessionMaterial(&linen.proto, false));
+    REQUIRE(AuctionBotVanilla::IsProfessionMaterial(&nexus.proto, false));
+    REQUIRE_FALSE(AuctionBotVanilla::IsProfessionMaterial(&epicGood.proto, false));
+    REQUIRE_FALSE(AuctionBotVanilla::IsProfessionMaterial(&coarseThread.proto, true));   // always at the vendor
+    REQUIRE_FALSE(AuctionBotVanilla::IsProfessionMaterial(&potion.proto, false));
+}
+
+TEST_CASE("Material listings: stock stacks, blue ones raised to BlueStackSize where the server stacks them", "[AuctionBotMarketPrice]")
+{
+    // Linen Cloth: green-or-lower keeps its stock stack of 20 (the server's 999 is not used)
+    REQUIRE(AuctionBotVanilla::MaterialStackSize(ITEM_QUALITY_NORMAL, 20, 999, 20) == 20);
+    // a blue that stacks to 10 in stock: 20 with BlueStackSize 20, stock with 0
+    REQUIRE(AuctionBotVanilla::MaterialStackSize(ITEM_QUALITY_RARE, 10, 999, 20) == 20);
+    REQUIRE(AuctionBotVanilla::MaterialStackSize(ITEM_QUALITY_RARE, 10, 999, 0) == 10);
+    // ... but not past the server's stack size, and never below the stock one
+    REQUIRE(AuctionBotVanilla::MaterialStackSize(ITEM_QUALITY_RARE, 10, 15, 20) == 15);
+    REQUIRE(AuctionBotVanilla::MaterialStackSize(ITEM_QUALITY_RARE, 1, 1, 20) == 1);
+    REQUIRE(AuctionBotVanilla::MaterialStackSize(ITEM_QUALITY_RARE, 40, 999, 20) == 40);
+    // greens are not raised
+    REQUIRE(AuctionBotVanilla::MaterialStackSize(ITEM_QUALITY_UNCOMMON, 10, 999, 20) == 10);
+}
