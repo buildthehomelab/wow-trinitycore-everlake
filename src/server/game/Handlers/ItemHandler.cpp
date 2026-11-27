@@ -1370,17 +1370,19 @@ bool IsSortedBefore(BagSortItem const& left, BagSortItem const& right)
     return left.Guid < right.Guid;
 }
 
-// Packs the backpack and the equipped bags: the client's "clean up bags" button is only the request, the slots are
-// moved here and the client follows the resulting item updates.
+// Packs the backpack and the equipped bags, or the character bank tabs: the client's "clean up bags" button is only the
+// request, the slots are moved here and the client follows the resulting item updates.
 class BagSorter
 {
 public:
-    explicit BagSorter(Player* player) : _player(player) { }
+    explicit BagSorter(Player* player, bool bank = false) : _player(player), _bank(bank) { }
 
     void Sort();
 
 private:
     void Collect();
+    void CollectBank();
+    EnumFlag<BagSlotFlags> GetContainerFlags(uint8 bagSlot) const;
     void AddContainer(uint8 bagSlot, uint8 firstSlot, uint8 slotCount, bool rightToLeft);
     void BuildPreference(std::size_t categoryIndex);
     bool BuildPlan();
@@ -1391,10 +1393,11 @@ private:
     bool CanGoIntoSlot(ItemTemplate const* proto, BagSortSlot const& slot) const;
 
     Player* _player;
+    bool _bank;
     std::vector<BagSortSlot> _slots;
     std::vector<BagSortItem> _items;
     std::array<std::vector<uint32>, BagSortCategoryCount> _preferences;
-    std::array<bool, REAGENT_BAG_SLOT_END> _specializedBags = { };
+    std::array<bool, BANK_SLOT_BAG_END> _specializedBags = { };
     std::vector<std::size_t> _slotOwner;    // slot index -> item index planned for it
 };
 
@@ -1418,6 +1421,12 @@ void BagSorter::Sort()
 
 void BagSorter::Collect()
 {
+    if (_bank)
+    {
+        CollectBank();
+        return;
+    }
+
     bool const rightToLeft = _player->IsSortBagsRightToLeft();
 
     AddContainer(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START, _player->GetInventorySlotCount(), false);
@@ -1429,7 +1438,7 @@ void BagSorter::Collect()
             continue;
 
         // "ignore this bag when sorting"
-        if (_player->GetBagSlotFlags(bagSlot - INVENTORY_SLOT_BAG_START).HasFlag(BagSlotFlags::DisableAutoSort))
+        if (GetContainerFlags(bagSlot).HasFlag(BagSlotFlags::DisableAutoSort))
             continue;
 
         ItemTemplate const* bagProto = bag->GetTemplate();
@@ -1438,6 +1447,36 @@ void BagSorter::Collect()
 
         AddContainer(bagSlot, 0, uint8(bag->GetBagSize()), rightToLeft);
     }
+}
+
+// Classic 1.60: the bank is up to nine tabs (bank bag slots 63..71), each one a Character Bank Tab Bag with its own deposit
+// flags ("ignore this tab when cleaning up", the item type priorities). There is no bank backpack and no bag of a single
+// item family, so items move freely between the tabs.
+void BagSorter::CollectBank()
+{
+    uint8 const tabEnd = uint8(std::min<uint32>(BANK_SLOT_BAG_START + _player->GetCharacterBankTabCount(), BANK_SLOT_BAG_END));
+    for (uint8 bagSlot = BANK_SLOT_BAG_START; bagSlot < tabEnd; ++bagSlot)
+    {
+        Bag* tab = _player->GetBagByPos(bagSlot);
+        if (!tab)
+            continue;
+
+        if (GetContainerFlags(bagSlot).HasFlag(BagSlotFlags::DisableAutoSort))
+            continue;
+
+        AddContainer(bagSlot, 0, uint8(tab->GetBagSize()), false);
+    }
+}
+
+EnumFlag<BagSlotFlags> BagSorter::GetContainerFlags(uint8 bagSlot) const
+{
+    if (bagSlot >= BANK_SLOT_BAG_START && bagSlot < BANK_SLOT_BAG_END)
+        return _player->GetCharacterBankTabDepositFlags(bagSlot - BANK_SLOT_BAG_START);
+
+    if (bagSlot >= INVENTORY_SLOT_BAG_START && bagSlot < REAGENT_BAG_SLOT_END)
+        return _player->GetBagSlotFlags(bagSlot - INVENTORY_SLOT_BAG_START);
+
+    return BagSlotFlags::None;
 }
 
 void BagSorter::AddContainer(uint8 bagSlot, uint8 firstSlot, uint8 slotCount, bool rightToLeft)
@@ -1496,7 +1535,7 @@ uint32 BagSorter::GetSlotRank(BagSortSlot const& slot, BagSortCategory category)
             if (bagProto->GetClass() == ITEM_CLASS_CONTAINER && bagProto->GetSubClass() == ITEM_SUBCLASS_REAGENT_CONTAINER)
                 return 0;
 
-    if (_player->GetBagSlotFlags(slot.BagSlot - INVENTORY_SLOT_BAG_START).HasFlag(GetBagSortPriorityFlag(category)))
+    if (GetContainerFlags(slot.BagSlot).HasFlag(GetBagSortPriorityFlag(category)))
         return 0;
 
     // a bag that only takes one item family is filled before the general purpose bags
@@ -1622,8 +1661,13 @@ void WorldSession::HandleSortBags(WorldPackets::Item::SortBags& /*sortBags*/)
 
 void WorldSession::HandleSortBankBags(WorldPackets::Item::SortBankBags& /*sortBankBags*/)
 {
-    // TODO: Implement sorting
-    // Placeholder to prevent completely locking out bags clientside
+    // same as the bags, over the character bank tabs; only while the bank is open (banker, or the Personal Banking innkeeper)
+    if (_player->IsAlive() && CanUseBank())
+    {
+        BagSorter sorter(_player, true);
+        sorter.Sort();
+    }
+
     SendPacket(WorldPackets::Item::BagCleanupFinished().Write());
 }
 
