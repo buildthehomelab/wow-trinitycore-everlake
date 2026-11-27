@@ -444,13 +444,16 @@ void WorldSession::HandleMoveTeleportAck(WorldPackets::Movement::MoveTeleportAck
 
     if (dest.TransportGuid)
     {
-        if (GameObject* go = plMover->GetMap()->GetGameObject(*dest.TransportGuid))
+        GameObject* object = plMover->GetMap()->GetGameObject(*dest.TransportGuid);
+        if (TransportBase* transport = object ? object->ToTransportBase() : nullptr)
         {
-            if (TransportBase* transport = go->ToTransportBase())
-            {
-                transport->AddPassenger(plMover, destLocation);
-                destLocation.Relocate(transport->GetPositionWithOffset(plMover->m_movementInfo.transport.pos));
-            }
+            transport->AddPassenger(plMover, destLocation);
+            destLocation.Relocate(transport->GetPositionWithOffset(plMover->m_movementInfo.transport.pos));
+        }
+        else
+        {
+            // The transport may have left this map while the client was acknowledging the teleport.
+            destLocation.Relocate(plMover->GetPosition());
         }
     }
 
