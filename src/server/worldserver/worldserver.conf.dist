@@ -4338,6 +4338,15 @@ AuctionHouseBot.Items.Crafted = 0
 
 AuctionHouseBot.Items.Crafted.MinStock = 0
 
+#    AuctionHouseBot.Items.TradeGoods.MinStock
+#       Description: Keep every profession material of the pool (trade goods up to rare quality: cloth, leather, herbs,
+#                    ore, bars, enchanting materials; not what a vendor sells without limit) listed at least this many
+#                    times in each house, in full stacks (20 Linen Cloth). What players buy is put back on the next update,
+#                    so a crafter can always level a profession from the auction house.
+#       Default:     0 - (Disabled)
+
+AuctionHouseBot.Items.TradeGoods.MinStock = 0
+
 #
 #    AuctionHouseBot.Bind.*
 #       Description: Indicates which bonding types to allow the bot to put up for auction

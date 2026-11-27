@@ -209,4 +209,10 @@ uint64 UnitValue(ItemTemplate const* proto)
         curve *= double(itemLevel) / double(_fullValueItemLevel);
     return std::max<uint64>(vendor, uint64(curve));
 }
+
+bool IsProfessionMaterial(ItemTemplate const* proto, bool soldUnlimitedByVendor)
+{
+    // a vendor's Coarse Thread or Flux is always there at the vendor price: no need to stock it
+    return proto->GetClass() == ITEM_CLASS_TRADE_GOODS && proto->GetQuality() <= ITEM_QUALITY_RARE && !soldUnlimitedByVendor;
+}
 }

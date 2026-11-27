@@ -120,6 +120,7 @@ the retail rule back without a build error.
 | Meeting stones don't summon | `GameObject::Use`, `GAMEOBJECT_TYPE_MEETINGSTONE` | Stones try the Wrath spell 59782 (not in the client) |
 | Faction auction houses, goblin houses cross-faction | `AllowTwoSide.Interaction.Auction` default 0 | One shared house everywhere at 5% / 5% |
 | Auction house bot stocks and buys in the Alliance, Horde and goblin houses | `src/modules/PlayerbotV2/conf/zz-0-playerbot-defaults.conf` (`*.Items.Amount.Ratio` 100 each, faction buyers on) and `zz-forever-bots.conf` (faction buyers on) | **Silent:** the bot stocks only house 1 (goblin auctioneers); Alliance and Horde houses stay empty |
+| Auction house bot keeps profession materials in stock, priced from live (TSM) | `AuctionBotSeller::AddMinStock` + `AuctionBotVanilla::IsProfessionMaterial` (`AuctionHouseBot.Items.TradeGoods.MinStock`), `zz-forever-bots.conf` (`MarketPrices = 1`, `TradeGoods.MinStock = 4`), test `tests/game/AuctionBotMarketPrice.cpp` | **Silent:** mats show up only by chance, half of them single pieces, and crafters can't level from the house |
 | Riding 100g / 1,000g at Friendly | `sql/custom/world/2026_11_19_81_world_forever_riding_prices.sql` | Prices back to 90g / 900g (the Honored price) |
 | Raids Forever hasn't released are closed: Molten Core, Blackwing Lair, Zul'Gurub, both Ahn'Qiraj raids, Naxxramas, and Onyxia until 2026-12-09; their dead-end quests are hidden | `sql/custom/world/2026_11_19_83_world_everlake_close_vanilla_raids.sql` (`disables` map and quest rows) | **Silent:** players can enter raids live doesn't have and pick up quests they can't finish |
 
@@ -132,6 +133,7 @@ grep -n "BlocksDungeonCarry" src/server/game/Entities/Player/KillRewarder.cpp
 grep -n "DazeChance" src/server/game/Entities/Unit/Unit.cpp
 grep -n "HasAchievedOnAccount" src/server/game/Spells/TraitMgr.cpp src/server/game/Entities/Player/Player.cpp
 grep -n "Alliance.Items.Amount.Ratio\|Buyer.Horde.Enabled" src/modules/PlayerbotV2/conf/zz-*.conf   # ratio 100, buyers 1
+grep -n "TradeGoods.MinStock\|Vanilla.MarketPrices = 1" src/modules/PlayerbotV2/conf/zz-forever-bots.conf
 ```
 
 Everlake choices that differ from live Forever or have no Forever source (decided 2026-11-19, keep them):
