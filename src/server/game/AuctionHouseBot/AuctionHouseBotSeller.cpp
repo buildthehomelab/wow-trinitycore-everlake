@@ -82,7 +82,9 @@ bool AuctionBotSeller::Initialize()
             for (VendorItem const& vendorItem : data->m_items)
             {
                 npcItems.insert(vendorItem.item);
-                if (!vendorItem.maxcount)
+                // sold for gold without a limit: a crafter buys it there (Simple Flour). An item that costs a currency
+                // or other items (Arcane Crystal, only at the Black Market agent) still needs the AH.
+                if (!vendorItem.maxcount && !vendorItem.ExtendedCost && vendorItem.Type == ITEM_VENDOR_TYPE_ITEM)
                     unlimitedVendorItems.insert(vendorItem.item);
             }
 
@@ -902,6 +904,14 @@ void AuctionBotSeller::SetItemsAmountForQuality(AuctionQuality quality, uint32 v
         LoadItemsQuantity(_houseConfig[i]);
 }
 
+// The stack a material is stocked in: the item's stock stack (20 Linen Cloth), blues raised to Items.TradeGoods.BlueStackSize.
+uint32 AuctionBotSeller::FullMaterialStack(ItemTemplate const* prototype)
+{
+    return AuctionBotVanilla::MaterialStackSize(prototype->GetQuality(),
+        ItemStackSize::GetStockMaxStackSize(prototype->GetId(), prototype->GetMaxStackSize()), prototype->GetMaxStackSize(),
+        sAuctionBotConfig->GetConfig(CONFIG_AHBOT_ITEMS_TRADEGOODS_BLUE_STACK));
+}
+
 // Creates one listing of itemId in auctionHouse (stack size, random bonus list, price and duration from config).
 bool AuctionBotSeller::PostAuction(SellerConfiguration& config, AuctionHouseObject* auctionHouse, uint32 itemId, CharacterDatabaseTransaction trans, bool fullStack)
 {
@@ -919,10 +929,7 @@ bool AuctionBotSeller::PostAuction(SellerConfiguration& config, AuctionHouseObje
     }
 
     // a full stock stack (20 Linen Cloth), not the server's bigger StackSize.* one: what a crafter buys at a time
-    uint32 stackCount = fullStack ? AuctionBotVanilla::MaterialStackSize(prototype->GetQuality(),
-            ItemStackSize::GetStockMaxStackSize(itemId, prototype->GetMaxStackSize()), prototype->GetMaxStackSize(),
-            sAuctionBotConfig->GetConfig(CONFIG_AHBOT_ITEMS_TRADEGOODS_BLUE_STACK))
-        : GetStackSizeForItem(prototype, config);
+    uint32 stackCount = fullStack ? FullMaterialStack(prototype) : GetStackSizeForItem(prototype, config);
 
     Item* item = Item::CreateItem(itemId, stackCount, ItemContext::NONE);
     if (!item)
@@ -974,36 +981,57 @@ void AuctionBotSeller::AddMinStock(SellerConfiguration& config, AuctionHouseObje
     if (!HasMinStock())
         return;
 
+    // listed: bot listings of each item, any size; fullStacks: those of them that hold a full material stack. The random
+    // fill also lists materials, in stacks of 1 to 20, and counting those made 10 Linen Cloth listings of 2 or 3 cloth
+    // each look like a full stock (PTR 11-27), so only full stacks count toward the material minimum.
     std::unordered_map<uint32, uint32> listed;
+    std::unordered_map<uint32, uint32> fullStacks;
     for (auto itr = auctionHouse->GetAuctionsBegin(); itr != auctionHouse->GetAuctionsEnd(); ++itr)
     {
         AuctionPosting const& posting = itr->second;
-        if ((posting.Owner.IsEmpty() || sAuctionBotConfig->IsBotChar(posting.Owner)) && !posting.Items.empty())
-            ++listed[posting.Items[0]->GetEntry()];
+        if ((!posting.Owner.IsEmpty() && !sAuctionBotConfig->IsBotChar(posting.Owner)) || posting.Items.empty())
+            continue;
+
+        Item const* item = posting.Items[0];
+        ++listed[item->GetEntry()];
+        if (item->GetCount() >= FullMaterialStack(item->GetTemplate()))
+            ++fullStacks[item->GetEntry()];
     }
 
-    auto fill = [&](ItemPool const& pool, uint32 minStock, bool fullStacks)
+    // materials first, in full stacks; a new listing also counts as crafted stock (Copper Bar is both)
+    if (uint32 const minStock = sAuctionBotConfig->GetConfig(CONFIG_AHBOT_ITEMS_TRADEGOODS_MIN_STOCK); minStock && !_materialStock.empty())
     {
-        if (!minStock || pool.empty())
-            return;
-
         // a random start, so a small budget does not always go to the same items first
-        std::size_t const start = urand(0, uint32(pool.size() - 1));
-        for (std::size_t i = 0; i < pool.size() && budget > 0; ++i)
+        std::size_t const start = urand(0, uint32(_materialStock.size() - 1));
+        for (std::size_t i = 0; i < _materialStock.size() && budget > 0; ++i)
         {
-            uint32 const itemId = pool[(start + i) % pool.size()];
-            // shared count: a crafted material (Copper Bar) stocked as a material already counts as crafted stock
+            uint32 const itemId = _materialStock[(start + i) % _materialStock.size()];
+            for (uint32& have = fullStacks[itemId]; have < minStock && budget > 0; ++have)
+            {
+                --budget;
+                if (PostAuction(config, auctionHouse, itemId, trans, true))
+                {
+                    ++count;
+                    ++listed[itemId];
+                }
+            }
+        }
+    }
+
+    if (uint32 const minStock = sAuctionBotConfig->GetConfig(CONFIG_AHBOT_ITEMS_CRAFTED_MIN_STOCK); minStock && !_craftedStock.empty())
+    {
+        std::size_t const start = urand(0, uint32(_craftedStock.size() - 1));
+        for (std::size_t i = 0; i < _craftedStock.size() && budget > 0; ++i)
+        {
+            uint32 const itemId = _craftedStock[(start + i) % _craftedStock.size()];
             for (uint32& have = listed[itemId]; have < minStock && budget > 0; ++have)
             {
                 --budget;
-                if (PostAuction(config, auctionHouse, itemId, trans, fullStacks))
+                if (PostAuction(config, auctionHouse, itemId, trans))
                     ++count;
             }
         }
-    };
-
-    fill(_materialStock, sAuctionBotConfig->GetConfig(CONFIG_AHBOT_ITEMS_TRADEGOODS_MIN_STOCK), true);
-    fill(_craftedStock, sAuctionBotConfig->GetConfig(CONFIG_AHBOT_ITEMS_CRAFTED_MIN_STOCK), false);
+    }
 }
 
 // Add new auction to one of the factions.
