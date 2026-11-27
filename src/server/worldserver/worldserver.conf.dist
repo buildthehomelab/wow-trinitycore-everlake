@@ -4347,6 +4347,13 @@ AuctionHouseBot.Items.Crafted.MinStock = 0
 
 AuctionHouseBot.Items.TradeGoods.MinStock = 0
 
+#    AuctionHouseBot.Items.TradeGoods.BlueStackSize
+#       Description: With AuctionHouseBot.Items.TradeGoods.MinStock, list rare (blue) profession materials in stacks of at
+#                    least this many, where the server lets them stack that far (StackSize.*). Others keep their stock stack.
+#       Default:     0 - (Disabled, stock stack)
+
+AuctionHouseBot.Items.TradeGoods.BlueStackSize = 0
+
 #
 #    AuctionHouseBot.Bind.*
 #       Description: Indicates which bonding types to allow the bot to put up for auction

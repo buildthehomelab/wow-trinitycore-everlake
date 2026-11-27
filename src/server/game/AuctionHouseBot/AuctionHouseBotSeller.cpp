@@ -919,7 +919,9 @@ bool AuctionBotSeller::PostAuction(SellerConfiguration& config, AuctionHouseObje
     }
 
     // a full stock stack (20 Linen Cloth), not the server's bigger StackSize.* one: what a crafter buys at a time
-    uint32 stackCount = fullStack ? std::max<uint32>(1, ItemStackSize::GetStockMaxStackSize(itemId, prototype->GetMaxStackSize()))
+    uint32 stackCount = fullStack ? AuctionBotVanilla::MaterialStackSize(prototype->GetQuality(),
+            ItemStackSize::GetStockMaxStackSize(itemId, prototype->GetMaxStackSize()), prototype->GetMaxStackSize(),
+            sAuctionBotConfig->GetConfig(CONFIG_AHBOT_ITEMS_TRADEGOODS_BLUE_STACK))
         : GetStackSizeForItem(prototype, config);
 
     Item* item = Item::CreateItem(itemId, stackCount, ItemContext::NONE);

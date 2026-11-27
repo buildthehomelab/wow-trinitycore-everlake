@@ -55,6 +55,10 @@ namespace AuctionBotVanilla
     // AuctionHouseBot.Items.TradeGoods.MinStock: a profession material (trade goods: cloth, leather, herbs, ore, bars,
     // enchanting materials, elemental and other parts) of up to rare quality, not one a vendor sells without limit.
     bool IsProfessionMaterial(ItemTemplate const* proto, bool soldUnlimitedByVendor);
+
+    // Stack size of a profession material listing: the stock stack (20 Linen Cloth); a rare (blue) one at least blueStack
+    // (AuctionHouseBot.Items.TradeGoods.BlueStackSize, 0 = stock) where the server lets it stack that far (StackSize.*).
+    uint32 MaterialStackSize(uint32 quality, uint32 stockStack, uint32 serverMaxStack, uint32 blueStack);
 }
 
 #endif

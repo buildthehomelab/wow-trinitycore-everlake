@@ -215,4 +215,13 @@ bool IsProfessionMaterial(ItemTemplate const* proto, bool soldUnlimitedByVendor)
     // a vendor's Coarse Thread or Flux is always there at the vendor price: no need to stock it
     return proto->GetClass() == ITEM_CLASS_TRADE_GOODS && proto->GetQuality() <= ITEM_QUALITY_RARE && !soldUnlimitedByVendor;
 }
+
+uint32 MaterialStackSize(uint32 quality, uint32 stockStack, uint32 serverMaxStack, uint32 blueStack)
+{
+    uint32 const stock = std::max<uint32>(stockStack, 1);
+    if (quality != ITEM_QUALITY_RARE || blueStack <= stock)
+        return stock;
+    // never past what the server lets it stack to (StackSize.* only raises stacks, so this is at least the stock stack)
+    return std::max(stock, std::min(blueStack, serverMaxStack));
+}
 }
