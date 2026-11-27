@@ -123,6 +123,8 @@ the retail rule back without a build error.
 | Auction house bot keeps profession materials in stock, priced from live (TSM) | `AuctionBotSeller::AddMinStock` + `AuctionBotVanilla::IsProfessionMaterial` (`AuctionHouseBot.Items.TradeGoods.MinStock`), `zz-forever-bots.conf` (`MarketPrices = 1`, `TradeGoods.MinStock = 10`), test `tests/game/AuctionBotMarketPrice.cpp` | **Silent:** mats show up only by chance, half of them single pieces, and crafters can't level from the house |
 | Riding 100g / 1,000g at Friendly | `sql/custom/world/2026_11_19_81_world_forever_riding_prices.sql` | Prices back to 90g / 900g (the Honored price) |
 | Raids Forever hasn't released are closed: Molten Core, Blackwing Lair, Zul'Gurub, both Ahn'Qiraj raids, Naxxramas, and Onyxia until 2026-12-09; their dead-end quests are hidden | `sql/custom/world/2026_11_19_83_world_everlake_close_vanilla_raids.sql` (`disables` map and quest rows) | **Silent:** players can enter raids live doesn't have and pick up quests they can't finish |
+| Onyxia's Lair opens by itself on 2026-12-09 15:00 UTC: game event 131 lifts the lair's map disable and the six Head of Onyxia quest disables (`disables_game_event`) | `DisableMgr::IsDisabledFor` + `LoadLiftingEvents`, `DisableMgr::IsLiftedLater` in `ObjectMgr::LoadQuests`, `sql/custom/world/2026_11_27_01_world_everlake_onyxia_opens.sql` | **Silent:** Onyxia stays closed after 12-09, or her head quests open without their chain links |
+| Quel'Serrar: Onyxia's Flame Breath turns the placed Ancient Unfired Sword (179561) into the Ancient Heated Blade (179562) | `classic_boss_onyxia::OnSpellCast` | **Silent:** The Forging of Quel'Serrar can't be finished |
 
 Check after a merge:
 

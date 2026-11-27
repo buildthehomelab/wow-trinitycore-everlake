@@ -66,6 +66,8 @@ namespace DisableMgr
     TC_GAME_API void LoadDisables();
     TC_GAME_API bool IsDisabledFor(DisableType type, uint32 entry, WorldObject const* ref, uint8 flags = 0);
     TC_GAME_API void CheckQuestDisables();
+    // Everlake: the disable has a `disables_game_event` row, so a game event can lift it while the server runs
+    TC_GAME_API bool IsLiftedLater(DisableType type, uint32 entry);
     TC_GAME_API bool IsVMAPDisabledFor(uint32 entry, uint8 flags);
     TC_GAME_API bool IsPathfindingEnabled(uint32 mapId);
 }
