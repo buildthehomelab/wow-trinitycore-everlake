@@ -146,6 +146,7 @@ private:
     bool _bonusQualityReported = false;
 
     bool PostAuction(SellerConfiguration& config, AuctionHouseObject* auctionHouse, uint32 itemId, CharacterDatabaseTransaction trans, bool fullStack = false);
+    static uint32 FullMaterialStack(ItemTemplate const* prototype);
     bool HasMinStock() const;
     void AddMinStock(SellerConfiguration& config, AuctionHouseObject* auctionHouse, CharacterDatabaseTransaction trans, uint32& budget, uint32& count);
     void LoadSellerValues(SellerConfiguration& config);
