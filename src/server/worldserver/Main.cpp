@@ -25,6 +25,7 @@
 #include "BattlenetAccountMgr.h"
 #include "BigNumber.h"
 #include "CliRunnable.h"
+#include "CrashStacks.h"
 #include "Configuration/Config.h"
 #include "DatabaseEnv.h"
 #include "DatabaseLoader.h"
@@ -150,6 +151,7 @@ variables_map GetConsoleArguments(int argc, char** argv, fs::path& configFile, f
 int main(int argc, char** argv)
 {
     signal(SIGABRT, &Trinity::AbortHandler);
+    CrashStacks::Install();
 
     Trinity::VerifyOsVersion();
 
@@ -594,6 +596,8 @@ void WorldUpdateLoop()
     if (!halfMaxCoreStuckTime)
         halfMaxCoreStuckTime = std::numeric_limits<uint32>::max();
 
+    CrashStacks::RegisterWorldThread();
+
     LoginDatabase.WarnAboutSyncQueries(true);
     CharacterDatabase.WarnAboutSyncQueries(true);
     WorldDatabase.WarnAboutSyncQueries(true);
@@ -708,6 +712,8 @@ void FreezeDetector::Handler(std::weak_ptr<FreezeDetector> freezeDetectorRef, bo
                 if (msTimeDiff > freezeDetector->_maxCoreStuckTimeInMs)
                 {
                     TC_LOG_ERROR("server.worldserver", "World Thread hangs for {} ms, forcing a crash!", msTimeDiff);
+                    // where the world thread is stuck: it prints its own stack to stderr (the console / docker logs)
+                    CrashStacks::DumpWorldThreadStack(3000);
                     ABORT_MSG("World Thread hangs for %u ms, forcing a crash!", msTimeDiff);
                 }
             }
