@@ -3577,6 +3577,79 @@ class classic_spell_item_claymore_of_two_moons : public AuraScript
     }
 };
 
+// 1269600 - Forge Delivery Receipt (Forged Delivery Receipt 262902, 15 Merchant's Favor at the camp quartermasters): "Slap a forged
+// delivery receipt onto an empty Waylaid Crate, allowing you to return it to the Azeroth Commerce Authority for +50 reputation."
+// Effect 0 (SPELL_EFFECT_SALVAGE_ITEM, ItemSalvage list 243) makes the client offer only the labeled Waylaid Crates of ItemSalvageLoot
+// list 243; effect 1 is a dummy holding the 50 for the tooltip. On the official server the crate becomes a Notarized Shipping
+// Container (262917), which the quest Crate Return (93862, Marcy Baker 256390 / Dokimi 256386) takes for the +50 reputation (Icy Veins'
+// live quest rows). The crate is swapped only after every effect has run (AfterCast), so no effect sees a destroyed item; a container
+// that does not fit in the bags comes by mail.
+class classic_spell_item_forge_delivery_receipt : public SpellScript
+{
+    static constexpr uint32 ITEM_NOTARIZED_SHIPPING_CONTAINER = 262917;
+
+    // ItemSalvageLoot rows of ItemSalvage 243 (the labeled crates 248682-248714 and 280041; 248700, 248701, 248714 and 280041
+    // are not in this client's Item.db2 yet)
+    static bool IsLabeledWaylaidCrate(uint32 itemId)
+    {
+        return (itemId >= 248682 && itemId <= 248714) || itemId == 280041;
+    }
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return sObjectMgr->GetItemTemplate(ITEM_NOTARIZED_SHIPPING_CONTAINER) != nullptr;
+    }
+
+    SpellCastResult CheckCast()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        Item* crate = GetExplTargetItem();
+        if (!player || !crate || crate->GetOwnerGUID() != player->GetGUID() || !IsLabeledWaylaidCrate(crate->GetEntry()))
+            return SPELL_FAILED_BAD_TARGETS;
+        return SPELL_CAST_OK;
+    }
+
+    void HandleSalvage(SpellEffIndex effIndex)
+    {
+        // the default salvage would give the crate's item loot (it has none); the crate is swapped in HandleAfterCast instead
+        PreventHitDefaultEffect(effIndex);
+        if (Item* crate = GetHitItem())
+            _crate = crate->GetGUID();
+    }
+
+    void HandleAfterCast()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        if (!player || _crate.IsEmpty())
+            return;
+
+        Item* crate = player->GetItemByGuid(_crate);
+        if (!crate || !IsLabeledWaylaidCrate(crate->GetEntry()))
+            return;
+
+        uint32 count = 1;
+        player->DestroyItemCount(crate, count, true);
+
+        ItemPosCountVec dest;
+        if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, ITEM_NOTARIZED_SHIPPING_CONTAINER, 1) == EQUIP_ERR_OK)
+        {
+            if (Item* container = player->StoreNewItem(dest, ITEM_NOTARIZED_SHIPPING_CONTAINER, true))
+                player->SendNewItem(container, 1, true, false);
+        }
+        else
+            player->SendItemRetrievalMail(ITEM_NOTARIZED_SHIPPING_CONTAINER, 1, ItemContext::NONE);
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(classic_spell_item_forge_delivery_receipt::CheckCast);
+        OnEffectHitTarget += SpellEffectFn(classic_spell_item_forge_delivery_receipt::HandleSalvage, EFFECT_0, SPELL_EFFECT_SALVAGE_ITEM);
+        AfterCast += SpellCastFn(classic_spell_item_forge_delivery_receipt::HandleAfterCast);
+    }
+
+    ObjectGuid _crate;
+};
+
 void AddSC_classic_spell_scripts()
 {
     RegisterSpellScript(classic_spell_item_versus_bonus);
@@ -3664,4 +3737,5 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_item_forever_poultryizer);
     RegisterSpellScript(classic_spell_item_everlook_delivery_bot);
     RegisterSpellScript(classic_spell_item_claymore_of_two_moons);
+    RegisterSpellScript(classic_spell_item_forge_delivery_receipt);
 }
