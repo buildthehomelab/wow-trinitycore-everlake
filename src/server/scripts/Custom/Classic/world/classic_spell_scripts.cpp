@@ -41,6 +41,7 @@
 #include "PhasingHandler.h"
 #include "Player.h"
 #include "QuestDef.h"
+#include "ReputationMgr.h"
 #include "RestMgr.h"
 #include "Random.h"
 #include "Spell.h"
@@ -3577,6 +3578,87 @@ class classic_spell_item_claymore_of_two_moons : public AuraScript
     }
 };
 
+// 1269600 - Forge Delivery Receipt (Forged Delivery Receipt 262902, 15 Merchant's Favor at the camp quartermasters): "Slap a forged
+// delivery receipt onto an empty Waylaid Crate, allowing you to return it to the Azeroth Commerce Authority for +50 reputation."
+// Effect 0 (SPELL_EFFECT_SALVAGE_ITEM, ItemSalvage list 243) makes the client offer only the labeled Waylaid Crates of ItemSalvageLoot
+// list 243; effect 1 is a dummy holding the 50. The client has no "forged" crate item and no hand-in quest for it (the Sealed Crate
+// quests 91899-91907 want the Sealed crates, which also pay Merchant's Favor), so the crate is used up here and the reputation given
+// at once: Azeroth Commerce Authority (2586) for the Alliance, Durotar Supply and Logistics (2587) for the Horde, the factions of the
+// Sealed Crate quests. Nothing happens to the crate before every effect has run (AfterCast), so no effect sees a destroyed item.
+class classic_spell_item_forge_delivery_receipt : public SpellScript
+{
+    static constexpr uint32 FACTION_AZEROTH_COMMERCE_AUTHORITY = 2586;
+    static constexpr uint32 FACTION_DUROTAR_SUPPLY_AND_LOGISTICS = 2587;
+
+    // ItemSalvageLoot rows of ItemSalvage 243 (the labeled crates 248682-248714 and 280041; 248700, 248701, 248714 and 280041
+    // are not in this client's Item.db2 yet)
+    static bool IsLabeledWaylaidCrate(uint32 itemId)
+    {
+        return (itemId >= 248682 && itemId <= 248714) || itemId == 280041;
+    }
+
+    static uint32 FactionFor(Player const* player)
+    {
+        return player->GetTeam() == ALLIANCE ? FACTION_AZEROTH_COMMERCE_AUTHORITY : FACTION_DUROTAR_SUPPLY_AND_LOGISTICS;
+    }
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } })
+            && sFactionStore.HasRecord(FACTION_AZEROTH_COMMERCE_AUTHORITY)
+            && sFactionStore.HasRecord(FACTION_DUROTAR_SUPPLY_AND_LOGISTICS);
+    }
+
+    SpellCastResult CheckCast()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        Item* crate = GetExplTargetItem();
+        if (!player || !crate || crate->GetOwnerGUID() != player->GetGUID() || !IsLabeledWaylaidCrate(crate->GetEntry()))
+            return SPELL_FAILED_BAD_TARGETS;
+        return SPELL_CAST_OK;
+    }
+
+    void HandleSalvage(SpellEffIndex effIndex)
+    {
+        // the default salvage would give the crate's item loot (it has none); the crate goes in HandleAfterCast instead
+        PreventHitDefaultEffect(effIndex);
+        if (Item* crate = GetHitItem())
+            _crate = crate->GetGUID();
+    }
+
+    void HandleAfterCast()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        if (!player || _crate.IsEmpty())
+            return;
+
+        Item* crate = player->GetItemByGuid(_crate);
+        if (!crate || !IsLabeledWaylaidCrate(crate->GetEntry()))
+            return;
+
+        uint32 count = 1;
+        player->DestroyItemCount(crate, count, true);
+
+        uint32 const factionId = FactionFor(player);
+        FactionEntry const* faction = sFactionStore.LookupEntry(factionId);
+        int32 reputation = GetEffectInfo(EFFECT_1).CalcValueAsInt(player);
+        if (!faction || reputation <= 0)
+            return;
+
+        reputation = player->CalculateReputationGain(REPUTATION_SOURCE_SPELL, 0, reputation, factionId);
+        player->GetReputationMgr().ModifyReputation(faction, reputation);
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(classic_spell_item_forge_delivery_receipt::CheckCast);
+        OnEffectHitTarget += SpellEffectFn(classic_spell_item_forge_delivery_receipt::HandleSalvage, EFFECT_0, SPELL_EFFECT_SALVAGE_ITEM);
+        AfterCast += SpellCastFn(classic_spell_item_forge_delivery_receipt::HandleAfterCast);
+    }
+
+    ObjectGuid _crate;
+};
+
 void AddSC_classic_spell_scripts()
 {
     RegisterSpellScript(classic_spell_item_versus_bonus);
@@ -3664,4 +3746,5 @@ void AddSC_classic_spell_scripts()
     RegisterSpellScript(classic_spell_item_forever_poultryizer);
     RegisterSpellScript(classic_spell_item_everlook_delivery_bot);
     RegisterSpellScript(classic_spell_item_claymore_of_two_moons);
+    RegisterSpellScript(classic_spell_item_forge_delivery_receipt);
 }
