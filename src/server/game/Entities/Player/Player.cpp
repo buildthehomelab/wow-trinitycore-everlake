@@ -1279,6 +1279,18 @@ bool Player::TeleportTo(WorldLocation const& loc, TeleportToOptions options, Opt
     return TeleportTo({ .Location = loc, .InstanceId = instanceId }, options, teleportSpellId);
 }
 
+static Optional<Position> ResolveNearTeleportPosition(Map* map, TeleportLocation const& destination)
+{
+    if (!destination.TransportGuid)
+        return destination.Location;
+
+    if (GameObject* object = map->GetGameObject(*destination.TransportGuid))
+        if (TransportBase* transport = object->ToTransportBase())
+            return transport->GetPositionWithOffset(destination.Location);
+
+    return std::nullopt;
+}
+
 bool Player::TeleportTo(TeleportLocation const& teleportLocation, TeleportToOptions options /*= TELE_TO_NONE*/, uint32 teleportSpellId)
 {
     if (!MapManager::IsValidMapCoord(teleportLocation.Location))
@@ -1327,6 +1339,18 @@ bool Player::TeleportTo(TeleportLocation const& teleportLocation, TeleportToOpti
     else
         TC_LOG_DEBUG("maps", "Player {} ({}) is being teleported to map (MapID: {})", GetName(), GetGUID().ToString(), teleportLocation.Location.GetMapId());
 
+    // A player out of the world can still report its old map after a failed far teleport.
+    bool const nearTeleport = IsInWorld() && GetMapId() == teleportLocation.Location.GetMapId() &&
+        (!teleportLocation.InstanceId || GetInstanceId() == teleportLocation.InstanceId);
+    Optional<Position> worldDestination;
+    if (nearTeleport)
+    {
+        // The packet keeps its transport offset. Server-side placement needs world coordinates.
+        worldDestination = ResolveNearTeleportPosition(GetMap(), teleportLocation);
+        if (!worldDestination)
+            return false;
+    }
+
     if (m_vehicle)
         ExitVehicle();
 
@@ -1347,8 +1371,7 @@ bool Player::TeleportTo(TeleportLocation const& teleportLocation, TeleportToOpti
     if (duel && GetMapId() != teleportLocation.Location.GetMapId() && GetMap()->GetGameObject(m_playerData->DuelArbiter))
         DuelComplete(DUEL_FLED);
 
-    // a player out of the world (after a failed far teleport) still reports its old map id but is in no grid: take the far path
-    if (IsInWorld() && GetMapId() == teleportLocation.Location.GetMapId() && (!teleportLocation.InstanceId || GetInstanceId() == teleportLocation.InstanceId))
+    if (nearTeleport)
     {
         SetTeleportState(TeleportState::Initiated);
         //if teleport spell is cast in Unit::Update() func
@@ -1366,7 +1389,7 @@ bool Player::TeleportTo(TeleportLocation const& teleportLocation, TeleportToOpti
         if (!(options & TELE_TO_NOT_UNSUMMON_PET))
         {
             //same map, only remove pet if out of range for new position; parked so UpdateParkedPet can retry the bring-back
-            if (pet && !pet->IsWithinDist3d(&teleportLocation.Location, GetMap()->GetVisibilityRange()))
+            if (pet && !pet->IsWithinDist3d(&*worldDestination, GetMap()->GetVisibilityRange()))
                 ParkPetForTravel();
         }
 
@@ -1390,7 +1413,7 @@ bool Player::TeleportTo(TeleportLocation const& teleportLocation, TeleportToOpti
             SendTeleportPacket(m_teleport_dest);
 
         if (!IsBeingTeleportedNear()) // update position immediately if we will not be waiting for client ACK
-            UpdatePosition(m_teleport_dest.Location, true);
+            UpdatePosition(*worldDestination, true);
     }
     else
     {
@@ -13818,13 +13841,17 @@ void Player::SwapItem(uint16 src, uint16 dst)
     }
 
     // prevent put equipped/bank bag in self
+    // (note: the modern client renders nothing for EQUIP_ERR_BAG_IN_BAG, keep EQUIP_ERR_CANT_SWAP here)
     if (IsBagPos(src) && srcslot == dstbag)
     {
-        SendEquipError(EQUIP_ERR_BAG_IN_BAG, pSrcItem, pDstItem);
+        SendEquipError(EQUIP_ERR_CANT_SWAP, pSrcItem, pDstItem);
         return;
     }
 
     // prevent equipping bag in the same slot from its inside
+    // (the 1.60 client can swallow this exact drag locally without sending an opcode;
+    // keep the server-side guard for scripted/modified clients and internal callers)
+    // (note: the modern client renders nothing for EQUIP_ERR_BAG_IN_BAG, keep EQUIP_ERR_CANT_SWAP here)
     if (IsBagPos(dst) && srcbag == dstslot)
     {
         SendEquipError(EQUIP_ERR_CANT_SWAP, pSrcItem, pDstItem);
@@ -13958,6 +13985,91 @@ void Player::SwapItem(uint16 src, uint16 dst)
     // impossible merge/fill, do real swap
     InventoryResult msg = EQUIP_ERR_OK;
 
+    // Bag swap with items exchange: a bag in a bag position replaced by an empty bag from storage
+    // hands its contents over to the new bag. The transfer has to happen before the move checks
+    // below, because a non-empty bag validates only into a bag position - the old bag fits its
+    // storage destination only once it is empty. If the swap cannot be completed the items move back.
+    std::vector<std::pair<Item*, uint8>> exchangedItems;
+    Bag* emptyBag = nullptr;
+    Bag* fullBag = nullptr;
+    if (Bag* srcBag = pSrcItem->ToBag())
+    {
+        if (Bag* dstBag = pDstItem->ToBag())
+        {
+            if (srcBag->IsEmpty() && !IsBagPos(src) && !dstBag->IsEmpty())
+            {
+                emptyBag = srcBag;
+                fullBag  = dstBag;
+            }
+            else if (dstBag->IsEmpty() && !IsBagPos(dst) && !srcBag->IsEmpty())
+            {
+                emptyBag = dstBag;
+                fullBag  = srcBag;
+            }
+        }
+    }
+
+    if (emptyBag && fullBag)
+    {
+        ItemTemplate const* emptyProto = emptyBag->GetTemplate();
+
+        uint32 count = 0;
+
+        for (uint32 i = 0; i < fullBag->GetBagSize(); ++i)
+        {
+            Item* bagItem = fullBag->GetItemByPos(i);
+            if (!bagItem)
+                continue;
+
+            ItemTemplate const* bagItemProto = bagItem->GetTemplate();
+            if (!bagItemProto || !ItemCanGoIntoBag(bagItemProto, emptyProto))
+            {
+                // one from items not go to empty target bag
+                SendEquipError(EQUIP_ERR_BAG_IN_BAG, pSrcItem, pDstItem);
+                return;
+            }
+
+            ++count;
+        }
+
+        if (count > emptyBag->GetBagSize())
+        {
+            // too small targeted bag
+            SendEquipError(EQUIP_ERR_CANT_SWAP, pSrcItem, pDstItem);
+            return;
+        }
+
+        // Items exchange, packed at the start of the new bag (official behavior - and slot indices
+        // mean little to the player anyway, since the combined-bag view reflows with the interface)
+        count = 0;                                      // will pos in new bag
+        for (uint32 i = 0; i < fullBag->GetBagSize(); ++i)
+        {
+            Item* bagItem = fullBag->GetItemByPos(i);
+            if (!bagItem)
+                continue;
+
+            fullBag->RemoveItem(i, true);
+            emptyBag->StoreItem(count, bagItem, true);
+            bagItem->SetState(ITEM_CHANGED, this);
+            exchangedItems.emplace_back(bagItem, i);
+
+            ++count;
+        }
+    }
+
+    auto rollbackItemsExchange = [&]()
+    {
+        for (std::pair<Item*, uint8> const& exchanged : exchangedItems)
+        {
+            uint8 newBagSlot = emptyBag->GetSlotByItemGUID(exchanged.first->GetGUID());
+            if (newBagSlot != NULL_SLOT)
+                emptyBag->RemoveItem(newBagSlot, true);
+            fullBag->StoreItem(exchanged.second, exchanged.first, true);
+            exchanged.first->SetState(ITEM_CHANGED, this);
+        }
+        exchangedItems.clear();
+    };
+
     // check src->dest move possibility
     ItemPosCountVec sDest;
     uint16 eDest = 0;
@@ -13974,6 +14086,7 @@ void Player::SwapItem(uint16 src, uint16 dst)
 
     if (msg != EQUIP_ERR_OK)
     {
+        rollbackItemsExchange();
         SendEquipError(msg, pSrcItem, pDstItem);
         return;
     }
@@ -13997,75 +14110,9 @@ void Player::SwapItem(uint16 src, uint16 dst)
 
     if (msg != EQUIP_ERR_OK)
     {
+        rollbackItemsExchange();
         SendEquipError(msg, pDstItem, pSrcItem);
         return;
-    }
-
-    // Check bag swap with item exchange (one from empty in not bag possition (equipped (not possible in fact) or store)
-    if (Bag* srcBag = pSrcItem->ToBag())
-    {
-        if (Bag* dstBag = pDstItem->ToBag())
-        {
-            Bag* emptyBag = nullptr;
-            Bag* fullBag = nullptr;
-            if (srcBag->IsEmpty() && !IsBagPos(src))
-            {
-                emptyBag = srcBag;
-                fullBag  = dstBag;
-            }
-            else if (dstBag->IsEmpty() && !IsBagPos(dst))
-            {
-                emptyBag = dstBag;
-                fullBag  = srcBag;
-            }
-
-            // bag swap (with items exchange) case
-            if (emptyBag && fullBag)
-            {
-                ItemTemplate const* emptyProto = emptyBag->GetTemplate();
-
-                uint32 count = 0;
-
-                for (uint32 i=0; i < fullBag->GetBagSize(); ++i)
-                {
-                    Item* bagItem = fullBag->GetItemByPos(i);
-                    if (!bagItem)
-                        continue;
-
-                    ItemTemplate const* bagItemProto = bagItem->GetTemplate();
-                    if (!bagItemProto || !ItemCanGoIntoBag(bagItemProto, emptyProto))
-                    {
-                        // one from items not go to empty target bag
-                        SendEquipError(EQUIP_ERR_BAG_IN_BAG, pSrcItem, pDstItem);
-                        return;
-                    }
-
-                    ++count;
-                }
-
-                if (count > emptyBag->GetBagSize())
-                {
-                    // too small targeted bag
-                    SendEquipError(EQUIP_ERR_CANT_SWAP, pSrcItem, pDstItem);
-                    return;
-                }
-
-                // Items swap
-                count = 0;                                      // will pos in new bag
-                for (uint32 i = 0; i< fullBag->GetBagSize(); ++i)
-                {
-                    Item* bagItem = fullBag->GetItemByPos(i);
-                    if (!bagItem)
-                        continue;
-
-                    fullBag->RemoveItem(i, true);
-                    emptyBag->StoreItem(count, bagItem, true);
-                    bagItem->SetState(ITEM_CHANGED, this);
-
-                    ++count;
-                }
-            }
-        }
     }
 
     // now do moves, remove...
@@ -14129,8 +14176,22 @@ void Player::SwapItem(uint16 src, uint16 dst)
                     if (GetLootByWorldObjectGUID(bagItem->GetGUID()))
                     {
                         m_session->DoLootReleaseAll();
+                        released = true;
                         break;
                     }
+                }
+            }
+        }
+
+        // items handed over in a bag swap with items exchange sit in neither scan above
+        if (!released)
+        {
+            for (std::pair<Item*, uint8> const& exchanged : exchangedItems)
+            {
+                if (GetLootByWorldObjectGUID(exchanged.first->GetGUID()))
+                {
+                    m_session->DoLootReleaseAll();
+                    break;
                 }
             }
         }
@@ -22203,15 +22264,20 @@ void Player::SaveToDB(LoginDatabaseTransaction loginTransaction, CharacterDataba
         }
         else
         {
-            stmt->setUInt16(index++, (uint16)GetTeleportDest().Location.GetMapId());
+            TeleportLocation const& destination = GetTeleportDest();
+            Position worldPosition = destination.Location;
+            if (IsBeingTeleportedNear() && destination.TransportGuid)
+                worldPosition = ResolveNearTeleportPosition(GetMap(), destination).value_or(GetPosition());
+
+            stmt->setUInt16(index++, (uint16)destination.Location.GetMapId());
             stmt->setUInt32(index++, (uint32)0);
             stmt->setUInt8(index++, uint8(GetDungeonDifficultyID()));
             stmt->setUInt8(index++, uint8(GetRaidDifficultyID()));
             stmt->setUInt8(index++, uint8(GetLegacyRaidDifficultyID()));
-            stmt->setFloat(index++, finiteAlways(GetTeleportDest().Location.GetPositionX()));
-            stmt->setFloat(index++, finiteAlways(GetTeleportDest().Location.GetPositionY()));
-            stmt->setFloat(index++, finiteAlways(GetTeleportDest().Location.GetPositionZ()));
-            stmt->setFloat(index++, finiteAlways(GetTeleportDest().Location.GetOrientation()));
+            stmt->setFloat(index++, finiteAlways(worldPosition.GetPositionX()));
+            stmt->setFloat(index++, finiteAlways(worldPosition.GetPositionY()));
+            stmt->setFloat(index++, finiteAlways(worldPosition.GetPositionZ()));
+            stmt->setFloat(index++, finiteAlways(worldPosition.GetOrientation()));
         }
 
         stmt->setFloat(index++, finiteAlways(GetTransOffsetX()));
