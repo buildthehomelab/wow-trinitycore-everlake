@@ -41,7 +41,6 @@
 #include "PhasingHandler.h"
 #include "Player.h"
 #include "QuestDef.h"
-#include "ReputationMgr.h"
 #include "RestMgr.h"
 #include "Random.h"
 #include "Spell.h"
@@ -3581,14 +3580,13 @@ class classic_spell_item_claymore_of_two_moons : public AuraScript
 // 1269600 - Forge Delivery Receipt (Forged Delivery Receipt 262902, 15 Merchant's Favor at the camp quartermasters): "Slap a forged
 // delivery receipt onto an empty Waylaid Crate, allowing you to return it to the Azeroth Commerce Authority for +50 reputation."
 // Effect 0 (SPELL_EFFECT_SALVAGE_ITEM, ItemSalvage list 243) makes the client offer only the labeled Waylaid Crates of ItemSalvageLoot
-// list 243; effect 1 is a dummy holding the 50. The client has no "forged" crate item and no hand-in quest for it (the Sealed Crate
-// quests 91899-91907 want the Sealed crates, which also pay Merchant's Favor), so the crate is used up here and the reputation given
-// at once: Azeroth Commerce Authority (2586) for the Alliance, Durotar Supply and Logistics (2587) for the Horde, the factions of the
-// Sealed Crate quests. Nothing happens to the crate before every effect has run (AfterCast), so no effect sees a destroyed item.
+// list 243; effect 1 is a dummy holding the 50 for the tooltip. On the official server the crate becomes a Notarized Shipping
+// Container (262917), which the quest Crate Return (93862, Marcy Baker 256390 / Dokimi 256386) takes for the +50 reputation (Icy Veins'
+// live quest rows). The crate is swapped only after every effect has run (AfterCast), so no effect sees a destroyed item; a container
+// that does not fit in the bags comes by mail.
 class classic_spell_item_forge_delivery_receipt : public SpellScript
 {
-    static constexpr uint32 FACTION_AZEROTH_COMMERCE_AUTHORITY = 2586;
-    static constexpr uint32 FACTION_DUROTAR_SUPPLY_AND_LOGISTICS = 2587;
+    static constexpr uint32 ITEM_NOTARIZED_SHIPPING_CONTAINER = 262917;
 
     // ItemSalvageLoot rows of ItemSalvage 243 (the labeled crates 248682-248714 and 280041; 248700, 248701, 248714 and 280041
     // are not in this client's Item.db2 yet)
@@ -3597,16 +3595,9 @@ class classic_spell_item_forge_delivery_receipt : public SpellScript
         return (itemId >= 248682 && itemId <= 248714) || itemId == 280041;
     }
 
-    static uint32 FactionFor(Player const* player)
+    bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return player->GetTeam() == ALLIANCE ? FACTION_AZEROTH_COMMERCE_AUTHORITY : FACTION_DUROTAR_SUPPLY_AND_LOGISTICS;
-    }
-
-    bool Validate(SpellInfo const* spellInfo) override
-    {
-        return ValidateSpellEffect({ { spellInfo->Id, EFFECT_1 } })
-            && sFactionStore.HasRecord(FACTION_AZEROTH_COMMERCE_AUTHORITY)
-            && sFactionStore.HasRecord(FACTION_DUROTAR_SUPPLY_AND_LOGISTICS);
+        return sObjectMgr->GetItemTemplate(ITEM_NOTARIZED_SHIPPING_CONTAINER) != nullptr;
     }
 
     SpellCastResult CheckCast()
@@ -3620,7 +3611,7 @@ class classic_spell_item_forge_delivery_receipt : public SpellScript
 
     void HandleSalvage(SpellEffIndex effIndex)
     {
-        // the default salvage would give the crate's item loot (it has none); the crate goes in HandleAfterCast instead
+        // the default salvage would give the crate's item loot (it has none); the crate is swapped in HandleAfterCast instead
         PreventHitDefaultEffect(effIndex);
         if (Item* crate = GetHitItem())
             _crate = crate->GetGUID();
@@ -3639,14 +3630,14 @@ class classic_spell_item_forge_delivery_receipt : public SpellScript
         uint32 count = 1;
         player->DestroyItemCount(crate, count, true);
 
-        uint32 const factionId = FactionFor(player);
-        FactionEntry const* faction = sFactionStore.LookupEntry(factionId);
-        int32 reputation = GetEffectInfo(EFFECT_1).CalcValueAsInt(player);
-        if (!faction || reputation <= 0)
-            return;
-
-        reputation = player->CalculateReputationGain(REPUTATION_SOURCE_SPELL, 0, reputation, factionId);
-        player->GetReputationMgr().ModifyReputation(faction, reputation);
+        ItemPosCountVec dest;
+        if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, ITEM_NOTARIZED_SHIPPING_CONTAINER, 1) == EQUIP_ERR_OK)
+        {
+            if (Item* container = player->StoreNewItem(dest, ITEM_NOTARIZED_SHIPPING_CONTAINER, true))
+                player->SendNewItem(container, 1, true, false);
+        }
+        else
+            player->SendItemRetrievalMail(ITEM_NOTARIZED_SHIPPING_CONTAINER, 1, ItemContext::NONE);
     }
 
     void Register() override
