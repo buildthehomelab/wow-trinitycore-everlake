@@ -1505,6 +1505,10 @@ void SpellMgr::LoadSpellGroupStackRules()
         // carry a stat, which must keep stacking whatever the aura count picks
         if (group_id == 1400910)
             auraTypes = { SPELL_AURA_MOD_CRIT_PCT };
+        // Classic 1.60 (WoW Forever): the elixir and scroll stat group (sql 2026_11_27_10, wowsims R-0054) counts each stat once,
+        // the strongest; the crit beside some of its elixirs is 1400910's
+        else if (group_id == 1400920)
+            auraTypes = { SPELL_AURA_MOD_STAT };
 
         mSpellSameEffectStack[SpellGroup(group_id)] = auraTypes;
         ++count;

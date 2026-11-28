@@ -2276,7 +2276,8 @@ bool SpellInfo::IsAuraExclusiveBySpecificWith(SpellInfo const* spellInfo) const
         case SPELL_SPECIFIC_MAGE_POLYMORPH:
         case SPELL_SPECIFIC_PRESENCE:
         case SPELL_SPECIFIC_CHARM:
-        case SPELL_SPECIFIC_SCROLL:
+        // Classic 1.60 (WoW Forever): scrolls of different stats stack; each stat counts its strongest scroll, elixir or raid
+        // buff through spell group 1400920 (sql 2026_11_27_10), so SPELL_SPECIFIC_SCROLL is no longer exclusive here
         case SPELL_SPECIFIC_WARRIOR_ENRAGE:
         case SPELL_SPECIFIC_MAGE_ARCANE_BRILLANCE:
         case SPELL_SPECIFIC_PRIEST_DIVINE_SPIRIT:
