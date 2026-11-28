@@ -256,7 +256,7 @@ standing on another map than its leader. The worldserver console in the log view
    archetype affinity, so the respec in `PlayListedRole` is rarely needed and the gear fits the role.
 2. **One role source in combat** (PR #182). The healer follow-tank and gap-close moves read snapshot `my_role`, while `raid_healer`, the
    pre-emptive tank heal and `ooc_heal` read `effective_role`. Read `effective_role` everywhere (or make the snapshot carry it).
-3. **Gap count by spec, not class.** `RoleMaskOf` counts a member with no LFG role by class (any priest heals, any warrior tanks).
+3. **Gap count by spec, not class** (PR #183). `RoleMaskOf` counts a member with no LFG role by class (any priest heals, any warrior tanks).
    A Shadow priest player in the group means no healer bot comes. Use the member's spec role (bots publish theirs; ask a player).
 4. **Healer idle reasons in plain words for the owner.** `[heal_idle_reason]` exists in the log; a party-chat line ("out of mana",
    "can't see you") after a few seconds of a hurt member and no heal would make the "healer does nothing" reports self-explaining.

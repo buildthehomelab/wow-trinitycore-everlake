@@ -121,26 +121,36 @@ namespace
         return size;
     }
 
-    // What a member counts as when the group carries no role for them: warriors tank, priests heal, the rest deal damage.
-    uint8 DefaultRoleForClass(uint8 cls)
+    // The role a member plays, as far as the server knows (0 = unknown): a bot's pinned role or spec; a player's bought talents.
+    uint8 PlayedRoleOf(Player const* member)
     {
-        if (cls == CLASS_WARRIOR) return kLfgRoleTank;
-        if (cls == CLASS_PRIEST)  return kLfgRoleHealer;
-        return kLfgRoleDamage;
+        if (!member)
+            return 0;
+        uint8 const cls = member->GetClass();
+        if (member->GetSession() && member->GetSession()->IsBot())
+        {
+            if (Playerbot::BotAI const* ai = Playerbot::Services::Registry().ai(member->GetGUID().GetCounter()))
+                switch (ai->role_override())
+                {
+                    case Playerbot::Role::Tank:   return kLfgRoleTank;
+                    case Playerbot::Role::Healer: return kLfgRoleHealer;
+                    case Playerbot::Role::Dps:    return kLfgRoleDamage;
+                    default: break;
+                }
+            uint16 const spec = uint16(::Playerbot::Classic::EffectiveSpecId(member));
+            return ::Playerbot::IsTankSpec(cls, spec) ? kLfgRoleTank : ::Playerbot::IsHealerSpec(cls, spec) ? kLfgRoleHealer : kLfgRoleDamage;
+        }
+        uint16 const spec = uint16(::Playerbot::Classic::TalentSpecId(member));
+        if (!spec)
+            return 0;
+        return ::Playerbot::IsTankSpec(cls, spec) ? kLfgRoleTank : ::Playerbot::IsHealerSpec(cls, spec) ? kLfgRoleHealer : kLfgRoleDamage;
     }
 
-    uint8 RoleMaskOf(Player const* leader, ObjectGuid guid, uint8 cls, uint8 leaderRole)
+    uint8 RoleMaskOf(Player const* leader, Player const* member, uint8 leaderRole)
     {
-        // a role the member's class cannot play is not counted: a rogue leader who picked Tank still needs a tank
-        if (Group const* group = leader->GetGroup())
-        {
-            if (uint8 const r = LfgRoleForClass(cls, group->GetLfgRoles(guid)))
-                return r;
-        }
-        if (guid == leader->GetGUID())
-            if (uint8 const r = LfgRoleForClass(cls, leaderRole))
-                return r;
-        return DefaultRoleForClass(cls);
+        uint8 const groupRoles = leader->GetGroup() ? leader->GetGroup()->GetLfgRoles(member->GetGUID()) : uint8(0);
+        uint8 const picked = member == leader ? leaderRole : uint8(0);
+        return LfgMemberRole(member->GetClass(), groupRoles, picked, PlayedRoleOf(member));
     }
 
     uint8 BotRoleBit(Playerbot::Role role)
@@ -162,10 +172,10 @@ namespace
         {
             for (GroupReference const& ref : group->GetMembers())
                 if (Player const* member = ref.GetSource())
-                    roles.push_back(RoleMaskOf(leader, member->GetGUID(), member->GetClass(), leaderRole));
+                    roles.push_back(RoleMaskOf(leader, member, leaderRole));
         }
         else
-            roles.push_back(RoleMaskOf(leader, leader->GetGUID(), leader->GetClass(), leaderRole));
+            roles.push_back(RoleMaskOf(leader, leader, leaderRole));
         return ComputeLfgRoleGap(roles, size);
     }
 
@@ -202,7 +212,7 @@ namespace
             Player* member = ref.GetSource();
             if (!member || member == leader || !member->GetSession() || !member->GetSession()->IsBot())
                 continue;
-            if (RoleMaskOf(leader, member->GetGUID(), member->GetClass(), 0) & (kLfgRoleTank | kLfgRoleHealer))
+            if (RoleMaskOf(leader, member, 0) & (kLfgRoleTank | kLfgRoleHealer))
                 continue;
             bool const saved = Playerbot::Services::Owners().GetOwner(member->GetGUID().GetCounter()).saved;
             if (!leave || (leaveSaved && !saved))
