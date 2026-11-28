@@ -28,6 +28,7 @@
 #include "ScriptedCreature.h"
 #include "ScriptedEscortAI.h"
 #include "ScriptedFollowerAI.h"
+#include "ScriptedGossip.h"
 #include "TemporarySummon.h"
 #include "classic_script_text.h"
 
@@ -276,6 +277,11 @@ enum Yehkinya : uint32
 
     QUEST_HAKKAR_EVENT          = 8181,
 
+    // "Yes. Give me the spell to summon the avatar." (shown once The God Hakkar 3528 is rewarded): the player casts
+    // Create Yeh'kinya's Scroll. The VMaNGOS SmartAI rows for it never run: this C++ AI is the creature's AI.
+    GOSSIP_MENU_YEHKINYA        = 1470,
+    SPELL_CREATE_YEHKINYA_SCROLL = 12998,
+
     DISPLAY_YEHKINYA            = 7902,
     DISPLAY_YEHKINYA_BIRD       = 1336,
 
@@ -299,6 +305,16 @@ struct classic_npc_yehkinya : public EscortAI
         me->SetCanFly(false);
         me->SetDisableGravity(false);
         me->SetWalk(false);
+    }
+
+    bool OnGossipSelect(Player* player, uint32 menuId, uint32 gossipListId) override
+    {
+        if (menuId != GOSSIP_MENU_YEHKINYA || gossipListId != 0)
+            return false;
+
+        CloseGossipMenuFor(player);
+        player->CastSpell(player, SPELL_CREATE_YEHKINYA_SCROLL, false);
+        return true;
     }
 
     void OnQuestReward(Player* player, Quest const* quest, LootItemType /*type*/, uint32 /*opt*/) override
