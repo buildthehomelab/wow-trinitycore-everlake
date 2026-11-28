@@ -3005,7 +3005,7 @@ void DispatchInCombat(BotAI& ai,
                     // (deadmines_full efeec980: the tank's last rule was this one when a Goblin Craftsman killed him). Turn on the
                     // attacker that is fighting the group instead; an out-of-instance bot has nothing else to pick.
                     if (snapshot.is_in_instance())
-                        if (NearbyUnit const* real = snapshot.highest_threat_attacker();
+                        if (NearbyUnit const* real = snapshot.top_attacker();
                             real && real->guid != vg && real->hp > 0 && !real->no_xp_kill && !real->is_pacified && !real->untargetable)
                             emit.start_attack(real->guid);
                     TC_LOG_INFO("playerbot.v2", "[disengage] {} drops {} ({}): {}", snapshot.name(), vu->entry,
@@ -5071,7 +5071,7 @@ void DispatchInCombat(BotAI& ai,
         if (snapshot.hp_pct() <= 60 && snapshot.attackers_count() >= 1 &&
             RaidLogDue(RaidLogKey(snapshot, RaidLogKind::ThreatHold) ^ 0x68656c64u, snapshot.published_at_ms(), 3000u))
         {
-            NearbyUnit const* a = snapshot.highest_threat_attacker();
+            NearbyUnit const* a = snapshot.top_attacker();
             TC_LOG_INFO("playerbot.v2", "[healer_hold] {} hp {}% mana {}% attackers {} top attacker {} victim_kind {} - rotation has no cast",
                         snapshot.name(), snapshot.hp_pct(), Combat::ClassicHeal::ManaPct(snapshot), snapshot.attackers_count(),
                         a ? a->guid.ToString() : std::string("none"), a ? int(a->victim_kind) : -1);
@@ -5106,7 +5106,7 @@ void DispatchInCombat(BotAI& ai,
     if (t.IsEmpty()) t = snapshot.current_target();
     if (t.IsEmpty())
     {
-        if (NearbyUnit const* a = snapshot.highest_threat_attacker())
+        if (NearbyUnit const* a = snapshot.top_attacker())
             t = a->guid;
     }
     // Skull-marked target wins for everyone in combat too (mid-fight focus
