@@ -2359,6 +2359,8 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void SetLootGUID(ObjectGuid const& guid) { SetUpdateFieldValue(m_values.ModifyValue(&Player::m_playerData).ModifyValue(&UF::PlayerData::LootTargetGUID), guid); }
         Loot* GetLootByWorldObjectGUID(ObjectGuid const& lootWorldObjectGuid) const;
         std::unordered_map<ObjectGuid, Loot*> const& GetAELootView() const { return m_AELootView; }
+        // Drops loot view entries whose Loot is already freed (see Loot::IsLive), without reading them. Call before walking the view.
+        void PruneDeadLootViews();
         LootRoll* GetLootRoll(ObjectGuid const& lootObjectGuid, uint8 lootListId);
         void AddLootRoll(LootRoll* roll);
         void RemoveLootRoll(LootRoll* roll);

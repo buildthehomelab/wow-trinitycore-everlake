@@ -10051,9 +10051,33 @@ Loot* Player::GetLootByWorldObjectGUID(ObjectGuid const& lootWorldObjectGuid) co
 {
     auto itr = std::find_if(m_AELootView.begin(), m_AELootView.end(), [&lootWorldObjectGuid](std::pair<ObjectGuid const, Loot*> const& lootView)
     {
-        return lootView.second->GetOwnerGUID() == lootWorldObjectGuid;
+        return Loot::IsLive(lootView.second, lootView.first) && lootView.second->GetOwnerGUID() == lootWorldObjectGuid;
     });
     return itr != m_AELootView.end() ? itr->second : nullptr;
+}
+
+void Player::PruneDeadLootViews()
+{
+    bool pruned = false;
+    for (auto itr = m_AELootView.begin(); itr != m_AELootView.end();)
+    {
+        if (Loot::IsLive(itr->second, itr->first))
+        {
+            ++itr;
+            continue;
+        }
+
+        TC_LOG_ERROR("loot", "Player::PruneDeadLootViews: {} ({}) still had loot {} open after it was freed; dropped it",
+            GetName(), GetGUID().ToString(), itr->first.ToString());
+        itr = m_AELootView.erase(itr);
+        pruned = true;
+    }
+
+    if (pruned && m_AELootView.empty())
+    {
+        SetLootGUID(ObjectGuid::Empty);
+        RemoveUnitFlag(UNIT_FLAG_LOOTING);
+    }
 }
 
 LootRoll* Player::GetLootRoll(ObjectGuid const& lootObjectGuid, uint8 lootListId)
