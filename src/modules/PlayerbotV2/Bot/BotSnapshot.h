@@ -871,7 +871,12 @@ struct VitalsState
 struct GroupMembershipState
 {
     ObjectGuid group_guid;
+    // The role the bot plays: its pinned role (BotAI::role_override: `.bot add <class> healer`, /setrole, a companion's declared
+    // role) when it has one, else what its class and spec say. Every reader in combat, threat and the rotations goes by this, the
+    // same as BotAI::effective_role, so a healer's follow and gap-close moves no longer disagree with its heal rules.
     Role       my_role = Role::Unknown;
+    // What the class and spec alone say (no override). Only for the rules that compare the two, e.g. idle:dual_spec_switch.
+    Role       spec_role = Role::Unknown;
 
     void reset() { *this = GroupMembershipState{}; }
 };

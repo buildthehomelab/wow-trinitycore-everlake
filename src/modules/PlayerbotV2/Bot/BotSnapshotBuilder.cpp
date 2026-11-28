@@ -1969,7 +1969,10 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         if (IsHealerSpec(cls, uint16(spec))) return Role::Healer;
         return cls != 0 ? Role::Dps : Role::Unknown;
     };
-    snap->group.my_role = infer_role(snap->identity.cls, snap->identity.spec);
+    snap->group.spec_role = infer_role(snap->identity.cls, snap->identity.spec);
+    // A pinned role wins (BotAI::effective_role): the healer moves in State_InCombat, ThreatDiscipline, the interrupt and paladin
+    // rules read my_role and used to see the spec's role while the heal rules saw the pinned one.
+    snap->group.my_role = (bot_ai && bot_ai->role_override() != Role::Unknown) ? bot_ai->role_override() : snap->group.spec_role;
 
     // ---- Vitals ----
     snap->vitals.hp     = static_cast<int32>(p->GetHealth());

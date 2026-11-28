@@ -70,7 +70,7 @@ bool DualSpecGate(BotSnapshotView const& s, BotAI& ai, GroupSnapshotView const&,
     if (s.raw().movement.is_mounted) return false;
     const Role pinned = ai.effective_role(s);
     if (pinned == Role::Unknown || pinned == Role::Dps) return false;
-    if (pinned == s.my_role()) return false;
+    if (pinned == s.spec_role()) return false;
     const uint8 cls = s.cls();
     const uint32 target_spec =
         (pinned == Role::Tank)   ? TankSpecForClass(cls) :
