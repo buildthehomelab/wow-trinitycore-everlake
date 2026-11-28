@@ -971,6 +971,7 @@ public:
 
     // Group
     Role       my_role() const { return s_->group.my_role; }
+    Role       spec_role() const { return s_->group.spec_role; }
 
     // Auto-detected AoE situation: in combat with 3+ attackers (the
     // canonical "this is an AoE pull" cutoff). Used by spec rotations to
