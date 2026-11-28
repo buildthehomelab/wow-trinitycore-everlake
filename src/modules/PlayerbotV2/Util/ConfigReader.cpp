@@ -359,6 +359,7 @@ void ConfigReader::apply_from_loaded_config()
         "506880:2994:48:55,508160:2970:35:42,508416:3039:40:47";
     lfg_bot_groups_activities_ = V2::ParseListedActivities(c.GetStringDefault("Playerbot.Lfg.BotGroups.Activities", kDefaultListedActivities, true));
     lfg_finder_enable_        = c.GetBoolDefault("Playerbot.Lfg.Finder.Enable", true, true);
+    lfg_tank_at_dungeon_top_  = c.GetBoolDefault("Playerbot.Lfg.TankAtDungeonTop", true, true);
     // empty = the doors named in DungeonFinderPlan.h
     lfg_finder_entrances_     = V2::ParseFinderEntrances(c.GetStringDefault("Playerbot.Lfg.Finder.Entrances", "", true));
     bhv_bg_human_priority_    = c.GetBoolDefault("Playerbot.Behavior.BgHumanPriority", true, true);
