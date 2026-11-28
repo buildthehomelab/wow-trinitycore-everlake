@@ -24,7 +24,9 @@
 #include "Log.h"
 
 #include "BotPopulationManager.h"   // arena team: log offline pool bots in (DeferLogin / ProtectFromKick)
-#include "../Bot/ClassTables.h"     // MaxPlayerLevel
+#include "../Bot/ClassTables.h"     // MaxPlayerLevel, IsTankSpec / IsHealerSpec
+#include "../Api/ClassicSpec.h"     // EffectiveSpecId
+#include "GroupRolePick.h"
 #include "DatabaseEnv.h"
 
 #include <algorithm>
@@ -88,22 +90,6 @@ uint8 BotFactionIndex(Player const* p)
 uint32 FactionMaskBit(uint8 idx)
 {
     return idx <= 1 ? (1u << idx) : 0u;
-}
-
-// Role-affinity slots in BotArchetype::role_affinity.
-enum RoleSlot : uint8 { kRoleTank = 0, kRoleHealer = 1, kRoleDps = 2 };
-
-// Pull a bot's role affinity from its BotAI archetype (world-thread read of
-// the authoritative BotArchetype — PickCandidates runs on the world thread
-// via the bus DrainAsync). Returns {0,0,1} (pure DPS) when the bot has no
-// registered bot logic, so an unmanaged candidate counts as DPS-only and never
-// pre-empts a tank/healer slot.
-std::array<float, 3> RoleAffinityOf(uint64 bot_low)
-{
-    if (Services::Initialized())
-        if (::Playerbot::BotAI* ai = Services::Registry().ai(bot_low))
-            return ai->archetype().role_affinity;
-    return std::array<float, 3>{ 0.f, 0.f, 1.f };
 }
 
 } // anonymous
@@ -226,13 +212,10 @@ std::vector<uint64> BotGroupBuilder::PickCandidates(GroupRequest const& req)
             "instance), {} deserter, {} in a battleground or its queue, {} in a dungeon, {} owned; free: {}",
             why.fits, why.not_free, why.deserter, why.in_bg, why.in_dungeon, why.owned, pool.size());
 
-    // Role balancing (#4C item 5). When the request specifies role wants
-    // (tank/healer/dps), fill the tank + healer slots FIRST from the bots
-    // with the highest role_affinity for that role, so a formed group isn't
-    // all-DPS. Remaining slots take whatever is left (DPS-leaning bots and
-    // any overflow). When no role mix is requested, fall back to plain
-    // registry order (preserves the prior behavior for owner-squad / world-
-    // boss / role-agnostic requests).
+    // Role balancing: when the request names role places, the tank and healer places go to the bots whose spec plays the role,
+    // then to the classes that can (Fleet/GroupRolePick.h); the damage places prefer damage specs; the rest backfills in registry
+    // order. The archetype role_affinity this used to sort by is {0.10, 0.10, 0.80} for every archetype, so the tank and healer
+    // passes took nobody and the group was the first free bots. No role mix requested: plain registry order, as before.
     const bool role_balanced =
         req.want_tank != 0 || req.want_healer != 0 || req.want_dps != 0;
     if (!role_balanced)
@@ -245,48 +228,29 @@ std::vector<uint64> BotGroupBuilder::PickCandidates(GroupRequest const& req)
         return picked;
     }
 
-    // Track which pool entries have already been picked so the role passes
-    // don't double-assign the same bot.
-    std::vector<bool> taken(pool.size(), false);
-
-    auto fill_role = [&](uint8 slot, uint8 want) {
-        if (want == 0) return;
-        // Order remaining pool members by descending affinity for `slot`.
-        std::vector<size_t> order;
-        order.reserve(pool.size());
-        for (size_t i = 0; i < pool.size(); ++i)
-            if (!taken[i]) order.push_back(i);
-        std::stable_sort(order.begin(), order.end(),
-            [&](size_t a, size_t b) {
-                return RoleAffinityOf(pool[a])[slot] > RoleAffinityOf(pool[b])[slot];
-            });
-        uint8 assigned = 0;
-        for (size_t idx : order)
+    std::vector<Fleet::GroupRoleCandidate> roles;
+    roles.reserve(pool.size());
+    for (uint64 id : pool)
+    {
+        Fleet::GroupRoleCandidate c;
+        if (Player const* p = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(id)))
         {
-            if (assigned >= want) break;
-            if (picked.size() >= req.required) break;
-            // For tank/healer, require a real lean (affinity > DPS) so we
-            // don't burn the slot on a pure-DPS bot when a hybrid exists;
-            // if none qualifies the slot is left to the DPS/backfill pass.
-            if (slot != kRoleDps)
-            {
-                auto const aff = RoleAffinityOf(pool[idx]);
-                if (aff[slot] <= aff[kRoleDps] || aff[slot] <= 0.f)
-                    break;   // order is sorted desc, so nothing better remains
-            }
-            picked.push_back(pool[idx]);
-            taken[idx] = true;
-            ++assigned;
+            c.cls = p->GetClass();
+            uint16 const spec = uint16(::Playerbot::Classic::EffectiveSpecId(p));
+            c.specRole = IsTankSpec(c.cls, spec) ? Fleet::kGroupTank : IsHealerSpec(c.cls, spec) ? Fleet::kGroupHealer : Fleet::kGroupDps;
         }
-    };
-
-    // Tank + healer first (the scarce roles), then DPS, then backfill any
-    // remaining required slots from whatever eligible bots are left.
-    fill_role(kRoleTank,   req.want_tank);
-    fill_role(kRoleHealer, req.want_healer);
-    fill_role(kRoleDps,    req.want_dps);
-    for (size_t i = 0; i < pool.size() && picked.size() < req.required; ++i)
-        if (!taken[i]) { picked.push_back(pool[i]); taken[i] = true; }
+        roles.push_back(c);
+    }
+    size_t const room = req.required > picked.size() ? req.required - picked.size() : 0;
+    uint32 spec_tanks = 0, spec_healers = 0;
+    for (size_t idx : Fleet::PickGroupRoles(roles, req.want_tank, req.want_healer, req.want_dps, room))
+    {
+        picked.push_back(pool[idx]);
+        spec_tanks += roles[idx].specRole == Fleet::kGroupTank ? 1u : 0u;
+        spec_healers += roles[idx].specRole == Fleet::kGroupHealer ? 1u : 0u;
+    }
+    TC_LOG_DEBUG("playerbot.v2", "[BotGroupBuilder] role pick (source {}): wants {} tank / {} healer / {} dps of {} free; took {} ({} tank spec, {} healer spec)",
+                 uint32(req.source), uint32(req.want_tank), uint32(req.want_healer), uint32(req.want_dps), pool.size(), picked.size(), spec_tanks, spec_healers);
 
     return picked;
 }
