@@ -39,6 +39,8 @@
 #include "SpellMgr.h"
 #include "../Services.h"                          // Services::Dungeons().GetAdvice in combat path
 #include "Util/ConfigReader.h"                    // full type for Services::Config() (combat_skip_unfightable)
+#include "Bot/BotTextMgr.h"                      // BotChatter::RaidTalkOn (the healer's "why" line in a 40-man raid)
+#include "Bot/HealerIdleSay.h"
 #include "Travel/RepairVendorIndex.h"             // Services::RepairVendors() for critical-gear flee
 #include "Travel/QuestHubDatabase.h"              // Services::Hubs() hub fallback for flee_to_repair (start-island escape)
 #include "RaceMask.h"
@@ -1441,7 +1443,8 @@ struct CombatIdleProbe
 {
     BotAI&                  ai;
     BotSnapshotView const&  s;
-    BotIntentEmitter const& emit;
+    GroupSnapshotView const& g;
+    BotIntentEmitter&       emit;   // the healer's "why" line in party chat (HealerIdle)
     uint32                  actions_before;
     uint32                  rules_before;
 
@@ -1449,7 +1452,8 @@ struct CombatIdleProbe
     {
         BotAI::CombatIdleState& st = ai.combat_idle();
         uint32 const now = s.published_at_ms();
-        if (s.is_alive() && s.is_in_raid() && ai.effective_role(s) == Role::Healer)
+        // Any grouped healer: a 5-man's "the healer does nothing" was never in the log, only a raid's.
+        if (s.is_alive() && (s.is_in_raid() || s.in_group()) && ai.effective_role(s) == Role::Healer)
         {
             HealerIdle(st, now);
             return;
@@ -1524,12 +1528,13 @@ struct CombatIdleProbe
             return;
         }
         uint32 const idle_ms = now - st.idle_since_ms;
-        if (idle_ms < 3000u || (st.logged_ms != 0 && now - st.logged_ms < 10000u))
-            return;
-        st.logged_ms = now ? now : 1u;
         float bx, by, bz; s.position(bx, by, bz);
         float const dx = hurt->x - bx, dy = hurt->y - by, dz = hurt->z - bz;
         float const dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+        SayWhy(st, *hurt, hurt_pct, dist, idle_ms, now);
+        if (idle_ms < 3000u || (st.logged_ms != 0 && now - st.logged_ms < 10000u))
+            return;
+        st.logged_ms = now ? now : 1u;
         char const* derived =
             !hurt->in_los              ? "hurt member out of LoS" :
             dist > 40.f                ? "hurt member out of range" :
@@ -1540,6 +1545,29 @@ struct CombatIdleProbe
         TC_LOG_INFO("playerbot.v2", "[heal_idle_reason] {} not healing because {}{}{} ({:.1f}s) lowest={} {}% dist={:.1f} los={} moving={} mana={}",
             s.name(), rule ? rule : derived, rule ? " / " : "", rule ? derived : "", idle_ms / 1000.f,
             hurt->guid.GetCounter(), hurt_pct, dist, int(hurt->in_los), int(s.is_moving()), s.power_pct(0));
+    }
+
+    // Playerbot.Behavior.HealerSaysWhy (Bot/HealerIdleSay.h): a healer in a player's group says in party chat why a hurt member gets no heal,
+    // when the player can fix it (out of sight, out of range, out of mana). The hurt one must be a group member (not a pet); a 40-man raid
+    // hears it only with Playerbot.Raid.Talk on, as the other chatter.
+    void SayWhy(BotAI::CombatIdleState& st, NearbyUnit const& hurt, int hurt_pct, float dist, uint32 idle_ms, uint32 now) const
+    {
+        if (!Services::Config().behavior_healer_says_why() || !s.is_led_by_player() || (s.big_raid() && !BotChatter::RaidTalkOn()))
+            return;
+        GroupMemberSummary const* who = nullptr;
+        if (auto const* members = g.exists() ? g.members() : nullptr)
+            for (GroupMemberSummary const& m : *members)
+                if (m.guid == hurt.guid) { who = &m; break; }
+        if (!who)
+            return;
+        bool const self = hurt.guid == s.guid();
+        HealerSay::Cause const cause = HealerSay::Classify(self || hurt.in_los, self ? 0.f : dist, s.is_moving(), s.power_pct(0));
+        if (!HealerSay::SayDue(st.healer_say, cause, hurt_pct, idle_ms, now))
+            return;
+        std::string const line = HealerSay::Line(cause, self ? std::string("myself") : who->name);
+        emit.say(line);
+        TC_LOG_INFO("playerbot.v2", "[heal_idle_say] {} tells the group: {} ({} at {}%, {:.0f} y, {:.1f} s without a heal)",
+                    s.name(), line, who->name, hurt_pct, dist, idle_ms / 1000.f);
     }
 };
 
@@ -2563,7 +2591,7 @@ void DispatchInCombat(BotAI& ai,
 {
     NoFightTick(ai, snapshot, emit);
     // Reports a damage bot that ends this tick with nothing to do ([dps_idle_reason]).
-    CombatIdleProbe const idle_probe{ ai, snapshot, emit, emit.combat_action_count(), ai.rule_fire_seq() };
+    CombatIdleProbe const idle_probe{ ai, snapshot, group, emit, emit.combat_action_count(), ai.rule_fire_seq() };
     GroupIdleProbe const group_idle_probe{ ai, snapshot, emit, emit.combat_action_count(), emit.emitted_count(), ai.rule_fire_seq() };
     if (IdleWatchdog(ai, snapshot, emit))
         return;

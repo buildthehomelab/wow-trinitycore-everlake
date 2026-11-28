@@ -33,6 +33,8 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include "HealerIdleSay.h"
+
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -3487,6 +3489,8 @@ public:
         float  anchor_x      = 0.f;
         float  anchor_y      = 0.f;
         uint32 anchor_ms     = 0;
+        // The healer's "why" line in party chat (Bot/HealerIdleSay.h): the last one said and its cause.
+        HealerSay::SayState healer_say;
     };
     CombatIdleState& combat_idle() { return combat_idle_; }
     // GroupFight gate (Bot/GroupFight.h): settled once per tick before the state pick (BotAI::update_group_fight). Fight = the bot's

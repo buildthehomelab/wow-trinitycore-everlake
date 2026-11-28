@@ -378,6 +378,7 @@ void ConfigReader::apply_from_loaded_config()
     bhv_fly_with_owner_       = c.GetBoolDefault("Playerbot.Behavior.FlyWithOwner", true, true);
     bhv_ride_with_owner_      = c.GetBoolDefault("Playerbot.Behavior.RideWithOwner", true, true);
     bhv_catch_up_to_owner_    = c.GetBoolDefault("Playerbot.Behavior.CatchUpToOwner", true, true);
+    bhv_healer_says_why_      = c.GetBoolDefault("Playerbot.Behavior.HealerSaysWhy", true, true);
     bhv_follow_owner_steps_   = c.GetBoolDefault("Playerbot.Behavior.FollowOwnerSteps", true, true);
     bhv_passive_leash_yd_     = std::max(0.0f, float(c.GetFloatDefault("Playerbot.Behavior.PassiveLeashYd", 25.0f, true)));
     bhv_aggressive_radius_yd_ = std::max(1.0f, float(c.GetFloatDefault("Playerbot.Behavior.AggressiveRadiusYd", 10.0f, true)));
