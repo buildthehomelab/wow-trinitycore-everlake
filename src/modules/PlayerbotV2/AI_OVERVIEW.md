@@ -250,18 +250,27 @@ up (`[Companion] bot ... did not enter the world within Ns (login still in fligh
 standing on another map than its leader. The worldserver console in the log viewer carries none of the bot lines; they are only in
 `Playerbot.log`. To check a case, grep there for the bot's name with `[lfg]`, `[role]`, `[Companion]`, `[heal_idle_reason]`.
 
-## 9. Further improvements, by expected impact
+## 9. Improvements since the first findings
 
-1. **Role-aware group building** (PR #181). Make `BotGroupBuilder` pick tanks and healers by spec (and class fit) instead of the flat
-   archetype affinity, so the respec in `PlayListedRole` is rarely needed and the gear fits the role.
-2. **One role source in combat** (PR #182). The healer follow-tank and gap-close moves read snapshot `my_role`, while `raid_healer`, the
-   pre-emptive tank heal and `ooc_heal` read `effective_role`. Read `effective_role` everywhere (or make the snapshot carry it).
-3. **Gap count by spec, not class** (PR #183). `RoleMaskOf` counts a member with no LFG role by class (any priest heals, any warrior tanks).
-   A Shadow priest player in the group means no healer bot comes. Use the member's spec role (bots publish theirs; ask a player).
-4. **Healer idle reasons in plain words for the owner.** `[heal_idle_reason]` exists in the log; a party-chat line ("out of mana",
-   "can't see you") after a few seconds of a hurt member and no heal would make the "healer does nothing" reports self-explaining.
-5. **`attackers` is sorted by "on me" and max health, not threat**, but `highest_threat_attacker()` takes the first. Sort by threat
-   or rename, so tank and fallback picks mean what they say.
+Each was its own pull request; none is deployed yet.
+
+1. **Role-aware group building** (PR #181). `BotGroupBuilder` now fills tank and healer places with bots whose spec plays the role,
+   then with the best class for it (`Fleet/GroupRolePick.h`), instead of the flat archetype affinity that took nobody. The respec in
+   `PlayListedRole` is then rarely needed, and the gear fits the role.
+2. **One role source in combat** (PR #182). The snapshot's `my_role` is now the bot's pinned role when it has one, else its spec's
+   role, the same rule as `effective_role`. The healer follow-tank and gap-close moves, the area-attack step-out, the threat checks,
+   the interrupt rule and the paladin seals and blessings now agree with the heal rules. The spec-only reading is kept as `spec_role`
+   for `idle:dual_spec_switch`.
+3. **Gap count by what members play** (PR #183). The fill counts a member with no group role by the leader's pick, else by the role
+   they play (a bot's pinned role or spec, a player's bought talents through the new `Classic::TalentSpecId`), else by class. A
+   Shadow priest player no longer stops a healer bot from coming.
+4. **Healers say why they are not healing** (PR #184). The healer idle probe now runs for any grouped healer, not only in raids. When a
+   member under 60 % gets no heal for 4 s for a reason the player can fix, the healer says it in party chat: "I can't see <name> from
+   here to heal.", "<name> is too far away for my heals." or "I'm out of mana, I can't heal." At most one line per 30 s.
+   `Playerbot.Behavior.HealerSaysWhy` turns it off.
+5. **`highest_threat_attacker()` renamed to `top_attacker()`** (PR #185). It never ranked by threat: it returns the first fightable
+   attacker, mobs on the bot first and then the biggest. Its three callers want exactly that for self-defence, so only the name and
+   comments changed.
 
 Checked and dropped: "a companion on another map does nothing". The InGroup layer does skip it, but the owner catch-up above
 already brings it after 15 s.
