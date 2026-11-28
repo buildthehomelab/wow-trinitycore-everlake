@@ -195,7 +195,9 @@ group work has nothing to do.
 
 InGroup layer (`State_InGroup.cpp`): returns before the follow/assist part when the bot is in combat, the leader is the bot itself,
 **the leader is offline or on another map**, or on a flight or a ship. A companion on another map than its leader (a door refused
-it, a teleport failed) stands where it is until the rejoin rule brings it.
+it, a teleport failed) does nothing in this layer; the owner catch-up on the world thread (`Fleet/OwnerCatchUp.h`,
+`Playerbot.Behavior.CatchUpToOwner`, on by default) brings it to him after 15 s once both are alive and out of combat, through
+`BringToOwner` and its instance door checks.
 
 InCombat: Passive (`no_fight`), flee or hold orders, still casting, a threat hold waiting for the tank, a rotation with no
 predicate that both matches and emits, a raid healer with nothing to cast (`combat:raid_healer_hold`), the fallback attack finding
@@ -250,15 +252,16 @@ standing on another map than its leader. The worldserver console in the log view
 
 ## 9. Further improvements, by expected impact
 
-1. **Role-aware group building.** Make `BotGroupBuilder` pick tanks and healers by spec (and class fit) instead of the flat
+1. **Role-aware group building** (PR #181). Make `BotGroupBuilder` pick tanks and healers by spec (and class fit) instead of the flat
    archetype affinity, so the respec in `PlayListedRole` is rarely needed and the gear fits the role.
-2. **One role source in combat.** The healer follow-tank and gap-close moves read snapshot `my_role`, while `raid_healer`, the
+2. **One role source in combat** (PR #182). The healer follow-tank and gap-close moves read snapshot `my_role`, while `raid_healer`, the
    pre-emptive tank heal and `ooc_heal` read `effective_role`. Read `effective_role` everywhere (or make the snapshot carry it).
-3. **A companion on another map does nothing.** The InGroup layer returns when the leader is on another map. Have it bring the
-   companion (or say why it cannot) after a few seconds instead of waiting for the rejoin rule.
-4. **Gap count by spec, not class.** `RoleMaskOf` counts a member with no LFG role by class (any priest heals, any warrior tanks).
+3. **Gap count by spec, not class.** `RoleMaskOf` counts a member with no LFG role by class (any priest heals, any warrior tanks).
    A Shadow priest player in the group means no healer bot comes. Use the member's spec role (bots publish theirs; ask a player).
-5. **Healer idle reasons in plain words for the owner.** `[heal_idle_reason]` exists in the log; a party-chat line ("out of mana",
+4. **Healer idle reasons in plain words for the owner.** `[heal_idle_reason]` exists in the log; a party-chat line ("out of mana",
    "can't see you") after a few seconds of a hurt member and no heal would make the "healer does nothing" reports self-explaining.
-6. **`attackers` is sorted by "on me" and max health, not threat**, but `highest_threat_attacker()` takes the first. Sort by threat
+5. **`attackers` is sorted by "on me" and max health, not threat**, but `highest_threat_attacker()` takes the first. Sort by threat
    or rename, so tank and fallback picks mean what they say.
+
+Checked and dropped: "a companion on another map does nothing". The InGroup layer does skip it, but the owner catch-up above
+already brings it after 15 s.
