@@ -32,6 +32,7 @@
 #include "Log.h"
 #include "Loot.h"
 #include "Map.h"
+#include "MapReference.h"
 #include "MotionMaster.h"
 #include "ObjectMgr.h"
 #include "PetDefines.h"
@@ -950,7 +951,16 @@ struct classic_go_broken_trap : public GameObjectAI
 enum ClassicDMMizzle
 {
     SAY_KILL_KING_1      = 9348,
-    SAY_KILL_KING_2      = 9411
+    SAY_KILL_KING_2      = 9411,
+
+    // The tribute run's end, which only VMaNGOS SmartAI rows held (they never run: this C++ AI is Mizzle's AI).
+    // "I'm the new king?" (5708/0, shown while the player is not King of the Gordok) crowns the players, and the menu
+    // goes on to 5715; "It's good to be the king!" (5715/0) closes; "Well then... show me the tribute!" (5740/0)
+    // closes, sets the tribute DONE (the instance respawns the Gordok Tribute chest and counts the guards still alive)
+    // and Mizzle has nothing more to say.
+    GOSSIP_MENU_MIZZLE_KING     = 5708,
+    GOSSIP_MENU_MIZZLE_GOOD     = 5715,
+    GOSSIP_MENU_MIZZLE_TRIBUTE  = 5740
 };
 
 struct classic_npc_mizzle_the_crafty : public ScriptedAI
@@ -993,6 +1003,33 @@ struct classic_npc_mizzle_the_crafty : public ScriptedAI
     void SpellHitTarget(WorldObject* /*target*/, SpellInfo const* /*spellInfo*/) override
     {
         me->SetOrientation(3.170f);
+    }
+
+    bool OnGossipSelect(Player* player, uint32 menuId, uint32 gossipListId) override
+    {
+        if (gossipListId != 0)
+            return false;
+
+        switch (menuId)
+        {
+            case GOSSIP_MENU_MIZZLE_KING:
+                for (MapReference const& ref : me->GetMap()->GetPlayers())
+                    if (Player* king = ref.GetSource())
+                        if (king->IsAlive() && !king->HasAura(SPELL_KING_OF_GORDOK))
+                            me->CastSpell(king, SPELL_KING_OF_GORDOK, true);
+                return false;   // the option's next menu (5715) opens as usual
+            case GOSSIP_MENU_MIZZLE_GOOD:
+                CloseGossipMenuFor(player);
+                return true;
+            case GOSSIP_MENU_MIZZLE_TRIBUTE:
+                CloseGossipMenuFor(player);
+                if (m_pInstance && m_pInstance->GetData(TYPE_GORDOK_TRIBUTE) != DONE)
+                    m_pInstance->SetData(TYPE_GORDOK_TRIBUTE, DONE);
+                me->RemoveNpcFlag(UNIT_NPC_FLAG_GOSSIP);
+                return true;
+            default:
+                return false;
+        }
     }
 };
 
@@ -1271,6 +1308,10 @@ enum ClassicDMGuards
     // Guard Mol'dar
     SPELL_MOLDAR_MOXIE          = 22818,
 
+    GOSSIP_MENU_FENGUS          = 5731,
+    GOSSIP_MENU_SLIPKIK         = 5733,
+    GOSSIP_MENU_MOLDAR          = 5735,
+
     EMOTE_ENRAGE                = 9413
 };
 
@@ -1402,6 +1443,26 @@ struct classic_boss_guards : public ScriptedAI
             me->CallForHelp(50.0f);
             m_bEnrageUsed = true;
         }
+    }
+
+    // The new king's henchmen: "Well what have you got for the new big dog of Gordok, Fengus?" (5731/0), Slip'kik's
+    // (5733/0) and Mol'dar's (5735/0) give their buff, as the VMaNGOS SmartAI rows did (they never run under this AI)
+    bool OnGossipSelect(Player* player, uint32 menuId, uint32 gossipListId) override
+    {
+        uint32 spell = 0;
+        switch (menuId)
+        {
+            case GOSSIP_MENU_FENGUS:  spell = SPELL_FENGUS_FEROCITY; break;
+            case GOSSIP_MENU_SLIPKIK: spell = SPELL_SLIPKIKS_SAVVY;  break;
+            case GOSSIP_MENU_MOLDAR:  spell = SPELL_MOLDAR_MOXIE;    break;
+            default: return false;
+        }
+        if (gossipListId != 0)
+            return false;
+
+        CloseGossipMenuFor(player);
+        me->CastSpell(player, spell, true);
+        return true;
     }
 };
 
