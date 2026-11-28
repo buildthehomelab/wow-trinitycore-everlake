@@ -77,6 +77,7 @@ private:
 void WorldSession::HandleAutostoreLootItemOpcode(WorldPackets::Loot::LootItem& packet)
 {
     Player* player = GetPlayer();
+    player->PruneDeadLootViews();
     AELootResult aeResult;
     AELootResult* aeResultPtr = player->GetAELootView().size() > 1 ? &aeResult : nullptr;
 
@@ -142,6 +143,7 @@ void WorldSession::HandleAutostoreLootItemOpcode(WorldPackets::Loot::LootItem& p
 void WorldSession::HandleLootMoneyOpcode(WorldPackets::Loot::LootMoney& /*packet*/)
 {
     Player* player = GetPlayer();
+    player->PruneDeadLootViews();
     std::vector<Loot*> forceLootRelease;
     for (std::pair<ObjectGuid const, Loot*> const& lootView : player->GetAELootView())
     {
@@ -409,13 +411,15 @@ void WorldSession::DoLootReleaseAll()
     // loot). That loot's destructor takes it out of the view, but a copy of the view still held its pointer, and releasing it
     // next erased from freed memory (live worldserver segfaults in set<ObjectGuid>::equal_range under DoLootRelease, 11-25/26).
     // Walk the loot guids and look each one up again in the live view, so a loot freed on the way is skipped.
+    _player->PruneDeadLootViews();
+
     std::vector<ObjectGuid> lootGuids;
     lootGuids.reserve(_player->GetAELootView().size());
     for (auto const& [lootGuid, loot] : _player->GetAELootView())
         lootGuids.push_back(lootGuid);
 
     for (ObjectGuid const& lootGuid : lootGuids)
-        if (Loot* loot = Trinity::Containers::MapGetValuePtr(_player->GetAELootView(), lootGuid))
+        if (Loot* loot = Trinity::Containers::MapGetValuePtr(_player->GetAELootView(), lootGuid); Loot::IsLive(loot, lootGuid))
             DoLootRelease(loot);
 }
 
@@ -439,6 +443,7 @@ void WorldSession::HandleLootMasterGiveOpcode(WorldPackets::Loot::MasterLootItem
 
     TC_LOG_DEBUG("network", "WorldSession::HandleLootMasterGiveOpcode (CMSG_LOOT_MASTER_GIVE, 0x02A3) Target = [{}].", target->GetName());
 
+    _player->PruneDeadLootViews();
     for (WorldPackets::Loot::LootRequest const& req : masterLootItem.Loot)
     {
         Loot* loot = Trinity::Containers::MapGetValuePtr(_player->GetAELootView(), req.Object);

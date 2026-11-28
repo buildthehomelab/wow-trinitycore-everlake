@@ -36,6 +36,8 @@
 #include "StringFormat.h"
 #include "World.h"
 #include "WorldSession.h"
+#include <mutex>
+#include <unordered_set>
 
 //
 // --------- LootItem ---------
@@ -748,15 +750,49 @@ void LootRoll::Finish(RollVoteMap::const_iterator winnerItr)
 // --------- Loot ---------
 //
 
+namespace
+{
+    // Every Loot alive right now. Loot is made and freed on map threads, so the set has a lock.
+    std::mutex& LiveLootLock()
+    {
+        static std::mutex lock;
+        return lock;
+    }
+
+    std::unordered_set<Loot const*>& LiveLoots()
+    {
+        static std::unordered_set<Loot const*> loots;
+        return loots;
+    }
+}
+
+bool Loot::IsLive(Loot const* loot, ObjectGuid const& lootGuid)
+{
+    if (!loot)
+        return false;
+
+    std::scoped_lock lock(LiveLootLock());
+    // the GUID check catches a new Loot that took a freed one's address
+    return LiveLoots().contains(loot) && loot->GetGUID() == lootGuid;
+}
+
 Loot::Loot(Map* map, ObjectGuid owner, LootType type, Group const* group) : gold(0), unlootedCount(0), loot_type(type),
     _guid(map ? ObjectGuid::Create<HighGuid::LootObject>(map->GetId(), 0, map->GenerateLowGuid<HighGuid::LootObject>()) : ObjectGuid::Empty),
     _owner(owner), _itemContext(ItemContext::NONE), _lootMethod(group ? group->GetLootMethod() : FREE_FOR_ALL),
     _lootMaster(group ? group->GetMasterLooterGuid() : ObjectGuid::Empty), _wasOpened(false), _changed(false), _dungeonEncounterId(0)
 {
+    std::scoped_lock lock(LiveLootLock());
+    LiveLoots().insert(this);
 }
 
 Loot::~Loot()
 {
+    {
+        // out of the registry first: from here on no loot view treats this pointer as usable
+        std::scoped_lock lock(LiveLootLock());
+        LiveLoots().erase(this);
+    }
+
     // PlayersLooting is how a dying loot finds every player whose loot view still points at it, so each one is released
     // here and none is left holding a freed pointer. Release only views that really hold this loot (another loot may have
     // taken the same view key), and skip a player whose session is already gone (bot logout teardown).
