@@ -28,6 +28,7 @@
 #include "QuestDef.h"
 #include "ScriptedCreature.h"
 #include "ScriptedEscortAI.h"
+#include "ScriptedGossip.h"
 #include "classic_maraudon.h"
 #include "classic_script_text.h"
 #include <iterator>
@@ -162,6 +163,18 @@ private:
 struct classic_celebras_spirit : public EscortAI
 {
     classic_celebras_spirit(Creature* creature) : EscortAI(creature), _phase(0), _eventTimer(0), _bookRead(false) { }
+
+    // "Celebras, I lost my Scepter..." (5349/0: The Scepter of Celebras 7046 rewarded and no Scepter 17191 in the bags)
+    // has the player cast Create Scepter of Celebras, as the VMaNGOS SmartAI rows did (they never run under this AI)
+    bool OnGossipSelect(Player* player, uint32 menuId, uint32 gossipListId) override
+    {
+        if (menuId != 5349 || gossipListId != 0)
+            return false;
+
+        CloseGossipMenuFor(player);
+        player->CastSpell(player, 21939, false);   // Create Scepter of Celebras
+        return true;
+    }
 
     void Reset() override
     {
