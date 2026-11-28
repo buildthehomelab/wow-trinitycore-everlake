@@ -307,7 +307,9 @@ public:
     // combat reaches + 4/3, at least 5 y) for a spell with the ranged flag. 0 when the spell has no minimum.
     float spell_min_range(uint32 spell_id, NearbyUnit const& t) const;
     NearbyUnit const* lowest_hp_friend() const;
-    NearbyUnit const* highest_threat_attacker() const;
+    // The first fightable attacker in the snapshot's order: a mob on this bot first, then the biggest (max health). Not a threat ranking,
+    // despite the old name highest_threat_attacker: the attackers are not sorted by threat. Threat per mob is in NearbyUnit::my_threat.
+    NearbyUnit const* top_attacker() const;
     // First attacker in the threat list that is currently casting an
     // interruptible spell. APL rules use this for kick / counterspell.
     NearbyUnit const* interruptible_caster() const;

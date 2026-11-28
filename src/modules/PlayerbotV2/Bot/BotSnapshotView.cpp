@@ -463,10 +463,10 @@ NearbyUnit const* BotSnapshotView::lowest_hp_friend() const
     return best;
 }
 
-NearbyUnit const* BotSnapshotView::highest_threat_attacker() const
+NearbyUnit const* BotSnapshotView::top_attacker() const
 {
-    // Snapshot stores attackers ordered by threat-to-me by the builder.
-    // Return the highest-threat FIGHTABLE attacker: skip untargetable trigger
+    // The builder orders the attackers on-me first, then by max health (BotSnapshotBuilder, "Sort: attackers currently targeting us").
+    // Return the first FIGHTABLE one: skip untargetable trigger
     // units (UNINTERACTIBLE stalkers) and pacified/dead entries so peel/taunt/
     // assist consumers never get handed a unit they can't attack (the harbor
     // 49521 flood would otherwise sit at attackers.front() and stall every

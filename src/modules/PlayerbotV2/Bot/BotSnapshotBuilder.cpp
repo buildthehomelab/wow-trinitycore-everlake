@@ -3095,7 +3095,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     // the target dies, so APL rules that gate on victim() being non-empty
     // would fire offensive abilities on the corpse and burn an intent slot
     // on InvalidTarget. Better to surface no victim and let the InCombat
-    // dispatch retarget via highest_threat_attacker.
+    // dispatch retarget via top_attacker.
     if (Unit* victim = p->GetVictim(); victim && victim->IsAlive())
     {
         snap->combat.victim = victim->GetGUID();
@@ -4424,7 +4424,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
         // never validates hostility, so a confused unit (2026-06-11: a
         // groupmate's hunter pet mid friendly-fire cascade) can sit in the
         // list. Surfacing it would have counterattack pickers
-        // (highest_threat_attacker, under-attack engage) re-target the
+        // (top_attacker, under-attack engage) re-target the
         // friendly and re-seed the cascade. Hostile-but-currently-
         // unattackable attackers (immunity phases) stay visible so
         // defensive rules still see the threat.
@@ -4612,7 +4612,7 @@ std::shared_ptr<BotSnapshot const> BotSnapshotBuilder::Build(Player* p, BotAI* b
     }
     // Sort: attackers currently targeting *us* come first (those generate the
     // most pressure), then by max_hp descending (biggest threat = biggest mob).
-    // BotSnapshotView::highest_threat_attacker() takes attackers.front().
+    // BotSnapshotView::top_attacker() takes the first fightable one. Not a threat order: threat per mob is NearbyUnit::my_threat.
     {
         const ObjectGuid self = snap->guid;
         std::sort(snap->combat.attackers.begin(), snap->combat.attackers.end(),
