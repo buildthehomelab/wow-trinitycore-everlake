@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <span>
+#include <vector>
 
 namespace Playerbot::V2
 {
@@ -144,5 +145,48 @@ inline LfgFillAction DecideLfgFill(int32 msLeft, uint32 realInRange, bool instan
     if (instantFillIfNobody && realInRange == 0)
         return LfgFillAction::FillNow;
     return msLeft <= 0 ? LfgFillAction::FillAfterWait : LfgFillAction::Wait;
+}
+
+// One member of a bot group about to be listed: how well its class tanks and heals (0 = cannot) and the role its spec plays now
+// (kLfgRoleTank / kLfgRoleHealer / kLfgRoleDamage).
+struct ListedMember
+{
+    uint8 tankFit = 0, healerFit = 0;
+    uint8 specRole = kLfgRoleDamage;
+};
+
+// The role each member of a listed bot group gets: `tanks` tank places, then `healers` healer places, the rest damage. A place goes
+// first to a member whose spec already plays that role, then by how well the class fits; a member whose class cannot play it never
+// gets it. The group is built from the first free bots (their archetype role affinity is damage-heavy for every archetype, so the
+// builder's tank and healer passes take nobody), and the old rule went by class alone: a Shadow priest was listed as the healer
+// beside a Holy paladin listed as damage, and each bot then played its spec, so the listed healer never healed (2026-11-27).
+// Returns one mask per member, in order.
+inline std::vector<uint8> PlanListedRoles(std::span<ListedMember const> members, uint8 tanks, uint8 healers)
+{
+    std::vector<uint8> roles(members.size(), 0);
+    auto assign = [&](uint8 role, uint8 count)
+    {
+        std::vector<size_t> order;
+        for (size_t i = 0; i < members.size(); ++i)
+        {
+            uint8 const fit = role == kLfgRoleTank ? members[i].tankFit : members[i].healerFit;
+            if (!roles[i] && fit)
+                order.push_back(i);
+        }
+        auto key = [&](size_t i)
+        {
+            uint8 const fit = role == kLfgRoleTank ? members[i].tankFit : members[i].healerFit;
+            return int(members[i].specRole == role ? 100 : 0) + fit;
+        };
+        std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return key(a) > key(b); });
+        for (size_t i = 0; i < order.size() && count; ++i, --count)
+            roles[order[i]] = role;
+    };
+    assign(kLfgRoleTank, tanks);
+    assign(kLfgRoleHealer, healers);
+    for (uint8& r : roles)
+        if (!r)
+            r = kLfgRoleDamage;
+    return roles;
 }
 } // namespace Playerbot::V2

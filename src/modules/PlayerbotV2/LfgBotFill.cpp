@@ -15,7 +15,10 @@
 #include "Timer.h"
 #include "Util.h"
 #include "WorldSession.h"
+#include "Api/ClassicSpec.h"
+#include "Api/PlayerbotAPI.h"
 #include "Bot/BotAI.h"
+#include "Bot/ClassTables.h"
 #include "Bot/BotArchetype.h"
 #include "Bot/BotRegistry.h"
 #include "Bot/ClassTables.h"
@@ -635,28 +638,64 @@ namespace
     // The group's members get the roles of the shape, tanks and healers going to the members whose class fits best, so the list shows
     // the mix and not ten damage dealers. Returns the tank and healer places really filled (fewer than the shape when the group has
     // no member of a fitting class: that place is open then).
+    uint8 SpecRoleBit(Player const* p)
+    {
+        uint32 const spec = ::Playerbot::Classic::EffectiveSpecId(p);
+        return ::Playerbot::IsTankSpec(p->GetClass(), uint16(spec)) ? kLfgRoleTank
+             : ::Playerbot::IsHealerSpec(p->GetClass(), uint16(spec)) ? kLfgRoleHealer : kLfgRoleDamage;
+    }
+
+    // A world bot listed for a role its spec does not play is switched to that role's spec (the virtual spec and its talent build,
+    // as the dungeon queue's role tags do in BotPopulationManager). Without it the bot kept its spec, its own tick put its party role
+    // back to the spec's (State_InGroup set_role_no_lfg) and it played the spec: the listed healer dealt damage. A companion (an owner's
+    // bot) keeps the role its owner gave it.
+    void PlayListedRole(Player* bot, uint8 role)
+    {
+        if (!bot->GetSession() || !bot->GetSession()->IsBot() || SpecRoleBit(bot) == role)
+            return;
+        uint64 const id = bot->GetGUID().GetCounter();
+        if (Playerbot::Services::Owners().GetOwner(id).account_id != 0)
+            return;
+        uint8 const cls = bot->GetClass();
+        uint32 const before = ::Playerbot::Classic::EffectiveSpecId(bot);
+        uint32 const spec = role == kLfgRoleTank ? ::Playerbot::TankSpecForClass(cls)
+                          : role == kLfgRoleHealer ? ::Playerbot::HealerSpecForClass(cls) : ::Playerbot::DpsSpecForClass(cls);
+        if (!spec)
+            return;
+        if (::Playerbot::Classic::IsSingleSpecClass(cls))
+        {
+            ::Playerbot::Classic::SetSpecOverride(bot, spec);
+            ::Playerbot::API(bot).apply_classic_talents();
+        }
+        else if (ChrSpecializationEntry const* entry = sChrSpecializationStore.LookupEntry(spec))
+            bot->ActivateTalentGroup(entry);
+        Playerbot::Role const botRole = role == kLfgRoleTank ? Playerbot::Role::Tank : role == kLfgRoleHealer ? Playerbot::Role::Healer : Playerbot::Role::Dps;
+        if (Playerbot::BotAI* ai = Playerbot::Services::Registry().ai(id); ai && ai->role_override() != Playerbot::Role::Unknown)
+            ai->set_role_override(botRole);
+        TC_LOG_INFO("playerbot.v2", "[lfg] listed bot {} (class {} L{}) takes the {} place: spec {} -> {}{}", bot->GetName(), uint32(cls),
+                    uint32(bot->GetLevel()), role == kLfgRoleTank ? "tank" : role == kLfgRoleHealer ? "healer" : "damage", before, spec,
+                    ::Playerbot::Classic::EffectiveSpecId(bot) == spec ? "" : " (refused: spec unchanged)");
+    }
+
     LfgRoleGap AssignListedRoles(Group* group, LfgRoleGap have)
     {
         std::vector<Player*> members;
+        std::vector<ListedMember> plan;
         for (GroupReference const& ref : group->GetMembers())
             if (Player* member = ref.GetSource())
-                members.push_back(member);
-        LfgRoleGap got;
-        auto assign = [&](uint8 (*fit)(uint8), uint8 mask, uint8 count, uint8& filled)
-        {
-            std::ranges::stable_sort(members, [&](Player* a, Player* b) { return fit(a->GetClass()) > fit(b->GetClass()); });
-            for (auto it = members.begin(); it != members.end() && count && fit((*it)->GetClass()); )
             {
-                group->SetLfgRoles((*it)->GetGUID(), mask);
-                it = members.erase(it);
-                --count;
-                ++filled;
+                members.push_back(member);
+                plan.push_back(ListedMember{ TankFit(member->GetClass()), HealerFit(member->GetClass()), SpecRoleBit(member) });
             }
-        };
-        assign(TankFit, kLfgRoleTank, have.tank, got.tank);
-        assign(HealerFit, kLfgRoleHealer, have.healer, got.healer);
-        for (Player* member : members)
-            group->SetLfgRoles(member->GetGUID(), kLfgRoleDamage);
+        std::vector<uint8> const roles = PlanListedRoles(plan, have.tank, have.healer);
+        LfgRoleGap got;
+        for (size_t i = 0; i < members.size(); ++i)
+        {
+            PlayListedRole(members[i], roles[i]);
+            group->SetLfgRoles(members[i]->GetGUID(), roles[i]);
+            if (roles[i] == kLfgRoleTank)   ++got.tank;
+            if (roles[i] == kLfgRoleHealer) ++got.healer;
+        }
         return got;
     }
 

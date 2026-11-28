@@ -1758,6 +1758,7 @@ void BotPopulationManager::DrainCompanionSetups()
     if (pending_companions_.empty())
         return;
     constexpr uint32 kCompanionLoginTimeoutMs = 60u * 1000u;
+    constexpr uint32 kCompanionLoginInFlightTimeoutMs = 5u * 60u * 1000u;
     for (auto it = pending_companions_.begin(); it != pending_companions_.end();)
     {
         BotId const id = it->first;
@@ -1767,10 +1768,21 @@ void BotPopulationManager::DrainCompanionSetups()
         if (!bot || !bot->IsInWorld() || !Services::Registry().has(id))
         {
             // queued_ms is getMSTime(); OnWorldTick's now_ms counts from the module's first tick, so compare on one clock.
-            if (getMSTimeDiff(pending.queued_ms, getMSTime()) > kCompanionLoginTimeoutMs)
+            // A login still in flight (its session is open: a slow character load while the database is busy) is waited for longer:
+            // dropped at 60 s, the bot came into the world later unlevelled, ungrouped and with no role, and stood where it was made.
+            uint32 const waited = getMSTimeDiff(pending.queued_ms, getMSTime());
+            bool const inFlight = Services::SessionMgr().IsHeadless(ObjectGuid::Create<HighGuid::Player>(id));
+            if (waited > (inFlight ? kCompanionLoginInFlightTimeoutMs : kCompanionLoginTimeoutMs))
             {
-                TC_LOG_WARN("playerbot.v2", "[Companion] bot {} did not enter the world within {}s, setup dropped",
-                            id, kCompanionLoginTimeoutMs / 1000u);
+                TC_LOG_WARN("playerbot.v2", "[Companion] bot {} did not enter the world within {}s (login {}), setup dropped",
+                            id, waited / 1000u, inFlight ? "still in flight" : "not started or refused");
+                if (Player* owner = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(pending.owner_guid_low)))
+                {
+                    std::string name;
+                    sCharacterCache->GetCharacterNameByGuid(ObjectGuid::Create<HighGuid::Player>(id), name);
+                    Playerbot::BotLanguage::LocalizedHandler(owner->GetSession()).PSendSysMessage(
+                        "%s could not log in in time. `.bot call %s` tries again.", name.c_str(), name.c_str());
+                }
                 it = pending_companions_.erase(it);
             }
             else
