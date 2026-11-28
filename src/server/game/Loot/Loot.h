@@ -308,6 +308,11 @@ struct TC_GAME_API Loot
     Loot& operator=(Loot const&) = delete;
     Loot& operator=(Loot&&) = delete;
 
+    // True while `loot` points at a Loot that has not started being destroyed and still has this GUID. A player's loot view holds raw
+    // Loot pointers; a loot freed without its view released left one dangling and the next release read freed memory (live crash
+    // 11-27, bot loot_corpse -> SendLoot -> DoLootReleaseAll). Checks the pointer against a registry, so it never reads freed memory.
+    static bool IsLive(Loot const* loot, ObjectGuid const& lootGuid);
+
     ObjectGuid const& GetGUID() const { return _guid; }
     ObjectGuid const& GetOwnerGUID() const { return _owner; }
     ItemContext GetItemContext() const { return _itemContext; }

@@ -271,7 +271,8 @@ bool DungeonFinderQueue(Player* leader, std::string const& what, Playerbot::Role
 
     LfgRoleGap gap;
     std::string report;
-    uint32 const started = LfgFillToSize(leader, ownRole, act.size, gap, report);
+    uint8 const tankLevel = FinderTankLevel(leader, { act.activity }, 0);
+    uint32 const started = LfgFillToSize(leader, ownRole, act.size, gap, report, tankLevel);
     uint32 const now = getMSTime();
     g_runs[key] = FinderRun{ Phase::Forming, act.activity, act.map, act.size, door->loc, now, name };
     TC_LOG_INFO("playerbot.v2", "[dungeon_finder] {} (level {}) queued for {} (activity {} map {} {} {}): party of {}, missing {} -> {} bot(s) started.{}",
@@ -281,8 +282,10 @@ bool DungeonFinderQueue(Player* leader, std::string const& what, Playerbot::Role
         msg += " " + std::to_string(started) + " bot(s) are joining (" + GapText(gap) + " missing). You go in when the group is complete.";
     else
         msg += " Your group is complete: in you go.";
+    if (tankLevel > leader->GetLevel() && gap.tank)
+        msg += " Your tank comes at level " + std::to_string(tankLevel) + ", the top of the dungeon.";
     if (leader->GetLevel() < act.levelMin)
-        msg += " Your bots are your level, below the dungeon's.";
+        msg += tankLevel > leader->GetLevel() ? " Your other bots are your level, below the dungeon's." : " Your bots are your level, below the dungeon's.";
     // a role the class cannot play was not counted (LfgRoleForClass): say so, else the player waits for a tank that is them
     uint8 const asked = ownRole == Playerbot::Role::Tank ? kLfgRoleTank : ownRole == Playerbot::Role::Healer ? kLfgRoleHealer : 0;
     if (asked && !LfgRoleForClass(leader->GetClass(), asked))

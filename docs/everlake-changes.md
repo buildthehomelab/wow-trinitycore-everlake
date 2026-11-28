@@ -212,3 +212,19 @@ Everlake's Molten Core drops the Forever tier 1 copies 288823-288894 (world data
 | `sql/custom/hotfixes/2026_11_21_86_hotfixes_forever_blackwing_lair_armor.sql` | Only the end: the sell prices of 16849-16868 and `hotfix_data` 26112720-26112739 (our copy already stops before it) |
 
 If a later Karrz file writes an `item_sparse` row for one of the 72 ids in 16795-16868, leave that row out too.
+
+## Consumable stacking as on live Forever (2026-11-27)
+
+Live Forever lets any number of elixirs and scrolls be up at once, but each stat counts only its strongest elixir, scroll,
+Juju or raid buff (wowsims/forever R-0054, EV-0185). Upstream still has the later-expansion rules (one scroll at a time,
+battle/guardian elixirs), so a merge can bring them back silently.
+
+| Hook | Where | If it is lost |
+|---|---|---|
+| `SPELL_SPECIFIC_SCROLL` left out of the exclusive cases | `SpellInfo::IsAuraExclusiveBySpecificWith` | **Silent:** a second scroll replaces the first again |
+| Group 1400920 pinned to `SPELL_AURA_MOD_STAT` (beside 1400910's crit pin) | `SpellMgr::LoadSpellGroupStackRules` | Load guesses the aura from the group; still stat today, but no longer stated |
+| Groups 1400920-1400926 | `sql/custom/world/2026_11_27_10_world_forever_consumable_stacking.sql` | **Silent:** same-stat elixirs and scrolls add up, flasks stack |
+| Vanilla elixirs out of groups 1 and 2 | `sql/updates/world/master/2026_10_26_55_world_classic_aura_exclusivity.sql` | **Silent:** a flask blocks every elixir again |
+
+Check in game: Elixir of the Mongoose and Elixir of Ferocity up together give Mongoose's 25 Agility and Ferocity's 18
+Strength (not 43 Agility), and Scroll of Agility IV and Scroll of Strength IV stay up together.

@@ -34,10 +34,16 @@ bool LfgBotGroupCanTake(Player* member, Player* applicant);
 // (0 = any) and about his level; nullptr when none. A channel LFG line is answered from it (Bot/ChannelChat.cpp).
 Player* LfgBotGroupMemberFor(Player* applicant, uint32 map);
 // Creates one companion for the owner (shared with `.bot add`). In hired mode it is a finder loan bot (HireMgr::SetLoaned).
-bool AddCompanionForOwner(Player* owner, uint8 cls, Playerbot::Role role, std::string& msg);
-// Fills the leader's group up to `size` now with level-matched companions (`.bot lfg` and the dungeon finder). `gap` is what was
-// missing; returns the bots started, `report` says why any could not be.
-uint32 LfgFillToSize(Player* leader, Playerbot::Role ownRole, uint32 size, LfgRoleGap& gap, std::string& report);
+// `minLevel` > the owner's level levels it to that instead (a finder tank at the top of the dungeon); 0 = the owner's level.
+bool AddCompanionForOwner(Player* owner, uint8 cls, Playerbot::Role role, std::string& msg, uint8 minLevel = 0);
+// The level a tank bot brought for the owner joins at (Playerbot.Lfg.TankAtDungeonTop): the top of the level range of the dungeon
+// among `activities` (Group Finder activity ids), or of the dungeon on `map` when `activities` is empty; never below the owner,
+// never above the level cap. 0 = no known dungeon, or the setting is off.
+uint8 FinderTankLevel(Player const* owner, std::vector<uint32> const& activities, uint32 map);
+// Fills the leader's group up to `size` now with level-matched companions (`.bot lfg` and the dungeon finder); a tank comes at
+// `tankLevel` when that is above the leader's (FinderTankLevel). `gap` is what was missing; returns the bots started, `report` says
+// why any could not be.
+uint32 LfgFillToSize(Player* leader, Playerbot::Role ownRole, uint32 size, LfgRoleGap& gap, std::string& report, uint8 tankLevel = 0);
 
 // The bot dungeon finder (DungeonFinder.cpp), `.bot dungeon`: pick a dungeon (or any for your level), the missing roles are filled
 // with your companions and the group is put inside the dungeon's door; `leave` brings you back to where you queued. World thread.

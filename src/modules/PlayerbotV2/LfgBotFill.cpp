@@ -21,6 +21,8 @@
 #include "Bot/ClassTables.h"
 #include "Bot/BotArchetype.h"
 #include "Bot/BotRegistry.h"
+#include "Bot/ClassTables.h"
+#include "BotListedGroupPlan.h"
 #include "Fleet/BotGroupBuilder.h"
 #include "Fleet/HireMgr.h"
 #include "Fleet/InstanceGroupCap.h"
@@ -46,6 +48,7 @@ namespace
         uint32 deadlineMs = 0;
         uint32 categoryId = 0;
         uint32 partySize = kLfgMinPartySize;      // the dungeon's player limit (5 or 10 or more)
+        std::vector<uint32> activities;           // the listed dungeons, for the level a tank bot joins at
         uint32 nextCheckMs = 0;                   // the real players in range are counted again at this time (every 15 s)
         // Trickle: the places missing when the wait started, how many of each the bots have been started for since, and when
         // the next bot is due.
@@ -102,6 +105,8 @@ namespace
     }
     // the size of the leader's last posted listing, for `.bot lfg` after the timer has run out
     std::unordered_map<uint64, uint32> g_lastSize;
+    // the activities of the leader's last posted listing (or the listed bot group they joined), for the tank's level
+    std::unordered_map<uint64, std::vector<uint32>> g_lastActivities;
     uint32 g_lastTickMs = 0;
 
     // The party size a listing is filled to: the activity's entry in Playerbot.Lfg.ActivityMaps (Upper Blackrock Spire is 10, a raid is
@@ -238,7 +243,7 @@ namespace
 
     // Adds the missing roles as the owner's companions. Returns how many were started. A tank or healer missing from a group that is
     // already at its party size takes the place of a damage dealer bot.
-    uint32 FillGap(Player* leader, LfgRoleGap gap, uint32 size, std::string& report)
+    uint32 FillGap(Player* leader, LfgRoleGap gap, uint32 size, uint8 tankLevel, std::string& report)
     {
         uint32 started = 0;
         auto add = [&](uint8 cls, Playerbot::Role role, uint8 count)
@@ -265,7 +270,8 @@ namespace
                     return;
                 }
                 std::string msg;
-                if (!AddCompanionForOwner(leader, role == Playerbot::Role::Dps ? PickDpsClass() : cls, role, msg))
+                if (!AddCompanionForOwner(leader, role == Playerbot::Role::Dps ? PickDpsClass() : cls, role, msg,
+                                          role == Playerbot::Role::Tank ? tankLevel : 0))
                 {
                     report += " " + msg;
                     return;
@@ -325,6 +331,7 @@ void LfgListingChanged(Player* leader, uint32 categoryId, std::vector<uint32> co
     uint32 const seconds = Playerbot::Services::Config().lfg_bot_fill_seconds();
     uint32 const partySize = PartySizeOf(activities);
     g_lastSize[key] = partySize;
+    g_lastActivities[key] = activities;
     TC_LOG_INFO("playerbot.v2", "[lfg] listing posted by {}: category={} activities={} party_size={} wait={}s", leader->GetName(), categoryId, acts, partySize, seconds);
     if (!seconds || !InCategory(categoryId))
     {
@@ -335,7 +342,7 @@ void LfgListingChanged(Player* leader, uint32 categoryId, std::vector<uint32> co
     if (g_pending.contains(key))
         return;
     uint32 const now = getMSTime();
-    g_pending[key] = PendingListing{ now + seconds * IN_MILLISECONDS, categoryId, partySize, now };   // checked on the next tick
+    g_pending[key] = PendingListing{ now + seconds * IN_MILLISECONDS, categoryId, partySize, activities, now };   // checked on the next tick
     if (Playerbot::Services::Config().lfg_instant_fill_if_nobody())
         Tell(leader, "Group Finder: if nobody in your level range is online or listed, your bots fill the missing roles at once; otherwise after " +
              std::to_string(seconds / 60) + " min " + std::to_string(seconds % 60) + " s.");
@@ -418,7 +425,7 @@ void LfgTick(uint32 nowMs)
                     if (one.Total())
                     {
                         std::string report;
-                        uint32 const started = FillGap(leader, one, size, report);
+                        uint32 const started = FillGap(leader, one, size, FinderTankLevel(leader, it->second.activities, 0), report);
                         if (started)
                         {
                             p.startedGap.tank += one.tank; p.startedGap.healer += one.healer; p.startedGap.dps += one.dps;
@@ -434,7 +441,7 @@ void LfgTick(uint32 nowMs)
         }
         std::string report;
         LfgRoleGap const rest = DueGap(it->second, gap);
-        uint32 const started = FillGap(leader, rest, size, report);
+        uint32 const started = FillGap(leader, rest, size, FinderTankLevel(leader, it->second.activities, 0), report);
         TC_LOG_INFO("playerbot.v2", "[lfg] {}: {}, party of {}, missing {} -> {} bot(s) started.{}", leader->GetName(),
                     action == LfgFillAction::FillNow ? "nobody in range" : "wait over", size, GapText(rest), started, report);
         Tell(leader, std::string(action == LfgFillAction::FillNow ? "Group Finder: nobody in your level range is available. " : "Group Finder: nobody joined in time. ") +
@@ -457,7 +464,12 @@ bool LfgFillNow(Player* leader, Playerbot::Role ownRole, std::string& msg)
         size = std::max<uint32>(size, 10);
     LfgRoleGap gap;
     std::string report;
-    uint32 const started = LfgFillToSize(leader, ownRole, size, gap, report);
+    // the tank comes at the top of the dungeon: the one the leader stands in, else the one they last listed for
+    std::vector<uint32> activities;
+    if (auto const itr = g_lastActivities.find(leader->GetGUID().GetCounter()); itr != g_lastActivities.end())
+        activities = itr->second;
+    uint32 const map = leader->GetMap() && leader->GetMap()->IsDungeon() ? leader->GetMapId() : 0;
+    uint32 const started = LfgFillToSize(leader, ownRole, size, gap, report, FinderTankLevel(leader, map ? std::vector<uint32>{} : activities, map));
     if (!gap.Total())
     { msg = "Your group is already full: " + std::to_string(size) + " players."; return true; }
     TC_LOG_INFO("playerbot.v2", "[lfg] {}: .bot lfg, party of {}, missing {} -> {} bot(s) started.{}", leader->GetName(), size, GapText(gap), started, report);
@@ -466,11 +478,26 @@ bool LfgFillNow(Player* leader, Playerbot::Role ownRole, std::string& msg)
     return true;
 }
 
-uint32 LfgFillToSize(Player* leader, Playerbot::Role ownRole, uint32 size, LfgRoleGap& gap, std::string& report)
+uint8 FinderTankLevel(Player const* owner, std::vector<uint32> const& activities, uint32 map)
+{
+    auto const& config = Playerbot::Services::Config();
+    if (!owner || !config.lfg_tank_at_dungeon_top() || (activities.empty() && !map))
+        return 0;
+    std::vector<ListedActivity> acts;
+    for (ListedActivity const& a : config.lfg_bot_groups_activities())
+        if (activities.empty() ? a.map == map : std::ranges::find(activities, a.activity) != activities.end())
+            acts.push_back(a);
+    uint8 const top = DungeonTopLevelFor(acts, owner->GetLevel());
+    if (!top)
+        return 0;
+    return std::min(std::max(top, owner->GetLevel()), Playerbot::MaxPlayerLevel());
+}
+
+uint32 LfgFillToSize(Player* leader, Playerbot::Role ownRole, uint32 size, LfgRoleGap& gap, std::string& report, uint8 tankLevel)
 {
     gap = GapOf(leader, ownRole, size);
     g_lastSize[leader->GetGUID().GetCounter()] = size;
-    return gap.Total() ? FillGap(leader, gap, size, report) : 0;
+    return gap.Total() ? FillGap(leader, gap, size, tankLevel, report) : 0;
 }
 
 namespace
@@ -520,6 +547,7 @@ namespace
         if (!human)
             return;
         uint32 const partySize = ListedGroupOf(group) ? ListedGroupOf(group)->capacity : kLfgMinPartySize;
+        uint32 const activity = ListedGroupOf(group) ? ListedGroupOf(group)->activity : 0;
         if (Player const* leader = ObjectAccessor::FindConnectedPlayer(listedLeader))
             GroupFinderListings::RemoveBotListing(leader);
         group->ChangeLeader(human->GetGUID());
@@ -543,8 +571,10 @@ namespace
         if (seconds && group->GetMembersCount() < partySize)
         {
             uint32 const now = getMSTime();
+            std::vector<uint32> const activities = activity ? std::vector<uint32>{ activity } : std::vector<uint32>{};
             g_lastSize[human->GetGUID().GetCounter()] = partySize;
-            g_pending[human->GetGUID().GetCounter()] = PendingListing{ now + seconds * IN_MILLISECONDS, 0, partySize, now };
+            g_lastActivities[human->GetGUID().GetCounter()] = activities;
+            g_pending[human->GetGUID().GetCounter()] = PendingListing{ now + seconds * IN_MILLISECONDS, 0, partySize, activities, now };
             TC_LOG_INFO("playerbot.v2", "[lfg] {}: the joined group fills its open places up to {} within {} s", human->GetName(), partySize, seconds);
         }
     }

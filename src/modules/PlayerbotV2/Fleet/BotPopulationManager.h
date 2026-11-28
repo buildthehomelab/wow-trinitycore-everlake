@@ -167,7 +167,7 @@ public:
     // class trainer spells, set the requested role (a Role value; Role::Unknown keeps the class default), apply
     // talents and gear, bring it to the owner and put it in the owner's group (made a raid when full). Dropped if the
     // bot does not log in within a minute or the owner is offline by then. World thread only.
-    void QueueCompanionSetup(BotId bot, uint64 owner_guid_low, uint8 role);
+    void QueueCompanionSetup(BotId bot, uint64 owner_guid_low, uint8 role, uint8 min_level = 0);
     // Brings an owned companion to its owner at once, in the open world or inside an instance (see the definition). Empty = on its way,
     // else why not (also logged as [summon]). World thread.
     std::string BringToOwner(Player* owner, Player* bot, char const* why);
@@ -223,6 +223,7 @@ public:
         uint64 owner_guid_low = 0;
         uint8  role = 0;
         uint32 queued_ms = 0;
+        uint8  min_level = 0;       // levelled to this when above the owner (a finder tank at the top of the dungeon)
     };
     std::unordered_map<uint64, PendingCompanion> pending_companions_;
     void DrainCompanionSetups();
@@ -242,7 +243,7 @@ public:
     };
     std::vector<PendingBring> pending_brings_;
     void DrainBringChecks();
-    void FinishCompanionSetup(Player* bot, Player* owner, uint8 role);
+    void FinishCompanionSetup(Player* bot, Player* owner, uint8 role, uint8 min_level = 0);
     std::unordered_map<uint64, uint32> pending_deletes_;   // bot -> queued at (getMSTime)
     // Companions their owner removed from the group: let go like a dismissal on the next tick (said goodbye to, logged out).
     std::vector<uint64> pending_releases_;

@@ -31,6 +31,7 @@
 #include "../Bot/BotRegistry.h"  // walking online bot AIs
 #include "../Bot/BotTextMgr.h"   // BotChatter::SayGoodbye (a released companion)
 #include "../Bot/ClassTables.h"  // IsTankSpec / TankSpecForClass etc.
+#include "../LfgBotFill.h"       // FinderTankLevel
 #include "../Bot/Formation.h"   // companion slots
 #include "../Bot/World/HunterPetsByRace.h"   // companion hunter pet
 #include "PetDefines.h"   // PetStable (HunterOwnsAnyPet)
@@ -1507,9 +1508,9 @@ void BotPopulationManager::EnsureBotHunterPet(Player* p)
         TC_LOG_WARN("playerbot.v2", "[hunter_pet] {} L{} has no pet and entry {} is not a tameable beast in this data", p->GetName(), uint32(p->GetLevel()), entry);
 }
 
-void BotPopulationManager::QueueCompanionSetup(BotId bot, uint64 owner_guid_low, uint8 role)
+void BotPopulationManager::QueueCompanionSetup(BotId bot, uint64 owner_guid_low, uint8 role, uint8 min_level)
 {
-    pending_companions_[bot] = PendingCompanion{ owner_guid_low, role, getMSTime() };
+    pending_companions_[bot] = PendingCompanion{ owner_guid_low, role, getMSTime(), min_level };
 }
 
 void BotPopulationManager::DrainLedWorldBotReleases()
@@ -1795,7 +1796,7 @@ void BotPopulationManager::DrainCompanionSetups()
             TC_LOG_INFO("playerbot.v2", "[Companion] {} logged in but its owner is offline, left as created", bot->GetName());
             continue;
         }
-        FinishCompanionSetup(bot, owner, pending.role);
+        FinishCompanionSetup(bot, owner, pending.role, pending.min_level);
     }
 }
 
@@ -1956,7 +1957,7 @@ std::string JoinOwnerGroup(Player* owner, Player* bot)
 
 } // namespace
 
-void BotPopulationManager::FinishCompanionSetup(Player* bot, Player* owner, uint8 role_value)
+void BotPopulationManager::FinishCompanionSetup(Player* bot, Player* owner, uint8 role_value, uint8 min_level)
 {
     BotId const id = bot->GetGUID().GetCounter();
     uint8 const old_level = bot->GetLevel();
@@ -1968,9 +1969,21 @@ void BotPopulationManager::FinishCompanionSetup(Player* bot, Player* owner, uint
     ::Playerbot::Result talents = ::Playerbot::Result::Ok;
     if (!own_character)
     {
-        if (owner->GetLevel() > old_level)
+        // A tank brought into (or for) a dungeon joins at the top of the dungeon's level range (Playerbot.Lfg.TankAtDungeonTop): the
+        // finder says which dungeon in `min_level`; one added or called while the owner is inside a dungeon takes that dungeon's.
+        uint8 target = owner->GetLevel();
+        if (!min_level && owner->GetMap() && owner->GetMap()->IsDungeon()
+            && (Role(role_value) == Role::Tank || (Role(role_value) == Role::Unknown && Services::Owners().DeclaredRole(id) == Role::Tank)))
+            min_level = FinderTankLevel(owner, {}, owner->GetMapId());
+        if (min_level > target)
         {
-            bot->GiveLevel(owner->GetLevel());
+            target = std::min(min_level, ::Playerbot::MaxPlayerLevel());
+            TC_LOG_INFO("playerbot.v2", "[Companion] {} (tank) joins {} at level {}, the top of the dungeon (owner level {})",
+                        bot->GetName(), owner->GetName(), uint32(target), uint32(owner->GetLevel()));
+        }
+        if (target > old_level)
+        {
+            bot->GiveLevel(target);
             bot->InitTalentForLevel();
             bot->SetXP(0);
         }

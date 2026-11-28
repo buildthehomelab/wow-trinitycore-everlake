@@ -1328,7 +1328,7 @@ public:
     static bool AddCompanionFor(Player* me, WorldSession* sess, uint8 cls, Playerbot::Role role, uint8 race, uint8 gender,
                                 std::string const& className, std::string& outMsg,
                                 Playerbot::V2::Fleet::Hire::Grade hireGrade = Playerbot::V2::Fleet::Hire::Grade::None,
-                                bool finder = false, bool anyClass = false)
+                                bool finder = false, bool anyClass = false, uint8 minLevel = 0)
     {
         namespace Hire = Playerbot::V2::Fleet::Hire;
         using Playerbot::V2::Fleet::HireMgr;
@@ -1406,7 +1406,7 @@ public:
             hire.SetLoaned(id, getMSTime());
             TC_LOG_INFO("playerbot.v2", "[hire] {} gets {} ({}) from the group finder, lent while it stays in the group", me->GetName(), pick.name, className);
         }
-        Playerbot::Services::Population().QueueCompanionSetup(id, me->GetGUID().GetCounter(), uint8(role));
+        Playerbot::Services::Population().QueueCompanionSetup(id, me->GetGUID().GetCounter(), uint8(role), minLevel);
         auto const login = Playerbot::Services::SessionMgr().LoginBot(created.guid);
         if (!login.ok)
         {
@@ -9798,11 +9798,11 @@ public:
     }
 };
 
-bool Playerbot::V2::AddCompanionForOwner(Player* owner, uint8 cls, Playerbot::Role role, std::string& msg)
+bool Playerbot::V2::AddCompanionForOwner(Player* owner, uint8 cls, Playerbot::Role role, std::string& msg, uint8 minLevel)
 {
     return playerbot_v2_commandscript::AddCompanionFor(owner, owner->GetSession(), cls, role, 0,
                                                       uint8(urand(GENDER_MALE, GENDER_FEMALE)), "bot", msg,
-                                                      Playerbot::V2::Fleet::Hire::Grade::None, /*finder*/ true);
+                                                      Playerbot::V2::Fleet::Hire::Grade::None, /*finder*/ true, /*anyClass*/ false, minLevel);
 }
 
 bool Playerbot::V2::HireCompanionForOwner(Player* owner, uint8 cls, Playerbot::Role role, Playerbot::V2::Fleet::Hire::Grade grade,
