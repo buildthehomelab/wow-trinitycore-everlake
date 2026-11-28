@@ -5237,8 +5237,8 @@ void ObjectMgr::LoadQuests()
     // Post processing
     for (auto& questPair : _questTemplates)
     {
-        // skip post-loading checks for disabled quests
-        if (DisableMgr::IsDisabledFor(DISABLE_TYPE_QUEST, questPair.first, nullptr))
+        // skip post-loading checks for disabled quests (Everlake: not for those a game event opens later, which need their links)
+        if (DisableMgr::IsDisabledFor(DISABLE_TYPE_QUEST, questPair.first, nullptr) && !DisableMgr::IsLiftedLater(DISABLE_TYPE_QUEST, questPair.first))
             continue;
 
         Quest* qinfo = questPair.second.get();
@@ -5840,8 +5840,8 @@ void ObjectMgr::LoadQuests()
     // Disallow any breadcrumb loops and inform quests of their breadcrumbs
     for (auto& questPair : _questTemplates)
     {
-        // skip post-loading checks for disabled quests
-        if (DisableMgr::IsDisabledFor(DISABLE_TYPE_QUEST, questPair.first, nullptr))
+        // skip post-loading checks for disabled quests (Everlake: not for those a game event opens later, which need their links)
+        if (DisableMgr::IsDisabledFor(DISABLE_TYPE_QUEST, questPair.first, nullptr) && !DisableMgr::IsLiftedLater(DISABLE_TYPE_QUEST, questPair.first))
             continue;
 
         Quest* qinfo = questPair.second.get();

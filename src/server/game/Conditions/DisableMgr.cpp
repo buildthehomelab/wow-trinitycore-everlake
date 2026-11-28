@@ -19,6 +19,7 @@
 #include "CriteriaHandler.h"
 #include "DatabaseEnv.h"
 #include "DB2Stores.h"
+#include "GameEventMgr.h"
 #include "Group.h"
 #include "Log.h"
 #include "Map.h"
@@ -58,6 +59,61 @@ namespace
     typedef std::unordered_map<uint32, DisableData> DisableTypeMap;
 
     std::array<DisableTypeMap, MAX_DISABLE_TYPES> m_DisableMap;
+
+    // Everlake: `disables_game_event` lifts a disable while one of its game events runs (a raid that opens on a date: the
+    // event starts then and the rows stop applying, with no reload or restart). Key = (sourceType << 32) | entry.
+    std::unordered_map<uint64, std::vector<uint16>> m_LiftingEvents;
+
+    constexpr uint64 LiftKey(uint32 type, uint32 entry) { return (uint64(type) << 32) | entry; }
+
+    bool IsLiftedByGameEvent(uint32 type, uint32 entry)
+    {
+        auto itr = m_LiftingEvents.find(LiftKey(type, entry));
+        if (itr == m_LiftingEvents.end())
+            return false;
+
+        for (uint16 eventId : itr->second)
+            if (sGameEventMgr->IsActiveEvent(eventId))
+                return true;
+
+        return false;
+    }
+
+    void LoadLiftingEvents()
+    {
+        m_LiftingEvents.clear();
+
+        //                                                  0           1      2
+        QueryResult result = WorldDatabase.Query("SELECT sourceType, entry, eventEntry FROM disables_game_event");
+        if (!result)
+        {
+            TC_LOG_INFO("server.loading", ">> Loaded 0 disables lifted by game events.");
+            return;
+        }
+
+        uint32 count = 0;
+        do
+        {
+            Field* fields = result->Fetch();
+            uint32 type = fields[0].GetUInt32();
+            uint32 entry = fields[1].GetUInt32();
+            uint16 eventId = fields[2].GetUInt16();
+            if (type >= MAX_DISABLE_TYPES)
+            {
+                TC_LOG_ERROR("sql.sql", "Invalid sourceType {} in `disables_game_event` (entry {}), skipped.", type, entry);
+                continue;
+            }
+
+            if (!m_DisableMap[type].contains(entry))
+                TC_LOG_ERROR("sql.sql", "`disables_game_event` lifts sourceType {} entry {}, which has no `disables` row: nothing to lift.", type, entry);
+
+            m_LiftingEvents[LiftKey(type, entry)].push_back(eventId);
+            ++count;
+        }
+        while (result->NextRow());
+
+        TC_LOG_INFO("server.loading", ">> Loaded {} disables lifted by game events.", count);
+    }
 }
 
 void LoadDisables()
@@ -75,6 +131,7 @@ void LoadDisables()
     if (!result)
     {
         TC_LOG_INFO("server.loading", ">> Loaded 0 disables. DB table `disables` is empty!");
+        LoadLiftingEvents();
         return;
     }
 
@@ -268,6 +325,8 @@ void LoadDisables()
     while (result->NextRow());
 
     TC_LOG_INFO("server.loading", ">> Loaded {} disables in {} ms", total_count, GetMSTimeDiffToNow(oldMSTime));
+
+    LoadLiftingEvents();
 }
 
 void CheckQuestDisables()
@@ -307,6 +366,9 @@ bool IsDisabledFor(DisableType type, uint32 entry, WorldObject const* ref, uint8
 
     DisableTypeMap::iterator itr = m_DisableMap[type].find(entry);
     if (itr == m_DisableMap[type].end())    // not disabled
+        return false;
+
+    if (!m_LiftingEvents.empty() && IsLiftedByGameEvent(type, entry))   // Everlake: its game event runs
         return false;
 
     switch (type)
@@ -414,6 +476,11 @@ bool IsDisabledFor(DisableType type, uint32 entry, WorldObject const* ref, uint8
     }
 
     return false;
+}
+
+bool IsLiftedLater(DisableType type, uint32 entry)
+{
+    return m_LiftingEvents.contains(LiftKey(type, entry));
 }
 
 bool IsVMAPDisabledFor(uint32 entry, uint8 flags)

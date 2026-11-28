@@ -21,6 +21,7 @@
 // VMaNGOS source file) and Heated Ground (22191..22202) needs its trigger chain split in two.
 
 #include "ScriptMgr.h"
+#include "GameObject.h"
 #include "InstanceScript.h"
 #include "Log.h"
 #include "Map.h"
@@ -29,6 +30,7 @@
 #include "MoveSpline.h"
 #include "Player.h"
 #include "ScriptedCreature.h"
+#include "SpellInfo.h"
 #include "TemporarySummon.h"
 #include "classic_onyxias_lair.h"
 #include "classic_script_text.h"
@@ -71,6 +73,12 @@ enum ClassicOnyxia : uint32
     POINT_ONY_DEPART_FLIGHT         = 20,
     POINT_ONY_LANDING_FLIGHT        = 21,
 
+    // The Forging of Quel'Serrar (7509): Place Unfired Blade (22905) sets the Ancient Unfired Sword down; Onyxia's Flame Breath
+    // over it leaves the Ancient Heated Blade, whose loot (16592) is the Heated Ancient Blade (18488). Its use (22906) on her
+    // corpse gives the Treated Ancient Blade (conditions already hold it to dead Onyxia).
+    GO_ONY_UNFIRED_SWORD            = 179561,
+    GO_ONY_HEATED_BLADE             = 179562,
+
     ONY_PHASE_ONE                   = 1,
     ONY_PHASE_TWO                   = 2,
     ONY_PHASE_THREE                 = 3
@@ -79,6 +87,7 @@ enum ClassicOnyxia : uint32
 float const ONYXIA_AGGRO_RANGE  = 58.0f;
 float const ONYXIA_NORMAL_SPEED = 1.28571f;
 float const ONYXIA_BREATH_SPEED = 3.0f;
+float const ONYXIA_SWORD_RANGE  = 25.0f;   // Flame Breath is a 20 yd cone from her front; a little slack for her size
 
 struct ClassicOnyxMove
 {
@@ -304,6 +313,27 @@ struct classic_boss_onyxia : public ScriptedAI
         for (Creature* warder : warderList)
             if (!warder->IsAlive())
                 warder->Respawn();
+    }
+
+    void OnSpellCast(SpellInfo const* spellInfo) override
+    {
+        if (spellInfo->Id != SPELL_ONY_FLAMEBREATH)
+            return;
+
+        // a sword set down under her breath turns into the heated blade on the same spot
+        std::list<GameObject*> swords;
+        me->GetGameObjectListWithEntryInGrid(swords, GO_ONY_UNFIRED_SWORD, ONYXIA_SWORD_RANGE);
+        for (GameObject* sword : swords)
+        {
+            if (!sword->isSpawned() || !me->HasInArc(float(M_PI) / 2.0f, sword))
+                continue;
+
+            QuaternionData const rotation = QuaternionData::fromEulerAnglesZYX(sword->GetOrientation(), 0.0f, 0.0f);
+            if (me->SummonGameObject(GO_ONY_HEATED_BLADE, *sword, rotation, 5min, GO_SUMMON_TIMED_DESPAWN))
+                TC_LOG_DEBUG("scripts", "Onyxia: Flame Breath heated the Quel'Serrar sword at {}", sword->GetPosition().ToString());
+
+            sword->DespawnOrUnsummon();
+        }
     }
 
     void JustDied(Unit* /*killer*/) override
