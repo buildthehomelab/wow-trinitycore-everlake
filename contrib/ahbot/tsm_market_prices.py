@@ -10,7 +10,9 @@ TradeSkillMaster publishes a free CSV of region-wide prices for WoW Forever (no 
     https://public-data.tradeskillmaster.com/forever/<us|eu>/region/items.csv      (https://tradeskillmaster.com/public-data)
 This script turns it into SQL for world.auctionhousebot_market_price (read by AuctionHouseBot.Vanilla.MarketPrices = 1 and
 AuctionHouseBot.Vanilla.MarketPrices.Only = 1). UnitPrice is TSM's marketValue in copper per unit. Items TSM does not list
-keep their row, so nothing loses a price.
+keep their row, so nothing loses a price. One exception: an item priced above 10,000 gold that sells less than once a day
+(TSM's market value for an item nobody buys follows whatever someone asked, e.g. 1.39 million gold for Teebu's Blazing
+Longsword) is left out and its row deleted, so the bot prices it from its value curve instead.
 
 TSM's terms: use the data freely in your own servers, bots and tools; download each file at most once per update (it
 changes daily; this script asks only for a newer file than its cache); do not republish the data in bulk. So the prices are
@@ -26,6 +28,8 @@ have, no download).
 import argparse, csv, email.utils, os, sys, urllib.error, urllib.request
 
 URL = "https://public-data.tradeskillmaster.com/forever/{region}/region/items.csv"
+# an item above this (copper per unit) that sells less than once a day has no real market: its row is dropped
+MAX_UNSOLD_PRICE = 10000 * 100 * 100
 
 
 def download(url, cache):
@@ -64,7 +68,7 @@ def main():
         path = a.cache or os.path.join(os.path.dirname(os.path.abspath(__file__)), f"tsm-forever-{a.region}-items.csv")
         download(URL.format(region=a.region), path)
 
-    rows, scans = [], set()
+    rows, scans, outliers = [], set(), []
     with open(path, newline="", encoding="utf-8") as f:
         r = csv.DictReader(f)
         need = {"itemId", "marketValue", "soldPerDay", "updatedAt"}
@@ -76,7 +80,9 @@ def main():
                 sold = min(round(float(row["soldPerDay"] or 0)), 4294967295)
             except ValueError:
                 continue
-            if item > 0 and price > 0:
+            if item > 0 and price > MAX_UNSOLD_PRICE and sold < 1:
+                outliers.append(item)
+            elif item > 0 and price > 0:
                 rows.append((item, price, sold))
                 scans.add(row["updatedAt"])
     if len(rows) < 1000:
@@ -91,8 +97,11 @@ def main():
         out.write("INSERT INTO `auctionhousebot_market_price` (`ItemID`, `UnitPrice`, `Quantity`, `Samples`) VALUES "
                   + ",".join(f"({x},{p},{q},0)" for x, p, q in rows[i:i + 1000])
                   + " ON DUPLICATE KEY UPDATE `UnitPrice`=VALUES(`UnitPrice`), `Quantity`=VALUES(`Quantity`), `Samples`=0;\n")
+    if outliers:
+        out.write(f"-- over {MAX_UNSOLD_PRICE // 10000} gold with no sales: no market price\n"
+                  f"DELETE FROM `auctionhousebot_market_price` WHERE `ItemID` IN ({','.join(map(str, outliers))});\n")
     out.write("COMMIT;\n")
-    print(f"-- {len(rows)} items written", file=sys.stderr)
+    print(f"-- {len(rows)} items written, {len(outliers)} unsold outliers left out", file=sys.stderr)
 
 
 if __name__ == "__main__":
