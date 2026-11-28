@@ -494,6 +494,7 @@ public:
     bool behavior_ride_with_owner()     const { return bhv_ride_with_owner_; }
     // A bot with no way closer to its player while he is well away is set down beside him (Fleet/OwnerCatchUp.h).
     bool behavior_catch_up_to_owner()   const { return bhv_catch_up_to_owner_; }
+    bool behavior_healer_says_why()     const { return bhv_healer_says_why_; }
     bool behavior_follow_owner_steps()  const { return bhv_follow_owner_steps_; }
     // Yards from the group's leader: a Passive bot defends a mob only within this of the leader (or of the member it is on), and an
     // Aggressive one attacks a hostile only within the aggressive radius of the leader. 0 switches the Passive leash off.
@@ -778,6 +779,7 @@ private:
     bool   bhv_fly_with_owner_       = true;
     bool   bhv_ride_with_owner_      = true;
     bool   bhv_catch_up_to_owner_    = true;
+    bool   bhv_healer_says_why_      = true;
     bool   bhv_follow_owner_steps_   = true;
     float  bhv_passive_leash_yd_     = 25.0f;
     float  bhv_aggressive_radius_yd_ = 10.0f;
