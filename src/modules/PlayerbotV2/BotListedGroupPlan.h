@@ -71,6 +71,27 @@ inline std::vector<ListedActivity> ParseListedActivities(std::string_view text)
     return out;
 }
 
+// The level a tank the finder brings for one of `acts` (the dungeon's entries of the table) joins at: the top of the dungeon's level
+// range, so the group is carried, not stretched. A map with several wings (Scarlet Monastery, Dire Maul: one map, so the wing is not
+// known inside) takes the highest top of the wings whose range holds the owner's level, else the next wing above the owner, else the
+// highest. 0 = no entry.
+inline uint8 DungeonTopLevelFor(std::vector<ListedActivity> const& acts, uint8 ownerLevel)
+{
+    uint8 holding = 0, above = 0, aboveMin = 0, highest = 0;
+    for (ListedActivity const& a : acts)
+    {
+        highest = std::max(highest, a.levelMax);
+        if (ownerLevel >= a.levelMin && ownerLevel <= a.levelMax)
+            holding = std::max(holding, a.levelMax);
+        else if (a.levelMin > ownerLevel && (!aboveMin || a.levelMin < aboveMin))
+        {
+            aboveMin = a.levelMin;
+            above = a.levelMax;
+        }
+    }
+    return holding ? holding : above ? above : highest;
+}
+
 // The order the dungeons are tried in for a new listed group: those with no listed group of the faction yet come first, so every
 // dungeon gets one before any gets a second; each half is shuffled. `listed` holds the activity id of each group listed for the
 // faction; `rand(n)` returns 0..n-1. The result is indices into `all`.

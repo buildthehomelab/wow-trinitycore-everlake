@@ -471,6 +471,7 @@ public:
     uint32 lfg_bot_groups_interval_seconds() const { return lfg_bot_groups_interval_seconds_; }
     std::vector<V2::ListedActivity> const& lfg_bot_groups_activities() const { return lfg_bot_groups_activities_; }
     bool   lfg_finder_enable()          const { return lfg_finder_enable_; }
+    bool   lfg_tank_at_dungeon_top()    const { return lfg_tank_at_dungeon_top_; }
     std::vector<V2::FinderEntrance> const& lfg_finder_entrances() const { return lfg_finder_entrances_; }
     bool behavior_bg_human_priority()   const { return bhv_bg_human_priority_; }
     bool behavior_tank_markers()        const { return bhv_tank_markers_; }
@@ -758,6 +759,7 @@ private:
     uint32 lfg_bot_groups_interval_seconds_ = 30;
     std::vector<V2::ListedActivity> lfg_bot_groups_activities_;
     bool   lfg_finder_enable_               = true;
+    bool   lfg_tank_at_dungeon_top_         = true;
     std::vector<V2::FinderEntrance> lfg_finder_entrances_;
     bool   bhv_bg_human_priority_    = true;
     bool   bhv_tank_markers_         = true;
