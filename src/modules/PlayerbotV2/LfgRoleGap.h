@@ -129,6 +129,28 @@ inline uint8 LfgRoleForClass(uint8 cls, uint8 mask)
     return uint8(mask & (kLfgRoleTank | kLfgRoleHealer | kLfgRoleDamage) & LfgClassRoles(cls));
 }
 
+// What a member counts as when nothing better is known: warriors tank, priests heal, the rest deal damage.
+inline uint8 LfgDefaultRoleForClass(uint8 cls)
+{
+    return cls == 1 ? kLfgRoleTank : cls == 5 ? kLfgRoleHealer : kLfgRoleDamage;
+}
+
+// The role a member counts as when the bots fill a group: the role the group carries for them, else the role they picked (the
+// leader's pick in the finder), else the role they play (a bot: its pinned role or spec; a player: what their bought talents say,
+// 0 when none are bought), else the class's usual role. Each only when the class can play it. Before, a member without a group role
+// counted by class alone: a Shadow priest player counted as the healer and no healer bot came; a Holy paladin counted as damage and
+// one more healer came than the group needed.
+inline uint8 LfgMemberRole(uint8 cls, uint8 groupRoles, uint8 pickedRole, uint8 playedRole)
+{
+    if (uint8 const r = LfgRoleForClass(cls, groupRoles))
+        return r;
+    if (uint8 const r = LfgRoleForClass(cls, pickedRole))
+        return r;
+    if (uint8 const r = LfgRoleForClass(cls, playedRole))
+        return r;
+    return LfgDefaultRoleForClass(cls);
+}
+
 // The places a group of `size` (default a 5-man party) still lacks after its members have taken theirs (PlanLfgSeats).
 inline LfgRoleGap ComputeLfgRoleGap(std::span<uint8 const> memberRoles, uint32 size = kLfgMinPartySize)
 {

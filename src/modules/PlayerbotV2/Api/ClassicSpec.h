@@ -35,6 +35,10 @@ TC_GAME_API uint32 EffectiveSpecId(Player const* player);
 // Inference only (ignores real spec and overrides). 0 for unknown classes.
 TC_GAME_API uint32 InferClassicSpec(Player const* player);
 
+// The spec the player's bought talents fit best, 0 when none are bought (no signature-spell or class fallback, unlike
+// InferClassicSpec): what a player plays, as far as the talents say.
+TC_GAME_API uint32 TalentSpecId(Player const* player);
+
 // Owner override. Returns false (and stores nothing) when spec does not
 // belong to the player's class or the player runs a real retail spec.
 // spec 0 clears the override.

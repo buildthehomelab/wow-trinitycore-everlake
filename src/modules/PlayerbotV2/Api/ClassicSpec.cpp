@@ -712,6 +712,11 @@ uint32 BestBuildFor(uint8 cls, std::unordered_map<std::string, int32> const& own
 
 } // namespace
 
+uint32 TalentSpecId(Player const* player)
+{
+    return player ? InferFromTalents(player) : 0;
+}
+
 TalentNode const* FindTalent(Player const* player, std::string const& name)
 {
     ClassTalentIndex const* index = player ? GetClassTalentIndex(player) : nullptr;
